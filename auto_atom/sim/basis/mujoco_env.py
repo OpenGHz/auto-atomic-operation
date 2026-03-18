@@ -13,9 +13,9 @@ import logging
 class DataType(str, Enum):
     CAMERA = "camera"
     IMU = "imu"
-    JOINT_POSITION = "position"
-    JOINT_VELOCITY = "velocity"
-    JOINT_EFFORT = "effort"
+    JOINT_POSITION = "joint_position"
+    JOINT_VELOCITY = "joint_velocity"
+    JOINT_EFFORT = "joint_effort"
     TACTILE = "tactile"
     WRENCH = "wrench"
     POSE = "pose"
@@ -333,11 +333,11 @@ class UnifiedMujocoEnv:
             np.asarray(eef_actuator_indices, dtype=np.int32),
         )
 
-    def _pose_rotation_matrix(self, component: str) -> np.ndarray:
+    def _pose_rot9d(self, component: str) -> np.ndarray:
         site_id = self._pose_site_ids.get(component, -1)
         if site_id < 0:
             raise ValueError(f"No pose site found for component '{component}'")
-        return np.asarray(self.data.site_xmat[site_id], dtype=np.float32).reshape(3, 3)
+        return self.data.site_xmat[site_id]
 
     def _mujoco_quat_wxyz_to_xyzw(self, quat: np.ndarray) -> np.ndarray:
         quat = np.asarray(quat, dtype=np.float32).reshape(-1)
@@ -471,7 +471,7 @@ class UnifiedMujocoEnv:
                 quat = self._mujoco_quat_wxyz_to_xyzw(
                     self._sensor_data(self._pose_ids[component]["quat"])
                 )
-                rotmat = self._pose_rotation_matrix(component)
+                rot9d = self._pose_rot9d(component)
                 self._validate_pose_sensor_matches_site(component, pos, quat)
                 obs[f"{component}/pose/position"] = {
                     "data": pos.astype(np.float32),
@@ -482,11 +482,11 @@ class UnifiedMujocoEnv:
                     "t": t,
                 }
                 obs[f"{component}/pose/rotation"] = {
-                    "data": euler_from_matrix(rotmat),
+                    "data": euler_from_matrix(rot9d.reshape(3, 3)),
                     "t": t,
                 }
                 obs[f"{component}/pose/rotation_6d"] = {
-                    "data": self._rotmat_to_rotation_6d(rotmat),
+                    "data": rot9d[:6].astype(np.float32),
                     "t": t,
                 }
 
