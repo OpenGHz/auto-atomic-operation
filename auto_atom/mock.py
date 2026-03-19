@@ -16,6 +16,7 @@ from .runtime import (
     ControlSignal,
     ObjectHandler,
     OperatorHandler,
+    PoseState,
     SimulatorBackend,
 )
 
@@ -25,6 +26,10 @@ class MockObjectHandler(ObjectHandler):
     """Mock object handle."""
 
     kind: str = "mock_object"
+    pose: PoseState = field(default_factory=PoseState)
+
+    def get_pose(self) -> PoseState:
+        return self.pose
 
 
 @dataclass
@@ -35,6 +40,8 @@ class MockOperatorHandler(OperatorHandler):
     role: str = "generic"
     _command_key: str = ""
     _progress: int = 0
+    base_pose: PoseState = field(default_factory=PoseState)
+    end_effector_pose: PoseState = field(default_factory=PoseState)
 
     @property
     def name(self) -> str:
@@ -60,6 +67,10 @@ class MockOperatorHandler(OperatorHandler):
                     "pose": _serialize_param(pose),
                 },
             )
+        self.end_effector_pose = PoseState(
+            position=pose.position if pose.position else self.end_effector_pose.position,
+            orientation=pose.orientation if pose.orientation else self.end_effector_pose.orientation,
+        )
         return ControlResult(
             signal=ControlSignal.REACHED,
             details={
@@ -95,6 +106,12 @@ class MockOperatorHandler(OperatorHandler):
                 "eef": _serialize_param(eef),
             },
         )
+
+    def get_end_effector_pose(self, simulator: SimulatorBackend) -> PoseState:
+        return self.end_effector_pose
+
+    def get_base_pose(self, simulator: SimulatorBackend) -> PoseState:
+        return self.base_pose
 
     def _prepare_command(self, command_key: str) -> None:
         if self._command_key != command_key:
@@ -149,14 +166,24 @@ def build_mock_backend(task_file: TaskFileConfig) -> MockSimulatorBackend:
         operator.name: MockOperatorHandler(
             operator_name=operator.name,
             role=operator.model_extra.get("role", "generic") if operator.model_extra else "generic",
+            base_pose=PoseState(position=(0.0, 0.0, 0.0), orientation=(0.0, 0.0, 0.0, 1.0)),
+            end_effector_pose=PoseState(
+                position=(0.2, 0.0, 0.3),
+                orientation=(0.0, 0.0, 0.0, 1.0),
+            ),
         )
         for operator in task_file.operators
     }
-    object_names = {stage.object for stage in config.stages if stage.object}
-    objects = {
-        object_name: MockObjectHandler(name=object_name)
-        for object_name in object_names
-    }
+    object_names = sorted({stage.object for stage in config.stages if stage.object})
+    objects = {}
+    for index, object_name in enumerate(object_names):
+        objects[object_name] = MockObjectHandler(
+            name=object_name,
+            pose=PoseState(
+                position=(0.4 + 0.1 * index, -0.1 + 0.05 * index, 0.05 * (index + 1)),
+                orientation=(0.0, 0.0, 0.0, 1.0),
+            ),
+        )
     return MockSimulatorBackend(
         simulator_name=config.simulator,
         env_path=str(config.env_path),

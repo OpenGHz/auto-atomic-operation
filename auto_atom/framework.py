@@ -92,9 +92,9 @@ class PoseControlConfig(BaseModel):
     position: Position = Field(default_factory=tuple)
     """The target position for the pose control. The position is represented as a tuple of three floats (x, y, z)."""
     orientation: Orientation = Field(default_factory=tuple)
-    """The target orientation for the pose control. The orientation is represented as a tuple of four floats (x, y, z, w) representing a quaternion."""
+    """The target orientation for the pose control. The orientation is represented as a quaternion in `xyzw` order."""
     rotation: Rotation = Field(default_factory=tuple)
-    """The target rotation for the pose control. The rotation is represented as a tuple of three floats (roll, pitch, yaw) representing the Euler angles."""
+    """The target rotation for the pose control. The rotation is represented as Euler angles in `rpy` order."""
     reference: PoseReference = PoseReference.AUTO
     """The reference frame for the pose control."""
     relative: bool = False

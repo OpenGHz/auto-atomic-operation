@@ -15,10 +15,12 @@ from .framework import (
     EefControlConfig,
     Operation,
     PoseControlConfig,
+    PoseReference,
     StageConfig,
     StageControlConfig,
     TaskFileConfig,
 )
+from .utils.pose import PoseState, compose_pose, inverse_pose, pose_config_to_pose_state
 
 
 class BackendFactory(Protocol):
@@ -51,6 +53,10 @@ class ObjectHandler:
     """Opaque object handle resolved by the simulator backend."""
 
     name: str
+
+    def get_pose(self) -> "PoseState":
+        """Return the current world pose of the object."""
+        raise NotImplementedError
 
 
 @dataclass
@@ -86,6 +92,14 @@ class OperatorHandler(ABC):
     ) -> ControlResult:
         """Advance the end-effector toward the desired state."""
 
+    @abstractmethod
+    def get_end_effector_pose(self, simulator: "SimulatorBackend") -> PoseState:
+        """Return the current world pose of the operator end-effector."""
+
+    @abstractmethod
+    def get_base_pose(self, simulator: "SimulatorBackend") -> PoseState:
+        """Return the current world pose of the operator base."""
+
 
 class SimulatorBackend(ABC):
     """Abstract simulator backend used by the task runner."""
@@ -118,6 +132,7 @@ class PrimitiveAction:
     kind: str
     pose: Optional[PoseControlConfig] = None
     eef: Optional[EefControlConfig] = None
+    resolved_pose: Optional[PoseControlConfig] = None
 
 
 @dataclass
@@ -431,10 +446,81 @@ class TaskRunner:
         target: Optional[ObjectHandler],
     ) -> ControlResult:
         if action.kind == "pose" and action.pose is not None:
-            return operator.move_to_pose(action.pose, backend, target)
+            resolved_pose = TaskRunner._resolve_pose_command(
+                operator=operator,
+                pose=action.pose,
+                backend=backend,
+                target=target,
+            )
+            action.resolved_pose = resolved_pose
+            return operator.move_to_pose(resolved_pose, backend, target)
         if action.kind == "eef" and action.eef is not None:
             return operator.control_eef(action.eef, backend)
         raise RuntimeError(f"Invalid primitive action '{action.kind}'.")
+
+    @staticmethod
+    def _resolve_pose_command(
+        operator: OperatorHandler,
+        pose: PoseControlConfig,
+        backend: SimulatorBackend,
+        target: Optional[ObjectHandler],
+    ) -> PoseControlConfig:
+        reference_pose = TaskRunner._resolve_reference_pose(
+            operator=operator,
+            pose=pose,
+            backend=backend,
+            target=target,
+        )
+        current_pose = operator.get_end_effector_pose(backend)
+        local_pose = TaskRunner._pose_config_to_local_pose(pose)
+
+        if pose.relative:
+            current_local = compose_pose(
+                inverse_pose(reference_pose),
+                current_pose,
+            )
+            target_pose = compose_pose(current_local, local_pose)
+        else:
+            target_pose = local_pose
+
+        world_pose = compose_pose(reference_pose, target_pose)
+        return PoseControlConfig(
+            position=world_pose.position,
+            orientation=world_pose.orientation,
+            reference=PoseReference.WORLD,
+            relative=False,
+        )
+
+    @staticmethod
+    def _resolve_reference_pose(
+        operator: OperatorHandler,
+        pose: PoseControlConfig,
+        backend: SimulatorBackend,
+        target: Optional[ObjectHandler],
+    ) -> PoseState:
+        reference = pose.reference
+        if reference == PoseReference.AUTO:
+            reference = PoseReference.OBJECT_WORLD if target is not None else PoseReference.BASE
+        if reference == PoseReference.WORLD:
+            return PoseState()
+        if reference == PoseReference.BASE:
+            return operator.get_base_pose(backend)
+        if reference == PoseReference.END_EFFECTOR:
+            return operator.get_end_effector_pose(backend)
+        if reference == PoseReference.OBJECT_WORLD:
+            if target is None:
+                raise ValueError("Pose reference OBJECT_WORLD requires a target object.")
+            object_pose = target.get_pose()
+            return PoseState(position=object_pose.position)
+        if reference == PoseReference.OBJECT:
+            if target is None:
+                raise ValueError("Pose reference OBJECT requires a target object.")
+            return target.get_pose()
+        raise NotImplementedError(f"Unsupported pose reference '{reference.value}'.")
+
+    @staticmethod
+    def _pose_config_to_local_pose(pose: PoseControlConfig) -> PoseState:
+        return pose_config_to_pose_state(pose)
 
     def _build_pending_update(self) -> TaskUpdate:
         if not self._plan:
