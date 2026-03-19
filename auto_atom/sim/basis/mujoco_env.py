@@ -2,7 +2,7 @@ from enum import Enum
 from math import tan, pi
 from pathlib import Path
 from typing import Any, Dict, List, Set
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from auto_atom.utils.transformations import euler_from_matrix
 import os
 import numpy as np
@@ -43,6 +43,17 @@ class EnvConfig(BaseModel, frozen=True):
     mask_objects: List[str] = Field(default_factory=list)
     operations: List[str] = Field(default_factory=list)
     stamp_ns: bool = True
+
+    @model_validator(mode="after")
+    def validate_operations(self):
+        for cam_cfg in self.cameras:
+            if cam_cfg.enable_heat_map:
+                for field in ("operations", "mask_objects"):
+                    if not getattr(self, field):
+                        raise ValueError(f"{field} must be set when enable_heat_map")
+            if cam_cfg.enable_mask and not self.mask_objects:
+                raise ValueError("mask_objects must be set when enable_mask")
+        return self
 
 
 class UnifiedMujocoEnv:
@@ -445,6 +456,14 @@ class UnifiedMujocoEnv:
                 }
                 obs[f"{eef_name}/joint_state/position"] = {
                     "data": np.asarray(self.data.qpos[eef_qidx], dtype=np.float32),
+                    "t": t,
+                }
+                obs[f"action/{arm_name}/joint_state/position"] = {
+                    "data": np.asarray(self.data.ctrl[arm_aidx], dtype=np.float32),
+                    "t": t,
+                }
+                obs[f"action/{eef_name}/joint_state/position"] = {
+                    "data": np.asarray(self.data.ctrl[eef_aidx], dtype=np.float32),
                     "t": t,
                 }
             if DataType.JOINT_VELOCITY in self.config.enabled_sensors:
