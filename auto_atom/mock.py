@@ -159,6 +159,11 @@ class MockSimulatorBackend(SimulatorBackend):
             known = ", ".join(sorted(self.objects)) or "<empty>"
             raise KeyError(f"Unknown object '{name}'. Known objects: {known}") from exc
 
+    def is_object_grasped(self, operator_name: str, object_name: str) -> bool:
+        _ = self.get_operator_handler(operator_name)
+        _ = self.get_object_handler(object_name)
+        return False
+
 
 def build_mock_backend(task_file: TaskFileConfig) -> MockSimulatorBackend:
     config = task_file.task

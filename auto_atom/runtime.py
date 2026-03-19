@@ -124,6 +124,10 @@ class SimulatorBackend(ABC):
     def get_object_handler(self, name: str) -> Optional[ObjectHandler]:
         """Resolve an object handler by name. Empty names may return None."""
 
+    @abstractmethod
+    def is_object_grasped(self, operator_name: str, object_name: str) -> bool:
+        """Return whether the operator is currently grasping the given object."""
+
 
 @dataclass
 class PrimitiveAction:

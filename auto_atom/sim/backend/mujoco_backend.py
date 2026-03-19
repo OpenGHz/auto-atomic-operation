@@ -138,7 +138,11 @@ class MujocoOperatorHandler(OperatorHandler):
         grasped_name = ""
         reached = False
         event = "eef_moving"
-        if eef.close and self._last_target is not None and self._is_target_grasped(self._last_target):
+        if (
+            eef.close
+            and self._last_target is not None
+            and simulator.is_object_grasped(self.name, self._last_target.name)
+        ):
             reached = True
             event = "eef_grasped"
             grasped_name = self._last_target.name
@@ -195,39 +199,6 @@ class MujocoOperatorHandler(OperatorHandler):
             return float(eef.joint_positions[0])
         return 0.82 if eef.close else 0.0
 
-    def _is_target_grasped(self, target: MujocoObjectHandler) -> bool:
-        target_body_id = mujoco.mj_name2id(self.env.model, mujoco.mjtObj.mjOBJ_BODY, target.body_name)
-        if target_body_id < 0:
-            return False
-
-        left_contact = False
-        right_contact = False
-        for idx in range(self.env.data.ncon):
-            contact = self.env.data.contact[idx]
-            geom1 = int(contact.geom1)
-            geom2 = int(contact.geom2)
-            body1 = int(self.env.model.geom_bodyid[geom1])
-            body2 = int(self.env.model.geom_bodyid[geom2])
-            if target_body_id not in {body1, body2}:
-                continue
-            other_geom = geom2 if body1 == target_body_id else geom1
-            other_name = mujoco.mj_id2name(self.env.model, mujoco.mjtObj.mjOBJ_GEOM, other_geom) or ""
-            if other_name.startswith("left_"):
-                left_contact = True
-            if other_name.startswith("right_"):
-                right_contact = True
-
-        if not (left_contact and right_contact):
-            return False
-
-        target_pose = target.get_pose()
-        eef_pose = self.get_end_effector_pose(None)  # type: ignore[arg-type]
-        horizontal_error = np.linalg.norm(
-            np.asarray(target_pose.position[:2], dtype=np.float64)
-            - np.asarray(eef_pose.position[:2], dtype=np.float64)
-        )
-        return bool(horizontal_error <= 0.03)
-
 
 @dataclass
 class MujocoTaskBackend(SimulatorBackend):
@@ -264,6 +235,44 @@ class MujocoTaskBackend(SimulatorBackend):
         except KeyError as exc:
             known = ", ".join(sorted(self.object_handlers)) or "<empty>"
             raise KeyError(f"Unknown object '{name}'. Known objects: {known}") from exc
+
+    def is_object_grasped(self, operator_name: str, object_name: str) -> bool:
+        operator = self.get_operator_handler(operator_name)
+        target = self.get_object_handler(object_name)
+        if target is None:
+            return False
+
+        target_body_id = mujoco.mj_name2id(self.env.model, mujoco.mjtObj.mjOBJ_BODY, target.body_name)
+        if target_body_id < 0:
+            return False
+
+        left_contact = False
+        right_contact = False
+        for idx in range(self.env.data.ncon):
+            contact = self.env.data.contact[idx]
+            geom1 = int(contact.geom1)
+            geom2 = int(contact.geom2)
+            body1 = int(self.env.model.geom_bodyid[geom1])
+            body2 = int(self.env.model.geom_bodyid[geom2])
+            if target_body_id not in {body1, body2}:
+                continue
+            other_geom = geom2 if body1 == target_body_id else geom1
+            other_name = mujoco.mj_id2name(self.env.model, mujoco.mjtObj.mjOBJ_GEOM, other_geom) or ""
+            if other_name.startswith("left_"):
+                left_contact = True
+            if other_name.startswith("right_"):
+                right_contact = True
+
+        if not (left_contact and right_contact):
+            return False
+
+        target_pose = target.get_pose()
+        eef_pose = operator.get_end_effector_pose(self)
+        horizontal_error = np.linalg.norm(
+            np.asarray(target_pose.position[:2], dtype=np.float64)
+            - np.asarray(eef_pose.position[:2], dtype=np.float64)
+        )
+        return bool(horizontal_error <= 0.03)
 
 
 def build_mujoco_backend(task_file: TaskFileConfig) -> MujocoTaskBackend:
