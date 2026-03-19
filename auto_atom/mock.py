@@ -164,6 +164,10 @@ class MockSimulatorBackend(SimulatorBackend):
         _ = self.get_object_handler(object_name)
         return False
 
+    def is_operator_grasping(self, operator_name: str) -> bool:
+        _ = self.get_operator_handler(operator_name)
+        return False
+
 
 def build_mock_backend(task_file: TaskFileConfig) -> MockSimulatorBackend:
     config = task_file.task

@@ -1,7 +1,6 @@
 """Run a simple pick-and-place demo using the Mujoco backend."""
 
 import argparse
-from contextlib import nullcontext
 from pathlib import Path
 import time
 import mujoco.viewer
@@ -42,56 +41,87 @@ def main() -> None:
     config_path = Path(__file__).with_name("mujoco_pick_place_demo.yaml")
     runner = TaskRunner(registry=build_registry()).from_yaml(config_path)
     backend = runner._require_context().backend  # demo-only introspection
+    viewer = None
 
     try:
-        viewer_context = (
-            nullcontext()
-            if args.no_viewer
-            else mujoco.viewer.launch_passive(backend.env.model, backend.env.data)
-        )
-        with viewer_context as viewer:
-            if viewer is not None:
-                viewer.cam.lookat[:] = [1.04, -5.6, 0.88]
-                viewer.cam.distance = 0.55
-                viewer.cam.azimuth = 135
-                viewer.cam.elevation = -28
-                viewer.sync()
-    
-            print("Reset task")
-            print(runner.reset())
-            print()
-            if viewer is not None:
-                viewer.sync()
+        if not args.no_viewer:
+            viewer = mujoco.viewer.launch_passive(backend.env.model, backend.env.data)
+            viewer.cam.lookat[:] = [1.04, -5.6, 0.88]
+            viewer.cam.distance = 0.55
+            viewer.cam.azimuth = 135
+            viewer.cam.elevation = -28
+            _safe_sync_viewer(viewer)
+
+        print("Reset task")
+        print(runner.reset())
+        print()
+        if viewer is not None and _viewer_running(viewer):
+            _safe_sync_viewer(viewer)
+            time.sleep(args.step_delay)
+
+        while True:
+            update = runner.update()
+            print(update)
+            if viewer is not None and _viewer_running(viewer):
+                _safe_sync_viewer(viewer)
                 time.sleep(args.step_delay)
+            if update.done:
+                break
 
-            while True:
-                update = runner.update()
-                print(update)
-                if viewer is not None:
-                    viewer.sync()
-                    time.sleep(args.step_delay)
-                if update.done:
-                    break
+        source_pose = backend.get_object_handler("source_block").get_pose()
+        target_pose = backend.get_object_handler("target_pedestal").get_pose()
 
-            source_pose = backend.get_object_handler("source_block").get_pose()
-            target_pose = backend.get_object_handler("target_pedestal").get_pose()
+        print()
+        print("Final poses:")
+        print("source_block:", source_pose)
+        print("target_pedestal:", target_pose)
+        print()
+        print("Execution records:")
+        for record in runner.records:
+            print(record)
 
-            print()
-            print("Final poses:")
-            print("source_block:", source_pose)
-            print("target_pedestal:", target_pose)
-            print()
-            print("Execution records:")
-            for record in runner.records:
-                print(record)
-
-            if viewer is not None and args.hold_seconds > 0.0:
-                deadline = time.time() + args.hold_seconds
-                while time.time() < deadline and viewer.is_running():
-                    viewer.sync()
-                    time.sleep(min(args.step_delay, 0.05))
+        if viewer is not None and args.hold_seconds > 0.0:
+            deadline = time.time() + args.hold_seconds
+            while time.time() < deadline and _viewer_running(viewer):
+                _safe_sync_viewer(viewer)
+                time.sleep(min(args.step_delay, 0.05))
     finally:
+        if viewer is not None:
+            _shutdown_viewer(viewer)
         runner.close()
+
+
+def _viewer_running(viewer: object) -> bool:
+    is_running = getattr(viewer, "is_running", None)
+    if callable(is_running):
+        try:
+            return bool(is_running())
+        except Exception:
+            return False
+    return True
+
+
+def _safe_sync_viewer(viewer: object) -> None:
+    try:
+        viewer.sync()
+    except Exception:
+        # The window may have been closed externally. Swallow viewer refresh
+        # errors so the demo can finish cleanly without an X/GLX crash.
+        return
+
+
+def _shutdown_viewer(viewer: object) -> None:
+    try:
+        viewer.close()
+    except Exception:
+        return
+
+    deadline = time.time() + 1.0
+    while time.time() < deadline:
+        if not _viewer_running(viewer):
+            break
+        time.sleep(0.01)
+    time.sleep(0.05)
 
 
 if __name__ == "__main__":

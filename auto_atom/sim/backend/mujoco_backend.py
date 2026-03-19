@@ -274,6 +274,13 @@ class MujocoTaskBackend(SimulatorBackend):
         )
         return bool(horizontal_error <= 0.03)
 
+    def is_operator_grasping(self, operator_name: str) -> bool:
+        _ = self.get_operator_handler(operator_name)
+        for object_name in self.object_handlers:
+            if self.is_object_grasped(operator_name, object_name):
+                return True
+        return False
+
 
 def build_mujoco_backend(task_file: TaskFileConfig) -> MujocoTaskBackend:
     config = task_file.task

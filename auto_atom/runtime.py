@@ -14,6 +14,9 @@ from .framework import (
     AutoAtomConfig,
     EefControlConfig,
     Operation,
+    OPERATION_CONDITIONS,
+    OperationConditionType,
+    OperationConstraint,
     PoseControlConfig,
     PoseReference,
     StageConfig,
@@ -127,6 +130,10 @@ class SimulatorBackend(ABC):
     @abstractmethod
     def is_object_grasped(self, operator_name: str, object_name: str) -> bool:
         """Return whether the operator is currently grasping the given object."""
+
+    @abstractmethod
+    def is_operator_grasping(self, operator_name: str) -> bool:
+        """Return whether the operator is currently grasping any object."""
 
 
 @dataclass
@@ -347,7 +354,33 @@ class TaskRunner:
             )
 
         if self._active_stage is None:
-            self._active_stage = self._start_stage(context, self._plan[self._stage_index])
+            plan = self._plan[self._stage_index]
+            precondition_failure = self._check_stage_condition(
+                context=context,
+                plan=plan,
+                condition_type=OperationConditionType.PERFORM,
+            )
+            if precondition_failure is not None:
+                self._records.append(
+                    ExecutionRecord(
+                        stage_index=plan.stage_index,
+                        stage_name=plan.stage_name,
+                        operator=plan.operator_name,
+                        operation=plan.stage.operation.value,
+                        target_object=plan.stage.object,
+                        blocking=plan.stage.blocking,
+                        status=StageExecutionStatus.FAILED,
+                        details=precondition_failure,
+                    )
+                )
+                return self._build_update(
+                    plan=plan,
+                    status=StageExecutionStatus.FAILED,
+                    details=precondition_failure,
+                    done=True,
+                    success=False,
+                )
+            self._active_stage = self._start_stage(context, plan)
 
         active = self._active_stage
         action = active.actions[active.action_index]
@@ -376,6 +409,32 @@ class TaskRunner:
                     details=details,
                     done=False,
                     success=None,
+                )
+            success_failure = self._check_stage_condition(
+                context=context,
+                plan=active.plan,
+                condition_type=OperationConditionType.SUCCESS,
+            )
+            if success_failure is not None:
+                self._records.append(
+                    ExecutionRecord(
+                        stage_index=active.plan.stage_index,
+                        stage_name=active.plan.stage_name,
+                        operator=active.operator.name,
+                        operation=active.plan.stage.operation.value,
+                        target_object=active.plan.stage.object,
+                        blocking=active.plan.stage.blocking,
+                        status=StageExecutionStatus.FAILED,
+                        details=success_failure,
+                    )
+                )
+                self._active_stage = None
+                return self._build_update(
+                    plan=active.plan,
+                    status=StageExecutionStatus.FAILED,
+                    details=success_failure,
+                    done=True,
+                    success=False,
                 )
             self._records.append(
                 ExecutionRecord(
@@ -408,14 +467,22 @@ class TaskRunner:
                 target_object=active.plan.stage.object,
                 blocking=active.plan.stage.blocking,
                 status=StageExecutionStatus.FAILED,
-                details=details,
+                details=self._build_action_failure_details(
+                    plan=active.plan,
+                    details=details,
+                    signal=result.signal,
+                ),
             )
         )
         self._active_stage = None
         return self._build_update(
             plan=active.plan,
             status=StageExecutionStatus.FAILED,
-            details=details,
+            details=self._build_action_failure_details(
+                plan=active.plan,
+                details=details,
+                signal=result.signal,
+            ),
             done=True,
             success=False,
         )
@@ -441,6 +508,80 @@ class TaskRunner:
             target=target,
             actions=self.builder.build_actions(plan.stage),
         )
+
+    @staticmethod
+    def _check_stage_condition(
+        context: ExecutionContext,
+        plan: StageExecutionPlan,
+        condition_type: OperationConditionType,
+    ) -> Optional[Dict[str, Any]]:
+        constraints = OPERATION_CONDITIONS.get(plan.stage.operation)
+        if not constraints:
+            return None
+
+        constraint = constraints.get(condition_type)
+        if constraint is None:
+            return None
+
+        operator_name = plan.operator_name
+        backend = context.backend
+        is_grasping = backend.is_operator_grasping(operator_name)
+
+        satisfied = True
+        if constraint == OperationConstraint.GRASPED:
+            satisfied = is_grasping
+        elif constraint == OperationConstraint.RELEASED:
+            satisfied = not is_grasping
+
+        if satisfied:
+            return None
+
+        phase = "precondition" if condition_type == OperationConditionType.PERFORM else "postcondition"
+        if constraint == OperationConstraint.GRASPED:
+            failure_category = "missing_grasp"
+            failure_reason = "operator is not grasping a required object"
+        elif constraint == OperationConstraint.RELEASED:
+            failure_category = "unexpected_grasp"
+            failure_reason = "operator is still grasping an object when it should be empty-handed"
+        else:
+            failure_category = "condition_mismatch"
+            failure_reason = "stage condition is not satisfied"
+
+        return {
+            "event": f"stage_{phase}_failed",
+            "failure_stage": phase,
+            "failure_category": failure_category,
+            "failure_reason": failure_reason,
+            "condition_type": condition_type.value,
+            "required_constraint": constraint.value,
+            "operator": operator_name,
+            "operation": plan.stage.operation.value,
+            "target_object": plan.stage.object,
+            "is_operator_grasping": is_grasping,
+        }
+
+    @staticmethod
+    def _build_action_failure_details(
+        plan: StageExecutionPlan,
+        details: Dict[str, Any],
+        signal: ControlSignal,
+    ) -> Dict[str, Any]:
+        enriched = dict(details)
+        enriched.setdefault("failure_stage", "execution")
+        enriched.setdefault("operator", plan.operator_name)
+        enriched.setdefault("operation", plan.stage.operation.value)
+        enriched.setdefault("target_object", plan.stage.object)
+
+        if signal == ControlSignal.TIMED_OUT:
+            enriched.setdefault("failure_category", "controller_timeout")
+            enriched.setdefault("failure_reason", "primitive action did not finish before timeout")
+        elif signal == ControlSignal.FAILED:
+            enriched.setdefault("failure_category", "controller_failure")
+            enriched.setdefault("failure_reason", "primitive action reported failure")
+        else:
+            enriched.setdefault("failure_category", "execution_failure")
+            enriched.setdefault("failure_reason", "primitive action failed during execution")
+        return enriched
 
     @staticmethod
     def _run_action(

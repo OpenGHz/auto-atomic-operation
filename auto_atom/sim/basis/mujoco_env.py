@@ -350,14 +350,14 @@ class UnifiedMujocoEnv:
             raise ValueError(f"No pose site found for component '{component}'")
         return self.data.site_xmat[site_id]
 
-    def _mujoco_quat_wxyz_to_xyzw(self, quat: np.ndarray) -> np.ndarray:
+    def _quat_wxyz_to_xyzw(self, quat: np.ndarray) -> np.ndarray:
         quat = np.asarray(quat, dtype=np.float32).reshape(-1)
         return quat[[1, 2, 3, 0]]
 
     def _rotmat_to_quat_xyzw(self, rotmat: np.ndarray) -> np.ndarray:
         quat_wxyz = np.zeros(4, dtype=np.float64)
         mujoco.mju_mat2Quat(quat_wxyz, np.asarray(rotmat, dtype=np.float64).reshape(9))
-        return self._mujoco_quat_wxyz_to_xyzw(quat_wxyz).astype(np.float32)
+        return self._quat_wxyz_to_xyzw(quat_wxyz).astype(np.float32)
 
     def _site_pose(self, component: str) -> tuple[np.ndarray, np.ndarray]:
         site_id = self._pose_site_ids.get(component, -1)
@@ -373,7 +373,7 @@ class UnifiedMujocoEnv:
             raise ValueError(f"Body '{body_name}' not found in the Mujoco model.")
         pos = np.asarray(self.data.xpos[body_id], dtype=np.float32)
         quat_wxyz = np.asarray(self.data.xquat[body_id], dtype=np.float32)
-        quat_xyzw = self._mujoco_quat_wxyz_to_xyzw(quat_wxyz)
+        quat_xyzw = self._quat_wxyz_to_xyzw(quat_wxyz)
         return pos, quat_xyzw
 
     def get_site_pose(self, site_name: str) -> tuple[np.ndarray, np.ndarray]:
@@ -411,26 +411,6 @@ class UnifiedMujocoEnv:
             )
 
         self._pose_validated_components.add(component)
-
-    def _rotmat_to_euler_xyz(self, rotmat: np.ndarray) -> np.ndarray:
-        rotmat = np.asarray(rotmat, dtype=np.float64).reshape(3, 3)
-        sy = np.sqrt(rotmat[0, 0] ** 2 + rotmat[1, 0] ** 2)
-        singular = sy < 1e-6
-
-        if not singular:
-            roll = np.arctan2(rotmat[2, 1], rotmat[2, 2])
-            pitch = np.arctan2(-rotmat[2, 0], sy)
-            yaw = np.arctan2(rotmat[1, 0], rotmat[0, 0])
-        else:
-            roll = np.arctan2(-rotmat[1, 2], rotmat[1, 1])
-            pitch = np.arctan2(-rotmat[2, 0], sy)
-            yaw = 0.0
-
-        return np.asarray([roll, pitch, yaw], dtype=np.float32)
-
-    def _rotmat_to_rotation_6d(self, rotmat: np.ndarray) -> np.ndarray:
-        rotmat = np.asarray(rotmat, dtype=np.float32).reshape(3, 3)
-        return rotmat[:, :2].reshape(-1).astype(np.float32)
 
     def reset(self) -> None:
         if self.model.nkey > 0:
@@ -504,7 +484,7 @@ class UnifiedMujocoEnv:
 
             if DataType.POSE in self.config.enabled_sensors:
                 pos = self._sensor_data(self._pose_ids[component]["pos"])
-                quat = self._mujoco_quat_wxyz_to_xyzw(
+                quat = self._quat_wxyz_to_xyzw(
                     self._sensor_data(self._pose_ids[component]["quat"])
                 )
                 rot9d = self._pose_rot9d(component)
