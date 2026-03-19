@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Set
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from auto_atom.utils.transformations import euler_from_matrix
+from auto_atom.sim.backend.tactile.tactile_sensor import TactileSensorManager
 import os
 import numpy as np
 import mujoco
@@ -227,23 +228,16 @@ class UnifiedMujocoEnv:
         return model, data
 
     def _init_tactile_manager(self) -> None:
-        try:
-            import importlib
-            import sys
-
-            tactile_dir = Path(__file__).resolve().parents[1] / "tactile"
-            if str(tactile_dir) not in sys.path:
-                sys.path.insert(0, str(tactile_dir))
-            tactile_module = importlib.import_module("tactile_sensor")
-            tactile_manager_cls = getattr(tactile_module, "TactileSensorManager")
-
-            self._tactile_manager = tactile_manager_cls(
-                self.model,
-                self.data,
-                enable=DataType.TACTILE in self.config.enabled_sensors,
+        self._tactile_manager = TactileSensorManager(
+            self.model,
+            self.data,
+            enable=DataType.TACTILE in self.config.enabled_sensors,
+        )
+        if self._tactile_manager.n_panels == 0:
+            raise ValueError(
+                "DataType.TACTILE is enabled but no tactile sensors "
+                "(sites with 'touch_point') were found in the model."
             )
-        except Exception:
-            self._tactile_manager = None
 
     def _sensor_id(self, name: str) -> int:
         sid = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_SENSOR, name)
@@ -546,7 +540,7 @@ class UnifiedMujocoEnv:
                 for component, data in self._group_tactile_by_component(
                     tactile_data
                 ).items():
-                    obs[f"{component}/tactile/point_cloud_raw"] = {
+                    obs[f"{component}/tactile/point_cloud2"] = {
                         "data": data,
                         "t": t,
                     }
@@ -622,29 +616,72 @@ class UnifiedMujocoEnv:
 
     def _group_tactile_by_component(
         self, tactile_tensor: np.ndarray
-    ) -> dict[str, np.ndarray]:
+    ) -> Dict[str, Dict[str, Any]]:
         tactile_tensor = np.asarray(tactile_tensor, dtype=np.float32)
-        if tactile_tensor.ndim != 3 or self._tactile_manager is None:
-            return {}
+        grouped = {}
+        rows = 8
+        cols = 5
+        max_points = rows * cols
+        for i, panel_prefix in enumerate(self._tactile_manager.panel_order):
+            panel_data = tactile_tensor[i]
+            packed_points = np.zeros((max_points, 6), dtype=np.float32)
 
-        grouped: dict[str, list[np.ndarray]] = {k: [] for k in self._components}
-        for i, panel_name in enumerate(self._tactile_manager.panel_order):
-            if i >= tactile_tensor.shape[0]:
-                break
-            panel = tactile_tensor[i]
-            if "left_" in panel_name:
-                comp = "left_arm" if "left_arm" in grouped else "arm"
-            elif "right_" in panel_name:
-                comp = "right_arm" if "right_arm" in grouped else "arm"
+            for i in range(min(len(panel_data), max_points)):
+                row = i // cols
+                col = i % cols
+                packed_points[i, 0] = col * 0.005
+                packed_points[i, 1] = row * 0.005
+                packed_points[i, 2] = 0.0
+                packed_points[i, 3] = panel_data[i, 0]
+                packed_points[i, 4] = panel_data[i, 1]
+                packed_points[i, 5] = panel_data[i, 2]
+
+            feats = ("x", "y", "z", "fx", "fy", "fz")
+            field_size = 4
+            fields = [
+                {
+                    "name": name,
+                    "offset": field_size * i,
+                    "datatype": "FLOAT32",
+                    "count": 1,
+                }
+                for i, name in enumerate(feats)
+            ]
+
+            single = self.config.arm_mode == "single"
+            comp_suffix = "arm_eef"
+            if single:
+                comp = comp_suffix
             else:
-                comp = "arm"
-            grouped.setdefault(comp, []).append(panel)
+                if panel_prefix.startswith("left_"):
+                    comp = "left_" + comp_suffix
+                elif panel_prefix.startswith("right_"):
+                    comp = "right_" + comp_suffix
+                else:
+                    raise ValueError(
+                        f"Unexpected panel prefix '{panel_prefix}' in multi-arm mode"
+                    )
 
-        out = {}
-        for comp, blocks in grouped.items():
-            if blocks:
-                out[comp] = np.concatenate(blocks, axis=0)
-        return out
+            sim_time = self.data.time
+            sec = int(sim_time)
+            nanosec = int((sim_time - sec) * 1e9)
+            loc = "left" if panel_prefix.endswith("left_") else "right"
+            key = f"{comp}_{loc}"
+            grouped[key] = {
+                "header": {
+                    "frame_id": f"{key}_tactile",
+                    "stamp": {"sec": sec, "nanosec": nanosec},
+                },
+                "height": rows,
+                "width": cols,
+                "fields": fields,
+                "is_bigendian": False,
+                "point_step": field_size * len(feats),
+                "data": packed_points.tobytes(),
+                "is_dense": True,
+            }
+
+        return dict(grouped)
 
     def get_info(self) -> dict[str, Any]:
         mujoco.mj_forward(self.model, self.data)
