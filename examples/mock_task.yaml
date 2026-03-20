@@ -1,3 +1,15 @@
+env:
+  _target_: auto_atom.runtime.ComponentRegistry.register_env
+  name: mock_single_arm
+  env:
+    _target_: auto_atom.mock.create_mock_env
+    kind: mock_env
+
+backend:
+  _target_: auto_atom.mock.build_mock_backend
+  task: ${task}
+  operators: ${operators}
+
 task:
   env_name: mock_single_arm
   simulator: mock

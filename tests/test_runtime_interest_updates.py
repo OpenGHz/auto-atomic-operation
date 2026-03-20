@@ -6,24 +6,26 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from auto_atom.runtime import ComponentRegistry, TaskRunner
-from auto_atom.mock import MockSimulatorBackend, build_mock_backend
-
-
-ENV_NAME = "mock_single_arm"
-
-
-def build_registry() -> ComponentRegistry:
-    registry = ComponentRegistry()
-    registry.register_backend("mock", build_mock_backend)
-    registry.register_env(ENV_NAME, {"kind": "mock_env"})
-    return registry
+from auto_atom.mock import MockSimulatorBackend
 
 
 def test_runner_propagates_interest_objects_and_operations() -> None:
     task_path = ROOT / "tests" / "runtime_interest_updates_task.yaml"
     task_path.write_text(
-        f"""task:
-  env_name: {ENV_NAME}
+        """env:
+  _target_: auto_atom.runtime.ComponentRegistry.register_env
+  name: mock_single_arm
+  env:
+    _target_: auto_atom.mock.create_mock_env
+    kind: mock_env
+
+backend:
+  _target_: auto_atom.mock.build_mock_backend
+  task: ${task}
+  operators: ${operators}
+
+task:
+  env_name: mock_single_arm
   simulator: mock
   seed: 7
   stages:
@@ -53,7 +55,8 @@ operators:
 """
     )
 
-    runner = TaskRunner(registry=build_registry()).from_yaml(task_path)
+    ComponentRegistry.clear()
+    runner = TaskRunner().from_yaml(task_path)
 
     try:
         update = runner.reset()

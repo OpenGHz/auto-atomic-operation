@@ -6,9 +6,10 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Protocol
+from typing import Any, ClassVar, Dict, List, Optional
 
-import yaml
+from hydra.utils import instantiate
+from omegaconf import DictConfig, OmegaConf
 
 from .framework import (
     AutoAtomConfig,
@@ -24,16 +25,6 @@ from .framework import (
     TaskFileConfig,
 )
 from .utils.pose import PoseState, compose_pose, inverse_pose, pose_config_to_pose_state
-
-
-class BackendFactory(Protocol):
-    """Callable used to build a simulator backend from validated task file."""
-
-    def __call__(
-        self,
-        task_file: TaskFileConfig,
-        registry: "ComponentRegistry",
-    ) -> "SimulatorBackend": ...
 
 
 class StageExecutionStatus(str, Enum):
@@ -248,38 +239,28 @@ class ActiveStageState:
 
 
 class ComponentRegistry:
-    """Registry mapping simulator names to backend factories and named env instances."""
+    """Process-global registry storing named component instances shared within the current process."""
 
-    def __init__(self) -> None:
-        self._backend_factories: Dict[str, BackendFactory] = {}
-        self._env_instances: Dict[str, Any] = {}
+    _env_instances: ClassVar[Dict[str, Any]] = {}
 
-    def register_backend(self, name: str, factory: BackendFactory) -> None:
-        self._backend_factories[name] = factory
-
-    def register_env(self, name: str, env: Any) -> Any:
-        self._env_instances[name] = env
+    @classmethod
+    def register_env(cls, name: str, env: Any) -> Any:
+        cls._env_instances[name] = env
         return env
 
-    def get_env(self, name: str) -> Any:
+    @classmethod
+    def get_env(cls, name: str) -> Any:
         try:
-            return self._env_instances[name]
+            return cls._env_instances[name]
         except KeyError as exc:
-            known = ", ".join(sorted(self._env_instances)) or "<empty>"
+            known = ", ".join(sorted(cls._env_instances)) or "<empty>"
             raise KeyError(
                 f"Environment '{name}' is not registered. Available environments: {known}"
             ) from exc
 
-    def create_backend(self, task_file: TaskFileConfig) -> SimulatorBackend:
-        try:
-            factory = self._backend_factories[task_file.task.simulator]
-        except KeyError as exc:
-            known = ", ".join(sorted(self._backend_factories)) or "<empty>"
-            raise KeyError(
-                f"Simulator backend '{task_file.task.simulator}' is not registered. "
-                f"Available backends: {known}"
-            ) from exc
-        return factory(task_file, self)
+    @classmethod
+    def clear(cls) -> None:
+        cls._env_instances.clear()
 
 
 class TaskFlowBuilder:
@@ -385,10 +366,8 @@ class TaskRunner:
 
     def __init__(
         self,
-        registry: ComponentRegistry,
         builder: Optional[TaskFlowBuilder] = None,
     ) -> None:
-        self.registry = registry
         self.builder = builder or TaskFlowBuilder()
         self._context: Optional[ExecutionContext] = None
         self._plan: List[StageExecutionPlan] = []
@@ -405,7 +384,12 @@ class TaskRunner:
         return self.from_config(task_file)
 
     def from_config(self, config: TaskFileConfig) -> "TaskRunner":
-        backend = self.registry.create_backend(config)
+        backend = config.backend
+        if not isinstance(backend, SimulatorBackend):
+            raise TypeError(
+                "Task file backend must be an instantiated SimulatorBackend. "
+                f"Got {type(backend).__name__}."
+            )
         self._context = ExecutionContext(
             config=config.task,
             backend=backend,
@@ -817,11 +801,10 @@ class TaskRunner:
 
 
 def load_yaml(path: str | Path) -> Dict[str, Any]:
-    yaml_path = Path(path)
-    with yaml_path.open("r", encoding="utf-8") as handle:
-        data = yaml.safe_load(handle) or {}
+    config = OmegaConf.load(Path(path))
+    data = OmegaConf.to_container(config, resolve=False)
     if not isinstance(data, dict):
-        raise TypeError(f"YAML root must be a mapping: {yaml_path}")
+        raise TypeError(f"YAML root must be a mapping: {path}")
     return data
 
 
@@ -830,5 +813,18 @@ def load_config(path: str | Path) -> AutoAtomConfig:
 
 
 def load_task_file(path: str | Path) -> TaskFileConfig:
-    raw = load_yaml(path)
-    return TaskFileConfig.model_validate(raw)
+    config_path = Path(path)
+    config = OmegaConf.load(config_path)
+    if not isinstance(config, DictConfig):
+        raise TypeError(f"YAML root must be a mapping: {config_path}")
+
+    raw = OmegaConf.to_container(config, resolve=False)
+    if not isinstance(raw, dict):
+        raise TypeError(f"YAML root must be a mapping: {config_path}")
+
+    instantiated_raw = dict(raw)
+    if "env" in config and config.env is not None:
+        instantiated_raw["env"] = instantiate(config.env)
+    if "backend" in config and config.backend is not None:
+        instantiated_raw["backend"] = instantiate(config.backend)
+    return TaskFileConfig.model_validate(instantiated_raw)

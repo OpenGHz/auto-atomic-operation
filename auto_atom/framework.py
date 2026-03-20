@@ -1,5 +1,5 @@
 from enum import Enum
-from typing import List, Optional, Tuple
+from typing import Any, List, Optional, Tuple
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -170,8 +170,12 @@ class OperatorConfig(BaseModel):
 class TaskFileConfig(BaseModel):
     """Top-level YAML schema for a runnable task file."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
 
+    env: Any = None
+    """The optional instantiated environment registration entry evaluated before backend creation."""
+    backend: Any = None
+    """The instantiated simulator backend consumed directly by the task runner."""
     task: AutoAtomConfig
     """The task-level configuration describing stages, simulator, and environment selection."""
     operators: List[OperatorConfig] = Field(default_factory=list)

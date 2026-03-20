@@ -8,10 +8,11 @@ from typing import Any, Dict, List, Optional
 from .framework import (
     AutoAtomConfig,
     EefControlConfig,
+    OperatorConfig,
     PoseControlConfig,
-    TaskFileConfig,
 )
 from .runtime import (
+    ComponentRegistry,
     ControlResult,
     ControlSignal,
     ObjectHandler,
@@ -196,9 +197,22 @@ class MockSimulatorBackend(SimulatorBackend):
         )
 
 
-def build_mock_backend(task_file: TaskFileConfig, registry) -> MockSimulatorBackend:
-    config = task_file.task
-    registry.get_env(config.env_name)
+def create_mock_env(kind: str = "mock_env") -> Dict[str, str]:
+    """Create a simple mock environment payload for registry-based lookup."""
+
+    return {"kind": kind}
+
+
+def build_mock_backend(
+    task: AutoAtomConfig | Dict[str, Any],
+    operators: List[OperatorConfig] | List[Dict[str, Any]],
+) -> MockSimulatorBackend:
+    config = task if isinstance(task, AutoAtomConfig) else AutoAtomConfig.model_validate(task)
+    operator_configs = [
+        item if isinstance(item, OperatorConfig) else OperatorConfig.model_validate(item)
+        for item in operators
+    ]
+    ComponentRegistry.get_env(config.env_name)
     operators = {
         operator.name: MockOperatorHandler(
             operator_name=operator.name,
@@ -209,7 +223,7 @@ def build_mock_backend(task_file: TaskFileConfig, registry) -> MockSimulatorBack
                 orientation=(0.0, 0.0, 0.0, 1.0),
             ),
         )
-        for operator in task_file.operators
+        for operator in operator_configs
     }
     object_names = sorted({stage.object for stage in config.stages if stage.object})
     objects = {}

@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 import mujoco
 import numpy as np
 
-from ...framework import AutoAtomConfig, EefControlConfig, PoseControlConfig, TaskFileConfig
+from ...framework import AutoAtomConfig, EefControlConfig, OperatorConfig, PoseControlConfig
 from ...runtime import (
+    ComponentRegistry,
     ControlResult,
     ControlSignal,
     ObjectHandler,
@@ -313,18 +314,24 @@ class MujocoTaskBackend(SimulatorBackend):
 
 
 def create_mujoco_env(
-    registry,
     env_name: str,
     config: EnvConfig,
 ) -> UnifiedMujocoEnv:
     env = UnifiedMujocoEnv(config)
-    registry.register_env(env_name, env)
+    ComponentRegistry.register_env(env_name, env)
     return env
 
 
-def build_mujoco_backend(task_file: TaskFileConfig, registry) -> MujocoTaskBackend:
-    config = task_file.task
-    env = registry.get_env(config.env_name)
+def build_mujoco_backend(
+    task: AutoAtomConfig | Dict[str, Any],
+    operators: List[OperatorConfig] | List[Dict[str, Any]],
+) -> MujocoTaskBackend:
+    config = task if isinstance(task, AutoAtomConfig) else AutoAtomConfig.model_validate(task)
+    operator_configs = [
+        item if isinstance(item, OperatorConfig) else OperatorConfig.model_validate(item)
+        for item in operators
+    ]
+    env = ComponentRegistry.get_env(config.env_name)
     if not isinstance(env, UnifiedMujocoEnv):
         raise TypeError(
             f"Registered environment '{config.env_name}' must be a UnifiedMujocoEnv, got {type(env).__name__}."
@@ -332,7 +339,7 @@ def build_mujoco_backend(task_file: TaskFileConfig, registry) -> MujocoTaskBacke
 
     operator_handlers = {
         operator.name: MujocoOperatorHandler(operator_name=operator.name, env=env)
-        for operator in task_file.operators
+        for operator in operator_configs
     }
     object_names = {stage.object for stage in config.stages if stage.object}
     object_handlers = {

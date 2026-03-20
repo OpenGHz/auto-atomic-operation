@@ -1,3 +1,21 @@
+env:
+  _target_: auto_atom.runtime.ComponentRegistry.register_env
+  name: mujoco_pick_place_demo
+  env:
+    _target_: auto_atom.sim.basis.mujoco_env.UnifiedMujocoEnv
+    config:
+      _target_: auto_atom.sim.basis.mujoco_env.EnvConfig
+      model_path: third_party/xml/scene_pick_place_demo.xml
+      arm_mode: single
+      enabled_sensors:
+        - pose
+        - joint_position
+
+backend:
+  _target_: auto_atom.sim.backend.mujoco_backend.build_mujoco_backend
+  task: ${task}
+  operators: ${operators}
+
 task:
   env_name: mujoco_pick_place_demo
   simulator: mujoco

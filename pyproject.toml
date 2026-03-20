@@ -13,6 +13,7 @@ authors = [
   { name = "OpenGHz" },
 ]
 dependencies = [
+  "hydra-core",
   "mujoco",
   "numpy",
   "pydantic>=2",
