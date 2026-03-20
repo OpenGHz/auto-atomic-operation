@@ -1,5 +1,4 @@
 import numpy as np
-
 from auto_atom.sim.basis.mujoco_env import (
     CameraSpec,
     DataType,
@@ -11,7 +10,7 @@ from auto_atom.sim.basis.mujoco_env import (
 def main():
     env = UnifiedMujocoEnv(
         EnvConfig(
-            model_path="third_party/xml/scene_single_arm.xml",
+            model_path="third_party/xml/scene_pick_place_demo.xml",
             arm_mode="single",
             enabled_sensors=[
                 DataType.CAMERA,
@@ -33,14 +32,14 @@ def main():
                     enable_heat_map=True,
                 )
             ],
-            mask_objects=["floor_1_room_main", "left_follower"],
-            operations=["grasp", "push", "place", "pull", "rotate"],
+            mask_objects=["source_block", "target_pedestal"],
+            operations=["pick", "place", "push", "pull", "press"],
         )
     )
 
     try:
         env.set_interest_objects_and_operations(
-            ["floor_1_room_main", "left_follower"], ["grasp", "place"]
+            ["source_block", "target_pedestal"], ["pick", "place"]
         )
         env.reset()
 
@@ -63,9 +62,9 @@ def main():
         assert int(mask.sum()) > 0
         assert heat_map.shape == (720, 1280, len(env.config.operations))
         assert heat_map.dtype == np.uint8
-        assert channel_sum[0] > 0, "floor_1_room_main should activate the grasp channel"
-        assert channel_sum[2] > 0, "left_follower should activate the place channel"
-        assert np.all(channel_sum[[1, 3, 4]] == 0)
+        assert channel_sum[0] > 0, "source_block should activate the pick channel"
+        assert channel_sum[1] > 0, "target_pedestal should activate the place channel"
+        assert np.all(channel_sum[[2, 3, 4]] == 0)
     finally:
         env.close()
 
