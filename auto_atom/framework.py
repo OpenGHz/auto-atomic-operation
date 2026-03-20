@@ -162,7 +162,9 @@ class OperatorConfig(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     type: str
+    """The backend-specific operator type used to interpret this operator entry."""
     name: str
+    """The unique operator name referenced by task stages."""
 
 
 class TaskFileConfig(BaseModel):
@@ -171,4 +173,6 @@ class TaskFileConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     task: AutoAtomConfig
+    """The task-level configuration describing stages, simulator, and environment selection."""
     operators: List[OperatorConfig] = Field(default_factory=list)
+    """The operator definitions available to the selected backend for this task file."""

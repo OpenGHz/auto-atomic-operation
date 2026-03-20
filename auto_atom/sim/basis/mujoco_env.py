@@ -26,24 +26,38 @@ class CameraSpec(BaseModel, frozen=True):
     model_config = ConfigDict(validate_assignment=True, extra="forbid")
 
     name: str
+    """The camera name as defined in the Mujoco model."""
     width: int = 640
+    """The rendered image width in pixels."""
     height: int = 480
+    """The rendered image height in pixels."""
     enable_color: bool = True
+    """Whether to include RGB images in the captured observation."""
     enable_depth: bool = True
+    """Whether to include depth images in the captured observation."""
     enable_mask: bool = False
+    """Whether to include a binary segmentation mask for configured objects."""
     enable_heat_map: bool = False
+    """Whether to include per-operation heat maps derived from object masks."""
 
 
 class EnvConfig(BaseModel, frozen=True):
     model_config = ConfigDict(validate_assignment=True, extra="forbid")
 
     model_path: Path
+    """The path to the Mujoco XML model file used to create the environment."""
     arm_mode: str = "single"
+    """The arm topology mode, such as ``single`` or a multi-arm layout."""
     enabled_sensors: Set[DataType] = Field(default_factory=set)
+    """The sensor categories that should be exposed in captured observations."""
     cameras: List[CameraSpec] = Field(default_factory=list)
+    """The camera specifications to initialize when camera output is enabled."""
     mask_objects: List[str] = Field(default_factory=list)
+    """The object names that are eligible for binary mask and heat-map generation."""
     operations: List[str] = Field(default_factory=list)
+    """The operation names used to assign channels in generated heat maps."""
     stamp_ns: bool = True
+    """Whether observation timestamps should be emitted in nanoseconds instead of seconds."""
 
     @model_validator(mode="after")
     def validate_operations(self):

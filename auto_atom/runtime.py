@@ -33,8 +33,7 @@ class BackendFactory(Protocol):
         self,
         task_file: TaskFileConfig,
         registry: "ComponentRegistry",
-    ) -> "SimulatorBackend":
-        ...
+    ) -> "SimulatorBackend": ...
 
 
 class StageExecutionStatus(str, Enum):
@@ -60,6 +59,7 @@ class ObjectHandler:
     """Opaque object handle resolved by the simulator backend."""
 
     name: str
+    """The unique object name used by stage configs and backend lookups."""
 
     def get_pose(self) -> "PoseState":
         """Return the current world pose of the object."""
@@ -71,7 +71,9 @@ class ControlResult:
     """Incremental low-level control result."""
 
     signal: ControlSignal
+    """The coarse controller state returned after advancing one primitive action step."""
     details: Dict[str, Any] = field(default_factory=dict)
+    """Backend-specific diagnostic details associated with the returned control signal."""
 
 
 class OperatorHandler(ABC):
@@ -152,9 +154,13 @@ class PrimitiveAction:
     """Single primitive control action derived from a stage."""
 
     kind: str
+    """The primitive action kind, typically ``pose`` or ``eef``."""
     pose: Optional[PoseControlConfig] = None
+    """The pose target for pose actions, or ``None`` for non-pose actions."""
     eef: Optional[EefControlConfig] = None
+    """The end-effector target for eef actions, or ``None`` for non-eef actions."""
     resolved_pose: Optional[PoseControlConfig] = None
+    """The runtime-resolved pose after applying reference-frame conversion, when available."""
 
 
 @dataclass
@@ -162,13 +168,21 @@ class ExecutionRecord:
     """Final record for one completed or failed stage."""
 
     stage_index: int
+    """The zero-based index of the executed stage in the task definition."""
     stage_name: str
+    """The human-readable stage name reported to users and logs."""
     operator: str
+    """The operator name chosen to execute the stage."""
     operation: str
+    """The high-level operation name executed by the stage."""
     target_object: str
+    """The target object name associated with the stage, if any."""
     blocking: bool
+    """Whether the stage was configured to block task progression until completion."""
     status: StageExecutionStatus
+    """The final execution status reached by the stage."""
     details: Dict[str, Any] = field(default_factory=dict)
+    """Additional execution metadata collected while running the stage."""
 
 
 @dataclass
@@ -176,8 +190,11 @@ class ExecutionContext:
     """Mutable runtime context shared across the task lifecycle."""
 
     config: AutoAtomConfig
+    """The validated task configuration currently being executed."""
     backend: SimulatorBackend
+    """The simulator backend instance bound to this task run."""
     task_file: TaskFileConfig
+    """The full validated task file, including operator declarations."""
 
 
 @dataclass
@@ -185,8 +202,11 @@ class StageExecutionPlan:
     """Validated executable stage plan."""
 
     stage_index: int
+    """The zero-based index of the stage in the original task definition."""
     stage: StageConfig
+    """The validated stage configuration to execute."""
     operator_name: str
+    """The resolved operator name that will execute this stage."""
 
     @property
     def stage_name(self) -> str:
@@ -198,11 +218,17 @@ class TaskUpdate:
     """User-facing task progress returned by ``TaskRunner.update``."""
 
     stage_index: Optional[int]
+    """The active stage index, or ``None`` when the task is idle or finished."""
     stage_name: str
+    """The current stage name exposed to the caller."""
     status: StageExecutionStatus
+    """The latest high-level status for the active stage or overall task."""
     done: bool
+    """Whether the task has fully finished and will produce no further work."""
     success: Optional[bool]
+    """The final task success flag when done, or ``None`` while still running."""
     details: Dict[str, Any] = field(default_factory=dict)
+    """Additional progress metadata describing the latest update."""
 
 
 @dataclass
@@ -210,10 +236,15 @@ class ActiveStageState:
     """Internal state for the currently active stage."""
 
     plan: StageExecutionPlan
+    """The resolved execution plan for the active stage."""
     operator: OperatorHandler
+    """The operator handler currently executing primitive actions for this stage."""
     target: Optional[ObjectHandler]
+    """The resolved target object handler for the stage, if one is required."""
     actions: List[PrimitiveAction]
+    """The ordered primitive actions still being executed for this stage."""
     action_index: int = 0
+    """The index of the primitive action currently in progress."""
 
 
 class ComponentRegistry:
@@ -287,15 +318,25 @@ class TaskFlowBuilder:
             actions = TaskFlowBuilder._build_pose_actions(control.pre_move)
 
         if stage.operation == Operation.GRASP:
-            actions.append(PrimitiveAction(kind="eef", eef=TaskFlowBuilder._grasp_eef(control)))
+            actions.append(
+                PrimitiveAction(kind="eef", eef=TaskFlowBuilder._grasp_eef(control))
+            )
         elif stage.operation == Operation.RELEASE:
-            actions.append(PrimitiveAction(kind="eef", eef=TaskFlowBuilder._release_eef(control)))
+            actions.append(
+                PrimitiveAction(kind="eef", eef=TaskFlowBuilder._release_eef(control))
+            )
         elif stage.operation in {Operation.PICK, Operation.PULL}:
-            actions.append(PrimitiveAction(kind="eef", eef=TaskFlowBuilder._grasp_eef(control)))
+            actions.append(
+                PrimitiveAction(kind="eef", eef=TaskFlowBuilder._grasp_eef(control))
+            )
         elif stage.operation == Operation.PLACE:
-            actions.append(PrimitiveAction(kind="eef", eef=TaskFlowBuilder._release_eef(control)))
+            actions.append(
+                PrimitiveAction(kind="eef", eef=TaskFlowBuilder._release_eef(control))
+            )
         elif stage.operation not in {Operation.MOVE, Operation.PUSH}:
-            raise NotImplementedError(f"Unsupported operation '{stage.operation.value}'.")
+            raise NotImplementedError(
+                f"Unsupported operation '{stage.operation.value}'."
+            )
 
         actions.extend(TaskFlowBuilder._build_pose_actions(control.post_move))
         return actions
@@ -361,11 +402,14 @@ class TaskRunner:
 
     def from_yaml(self, path: str | Path) -> "TaskRunner":
         task_file = load_task_file(path)
-        backend = self.registry.create_backend(task_file)
+        return self.from_config(task_file)
+
+    def from_config(self, config: TaskFileConfig) -> "TaskRunner":
+        backend = self.registry.create_backend(config)
         self._context = ExecutionContext(
-            config=task_file.task,
+            config=config.task,
             backend=backend,
-            task_file=task_file,
+            task_file=config,
         )
         self._plan = self.builder.build(self._context)
         self._context.backend.setup(self._context.config)
@@ -429,7 +473,9 @@ class TaskRunner:
 
         active = self._active_stage
         action = active.actions[active.action_index]
-        result = self._run_action(active.operator, action, context.backend, active.target)
+        result = self._run_action(
+            active.operator, action, context.backend, active.target
+        )
         details = {
             "action": action.kind,
             "action_index": active.action_index,
@@ -585,13 +631,19 @@ class TaskRunner:
         if satisfied:
             return None
 
-        phase = "precondition" if condition_type == OperationConditionType.PERFORM else "postcondition"
+        phase = (
+            "precondition"
+            if condition_type == OperationConditionType.PERFORM
+            else "postcondition"
+        )
         if constraint == OperationConstraint.GRASPED:
             failure_category = "missing_grasp"
             failure_reason = "operator is not grasping a required object"
         elif constraint == OperationConstraint.RELEASED:
             failure_category = "unexpected_grasp"
-            failure_reason = "operator is still grasping an object when it should be empty-handed"
+            failure_reason = (
+                "operator is still grasping an object when it should be empty-handed"
+            )
         else:
             failure_category = "condition_mismatch"
             failure_reason = "stage condition is not satisfied"
@@ -623,13 +675,17 @@ class TaskRunner:
 
         if signal == ControlSignal.TIMED_OUT:
             enriched.setdefault("failure_category", "controller_timeout")
-            enriched.setdefault("failure_reason", "primitive action did not finish before timeout")
+            enriched.setdefault(
+                "failure_reason", "primitive action did not finish before timeout"
+            )
         elif signal == ControlSignal.FAILED:
             enriched.setdefault("failure_category", "controller_failure")
             enriched.setdefault("failure_reason", "primitive action reported failure")
         else:
             enriched.setdefault("failure_category", "execution_failure")
-            enriched.setdefault("failure_reason", "primitive action failed during execution")
+            enriched.setdefault(
+                "failure_reason", "primitive action failed during execution"
+            )
         return enriched
 
     @staticmethod
@@ -694,7 +750,9 @@ class TaskRunner:
     ) -> PoseState:
         reference = pose.reference
         if reference == PoseReference.AUTO:
-            reference = PoseReference.OBJECT_WORLD if target is not None else PoseReference.BASE
+            reference = (
+                PoseReference.OBJECT_WORLD if target is not None else PoseReference.BASE
+            )
         if reference == PoseReference.WORLD:
             return PoseState()
         if reference == PoseReference.BASE:
@@ -703,7 +761,9 @@ class TaskRunner:
             return operator.get_end_effector_pose(backend)
         if reference == PoseReference.OBJECT_WORLD:
             if target is None:
-                raise ValueError("Pose reference OBJECT_WORLD requires a target object.")
+                raise ValueError(
+                    "Pose reference OBJECT_WORLD requires a target object."
+                )
             object_pose = target.get_pose()
             return PoseState(position=object_pose.position)
         if reference == PoseReference.OBJECT:

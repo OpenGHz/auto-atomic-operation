@@ -24,8 +24,9 @@ class PoseState:
     """Concrete world pose used by the runtime for frame conversions."""
 
     position: Position = (0.0, 0.0, 0.0)
-    # Quaternion convention is always xyzw.
+    """The Cartesian position represented as ``(x, y, z)`` in world coordinates."""
     orientation: Orientation = (0.0, 0.0, 0.0, 1.0)
+    """The quaternion orientation represented in ``xyzw`` order."""
 
 
 def pose_config_to_pose_state(pose: PoseControlConfig) -> PoseState:

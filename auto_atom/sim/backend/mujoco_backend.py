@@ -25,8 +25,11 @@ class MujocoObjectHandler(ObjectHandler):
     """Object handle backed by a Mujoco body."""
 
     env: UnifiedMujocoEnv
+    """The shared Mujoco basis environment used to query object state."""
     body_name: str
+    """The Mujoco body name that stores this object's pose."""
     freejoint_name: Optional[str] = None
+    """The optional free-joint name associated with the object for direct manipulation."""
 
     def get_pose(self) -> PoseState:
         pos, quat = self.env.get_body_pose(self.body_name)
@@ -37,22 +40,39 @@ class MujocoOperatorHandler(OperatorHandler):
     """Operator controller backed by the free-flying gripper model."""
 
     operator_name: str
+    """The runtime-visible operator name for this controller."""
     env: UnifiedMujocoEnv
+    """The shared Mujoco basis environment used to step the simulation."""
     component: str = "arm"
+    """The environment component name this operator is bound to."""
     root_body_name: str = "robotiq_interface"
+    """The root body name used to read the operator base pose."""
     eef_site_name: str = "eef_pose"
+    """The site name used to read the operator end-effector pose."""
     eef_ctrl_index: int = 6
+    """The control index corresponding to the gripper or end-effector actuator."""
     position_tolerance: float = 0.01
+    """The Euclidean position tolerance for considering a pose command reached."""
     orientation_tolerance: float = 0.08
+    """The angular tolerance in radians for considering a pose orientation reached."""
     eef_tolerance: float = 0.03
+    """The tolerance used to determine whether the gripper target has been reached."""
     command_timeout_steps: int = 600
+    """The maximum number of simulation steps allowed for one primitive command."""
     _tool_pose_in_base: PoseState = field(init=False)
+    """The fixed transform from the operator base frame to the tool frame."""
     _last_move_key: Optional[str] = None
+    """The serialized pose command currently tracked by the motion controller."""
     _last_eef_key: Optional[str] = None
+    """The serialized end-effector command currently tracked by the controller."""
     _last_target: Optional[MujocoObjectHandler] = None
+    """The last target object involved in a primitive action, if any."""
     _move_steps: int = 0
+    """The number of simulation steps consumed by the active pose command."""
     _eef_steps: int = 0
+    """The number of simulation steps consumed by the active eef command."""
     _home_ctrl: np.ndarray = field(default_factory=lambda: np.asarray([0.0, -0.25, 0.35, 0.0, 0.0, 0.0, 0.0], dtype=np.float64))
+    """The nominal home control vector used to settle the operator at reset time."""
 
     @property
     def name(self) -> str:
@@ -204,8 +224,11 @@ class MujocoTaskBackend(SimulatorBackend):
     """Framework backend implemented on top of ``UnifiedMujocoEnv``."""
 
     env: UnifiedMujocoEnv
+    """The registered Mujoco basis environment used by this backend instance."""
     operator_handlers: Dict[str, MujocoOperatorHandler]
+    """The operator handlers available to execute task stages."""
     object_handlers: Dict[str, MujocoObjectHandler]
+    """The object handlers available for stage target lookup and state queries."""
 
     def setup(self, config: AutoAtomConfig) -> None:
         for operator in self.operator_handlers.values():

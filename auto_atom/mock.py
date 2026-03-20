@@ -26,7 +26,9 @@ class MockObjectHandler(ObjectHandler):
     """Mock object handle."""
 
     kind: str = "mock_object"
+    """A simple type label describing the mock object implementation."""
     pose: PoseState = field(default_factory=PoseState)
+    """The current mock world pose returned for this object."""
 
     def get_pose(self) -> PoseState:
         return self.pose
@@ -37,11 +39,17 @@ class MockOperatorHandler(OperatorHandler):
     """Mock operator that completes each primitive action in two update ticks."""
 
     operator_name: str
+    """The public operator name exposed to the runtime."""
     role: str = "generic"
+    """An optional semantic role used by examples and debug output."""
     _command_key: str = ""
+    """The serialized command signature used to detect command changes."""
     _progress: int = 0
+    """The number of update ticks already spent on the active primitive action."""
     base_pose: PoseState = field(default_factory=PoseState)
+    """The mock base pose reported for this operator."""
     end_effector_pose: PoseState = field(default_factory=PoseState)
+    """The mock end-effector pose reported for this operator."""
 
     @property
     def name(self) -> str:
@@ -124,11 +132,17 @@ class MockSimulatorBackend(SimulatorBackend):
     """Simple simulator backend with in-memory object and operator handlers."""
 
     simulator_name: str
+    """The simulator name used to register this backend in the runtime."""
     env_name: str
+    """The registered environment name associated with this backend instance."""
     operators: Dict[str, MockOperatorHandler] = field(default_factory=dict)
+    """The operator handlers keyed by operator name."""
     objects: Dict[str, MockObjectHandler] = field(default_factory=dict)
+    """The object handlers keyed by object name."""
     lifecycle_events: List[str] = field(default_factory=list)
+    """A simple ordered log of setup, reset, and teardown calls."""
     interest_updates: List[Dict[str, List[str]]] = field(default_factory=list)
+    """Recorded interest-object and interest-operation updates pushed by the runner."""
 
     def setup(self, config: AutoAtomConfig) -> None:
         self.lifecycle_events.append(
