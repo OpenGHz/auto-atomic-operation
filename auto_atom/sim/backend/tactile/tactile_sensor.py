@@ -4,8 +4,10 @@ os.environ["QT_QPA_PLATFORM_PLUGIN_PATH"] = ""
 
 import numpy as np
 import mujoco
-import cv2
-
+try:
+    import cv2
+except:
+    cv2 = None
 
 class TactileSensorManager:
     TANGENTIAL_FORCE_LIMIT_N = 10.0
