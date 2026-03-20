@@ -58,6 +58,25 @@ class EnvConfig(BaseModel, frozen=True):
     """The operation names used to assign channels in generated heat maps."""
     stamp_ns: bool = True
     """Whether observation timestamps should be emitted in nanoseconds instead of seconds."""
+    sim_freq: float | None = None
+    """Physics simulation frequency in Hz. If None, uses the timestep defined in the XML model."""
+    update_freq: float | None = None
+    """Control update frequency in Hz. Must be <= sim_freq. If None, defaults to sim_freq (n_substeps=1)."""
+
+    @model_validator(mode="after")
+    def validate_frequencies(self):
+        if self.update_freq is not None:
+            if self.sim_freq is None:
+                raise ValueError("sim_freq must be set when update_freq is set.")
+            if self.update_freq > self.sim_freq:
+                raise ValueError(
+                    f"update_freq ({self.update_freq} Hz) must be <= sim_freq ({self.sim_freq} Hz)."
+                )
+            if self.sim_freq % self.update_freq != 0:
+                raise ValueError(
+                    f"sim_freq ({self.sim_freq} Hz) must be divisible by update_freq ({self.update_freq} Hz)."
+                )
+        return self
 
     @model_validator(mode="after")
     def validate_operations(self):
@@ -76,6 +95,14 @@ class UnifiedMujocoEnv:
         self.get_logger().info("Initializing...")
         self.config = config
         self.model, self.data = self._load_model(config.model_path)
+
+        if config.sim_freq is not None:
+            self.model.opt.timestep = 1.0 / config.sim_freq
+        self._n_substeps = (
+            int(config.sim_freq / config.update_freq)
+            if config.sim_freq is not None and config.update_freq is not None
+            else 1
+        )
 
         if self.model.nkey > 0:
             mujoco.mj_resetDataKeyframe(self.model, self.data, 0)
@@ -610,7 +637,8 @@ class UnifiedMujocoEnv:
         return False
 
     def update(self):
-        mujoco.mj_step(self.model, self.data)
+        for _ in range(self._n_substeps):
+            mujoco.mj_step(self.model, self.data)
 
     def _wrench_from_tactile(self, component: str) -> tuple[np.ndarray, np.ndarray]:
         if self._tactile_manager is None:

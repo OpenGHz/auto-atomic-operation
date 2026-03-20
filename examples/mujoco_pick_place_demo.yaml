@@ -10,6 +10,8 @@ env:
       enabled_sensors:
         - pose
         - joint_position
+      sim_freq: 500
+      update_freq: 20
 
 backend: auto_atom.sim.backend.mujoco_backend.build_mujoco_backend
 
