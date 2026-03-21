@@ -132,8 +132,6 @@ class MockOperatorHandler(OperatorHandler):
 class MockSimulatorBackend(SimulatorBackend):
     """Simple simulator backend with in-memory object and operator handlers."""
 
-    simulator_name: str
-    """The simulator name used to register this backend in the runtime."""
     env_name: str
     """The registered environment name associated with this backend instance."""
     operators: Dict[str, MockOperatorHandler] = field(default_factory=dict)
@@ -147,7 +145,7 @@ class MockSimulatorBackend(SimulatorBackend):
 
     def setup(self, config: AutoAtomConfig) -> None:
         self.lifecycle_events.append(
-            f"setup(simulator={self.simulator_name}, env={config.env_name}, seed={config.seed})"
+            f"setup(env={config.env_name}, seed={config.seed})"
         )
 
     def reset(self) -> None:
@@ -236,7 +234,6 @@ def build_mock_backend(
             ),
         )
     return MockSimulatorBackend(
-        simulator_name=config.simulator,
         env_name=config.env_name,
         operators=operators,
         objects=objects,

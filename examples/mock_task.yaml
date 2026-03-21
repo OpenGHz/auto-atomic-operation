@@ -9,7 +9,6 @@ backend: auto_atom.mock.build_mock_backend
 
 task:
   env_name: mock_single_arm
-  simulator: mock
   seed: 7
   stages:
     - name: pick_cup
@@ -45,9 +44,7 @@ task:
             reference: base
 
 operators:
-  - type: mock
-    name: arm_a
+  - name: arm_a
     role: manipulator
-  - type: mock
-    name: observer
+  - name: observer
     role: monitor

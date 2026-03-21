@@ -187,8 +187,6 @@ class AutoAtomConfig(BaseModel):
     """A list of StageConfig objects, each representing a stage of the AutoAtom agent. The stages are executed in the order they are defined in the list."""
     env_name: str
     """The registered environment name used to resolve the basis environment instance for the selected simulator."""
-    simulator: str = "mujoco"
-    """The name of the simulator to be used by the AutoAtom agent. The simulator should be compatible with the environment model."""
     seed: int = 0
     """The random seed for the AutoAtom agent. This is used to ensure reproducibility of the agent's behavior."""
     randomization: Dict[str, PoseRandomRange] = Field(default_factory=dict)
@@ -202,8 +200,6 @@ class OperatorConfig(BaseModel):
 
     model_config = ConfigDict(extra="allow")
 
-    type: str
-    """The backend-specific operator type used to interpret this operator entry."""
     name: str
     """The unique operator name referenced by task stages."""
 
