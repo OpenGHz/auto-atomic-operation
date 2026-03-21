@@ -76,8 +76,12 @@ class MockOperatorHandler(OperatorHandler):
                 },
             )
         self.end_effector_pose = PoseState(
-            position=pose.position if pose.position else self.end_effector_pose.position,
-            orientation=pose.orientation if pose.orientation else self.end_effector_pose.orientation,
+            position=pose.position
+            if pose.position
+            else self.end_effector_pose.position,
+            orientation=pose.orientation
+            if pose.orientation
+            else self.end_effector_pose.orientation,
         )
         return ControlResult(
             signal=ControlSignal.REACHED,
@@ -160,7 +164,9 @@ class MockSceneBackend(SceneBackend):
             return self.operators[name]
         except KeyError as exc:
             known = ", ".join(sorted(self.operators)) or "<empty>"
-            raise KeyError(f"Unknown operator '{name}'. Known operators: {known}") from exc
+            raise KeyError(
+                f"Unknown operator '{name}'. Known operators: {known}"
+            ) from exc
 
     def get_object_handler(self, name: str) -> Optional[MockObjectHandler]:
         if not name:
@@ -203,17 +209,27 @@ def build_mock_backend(
     task: AutoAtomConfig | Dict[str, Any],
     operators: List[OperatorConfig] | List[Dict[str, Any]],
 ) -> MockSceneBackend:
-    config = task if isinstance(task, AutoAtomConfig) else AutoAtomConfig.model_validate(task)
+    config = (
+        task
+        if isinstance(task, AutoAtomConfig)
+        else AutoAtomConfig.model_validate(task)
+    )
     operator_configs = [
-        item if isinstance(item, OperatorConfig) else OperatorConfig.model_validate(item)
+        item
+        if isinstance(item, OperatorConfig)
+        else OperatorConfig.model_validate(item)
         for item in operators
     ]
     ComponentRegistry.get_env(config.env_name)
     operators = {
         operator.name: MockOperatorHandler(
             operator_name=operator.name,
-            role=operator.model_extra.get("role", "generic") if operator.model_extra else "generic",
-            base_pose=PoseState(position=(0.0, 0.0, 0.0), orientation=(0.0, 0.0, 0.0, 1.0)),
+            role=operator.model_extra.get("role", "generic")
+            if operator.model_extra
+            else "generic",
+            base_pose=PoseState(
+                position=(0.0, 0.0, 0.0), orientation=(0.0, 0.0, 0.0, 1.0)
+            ),
             end_effector_pose=PoseState(
                 position=(0.2, 0.0, 0.3),
                 orientation=(0.0, 0.0, 0.0, 1.0),

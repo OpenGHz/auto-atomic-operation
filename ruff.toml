@@ -1,0 +1,6 @@
+[lint]
+ignore = ["F841", "F401"]
+exclude = [
+    "auto_atom/utils/transformations.py",
+    "tests/*",
+]
