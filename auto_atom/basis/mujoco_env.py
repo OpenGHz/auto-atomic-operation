@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Set
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from auto_atom.utils.transformations import euler_from_matrix
-from auto_atom.sim.backend.tactile.tactile_sensor import TactileSensorManager
+from auto_atom.backend.mjc.tactile.tactile_sensor import TactileSensorManager
 import os
 import time
 import numpy as np

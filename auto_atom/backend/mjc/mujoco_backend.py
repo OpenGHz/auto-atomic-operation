@@ -24,7 +24,7 @@ from ...runtime import (
     SimulatorBackend,
 )
 from ...utils.pose import PoseState, compose_pose, inverse_pose, quaternion_to_rpy
-from ..basis.mujoco_env import EnvConfig, UnifiedMujocoEnv
+from ...basis.mujoco_env import EnvConfig, UnifiedMujocoEnv
 
 
 @dataclass

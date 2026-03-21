@@ -2,9 +2,9 @@ env:
   _target_: auto_atom.runtime.ComponentRegistry.register_env
   name: mujoco_pick_place_demo
   env:
-    _target_: auto_atom.sim.basis.mujoco_env.UnifiedMujocoEnv
+    _target_: auto_atom.basis.mujoco_env.UnifiedMujocoEnv
     config:
-      _target_: auto_atom.sim.basis.mujoco_env.EnvConfig
+      _target_: auto_atom.basis.mujoco_env.EnvConfig
       model_path: third_party/xml/scene_pick_place_demo.xml
       arm_mode: single
       enabled_sensors:
@@ -51,7 +51,7 @@ env:
         step_delay: 0.03
         hold_seconds: 3.0
 
-backend: auto_atom.sim.backend.mujoco_backend.build_mujoco_backend
+backend: auto_atom.backend.mjc.mujoco_backend.build_mujoco_backend
 
 task:
   env_name: mujoco_pick_place_demo

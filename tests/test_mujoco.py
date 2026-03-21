@@ -1,5 +1,5 @@
 import numpy as np
-from auto_atom.sim.basis.mujoco_env import (
+from auto_atom.basis.mujoco_env import (
     CameraSpec,
     DataType,
     EnvConfig,
