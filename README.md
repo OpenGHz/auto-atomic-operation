@@ -10,7 +10,7 @@ A YAML-driven atomic operation framework for robotic manipulation.
 
 </div>
 
-`auto-atomic-operation` lets you define robotic manipulation tasks — pick, place, push, pull, move, grasp, release — as declarative YAML files. A built-in state machine handles task sequencing, pose resolution, end-effector control, and execution tracking. A plugin-based backend system decouples task logic from the underlying hardware or simulator, making it easy to run the same task definition against a real robot, a physics simulator, or a lightweight mock for testing.
+`auto-atomic-operation` lets you define robotic manipulation tasks — move, grasp, release, pick, place, push, pull, press — as declarative YAML files. A built-in state machine handles task sequencing, pose resolution, end-effector control, and execution tracking. A plugin-based backend system decouples task logic from the underlying hardware or simulator, making it easy to run the same task definition against a real robot, a physics simulator, or a lightweight mock for testing.
 
 ## Features
 
