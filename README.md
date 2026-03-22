@@ -20,7 +20,7 @@ A YAML-driven atomic operation framework for robotic manipulation.
 - **Pose randomization** — per-object position/orientation randomization with automatic collision avoidance on reset
 - **Multi-arm support** — single-arm and dual-arm (left/right) topologies
 - **Execution records** — detailed per-stage status, failure reasons, and timing after every run
-- **Mujoco backend included** — a ready-to-use backend with RGB-D cameras, tactile sensors, force/torque, IMU, and joint state support
+- **MuJoCo backend included** — a ready-to-use backend with RGB-D cameras, tactile sensors, force/torque, IMU, and joint state support
 
 ## Installation
 
@@ -30,9 +30,40 @@ Requires **Python 3.10+**.
 # Core framework only
 pip install -e .
 
-# With the built-in Mujoco backend
+# With the built-in MuJoCo backend
 pip install -e ".[mujoco]"
 ```
+
+## Examples
+
+The [`examples/`](examples/) directory contains two runnable demos:
+
+### Mock example (no robot or simulator required)
+
+```bash
+python examples/run_mock_example.py
+```
+
+Uses the in-memory mock backend — ideal for testing task logic in isolation.
+
+### MuJoCo pick-and-place demo
+
+Download the assets and unzip:
+
+```bash
+wget https://drive.usercontent.google.com/download?id=1NPHpa8KnPDKYunWXTQm1168QOC0X4iPU&export=download&authuser=0 --no-check-certificate -O assets.zip
+
+unzip assets.zip
+
+```
+
+Run the demo:
+
+```bash
+python examples/run_mujoco_pick_place_demo.py
+```
+
+A full pick-and-place task with RGB-D cameras, tactile sensors, and randomized object placement, running in the Mujoco physics simulator.
 
 ## Quick Start
 
@@ -138,26 +169,6 @@ A task file has four top-level keys:
 | `object_world` | Object position with world orientation |
 | `eef_world` | EEF position snapshot at command start |
 | `auto` | Automatically determined from context |
-
-## Examples
-
-The [`examples/`](examples/) directory contains two runnable demos:
-
-### Mock example (no robot or simulator required)
-
-```bash
-python examples/run_mock_example.py
-```
-
-Uses the in-memory mock backend — ideal for testing task logic in isolation.
-
-### Mujoco pick-and-place demo
-
-```bash
-python examples/run_mujoco_pick_place_demo.py
-```
-
-A full pick-and-place task with RGB-D cameras, tactile sensors, and randomized object placement, running in the Mujoco physics simulator.
 
 ## Architecture
 

@@ -5,7 +5,7 @@ env:
     _target_: auto_atom.basis.mujoco_env.UnifiedMujocoEnv
     config:
       _target_: auto_atom.basis.mujoco_env.EnvConfig
-      model_path: third_party/xml/scene_pick_place_demo.xml
+      model_path: assets/xmls/scenes/pick_and_place/demo.xml
       arm_mode: single
       enabled_sensors:
         - camera

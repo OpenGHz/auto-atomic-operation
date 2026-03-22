@@ -5,7 +5,6 @@ Pose randomization is configured in mujoco_pick_place_demo.yaml under
 """
 
 from pathlib import Path
-
 from auto_atom.runtime import ComponentRegistry, TaskRunner
 
 
