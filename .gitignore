@@ -207,4 +207,4 @@ marimo/_lsp/
 __marimo__/
 .vscode/
 third_party/
-assets/
+# assets/
