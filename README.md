@@ -91,10 +91,22 @@ git lfs pull -I "assets/meshes/robotiq/*"
 Run the pick & place demo:
 
 ```bash
-python examples/run_demo.py
+python examples/run_demo.py --config-name pick_and_place
 ```
 
-A full pick-and-place task with RGB-D cameras, tactile sensors, and randomized object placement, running in the Mujoco physics simulator. Config values can be overridden on the command line via Hydra:
+A full pick-and-place task with RGB-D cameras, tactile sensors, and randomized object placement, running in the Mujoco physics simulator.
+
+This demo uses the scene `assets/xmls/scenes/pick_and_place/demo.xml`. You can use the following command to visualize the scene:
+
+```bash
+(cd assets/xmls/scenes/pick_and_place/ && python -m mujoco.viewer --mjcf demo.yaml)
+```
+
+Note: (command) will use a sub-shell to change the working directory, so it won't affect the main shell's current directory.
+
+```bash
+
+Config values can be overridden on the command line via Hydra:
 
 ```bash
 python examples/run_demo.py task.seed=0
