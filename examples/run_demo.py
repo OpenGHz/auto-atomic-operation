@@ -1,18 +1,20 @@
 """Run a demo using the Mujoco backend.
 
 Config files live in the ``mujoco/`` subdirectory. The default is
-``mujoco/pick_and_place.yaml``. Any value can be overridden from the command
-line via Hydra, e.g.::
+``mujoco/pick_and_place.yaml``. Switch tasks with ``--config-name``.
+Any value can be overridden from the command line via Hydra, e.g.::
 
     # Run the default pick-and-place demo
     python run_demo.py
 
-    # Run the mock demo
+    # Run other tasks
+    python run_demo.py --config-name cup_on_coaster
+    python run_demo.py --config-name stack_color_blocks
     python run_demo.py --config-name mock
 
     # Override individual values
     python run_demo.py task.seed=0
-    python run_demo.py task.randomization.source_block.x="[-0.05,0.05]"
+    python run_demo.py "task.randomization.cup.x=[-0.03,0.03]"
 """
 
 import hydra
@@ -35,13 +37,8 @@ def main(cfg: DictConfig) -> None:
     runner = TaskRunner().from_config(task_file)
 
     try:
-        print("Reset task (randomization loaded from YAML)")
+        print("Reset task")
         print(runner.reset())
-        print()
-
-        backend = runner._require_context().backend
-        source_pose = backend.get_object_handler("source_block").get_pose()
-        print(f"source_block pose after reset: {source_pose}")
         print()
 
         while True:
@@ -50,13 +47,6 @@ def main(cfg: DictConfig) -> None:
             if update.done:
                 break
 
-        source_pose = backend.get_object_handler("source_block").get_pose()
-        target_pose = backend.get_object_handler("target_pedestal").get_pose()
-
-        print()
-        print("Final poses:")
-        print("source_block:", source_pose)
-        print("target_pedestal:", target_pose)
         print()
         print("Execution records:")
         for record in runner.records:

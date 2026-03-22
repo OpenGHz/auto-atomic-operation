@@ -1,0 +1,68 @@
+<mujoco model="cup_on_coaster">
+  <include file="../../robots/robotiq.xml"/>
+
+  <visual>
+    <map znear="0.001"/>
+  </visual>
+
+  <asset>
+    <!-- meshdir resolved from this file: assets/xmls/scenes/cup_on_coaster/
+         -> ../../../meshes = assets/meshes/ (set in robotiq.xml compiler) -->
+    <mesh name="cup_mesh"     file="cup_on_coaster/blue_water_cup/blue_water_cup.obj"/>
+    <mesh name="coaster_mesh" file="cup_on_coaster/coaster/coaster.obj"/>
+
+    <material name="cup_mat"     rgba="0.1 0.45 0.85 0.85" specular="0.5" shininess="0.5"/>
+    <material name="coaster_mat" rgba="0.65 0.45 0.3 1"    reflectance="0.15"/>
+  </asset>
+
+  <worldbody>
+    <light name="demo_light" pos="0 0 1.5" dir="0 0 -1"/>
+    <geom name="floor" type="plane" size="2 2 0.1" rgba="0.85 0.85 0.85 1"/>
+
+    <!-- table: center z=0.03, half-height=0.03 -> top surface z=0.06 -->
+    <body name="table" pos="0 0 0.03">
+      <geom name="table_top" type="box" size="0.28 0.22 0.03" rgba="0.6 0.45 0.3 1"/>
+    </body>
+
+    <!-- cup: box collision (half-extents 0.025 x 0.025 x 0.025) gives flat
+         surfaces for stable gripper contact, matching source_block in demo.
+         center z = 0.06 (table top) + 0.025 = 0.085                         -->
+    <body name="cup" pos="-0.04 0.0 0.085">
+      <freejoint name="cup_joint"/>
+      <geom name="cup_col" type="box" size="0.025 0.025 0.025"
+            mass="0.005" friction="1.2 0.05 0.01"
+            rgba="0 0 0 0" contype="1" conaffinity="1"/>
+      <geom name="cup_vis" type="mesh" mesh="cup_mesh" material="cup_mat"
+            quat="0.5 -0.866 0 0" density="0"
+            contype="0" conaffinity="0" group="1"/>
+      <site name="cup_site" pos="0 0 0" size="0.004" rgba="1 0 0 0"/>
+    </body>
+
+    <!-- coaster: static (no joint), half-height=0.01
+         center z = 0.06 (table top) + 0.01 = 0.07                           -->
+    <body name="coaster" pos="0.12 0.0 0.07">
+      <geom name="coaster_col" type="box" size="0.05 0.05 0.01"
+            mass="0.05" rgba="0 0 0 0" contype="1" conaffinity="1"/>
+      <geom name="coaster_vis" type="mesh" mesh="coaster_mesh" material="coaster_mat"
+            quat="0.942405 0.30447 -0.0342528 -0.134153" density="0"
+            contype="0" conaffinity="0" group="1"/>
+      <site name="coaster_site" pos="0 0 0" size="0.004" rgba="0 1 0 0"/>
+    </body>
+
+    <!-- Front camera: looking from -Y toward the task area -->
+    <camera name="front_cam" pos="0 -0.8 0.5" xyaxes="1 0 0 0 0.447 0.894" fovy="45"/>
+    <!-- Side camera: looking from +X toward the task area -->
+    <camera name="side_cam" pos="0.9 0 0.5" xyaxes="0 1 0 -0.406 0 0.914" fovy="45"/>
+  </worldbody>
+
+  <keyframe>
+    <!-- robotiq 6-DOF base (6) + gripper finger joints (6) + cup freejoint (7) -->
+    <key
+      qpos="
+         0 0 0.4 0 0 0
+         0.00522882 0.00541525 0.00562153 0.00529892 0.00548528 0.00569143
+         -0.04 0.0 0.085  1 0 0 0"
+      ctrl="0 0 0.4 0 0 0 0"
+    />
+  </keyframe>
+</mujoco>

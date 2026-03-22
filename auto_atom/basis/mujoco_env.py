@@ -141,6 +141,8 @@ class EnvConfig(BaseModel, frozen=True):
     """Control update frequency in Hz. Must be <= sim_freq. If None, defaults to sim_freq (n_substeps=1)."""
     viewer: ViewerConfig | None = None
     """Viewer configuration. If None, the passive viewer is not launched."""
+    flatten_like: bool = True
+    """Whether the observation value data should be flattened to 1D arrays when possible, e.g. for joint states."""
 
     @model_validator(mode="after")
     def validate_frequencies(self):

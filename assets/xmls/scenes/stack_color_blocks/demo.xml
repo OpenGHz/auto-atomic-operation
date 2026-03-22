@@ -1,0 +1,83 @@
+<mujoco model="stack_color_blocks">
+  <include file="../../robots/robotiq.xml"/>
+
+  <visual>
+    <map znear="0.001"/>
+  </visual>
+
+  <asset>
+    <!-- meshdir resolved to assets/meshes/ via robotiq.xml compiler -->
+    <mesh name="cube_blue_mesh"   file="stack_color_blocks/blue_plastic_cube/blue_plastic_cube.obj"/>
+    <mesh name="cube_yellow_mesh" file="stack_color_blocks/yellow_plastic_cube/yellow_plastic_cube.obj"/>
+    <mesh name="cube_orange_mesh" file="stack_color_blocks/orange_plastic_cube/orange_plastic_cube.obj"/>
+
+    <material name="cube_blue_mat"   rgba="0.10 0.35 0.95 1" reflectance="0.2"/>
+    <material name="cube_yellow_mat" rgba="0.95 0.85 0.10 1" reflectance="0.2"/>
+    <material name="cube_orange_mat" rgba="0.95 0.55 0.10 1" reflectance="0.2"/>
+  </asset>
+
+  <worldbody>
+    <light name="demo_light" pos="0 0 1.5" dir="0 0 -1"/>
+    <geom name="floor" type="plane" size="2 2 0.1" rgba="0.85 0.85 0.85 1"/>
+
+    <!-- table: center z=0.03, top surface z=0.06 -->
+    <body name="table" pos="0 0 0.03">
+      <geom name="table_top" type="box" size="0.28 0.22 0.03" rgba="0.6 0.45 0.3 1"/>
+    </body>
+
+    <!-- Cube half-extent = 0.025 (5 cm cube)
+         center z = 0.06 (table top) + 0.025 = 0.085                         -->
+
+    <!-- cube_blue: source, picked first and placed on cube_orange -->
+    <body name="cube_blue" pos="-0.05 0.0 0.085">
+      <freejoint name="cube_blue_joint"/>
+      <geom name="cube_blue_col" type="box" size="0.025 0.025 0.025"
+            mass="0.005" friction="1.2 0.05 0.01"
+            rgba="0 0 0 0" contype="1" conaffinity="1"/>
+      <geom name="cube_blue_vis" type="mesh" mesh="cube_blue_mesh" material="cube_blue_mat"
+            density="0" contype="0" conaffinity="0" group="1"/>
+      <site name="cube_blue_site" pos="0 0 0" size="0.004" rgba="1 0 0 0"/>
+    </body>
+
+    <!-- cube_orange: base of the stack (stacking destination for blue) -->
+    <body name="cube_orange" pos="0.08 0.0 0.085">
+      <freejoint name="cube_orange_joint"/>
+      <geom name="cube_orange_col" type="box" size="0.025 0.025 0.025"
+            mass="0.005" friction="1.2 0.05 0.01"
+            rgba="0 0 0 0" contype="1" conaffinity="1"/>
+      <geom name="cube_orange_vis" type="mesh" mesh="cube_orange_mesh" material="cube_orange_mat"
+            density="0" contype="0" conaffinity="0" group="1"/>
+      <site name="cube_orange_site" pos="0 0 0" size="0.004" rgba="1 0 0 0"/>
+    </body>
+
+    <!-- cube_yellow: picked second and placed on top of cube_blue -->
+    <body name="cube_yellow" pos="-0.05 -0.1 0.085">
+      <freejoint name="cube_yellow_joint"/>
+      <geom name="cube_yellow_col" type="box" size="0.025 0.025 0.025"
+            mass="0.005" friction="1.2 0.05 0.01"
+            rgba="0 0 0 0" contype="1" conaffinity="1"/>
+      <geom name="cube_yellow_vis" type="mesh" mesh="cube_yellow_mesh" material="cube_yellow_mat"
+            density="0" contype="0" conaffinity="0" group="1"/>
+      <site name="cube_yellow_site" pos="0 0 0" size="0.004" rgba="1 0 0 0"/>
+    </body>
+
+    <!-- Front camera -->
+    <camera name="front_cam" pos="0 -0.8 0.5" xyaxes="1 0 0 0 0.447 0.894" fovy="45"/>
+    <!-- Side camera -->
+    <camera name="side_cam" pos="0.9 0 0.5" xyaxes="0 1 0 -0.406 0 0.914" fovy="45"/>
+  </worldbody>
+
+  <keyframe>
+    <!-- robotiq 6-DOF base (6) + gripper finger joints (6)
+         + cube_blue freejoint (7) + cube_orange freejoint (7) + cube_yellow freejoint (7) -->
+    <key
+      qpos="
+         0 0 0.4 0 0 0
+         0.00522882 0.00541525 0.00562153 0.00529892 0.00548528 0.00569143
+         -0.05  0.0  0.085  1 0 0 0
+          0.08  0.0  0.085  1 0 0 0
+         -0.05 -0.1  0.085  1 0 0 0"
+      ctrl="0 0 0.4 0 0 0 0"
+    />
+  </keyframe>
+</mujoco>
