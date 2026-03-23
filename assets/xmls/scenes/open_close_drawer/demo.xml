@@ -1,0 +1,76 @@
+<mujoco model="open_close_drawer_demo">
+  <include file="../../robots/robotiq.xml"/>
+
+  <visual>
+    <map znear="0.001"/>
+  </visual>
+
+  <worldbody>
+    <light name="demo_light" pos="0 0 1.5" dir="0 0 -1"/>
+    <geom name="floor" type="plane" size="2 2 0.1" rgba="0.85 0.85 0.85 1"/>
+
+    <!-- table half-height=0.03, sits on floor: center z=0.03, top surface z=0.06 -->
+    <body name="table" pos="0 0 0.03">
+      <geom name="table_top" type="box" size="0.28 0.22 0.03" rgba="0.6 0.45 0.3 1"/>
+    </body>
+
+    <!-- Front camera: looking from -Y toward the task area -->
+    <camera name="front_cam" pos="0 -0.8 0.5" xyaxes="1 0 0 0 0.447 0.894" fovy="45"/>
+    <!-- Side camera: looking from +X toward the task area -->
+    <camera name="side_cam" pos="0.9 0 0.5" xyaxes="0 1 0 -0.406 0 0.914" fovy="45"/>
+
+    <!-- ===== Cabinet frame (static, visual only) ===== -->
+    <!-- Outer half: x=0.075, y=0.070, z=0.050                         -->
+    <!-- Center at (0, 0.14, 0.11): bottom z=0.06, top z=0.16          -->
+    <!-- Front face y=0.070, back face y=0.210                          -->
+    <body name="cabinet" pos="0.0 0.14 0.11">
+      <geom name="cab_back"      type="box" size="0.075 0.006 0.050" pos="0       0.064  0     " density="0" rgba="0.65 0.45 0.25 1" contype="0" conaffinity="0" group="1"/>
+      <geom name="cab_left"      type="box" size="0.006 0.070 0.050" pos="-0.069 0      0     " density="0" rgba="0.65 0.45 0.25 1" contype="0" conaffinity="0" group="1"/>
+      <geom name="cab_right"     type="box" size="0.006 0.070 0.050" pos=" 0.069 0      0     " density="0" rgba="0.65 0.45 0.25 1" contype="0" conaffinity="0" group="1"/>
+      <geom name="cab_top"       type="box" size="0.075 0.070 0.006" pos="0       0      0.044" density="0" rgba="0.55 0.38 0.22 1" contype="0" conaffinity="0" group="1"/>
+      <geom name="cab_floor"     type="box" size="0.075 0.070 0.006" pos="0       0     -0.044" density="0" rgba="0.55 0.38 0.22 1" contype="0" conaffinity="0" group="1"/>
+      <!-- Narrow front trim strips (top and sides) so cabinet looks like a frame -->
+      <geom name="cab_trim_top"  type="box" size="0.075 0.006 0.006" pos="0      -0.064  0.044" density="0" rgba="0.65 0.45 0.25 1" contype="0" conaffinity="0" group="1"/>
+      <geom name="cab_trim_left" type="box" size="0.006 0.006 0.050" pos="-0.069 -0.064  0    " density="0" rgba="0.65 0.45 0.25 1" contype="0" conaffinity="0" group="1"/>
+      <geom name="cab_trim_rgt"  type="box" size="0.006 0.006 0.050" pos=" 0.069 -0.064  0    " density="0" rgba="0.65 0.45 0.25 1" contype="0" conaffinity="0" group="1"/>
+      <site name="cabinet_site" pos="0 0 0" size="0.004" rgba="0 1 0 0"/>
+    </body>
+
+    <!-- ===== Drawer (slides in Y; negative Y = opening toward arm) ===== -->
+    <!-- Base position same as cabinet center; slide joint named drawer_slide  -->
+    <!-- so it is NOT auto-detected as a freejoint by build_mujoco_backend.    -->
+    <!-- joint=0: closed (flush with cabinet front), joint=-0.12: fully open   -->
+    <body name="drawer" pos="0.0 0.14 0.11">
+      <joint name="drawer_slide" type="slide" axis="0 1 0" range="-0.12 0" damping="5"/>
+      <geom name="drawer_col" type="box" size="0.062 0.056 0.038" mass="0.20"
+            friction="0.5 0.05 0.01" rgba="0 0 0 0" contype="1" conaffinity="1"/>
+      <geom name="drawer_vis" type="box" size="0.062 0.056 0.038"
+            rgba="0.82 0.62 0.40 1" density="0" contype="0" conaffinity="0" group="1"/>
+      <site name="drawer_site" pos="0 0 0" size="0.004" rgba="0 0 1 0"/>
+
+      <!-- ===== Drawer handle (child of drawer, no joint) ===== -->
+      <!-- Flat horizontal bar in front of the cabinet (y < cabinet_front=0.07). -->
+      <!-- pos relative to drawer center: (0, -(0.056+0.035), +0.022)           -->
+      <!-- When closed: world (0, 0.049, 0.132); when open: (0, -0.071, 0.132)  -->
+      <!-- Gripper fingers (±42 mm span) pass either side of the ±30 mm bar     -->
+      <!-- during descent, then close to grasp. No collision during approach.   -->
+      <body name="handle" pos="0.0 -0.091 0.022">
+        <geom name="handle_col" type="box" size="0.030 0.010 0.015" mass="0.02"
+              friction="1.2 0.05 0.01" rgba="0 0 0 0" contype="1" conaffinity="1"/>
+        <geom name="handle_vis" type="box" size="0.030 0.010 0.015"
+              rgba="0.75 0.75 0.80 1" density="0" contype="0" conaffinity="0" group="1"/>
+        <site name="handle_site" pos="0 0 0" size="0.004" rgba="1 0 0 0"/>
+      </body>
+    </body>
+  </worldbody>
+
+  <!-- ===== Initial state ===== -->
+  <!-- qpos layout: 6 arm-base joints (x,y,z,rot_z,rot_y,rot_x) + 6 gripper joints + 1 drawer slide -->
+  <!-- Arm starts horizontal: rot_x=pi/2 → gripper points +Y toward cabinet, fingers in ±Z (one up/down) -->
+  <keyframe>
+    <key
+      qpos="0 -0.2 0.15 0 0 1.5707  0.00522882 0.00541525 0.00562153 0.00529892 0.00548528 0.00569143  0"
+      ctrl="0 -0.2 0.15 0 0 1.5707 0"
+    />
+  </keyframe>
+</mujoco>

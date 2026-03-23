@@ -62,6 +62,7 @@ examples/
     ├── cup_on_coaster.yaml        # Pick a cup and place it on a coaster
     ├── stack_color_blocks.yaml    # Stack three colored blocks
     ├── press_three_buttons.yaml   # Press three buttons in sequence
+    ├── open_close_drawer.yaml     # Pull a drawer open, then push it closed
     └── mock.yaml                  # Mock backend demo (no simulator required)
 ```
 
@@ -81,6 +82,8 @@ Uses the in-memory mock backend — ideal for testing task logic in isolation.
 | `pick_and_place` | `cup_on_coaster` |
 | ![stack_color_blocks](assets/videos/stack_color_blocks.gif) | ![press_three_buttons](assets/videos/press_three_buttons.gif) |
 | `stack_color_blocks` | `press_three_buttons` |
+| ![open_close_drawer](assets/videos/open_close_drawer.gif) | |
+| `open_close_drawer` | |
 
 Make sure to install Git LFS and pull the assets after cloning:
 
@@ -106,6 +109,7 @@ Available configs:
 | `cup_on_coaster` | Pick a cup from a randomized position and place it on a coaster |
 | `stack_color_blocks` | Stack three colored blocks: blue on orange, then yellow on blue |
 | `press_three_buttons` | Press three buttons (blue, green, pink) in sequence |
+| `open_close_drawer` | Pull a drawer open, then push it closed |
 
 Each demo runs in the MuJoCo physics simulator with RGB-D cameras, tactile sensors, and randomized object placement. The scene XML for each demo is at `assets/xmls/scenes/<config>/demo.xml` and can be previewed with:
 
