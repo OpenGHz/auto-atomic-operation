@@ -208,3 +208,4 @@ __marimo__/
 .vscode/
 third_party/
 outputs/
+tests/profiles/

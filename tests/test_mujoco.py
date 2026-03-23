@@ -7,6 +7,7 @@ from auto_atom.basis.mujoco_env import (
     UnifiedMujocoEnv,
 )
 from pprint import pprint
+from itertools import count
 
 
 def main():
@@ -14,8 +15,8 @@ def main():
         name="hand_cam",
         width=1280,
         height=720,
-        enable_color=False,
-        enable_depth=False,
+        enable_color=True,
+        enable_depth=True,
         enable_mask=True,
         enable_heat_map=True,
     )
@@ -106,6 +107,12 @@ def main():
         assert channel_sum[0] > 0, "source_block should activate the pick channel"
         assert channel_sum[1] > 0, "target_pedestal should activate the place channel"
         assert np.all(channel_sum[[2, 3, 4]] == 0)
+
+        # for i in range(50):
+        #     env.update()
+        #     env.capture_observation()
+        #     print(f"Step {i} done")
+
     finally:
         env.close()
 
