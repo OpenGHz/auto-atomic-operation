@@ -19,6 +19,7 @@ def main():
         enable_mask=True,
         enable_heat_map=True,
     )
+    flatten_like = False
     env = UnifiedMujocoEnv(
         EnvConfig(
             model_path="assets/xmls/scenes/pick_and_place/demo.xml",
@@ -60,6 +61,7 @@ def main():
             ],
             mask_objects=["source_block", "target_pedestal"],
             operations=["pick", "place", "push", "pull", "press"],
+            structured=not flatten_like,
         )
     )
 
@@ -70,22 +72,30 @@ def main():
         env.reset()
 
         info = env.get_info()
-        pprint("Info:")
-        pprint(info)
+        # pprint("Info:")
+        # pprint(info)
 
         obs = env.capture_observation()
-        mask = obs["hand_cam/mask/image_raw"]["data"]
-        heat_map = obs["hand_cam/mask/heat_map"]["data"]
+        print("keys:", sorted(obs.keys()))
+
+        cam_name = "hand_cam" if flatten_like else "camera/hand"
+        cam_name = "/robot/" + cam_name
+        mask = obs[cam_name + "/mask/image_raw"]["data"]
+        heat_map = obs[cam_name + "/mask/heat_map"]["data"]
         channel_sum = heat_map.sum(axis=(0, 1))
 
-        print("keys:", sorted(obs.keys()))
         print("mask_shape:", mask.shape)
         print("mask_dtype:", mask.dtype)
         print("mask_sum:", int(mask.sum()))
         print("heat_map_shape:", heat_map.shape)
         print("heat_map_dtype:", heat_map.dtype)
         print("channel_sum:", channel_sum.tolist())
-        print("tactile:", obs["eef_left/tactile/point_cloud2"]["data"].keys())
+        tactile_key = (
+            "eef_left/tactile/point_cloud2"
+            if flatten_like
+            else "/robot/eef/left/tactile/point_cloud2"
+        )
+        print("tactile:", obs[tactile_key]["data"].keys())
         # print("arm/joint_state/position:", obs["arm/joint_state/position"]["data"])
 
         assert mask.shape == (720, 1280)

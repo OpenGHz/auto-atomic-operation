@@ -141,7 +141,7 @@ class EnvConfig(BaseModel, frozen=True):
     """Control update frequency in Hz. Must be <= sim_freq. If None, defaults to sim_freq (n_substeps=1)."""
     viewer: ViewerConfig | None = None
     """Viewer configuration. If None, the passive viewer is not launched."""
-    flatten_like: bool = True
+    structured: bool = False
     """Whether the observation value data should be flattened to 1D arrays when possible, e.g. for joint states."""
 
     @model_validator(mode="after")
@@ -653,11 +653,10 @@ class UnifiedMujocoEnv:
         self.update()
 
     def capture_observation(self) -> dict[str, dict[str, Any]]:
-        t = (
-            float(self.data.time)
-            if not self.config.stamp_ns
-            else int(self.data.time * 1e9)
-        )
+        return self._collect_obs(self.config.structured)
+
+    def _collect_obs(self, structured: bool) -> dict[str, dict[str, Any]]:
+        t = int(self.data.time * 1e9) if self.config.stamp_ns else float(self.data.time)
         obs: dict[str, dict[str, Any]] = {}
 
         for op in self._operators:
@@ -670,40 +669,52 @@ class UnifiedMujocoEnv:
             arm_name, eef_name = self._op_output_names[op.name]
 
             if DataType.JOINT_POSITION in self.config.enabled_sensors:
-                obs[f"{arm_name}/joint_state/position"] = {
-                    "data": np.asarray(self.data.qpos[arm_qidx], dtype=np.float32),
-                    "t": t,
-                }
-                obs[f"{eef_name}/joint_state/position"] = {
-                    "data": np.asarray(self.data.qpos[eef_qidx], dtype=np.float32),
-                    "t": t,
-                }
-                obs[f"action/{arm_name}/joint_state/position"] = {
-                    "data": np.asarray(self.data.ctrl[arm_aidx], dtype=np.float32),
-                    "t": t,
-                }
-                obs[f"action/{eef_name}/joint_state/position"] = {
-                    "data": np.asarray(self.data.ctrl[eef_aidx], dtype=np.float32),
-                    "t": t,
-                }
-            if DataType.JOINT_VELOCITY in self.config.enabled_sensors:
-                obs[f"{arm_name}/joint_state/velocity"] = {
-                    "data": np.asarray(self.data.qvel[arm_vidx], dtype=np.float32),
-                    "t": t,
-                }
-                obs[f"{eef_name}/joint_state/velocity"] = {
-                    "data": np.asarray(self.data.qvel[eef_vidx], dtype=np.float32),
-                    "t": t,
-                }
-            if DataType.JOINT_EFFORT in self.config.enabled_sensors:
-                obs[f"{arm_name}/joint_state/effort"] = {
-                    "data": np.asarray(self.data.ctrl[arm_aidx], dtype=np.float32),
-                    "t": t,
-                }
-                obs[f"{eef_name}/joint_state/effort"] = {
-                    "data": np.asarray(self.data.ctrl[eef_aidx], dtype=np.float32),
-                    "t": t,
-                }
+                if structured:
+                    for prefix, limb, qidx, vidx, aidx in [
+                        ("enc", arm_name, arm_qidx, arm_vidx, arm_aidx),
+                        ("enc", eef_name, eef_qidx, eef_vidx, eef_aidx),
+                        ("action", arm_name, arm_qidx, arm_vidx, arm_aidx),
+                        ("action", eef_name, eef_qidx, eef_vidx, eef_aidx),
+                    ]:
+                        obs[f"{prefix}/{limb}/joint_state"] = {
+                            "data": {
+                                "position": np.asarray(
+                                    self.data.qpos[qidx], dtype=np.float32
+                                ),
+                                "velocity": np.asarray(
+                                    self.data.qvel[vidx], dtype=np.float32
+                                ),
+                                "effort": np.asarray(
+                                    self.data.ctrl[aidx], dtype=np.float32
+                                ),
+                            },
+                            "t": t,
+                        }
+                else:
+                    for limb, qidx in [(arm_name, arm_qidx), (eef_name, eef_qidx)]:
+                        obs[f"{limb}/joint_state/position"] = {
+                            "data": np.asarray(self.data.qpos[qidx], dtype=np.float32),
+                            "t": t,
+                        }
+                    for limb, aidx in [(arm_name, arm_aidx), (eef_name, eef_aidx)]:
+                        obs[f"action/{limb}/joint_state/position"] = {
+                            "data": np.asarray(self.data.ctrl[aidx], dtype=np.float32),
+                            "t": t,
+                        }
+
+            if not structured:
+                if DataType.JOINT_VELOCITY in self.config.enabled_sensors:
+                    for limb, vidx in [(arm_name, arm_vidx), (eef_name, eef_vidx)]:
+                        obs[f"{limb}/joint_state/velocity"] = {
+                            "data": np.asarray(self.data.qvel[vidx], dtype=np.float32),
+                            "t": t,
+                        }
+                if DataType.JOINT_EFFORT in self.config.enabled_sensors:
+                    for limb, aidx in [(arm_name, arm_aidx), (eef_name, eef_aidx)]:
+                        obs[f"{limb}/joint_state/effort"] = {
+                            "data": np.asarray(self.data.ctrl[aidx], dtype=np.float32),
+                            "t": t,
+                        }
 
             if DataType.POSE in self.config.enabled_sensors:
                 site_id = self._pose_site_ids.get(op.name, -1)
@@ -717,14 +728,23 @@ class UnifiedMujocoEnv:
                     else:
                         pos, quat = self._site_pose(op.name)
                     rot9d = self._pose_rot9d(op.name)
-                    obs[f"{op.name}/pose/position"] = {
-                        "data": pos.astype(np.float32),
-                        "t": t,
-                    }
-                    obs[f"{op.name}/pose/orientation"] = {
-                        "data": quat.astype(np.float32),
-                        "t": t,
-                    }
+                    if structured:
+                        obs[f"{op.name}/pose"] = {
+                            "data": {
+                                "position": pos.astype(np.float32),
+                                "orientation": quat.astype(np.float32),
+                            },
+                            "t": t,
+                        }
+                    else:
+                        obs[f"{op.name}/pose/position"] = {
+                            "data": pos.astype(np.float32),
+                            "t": t,
+                        }
+                        obs[f"{op.name}/pose/orientation"] = {
+                            "data": quat.astype(np.float32),
+                            "t": t,
+                        }
                     obs[f"{op.name}/pose/rotation"] = {
                         "data": euler_from_matrix(rot9d.reshape(3, 3)),
                         "t": t,
@@ -739,32 +759,41 @@ class UnifiedMujocoEnv:
                 gyro_id = self._imu_ids[op.name]["gyro"]
                 quat_id = self._imu_ids[op.name]["quat"]
                 if acc_id >= 0 and gyro_id >= 0 and quat_id >= 0:
-                    obs[f"{op.name}/imu/linear_acceleration"] = {
-                        "data": self._sensor_data(acc_id),
-                        "t": t,
-                    }
-                    obs[f"{op.name}/imu/angular_velocity"] = {
-                        "data": self._sensor_data(gyro_id),
-                        "t": t,
-                    }
-                    obs[f"{op.name}/imu/orientation"] = {
-                        "data": self._sensor_data(quat_id),
-                        "t": t,
-                    }
+                    acc = self._sensor_data(acc_id)
+                    gyro = self._sensor_data(gyro_id)
+                    imu_quat = self._sensor_data(quat_id)
+                    if structured:
+                        obs[f"{op.name}/imu"] = {
+                            "data": {
+                                "linear_acceleration": acc,
+                                "angular_velocity": gyro,
+                                "orientation": imu_quat,
+                            },
+                            "t": t,
+                        }
+                    else:
+                        obs[f"{op.name}/imu/linear_acceleration"] = {
+                            "data": acc,
+                            "t": t,
+                        }
+                        obs[f"{op.name}/imu/angular_velocity"] = {"data": gyro, "t": t}
+                        obs[f"{op.name}/imu/orientation"] = {"data": imu_quat, "t": t}
 
             if DataType.WRENCH in self.config.enabled_sensors:
                 force = self._sensor_data(self._wrench_ids[op.name]["force"])
                 torque = self._sensor_data(self._wrench_ids[op.name]["torque"])
                 if force.size == 0 or torque.size == 0:
                     force, torque = self._wrench_from_tactile(op)
-                obs[f"{op.name}/wrench/force"] = {
-                    "data": np.asarray(force, dtype=np.float32),
-                    "t": t,
-                }
-                obs[f"{op.name}/wrench/torque"] = {
-                    "data": np.asarray(torque, dtype=np.float32),
-                    "t": t,
-                }
+                force = np.asarray(force, dtype=np.float32)
+                torque = np.asarray(torque, dtype=np.float32)
+                if structured:
+                    obs[f"{op.name}/wrench"] = {
+                        "data": {"force": force, "torque": torque},
+                        "t": t,
+                    }
+                else:
+                    obs[f"{op.name}/wrench/force"] = {"data": force, "t": t}
+                    obs[f"{op.name}/wrench/torque"] = {"data": torque, "t": t}
 
         if (
             DataType.TACTILE in self.config.enabled_sensors
@@ -775,7 +804,10 @@ class UnifiedMujocoEnv:
                 for component, data in self._group_tactile_by_component(
                     tactile_data
                 ).items():
-                    obs[f"{component}/tactile/point_cloud2"] = {
+                    key_component = (
+                        component.replace("_", "/", 1) if structured else component
+                    )
+                    obs[f"{key_component}/tactile/point_cloud2"] = {
                         "data": data,
                         "t": t,
                     }
@@ -791,8 +823,11 @@ class UnifiedMujocoEnv:
                 )
                 renderer.disable_depth_rendering()
                 renderer.disable_segmentation_rendering()
+                obs_cam_name = (
+                    "camera/" + cam_name.split("_")[0] if structured else cam_name
+                )
                 if spec.enable_color:
-                    obs[f"{cam_name}/color/image_raw"] = {
+                    obs[f"{obs_cam_name}/color/image_raw"] = {
                         "data": np.asarray(renderer.render(), dtype=np.uint8),
                         "t": t,
                     }
@@ -801,7 +836,7 @@ class UnifiedMujocoEnv:
                     depth = np.asarray(renderer.render(), dtype=np.float32)
                     renderer.disable_depth_rendering()
                     depth[depth > spec.depth_max] = 0.0
-                    obs[f"{cam_name}/aligned_depth_to_color/image_raw"] = {
+                    obs[f"{obs_cam_name}/aligned_depth_to_color/image_raw"] = {
                         "data": depth,
                         "t": t,
                     }
@@ -810,16 +845,18 @@ class UnifiedMujocoEnv:
                     segmentation = np.asarray(renderer.render(), dtype=np.int32)
                     renderer.disable_segmentation_rendering()
                     if spec.enable_mask:
-                        obs[f"{cam_name}/mask/image_raw"] = {
+                        obs[f"{obs_cam_name}/mask/image_raw"] = {
                             "data": self._build_binary_mask(segmentation),
                             "t": t,
                         }
                     if spec.enable_heat_map:
-                        obs[f"{cam_name}/mask/heat_map"] = {
+                        obs[f"{obs_cam_name}/mask/heat_map"] = {
                             "data": self._build_operation_mask(segmentation),
                             "t": t,
                         }
 
+        if structured:
+            return {f"/robot/{key}": value for key, value in obs.items()}
         return obs
 
     def is_updated(self) -> bool:
