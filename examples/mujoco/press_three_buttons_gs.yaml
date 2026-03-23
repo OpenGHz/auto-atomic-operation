@@ -1,0 +1,16 @@
+defaults:
+  - press_three_buttons
+  - _self_
+
+gs_dir: third_party/press_da_button/gs_playground/models/tasks/table30/_01_press_three_buttons/3dgs
+
+env:
+  env:
+    _target_: auto_atom.basis.gs_mujoco_env.GSUnifiedMujocoEnv
+    config:
+      _target_: auto_atom.basis.gs_mujoco_env.GSEnvConfig
+      gaussian_render:
+        body_gaussians:
+          button_blue: ${gs_dir}/button_blue.ply
+          button_green: ${gs_dir}/button_green.ply
+          button_pink: ${gs_dir}/button_pink.ply

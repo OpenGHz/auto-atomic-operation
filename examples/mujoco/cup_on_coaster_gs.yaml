@@ -1,0 +1,15 @@
+defaults:
+  - cup_on_coaster
+  - _self_
+
+gs_dir: third_party/press_da_button/gs_playground/models/tasks/table30/_06_put_cup_on_coaster/3dgs/
+
+env:
+  env:
+    _target_: auto_atom.basis.gs_mujoco_env.GSUnifiedMujocoEnv
+    config:
+      _target_: auto_atom.basis.gs_mujoco_env.GSEnvConfig
+      gaussian_render:
+        body_gaussians:
+          cup: ${gs_dir}/cup.ply
+          coaster: ${gs_dir}/coaster.ply

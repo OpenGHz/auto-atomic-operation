@@ -52,13 +52,13 @@ env:
           enable_depth: true
           enable_mask: false
           enable_heat_map: false
-      viewer:
-        lookat: [0.0, 0.0, 0.1]
-        distance: 0.6
-        azimuth: 135
-        elevation: -28
-        step_delay: 0.03
-        hold_seconds: 3.0
+      # viewer:
+      #   lookat: [0.0, 0.0, 0.1]
+      #   distance: 0.6
+      #   azimuth: 135
+      #   elevation: -28
+      #   step_delay: 0.03
+      #   hold_seconds: 3.0
 
 backend: auto_atom.backend.mjc.mujoco_backend.build_mujoco_backend
 

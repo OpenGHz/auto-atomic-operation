@@ -1,0 +1,16 @@
+defaults:
+  - stack_color_blocks
+  - _self_
+
+gs_dir: third_party/press_da_button/gs_playground/models/tasks/table30/_02_stack_color_blocks/3dgs/
+
+env:
+  env:
+    _target_: auto_atom.basis.gs_mujoco_env.GSUnifiedMujocoEnv
+    config:
+      _target_: auto_atom.basis.gs_mujoco_env.GSEnvConfig
+      gaussian_render:
+        body_gaussians:
+          cube_blue: ${gs_dir}/cube_blue.ply
+          cube_orange: ${gs_dir}/cube_orange.ply
+          cube_yellow: ${gs_dir}/cube_yellow.ply
