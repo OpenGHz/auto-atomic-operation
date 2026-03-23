@@ -26,38 +26,62 @@ from hydra.core.hydra_config import HydraConfig
 from hydra.utils import instantiate
 from omegaconf import DictConfig, OmegaConf
 from PIL import Image
+from pydantic import BaseModel, Field
 from auto_atom.backend.mjc.mujoco_backend import MujocoTaskBackend
 from auto_atom.runtime import ComponentRegistry, TaskFileConfig, TaskRunner
+
+
+class RecorderConfig(BaseModel):
+    camera: str = Field(default="front_cam")
+    fps: int = Field(default=25)
+    gif_width: int = Field(default=320)
 
 
 @hydra.main(config_path="mujoco", config_name="pick_and_place", version_base=None)
 def main(cfg: DictConfig) -> None:
     raw = OmegaConf.to_container(cfg, resolve=False)
+    ComponentRegistry.clear()
+    instantiate(cfg)
     if not isinstance(raw, dict):
         raise TypeError("Config root must be a mapping.")
 
     # Recorder settings (injectable via Hydra: recorder.camera=..., etc.)
-    rec_cfg = raw.pop("recorder", {}) if isinstance(raw, dict) else {}
-    camera: str = rec_cfg.get("camera", "front_cam")
-    fps: int = int(rec_cfg.get("fps", 25))
-    gif_width: int = int(rec_cfg.get("gif_width", 320))
-
-    ComponentRegistry.clear()
-    if "env" in cfg and cfg.env is not None:
-        instantiate(cfg.env)
-
+    rec_cfg = RecorderConfig.model_validate(raw.pop("recorder", {}))
     task_file = TaskFileConfig.model_validate(raw)
     runner = TaskRunner().from_config(task_file)
 
     frames: list[np.ndarray] = []
+    resolved_camera: str | None = None
+
+    def resolve_camera(obs: dict) -> str | None:
+        """Return the camera key to use, or None if no suitable camera found."""
+        preferred = f"{rec_cfg.camera}/color/image_raw"
+        if obs.get(preferred, {}).get("data") is not None:
+            return rec_cfg.camera
+        # Fall back to any camera whose name contains "front"
+        for key in obs:
+            cam_name = key.split("/")[0]
+            if "front" in cam_name and obs[key].get("data") is not None:
+                print(
+                    f"Camera '{rec_cfg.camera}' not found, using '{cam_name}' instead."
+                )
+                return cam_name
+        return None
 
     def capture() -> None:
         backend = runner._context and runner._context.backend
         if not isinstance(backend, MujocoTaskBackend):
             return
         obs = backend.env.capture_observation()
-        key = f"{camera}/color/image_raw"
-        data = obs.get(key, {}).get("data")
+        nonlocal resolved_camera
+        if resolved_camera is None:
+            resolved_camera = resolve_camera(obs)
+            if resolved_camera is None:
+                raise RuntimeError(
+                    f"No usable front camera found in observation. "
+                    f"Available keys: {list(obs.keys())}"
+                )
+        data = obs.get(f"{resolved_camera}/color/image_raw", {}).get("data")
         if data is not None:
             frames.append(np.asarray(data, dtype=np.uint8))
 
@@ -91,16 +115,17 @@ def main(cfg: DictConfig) -> None:
     gif_path = os.path.join(out_dir, f"{config_name}.gif")
 
     # # Write MP4
-    # iio.imwrite(mp4_path, frames, fps=fps, codec="libx264", quality=8)
-    # print(f"\nSaved MP4 ({len(frames)} frames @ {fps} fps): {mp4_path}")
+    # iio.imwrite(mp4_path, frames, fps=rec_cfg.fps, codec="libx264", quality=8)
+    # print(f"\nSaved MP4 ({len(frames)} frames @ {rec_cfg.fps} fps): {mp4_path}")
 
     # Resize frames for GIF
     h, w = frames[0].shape[:2]
-    gif_height = int(gif_width * h / w)
+    gif_height = int(rec_cfg.gif_width * h / w)
     gif_frames = [
-        np.array(Image.fromarray(f).resize((gif_width, gif_height))) for f in frames
+        np.array(Image.fromarray(f).resize((rec_cfg.gif_width, gif_height)))
+        for f in frames
     ]
-    gif_fps = min(fps, 15)
+    gif_fps = min(rec_cfg.fps, 15)
     iio.imwrite(gif_path, gif_frames, fps=gif_fps, loop=0)
     print(f"Saved GIF  ({len(gif_frames)} frames @ {gif_fps} fps): {gif_path}")
 
