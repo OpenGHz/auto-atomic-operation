@@ -156,6 +156,26 @@ env:
 
 The `body_gaussians` keys must match the **outer** (`*_gs`) body names in the XML.
 
+## Visual Comparison Tool
+
+Use `examples/compare_gs_render.py` to render the first frame of a GS scene and compare GS vs native MuJoCo images side-by-side per camera.
+
+```bash
+# Default config: press_three_buttons_table30_gs
+python examples/compare_gs_render.py
+
+# Any other GS scene config (Hydra --config-name override)
+python examples/compare_gs_render.py --config-name cup_on_coaster_gs
+python examples/compare_gs_render.py --config-name stack_color_blocks_gs
+
+# Display result interactively (in addition to saving)
+python examples/compare_gs_render.py show=true
+```
+
+Must be run from the project root. Output is saved to `outputs/compare_<config>_<timestamp>.png`.
+
+Each row in the output image corresponds to one camera, with the GS render on the left and the native MuJoCo rasteriser on the right. This is useful for verifying that GS and non-GS renders are geometrically aligned after following the pre-rotation workflow above.
+
 ## Summary Checklist
 
 When adding a new GS object to a scene:
