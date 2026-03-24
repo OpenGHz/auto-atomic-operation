@@ -297,7 +297,7 @@ See the **[Custom Backend Guide](docs/custom-backend.md)** for a step-by-step wa
 
 ## Data Collection
 
-
+See the **[Data Collection Guide](docs/data_collection.md)** for recording task demos (GIF/MP4) and comparing GS vs native MuJoCo rendering.
 
 ## License
 

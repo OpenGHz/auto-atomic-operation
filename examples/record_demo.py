@@ -13,9 +13,9 @@ Output files are written to ``assets/videos/<config_name>.mp4`` and
 
 Extra Hydra overrides:
 
-    python examples/record_demo.py recorder.camera=side_cam
-    python examples/record_demo.py recorder.fps=15
-    python examples/record_demo.py recorder.gif_width=480
+    python examples/record_demo.py +recorder.camera=side_cam
+    python examples/record_demo.py +recorder.fps=15
+    python examples/record_demo.py +recorder.gif_width=480
 """
 
 import os
@@ -35,6 +35,8 @@ class RecorderConfig(BaseModel):
     camera: str = Field(default="front_cam")
     fps: int = Field(default=25)
     gif_width: int = Field(default=320)
+    save_gif: bool = Field(default=True)
+    save_mp4: bool = Field(default=False)
 
 
 @hydra.main(config_path="mujoco", config_name="pick_and_place", version_base=None)
@@ -114,20 +116,22 @@ def main(cfg: DictConfig) -> None:
     mp4_path = os.path.join(out_dir, f"{config_name}.mp4")
     gif_path = os.path.join(out_dir, f"{config_name}.gif")
 
-    # # Write MP4
-    # iio.imwrite(mp4_path, frames, fps=rec_cfg.fps, codec="libx264", quality=8)
-    # print(f"\nSaved MP4 ({len(frames)} frames @ {rec_cfg.fps} fps): {mp4_path}")
+    # Write MP4
+    if rec_cfg.save_mp4:
+        iio.imwrite(mp4_path, frames, fps=rec_cfg.fps, codec="libx264", quality=8)
+        print(f"\nSaved MP4 ({len(frames)} frames @ {rec_cfg.fps} fps): {mp4_path}")
 
     # Resize frames for GIF
-    h, w = frames[0].shape[:2]
-    gif_height = int(rec_cfg.gif_width * h / w)
-    gif_frames = [
-        np.array(Image.fromarray(f).resize((rec_cfg.gif_width, gif_height)))
-        for f in frames
-    ]
-    gif_fps = min(rec_cfg.fps, 15)
-    iio.imwrite(gif_path, gif_frames, fps=gif_fps, loop=0)
-    print(f"Saved GIF  ({len(gif_frames)} frames @ {gif_fps} fps): {gif_path}")
+    if rec_cfg.save_gif:
+        h, w = frames[0].shape[:2]
+        gif_height = int(rec_cfg.gif_width * h / w)
+        gif_frames = [
+            np.array(Image.fromarray(f).resize((rec_cfg.gif_width, gif_height)))
+            for f in frames
+        ]
+        gif_fps = min(rec_cfg.fps, 15)
+        iio.imwrite(gif_path, gif_frames, fps=gif_fps, loop=0)
+        print(f"Saved GIF  ({len(gif_frames)} frames @ {gif_fps} fps): {gif_path}")
 
 
 if __name__ == "__main__":
