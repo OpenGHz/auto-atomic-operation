@@ -18,6 +18,11 @@ env:
           enable_depth: true
           enable_mask: false
           enable_heat_map: false
+      viewer:
+        lookat: [0.5, 0.02, 0.08]
+        distance: 0.8
+        azimuth: 135
+        elevation: -28
       gaussian_render:
         background_ply: assets/gs/backgrounds/example.ply
         body_gaussians:

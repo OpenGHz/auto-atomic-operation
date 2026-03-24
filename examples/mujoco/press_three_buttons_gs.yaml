@@ -1,12 +1,14 @@
 defaults:
-  - press_three_buttons_gs
+  - press_three_buttons
   - _self_
 
 gs_dir: assets/gs/scenes/press_three_buttons
 
 env:
   env:
+    _target_: auto_atom.basis.gs_mujoco_env.GSUnifiedMujocoEnv
     config:
+      _target_: auto_atom.basis.gs_mujoco_env.GSEnvConfig
       model_path: assets/xmls/scenes/press_three_buttons/demo_gs.xml
       cameras:
         - name: front_right
@@ -23,62 +25,14 @@ env:
           enable_depth: true
           enable_mask: false
           enable_heat_map: false
+      viewer:
+        lookat: [0.45, 0.0, 0.08]
+        distance: 0.8
+        azimuth: 135
+        elevation: -28
       gaussian_render:
         background_ply: assets/gs/backgrounds/example.ply
         body_gaussians:
           button_blue_gs: ${gs_dir}/button_blue.ply
           button_green_gs: ${gs_dir}/button_green.ply
           button_pink_gs: ${gs_dir}/button_pink.ply
-
-task:
-  stages:
-    - name: press_blue
-      object: button_blue
-      operation: press
-      operator: arm
-      param:
-        pre_move:
-          - position: [0.0, 0.0, 0.12]
-            orientation: [-0.70710678, 0.70710678, 0.0, 0.0]
-            reference: object_world
-          - position: [0.0, 0.0, 0.035]
-            orientation: [-0.70710678, 0.70710678, 0.0, 0.0]
-            reference: object_world
-        post_move:
-          - position: [0.0, 0.0, 0.12]
-            orientation: [-0.70710678, 0.70710678, 0.0, 0.0]
-            reference: object_world
-
-    - name: press_green
-      object: button_green
-      operation: press
-      operator: arm
-      param:
-        pre_move:
-          - position: [0.0, 0.0, 0.12]
-            orientation: [-0.70710678, 0.70710678, 0.0, 0.0]
-            reference: object_world
-          - position: [0.0, 0.0, 0.035]
-            orientation: [-0.70710678, 0.70710678, 0.0, 0.0]
-            reference: object_world
-        post_move:
-          - position: [0.0, 0.0, 0.12]
-            orientation: [-0.70710678, 0.70710678, 0.0, 0.0]
-            reference: object_world
-
-    - name: press_pink
-      object: button_pink
-      operation: press
-      operator: arm
-      param:
-        pre_move:
-          - position: [0.0, 0.0, 0.12]
-            orientation: [-0.70710678, 0.70710678, 0.0, 0.0]
-            reference: object_world
-          - position: [0.0, 0.0, 0.035]
-            orientation: [-0.70710678, 0.70710678, 0.0, 0.0]
-            reference: object_world
-        post_move:
-          - position: [0.0, 0.0, 0.12]
-            orientation: [-0.70710678, 0.70710678, 0.0, 0.0]
-            reference: object_world
