@@ -44,7 +44,7 @@ def main(cfg: DictConfig) -> None:
         while True:
             update = runner.update()
             print(update)
-            # input("Press Enter to continue...")
+            input("Press Enter to continue...")
             if update.done:
                 break
 

@@ -8,7 +8,15 @@ env:
       model_path: assets/xmls/scenes/arrange_flowers/demo.xml
       operators:
         - name: arm
-          arm_actuators: [act_root_x, act_root_y, act_root_z, act_root_rot_z, act_root_rot_y, act_root_rot_x]
+          arm_actuators:
+            [
+              act_root_x,
+              act_root_y,
+              act_root_z,
+              act_root_rot_z,
+              act_root_rot_y,
+              act_root_rot_x,
+            ]
           eef_actuators: [fingers_actuator]
           eef_output_name: eef
           pose_site: eef_pose
@@ -27,7 +35,8 @@ env:
         - joint_effort
       sim_freq: 500
       update_freq: 20
-      operations: ["pick", "place", "push", "pull", "press"]
+      mask_objects: ["flower", "vase", "vase2"]
+      operations: ["pick", "place"]
       cameras:
         - name: front_cam
           width: 640
@@ -43,12 +52,72 @@ env:
           enable_depth: true
           enable_mask: false
           enable_heat_map: false
+      viewer:
+        lookat: [0.04, 0.0, 0.1]
+        distance: 0.55
+        azimuth: 135
+        elevation: -28
+        step_delay: 0.03
+        hold_seconds: 1.0
 
 backend: auto_atom.backend.mjc.mujoco_backend.build_mujoco_backend
 
 task:
   env_name: arrange_flowers
-  stages: []
+  seed: 42
+  randomization:
+    flower:
+      x: [-0.01, 0.01]
+      y: [-0.01, 0.01]
+      collision_radius: 0.04
+    arm:
+      x: [-0.01, 0.01]
+      y: [-0.01, 0.01]
+      collision_radius: 0.15
+  stages:
+    # Stage 1: Pick flower
+    # flower center z≈0.19, mesh collision extends ~3cm from center
+    # grasp offset must clear the mesh to satisfy position_tolerance
+    - name: pick_flower
+      object: flower
+      operation: pick
+      operator: arm
+      param:
+        pre_move:
+          - position: [0.0, 0.0, 0.12]
+            orientation: [-0.70710678, 0.70710678, 0.0, 0.0]
+            reference: object_world
+          - position: [0.0, 0.0, 0.04]
+            orientation: [-0.70710678, 0.70710678, 0.0, 0.0]
+            reference: object_world
+        post_move:
+          - position: [0.0, 0.0, 0.3]
+            orientation: [-0.70710678, 0.70710678, 0.0, 0.0]
+            reference: eef_world
+        eef:
+          close: true
+
+    # Stage 2: Place flower into vase2
+    # vase2 center z=0.13, opening is near the top (~z=0.20)
+    # offset from vase2 center to insertion point ≈ 0.08
+    - name: place_flower
+      object: vase2
+      operation: place
+      operator: arm
+      param:
+        pre_move:
+          - position: [0.05, 0.0, 0.3]
+            orientation: [-0.70710678, 0.70710678, 0.0, 0.0]
+            reference: object_world
+          - position: [0.05, 0.0, 0.13]
+            orientation: [-0.70710678, 0.70710678, 0.0, 0.0]
+            reference: object_world
+        post_move:
+          - position: [0.05, 0.0, 0.2]
+            orientation: [-0.70710678, 0.70710678, 0.0, 0.0]
+            reference: object_world
+        eef:
+          close: false
 
 operators:
   - name: arm

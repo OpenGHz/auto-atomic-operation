@@ -88,6 +88,9 @@ class MujocoOperatorHandler(OperatorHandler):
     """The angular tolerance in radians for considering a pose orientation reached."""
     eef_tolerance: float = 0.03
     """The tolerance used to determine whether the gripper target has been reached."""
+    eef_grasp_settle_steps: int = 10
+    """Minimum steps the eef must run before a grasp can be declared reached,
+    ensuring the fingers have time to fully clamp before the arm lifts."""
     command_timeout_steps: int = 600
     """The maximum number of simulation steps allowed for one primitive command."""
     _tool_pose_in_base: PoseState = field(init=False)
@@ -216,6 +219,7 @@ class MujocoOperatorHandler(OperatorHandler):
         event = "eef_moving"
         if (
             eef.close
+            and self._eef_steps >= self.eef_grasp_settle_steps
             and self._last_target is not None
             and self._is_target_grasped(self._last_target)
         ):
