@@ -51,7 +51,7 @@ env:
       #   azimuth: 155
       #   elevation: -22
       #   step_delay: 0.025
-      #   hold_seconds: 3.0
+      #   hold_seconds: 1.0
 
 backend: auto_atom.backend.mjc.mujoco_backend.build_mujoco_backend
 

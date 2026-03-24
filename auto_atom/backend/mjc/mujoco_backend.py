@@ -88,7 +88,7 @@ class MujocoOperatorHandler(OperatorHandler):
     """The angular tolerance in radians for considering a pose orientation reached."""
     eef_tolerance: float = 0.03
     """The tolerance used to determine whether the gripper target has been reached."""
-    eef_grasp_settle_steps: int = 10
+    eef_grasp_settle_steps: int = 5
     """Minimum steps the eef must run before a grasp can be declared reached,
     ensuring the fingers have time to fully clamp before the arm lifts."""
     command_timeout_steps: int = 600
