@@ -266,6 +266,8 @@ Pre- and post-conditions constrain when an operation may run and what constitute
 | `contacted`  | Operator end-effector is in contact with the target object                      |
 | `displaced`  | Target object has moved beyond a threshold distance from its original pose      |
 
+For detailed implementation of these conditions in the MuJoCo backend, including detection logic and configurable thresholds, see [MuJoCo Backend Conditions](docs/mujoco_backend_conditions.md).
+
 ### Pose references
 
 | Reference      | Description                            |

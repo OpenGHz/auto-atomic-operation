@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional
 
 import mujoco
 import numpy as np
+from pydantic import BaseModel
 
 from ...framework import (
     AutoAtomConfig,
@@ -25,6 +26,38 @@ from ...runtime import (
 )
 from ...utils.pose import PoseState, compose_pose, inverse_pose, quaternion_to_rpy
 from ...basis.mujoco_env import EnvConfig, UnifiedMujocoEnv
+
+
+class MujocoToleranceConfig(BaseModel):
+    """Tolerance thresholds for pose and gripper control."""
+
+    position: float = 0.01
+    """Position error threshold (meters) for pose control."""
+    orientation: float = 0.08
+    """Orientation error threshold (radians) for pose control."""
+    eef: float = 0.03
+    """Gripper position tolerance for eef control."""
+
+
+class MujocoGraspConfig(BaseModel):
+    """Grasp detection parameters."""
+
+    horizontal_threshold: float = 0.03
+    """Max horizontal distance (meters) between object center and EEF for valid grasp.
+    Increase for side grasps (e.g., 0.06-0.10 for cup handles)."""
+    settle_steps: int = 5
+    """Minimum simulation steps before checking grasp, allowing fingers to fully clamp."""
+
+
+class MujocoControlConfig(BaseModel):
+    """Control loop parameters."""
+
+    timeout_steps: int = 600
+    """Maximum simulation steps per primitive action before timeout."""
+    tolerance: MujocoToleranceConfig = MujocoToleranceConfig()
+    """Tolerance thresholds for control."""
+    grasp: MujocoGraspConfig = MujocoGraspConfig()
+    """Grasp detection parameters."""
 
 
 @dataclass
@@ -82,17 +115,8 @@ class MujocoOperatorHandler(OperatorHandler):
     """The site name used to read the operator end-effector pose."""
     eef_ctrl_index: int = 6
     """The control index corresponding to the gripper or end-effector actuator."""
-    position_tolerance: float = 0.01
-    """The Euclidean position tolerance for considering a pose command reached."""
-    orientation_tolerance: float = 0.08
-    """The angular tolerance in radians for considering a pose orientation reached."""
-    eef_tolerance: float = 0.03
-    """The tolerance used to determine whether the gripper target has been reached."""
-    eef_grasp_settle_steps: int = 5
-    """Minimum steps the eef must run before a grasp can be declared reached,
-    ensuring the fingers have time to fully clamp before the arm lifts."""
-    command_timeout_steps: int = 600
-    """The maximum number of simulation steps allowed for one primitive command."""
+    control: MujocoControlConfig = field(default_factory=MujocoControlConfig)
+    """Control parameters including tolerances, grasp detection, and timeouts."""
     _tool_pose_in_base: PoseState = field(init=False)
     """The fixed transform from the operator base frame to the tool frame."""
     _last_move_key: Optional[str] = None
@@ -177,8 +201,8 @@ class MujocoOperatorHandler(OperatorHandler):
 
         details = {
             "event": "moving"
-            if pos_error > self.position_tolerance
-            or ori_error > self.orientation_tolerance
+            if pos_error > self.control.tolerance.position
+            or ori_error > self.control.tolerance.orientation
             else "pose_reached",
             "operator": self.name,
             "target": target.name if target else "",
@@ -187,11 +211,11 @@ class MujocoOperatorHandler(OperatorHandler):
             "orientation_error": float(ori_error),
         }
         if (
-            pos_error <= self.position_tolerance
-            and ori_error <= self.orientation_tolerance
+            pos_error <= self.control.tolerance.position
+            and ori_error <= self.control.tolerance.orientation
         ):
             return ControlResult(signal=ControlSignal.REACHED, details=details)
-        if self._move_steps >= self.command_timeout_steps:
+        if self._move_steps >= self.control.timeout_steps:
             details["event"] = "move_timeout"
             return ControlResult(signal=ControlSignal.TIMED_OUT, details=details)
         return ControlResult(signal=ControlSignal.RUNNING, details=details)
@@ -219,17 +243,19 @@ class MujocoOperatorHandler(OperatorHandler):
         event = "eef_moving"
         if (
             eef.close
-            and self._eef_steps >= self.eef_grasp_settle_steps
+            and self._eef_steps >= self.control.grasp.settle_steps
             and self._last_target is not None
             and self._is_target_grasped(self._last_target)
         ):
             reached = True
             event = "eef_grasped"
             grasped_name = self._last_target.name
-        elif eef.close and actual >= max(target_ctrl - self.eef_tolerance, 0.45):
+        elif eef.close and actual >= max(
+            target_ctrl - self.control.tolerance.eef, 0.45
+        ):
             reached = True
             event = "eef_reached"
-        elif not eef.close and actual <= max(self.eef_tolerance, 0.05):
+        elif not eef.close and actual <= max(self.control.tolerance.eef, 0.05):
             reached = True
             event = "eef_reached"
         details = {
@@ -242,9 +268,15 @@ class MujocoOperatorHandler(OperatorHandler):
             "error": error,
             "grasped_object": grasped_name,
         }
+
+        # Add grasp detection details when closing gripper
+        if eef.close and self._last_target is not None:
+            grasp_check = self._check_grasp_conditions(self._last_target)
+            details["grasp_check"] = grasp_check
+
         if reached:
             return ControlResult(signal=ControlSignal.REACHED, details=details)
-        if self._eef_steps >= self.command_timeout_steps:
+        if self._eef_steps >= self.control.timeout_steps:
             details["event"] = "eef_timeout"
             return ControlResult(signal=ControlSignal.TIMED_OUT, details=details)
         return ControlResult(signal=ControlSignal.RUNNING, details=details)
@@ -264,11 +296,27 @@ class MujocoOperatorHandler(OperatorHandler):
         )
 
     def _is_target_grasped(self, target: "MujocoObjectHandler") -> bool:
+        grasp_check = self._check_grasp_conditions(target)
+        return (
+            grasp_check["left_contact"]
+            and grasp_check["right_contact"]
+            and grasp_check["horizontal_ok"]
+        )
+
+    def _check_grasp_conditions(self, target: "MujocoObjectHandler") -> dict:
+        """Check individual grasp conditions and return detailed status."""
         target_body_id = mujoco.mj_name2id(
             self.env.model, mujoco.mjtObj.mjOBJ_BODY, target.body_name
         )
         if target_body_id < 0:
-            return False
+            return {
+                "left_contact": False,
+                "right_contact": False,
+                "horizontal_ok": False,
+                "horizontal_error": float("inf"),
+                "horizontal_threshold": 0.03,
+            }
+
         left_contact = False
         right_contact = False
         for idx in range(self.env.data.ncon):
@@ -288,15 +336,25 @@ class MujocoOperatorHandler(OperatorHandler):
                 left_contact = True
             if other_name.startswith("right_"):
                 right_contact = True
-        if not (left_contact and right_contact):
-            return False
+
         target_pose = target.get_pose()
         eef_pose = self.get_end_effector_pose()
-        horizontal_error = np.linalg.norm(
-            np.asarray(target_pose.position[:2], dtype=np.float64)
-            - np.asarray(eef_pose.position[:2], dtype=np.float64)
+        horizontal_error = float(
+            np.linalg.norm(
+                np.asarray(target_pose.position[:2], dtype=np.float64)
+                - np.asarray(eef_pose.position[:2], dtype=np.float64)
+            )
         )
-        return bool(horizontal_error <= 0.03)
+        horizontal_threshold = self.control.grasp.horizontal_threshold
+        horizontal_ok = horizontal_error <= horizontal_threshold
+
+        return {
+            "left_contact": left_contact,
+            "right_contact": right_contact,
+            "horizontal_ok": horizontal_ok,
+            "horizontal_error": horizontal_error,
+            "horizontal_threshold": horizontal_threshold,
+        }
 
     def reset_state(self) -> None:
         self._last_move_key = None
