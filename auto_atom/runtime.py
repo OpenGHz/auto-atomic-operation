@@ -676,7 +676,10 @@ class TaskFlowBuilder:
             actions.append(
                 PrimitiveAction(kind="eef", eef=TaskFlowBuilder._grasp_eef(control))
             )
-        elif stage.operation not in {Operation.MOVE, Operation.PUSH}:
+        elif stage.operation == Operation.PUSH:
+            if control.eef is not None:
+                actions.append(PrimitiveAction(kind="eef", eef=control.eef))
+        elif stage.operation != Operation.MOVE:
             raise NotImplementedError(
                 f"Unsupported operation '{stage.operation.value}'."
             )

@@ -67,7 +67,7 @@ task:
     # Arc angle +1.3 rad swings the door back to closed (joint → 0).
     - name: push_close
       object: handle
-      operation: pull
+      operation: push
       operator: arm
       param:
         pre_move:
