@@ -25,6 +25,7 @@ from ...runtime import (
     SceneBackend,
 )
 from ...utils.pose import PoseState, compose_pose, inverse_pose, quaternion_to_rpy
+from ...utils.transformations import quaternion_slerp
 from ...basis.mujoco_env import EnvConfig, UnifiedMujocoEnv
 
 
@@ -42,9 +43,13 @@ class MujocoToleranceConfig(BaseModel):
 class MujocoGraspConfig(BaseModel):
     """Grasp detection parameters."""
 
-    horizontal_threshold: float = 0.03
-    """Max horizontal distance (meters) between object center and EEF for valid grasp.
-    Increase for side grasps (e.g., 0.06-0.10 for cup handles)."""
+    lateral_threshold: float = 0.0
+    """Max lateral distance (meters) perpendicular to grasp direction.
+    Measured in EEF frame on the plane perpendicular to grasp_axis.
+    Set to 0 or negative to disable lateral distance check."""
+    grasp_axis: int = 2
+    """Grasp direction axis in EEF frame: 0=X, 1=Y, 2=Z (default).
+    Lateral distance is computed on the plane perpendicular to this axis."""
     settle_steps: int = 5
     """Minimum simulation steps before checking grasp, allowing fingers to fully clamp."""
 
@@ -127,6 +132,10 @@ class MujocoOperatorHandler(OperatorHandler):
     """The last target object involved in a primitive action, if any."""
     _move_steps: int = 0
     """The number of simulation steps consumed by the active pose command."""
+    _move_start_orientation: Optional[tuple] = None
+    """Starting orientation (xyzw quaternion) for SLERP interpolation."""
+    _move_target_orientation: Optional[tuple] = None
+    """Target orientation (xyzw quaternion) for SLERP interpolation."""
     _eef_steps: int = 0
     """The number of simulation steps consumed by the active eef command."""
     _home_ctrl: np.ndarray = field(init=False, repr=False)
@@ -156,12 +165,40 @@ class MujocoOperatorHandler(OperatorHandler):
         if self._last_move_key != key:
             self._last_move_key = key
             self._move_steps = 0
+            # Save start and target orientations for SLERP interpolation
+            current_eef = self.get_end_effector_pose()
+            self._move_start_orientation = current_eef.orientation
+            self._move_target_orientation = pose.orientation
         if isinstance(target, MujocoObjectHandler):
             self._last_target = target
 
-        desired_eef_pose = PoseState(
-            position=pose.position, orientation=pose.orientation
-        )
+        # Use SLERP interpolation for smooth orientation changes (if enabled)
+        if (
+            pose.use_slerp
+            and self._move_start_orientation
+            and self._move_target_orientation
+        ):
+            current_eef = self.get_end_effector_pose()
+            # Calculate interpolation fraction based on orientation error
+            ori_error = self._orientation_error(
+                current_eef.orientation, self._move_target_orientation
+            )
+            # Use smaller steps when error is large for smoother motion
+            alpha = min(0.1, 0.05 / max(ori_error, 0.01))
+            interpolated_ori = quaternion_slerp(
+                current_eef.orientation,
+                self._move_target_orientation,
+                alpha,
+                shortestpath=True,
+            )
+            desired_eef_pose = PoseState(
+                position=pose.position, orientation=interpolated_ori
+            )
+        else:
+            desired_eef_pose = PoseState(
+                position=pose.position, orientation=pose.orientation
+            )
+
         desired_base_pose = compose_pose(
             desired_eef_pose, inverse_pose(self._tool_pose_in_base)
         )
@@ -189,15 +226,7 @@ class MujocoOperatorHandler(OperatorHandler):
                 np.asarray(current_pose.position) - np.asarray(pose.position)
             )
         )
-        quat_dot = abs(
-            float(
-                np.dot(
-                    np.asarray(current_pose.orientation), np.asarray(pose.orientation)
-                )
-            )
-        )
-        quat_dot = min(1.0, max(-1.0, quat_dot))
-        ori_error = 2.0 * np.arccos(quat_dot)
+        ori_error = self._orientation_error(current_pose.orientation, pose.orientation)
 
         details = {
             "event": "moving"
@@ -288,6 +317,12 @@ class MujocoOperatorHandler(OperatorHandler):
             orientation=tuple(float(v) for v in quat),
         )
 
+    def _orientation_error(self, quat1: tuple, quat2: tuple) -> float:
+        """Calculate angular error between two quaternions in radians."""
+        quat_dot = abs(float(np.dot(np.asarray(quat1), np.asarray(quat2))))
+        quat_dot = min(1.0, max(-1.0, quat_dot))
+        return 2.0 * np.arccos(quat_dot)
+
     def get_base_pose(self) -> PoseState:
         pos, quat = self.env.get_body_pose(self.root_body_name)
         return PoseState(
@@ -300,7 +335,7 @@ class MujocoOperatorHandler(OperatorHandler):
         return (
             grasp_check["left_contact"]
             and grasp_check["right_contact"]
-            and grasp_check["horizontal_ok"]
+            and grasp_check["lateral_ok"]
         )
 
     def _check_grasp_conditions(self, target: "MujocoObjectHandler") -> dict:
@@ -312,9 +347,9 @@ class MujocoOperatorHandler(OperatorHandler):
             return {
                 "left_contact": False,
                 "right_contact": False,
-                "horizontal_ok": False,
-                "horizontal_error": float("inf"),
-                "horizontal_threshold": 0.03,
+                "lateral_ok": False,
+                "lateral_error": float("inf"),
+                "lateral_threshold": 0.03,
             }
 
         left_contact = False
@@ -339,21 +374,53 @@ class MujocoOperatorHandler(OperatorHandler):
 
         target_pose = target.get_pose()
         eef_pose = self.get_end_effector_pose()
-        horizontal_error = float(
-            np.linalg.norm(
-                np.asarray(target_pose.position[:2], dtype=np.float64)
-                - np.asarray(eef_pose.position[:2], dtype=np.float64)
+
+        lateral_threshold = self.control.grasp.lateral_threshold
+        if lateral_threshold <= 0:
+            # Distance check disabled
+            lateral_ok = True
+            lateral_error = 0.0
+        else:
+            # Convert object position to EEF frame
+            obj_pos = np.asarray(target_pose.position, dtype=np.float64)
+            eef_pos = np.asarray(eef_pose.position, dtype=np.float64)
+            eef_quat = np.asarray(eef_pose.orientation, dtype=np.float64)  # xyzw
+
+            # Quaternion to rotation matrix (xyzw format)
+            qx, qy, qz, qw = eef_quat
+            R = np.array(
+                [
+                    [
+                        1 - 2 * (qy**2 + qz**2),
+                        2 * (qx * qy - qz * qw),
+                        2 * (qx * qz + qy * qw),
+                    ],
+                    [
+                        2 * (qx * qy + qz * qw),
+                        1 - 2 * (qx**2 + qz**2),
+                        2 * (qy * qz - qx * qw),
+                    ],
+                    [
+                        2 * (qx * qz - qy * qw),
+                        2 * (qy * qz + qx * qw),
+                        1 - 2 * (qx**2 + qy**2),
+                    ],
+                ]
             )
-        )
-        horizontal_threshold = self.control.grasp.horizontal_threshold
-        horizontal_ok = horizontal_error <= horizontal_threshold
+
+            # Transform to EEF frame and compute lateral error perpendicular to grasp axis
+            obj_in_eef = R.T @ (obj_pos - eef_pos)
+            grasp_axis = self.control.grasp.grasp_axis
+            lateral_indices = [i for i in range(3) if i != grasp_axis]
+            lateral_error = float(np.linalg.norm(obj_in_eef[lateral_indices]))
+            lateral_ok = lateral_error <= lateral_threshold
 
         return {
             "left_contact": left_contact,
             "right_contact": right_contact,
-            "horizontal_ok": horizontal_ok,
-            "horizontal_error": horizontal_error,
-            "horizontal_threshold": horizontal_threshold,
+            "lateral_ok": lateral_ok,
+            "lateral_error": lateral_error,
+            "lateral_threshold": lateral_threshold,
         }
 
     def reset_state(self) -> None:
@@ -543,11 +610,38 @@ class MujocoTaskBackend(SceneBackend):
 
         target_pose = target.get_pose()
         eef_pose = operator.get_end_effector_pose()
-        horizontal_error = np.linalg.norm(
-            np.asarray(target_pose.position[:2], dtype=np.float64)
-            - np.asarray(eef_pose.position[:2], dtype=np.float64)
+
+        # Convert to EEF frame
+        obj_pos = np.asarray(target_pose.position, dtype=np.float64)
+        eef_pos = np.asarray(eef_pose.position, dtype=np.float64)
+        qx, qy, qz, qw = np.asarray(eef_pose.orientation, dtype=np.float64)
+
+        # Rotation matrix from quaternion
+        R = np.array(
+            [
+                [
+                    1 - 2 * (qy**2 + qz**2),
+                    2 * (qx * qy - qz * qw),
+                    2 * (qx * qz + qy * qw),
+                ],
+                [
+                    2 * (qx * qy + qz * qw),
+                    1 - 2 * (qx**2 + qz**2),
+                    2 * (qy * qz - qx * qw),
+                ],
+                [
+                    2 * (qx * qz - qy * qw),
+                    2 * (qy * qz + qx * qw),
+                    1 - 2 * (qx**2 + qy**2),
+                ],
+            ]
         )
-        return bool(horizontal_error <= 0.03)
+
+        obj_in_eef = R.T @ (obj_pos - eef_pos)
+        grasp_axis = 2  # Default Z-axis
+        lateral_indices = [i for i in range(3) if i != grasp_axis]
+        lateral_error = np.linalg.norm(obj_in_eef[lateral_indices])
+        return bool(lateral_error <= 0.03)
 
     def is_operator_grasping(self, operator_name: str) -> bool:
         _ = self.get_operator_handler(operator_name)

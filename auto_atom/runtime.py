@@ -1112,8 +1112,15 @@ class TaskRunner:
         target: Optional[ObjectHandler],
     ) -> ControlResult:
         if action.kind == "pose" and action.pose is not None:
+            # Snapshot-based references: resolve once and cache
             if (
-                action.pose.reference == PoseReference.EEF_WORLD
+                action.pose.reference
+                in {
+                    PoseReference.EEF_WORLD,
+                    PoseReference.EEF,
+                    # PoseReference.BASE,
+                    # PoseReference.OBJECT,
+                }
                 and action.resolved_pose is not None
             ):
                 resolved_pose = action.resolved_pose

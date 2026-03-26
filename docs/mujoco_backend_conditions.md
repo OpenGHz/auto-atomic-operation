@@ -25,21 +25,21 @@ An object is considered "grasped" when ALL of the following are true:
 
 **Detection method**: Iterates through `env.data.contact` array, checks `geom_bodyid` to find contacts involving the target body, then checks geom names.
 
-### 1.2 Horizontal Alignment
-- **Horizontal error**: Euclidean distance between object center (x, y) and EEF position (x, y)
-- **Threshold**: `horizontal_error <= grasp_horizontal_threshold` (default 0.03 meters)
+### 1.2 Lateral Alignment
+- **Lateral error**: Distance between object and EEF center on the plane perpendicular to grasp direction
+- **Computed in EEF frame**: Object position is transformed to gripper coordinate system
+- **Threshold**: `lateral_error <= lateral_threshold` (default 0.03 meters)
 
-**Rationale**: Ensures the gripper is centered on the object, not just touching it from the side.
+**Rationale**: Ensures the gripper is centered on the object perpendicular to the grasp direction, independent of gripper orientation in world frame.
 
-**Important**: This check assumes the grasp point is near the object center (e.g., top-down grasps). For side grasps (e.g., cup handles), the horizontal distance can be large even with a valid grasp. In such cases, increase `grasp_horizontal_threshold` to accommodate the offset.
+**Key improvement**: Unlike world-frame horizontal checks, this works correctly for any grasp orientation (vertical, horizontal, or angled).
 
 ### Configurable Parameters
 
 | Parameter | Location | Default | Description |
 |-----------|----------|---------|-------------|
-| `grasp_horizontal_threshold` | `MujocoOperatorHandler` | `0.03` m | Max horizontal distance between object center and EEF for valid grasp |
-
-**Note**: Increase this value for side grasps (e.g., 0.06-0.10 m for cup handles).
+| `lateral_threshold` | `MujocoGraspConfig` | `0.03` m | Max lateral distance perpendicular to grasp direction |
+| `grasp_axis` | `MujocoGraspConfig` | `2` (Z) | Grasp direction axis in EEF frame: 0=X, 1=Y, 2=Z |
 
 ### Debugging
 
@@ -49,9 +49,9 @@ When `eef.close=True` and a target object exists, the `TaskUpdate.details` will 
 "grasp_check": {
     "left_contact": bool,
     "right_contact": bool,
-    "horizontal_ok": bool,
-    "horizontal_error": float,  # meters
-    "horizontal_threshold": 0.03
+    "lateral_ok": bool,
+    "lateral_error": float,  # meters, in EEF frame
+    "lateral_threshold": float  # meters
 }
 ```
 
@@ -202,7 +202,8 @@ operators:
         orientation: 0.08   # radians
         eef: 0.03          # gripper tolerance
       grasp:
-        horizontal_threshold: 0.03  # meters (increase for side grasps)
+        lateral_threshold: 0.0      # meters (0 = disabled, >0 to enable check)
+        grasp_axis: 2               # 0=X, 1=Y, 2=Z (grasp direction)
         settle_steps: 5             # simulation steps
       timeout_steps: 600            # max steps per action
 ```
@@ -212,7 +213,8 @@ operators:
 | `control.tolerance.position` | 0.01 | m | Position error threshold for pose control |
 | `control.tolerance.orientation` | 0.08 | rad | Orientation error threshold for pose control |
 | `control.tolerance.eef` | 0.03 | - | Gripper position tolerance |
-| `control.grasp.horizontal_threshold` | 0.03 | m | Max horizontal distance for valid grasp |
+| `control.grasp.lateral_threshold` | 0.0 | m | Max lateral distance for valid grasp (0=disabled) |
+| `control.grasp.grasp_axis` | 2 | - | Grasp direction axis (0=X, 1=Y, 2=Z) |
 | `control.grasp.settle_steps` | 5 | steps | Min steps before checking grasp |
 | `control.timeout_steps` | 600 | steps | Max steps per action before timeout |
 
@@ -223,6 +225,5 @@ operators:
 ## Future Improvements
 
 1. Expose backend parameters in YAML task configs
-2. Make grasp `horizontal_threshold` configurable
-3. Add per-stage timeout overrides
-4. Support custom post-condition predicates
+2. Add per-stage timeout overrides
+3. Support custom post-condition predicates

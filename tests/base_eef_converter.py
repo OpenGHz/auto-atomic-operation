@@ -20,11 +20,13 @@ def print_rotation(name: str, rot: R):
     q_xyzw = rot.as_quat()
     q_wxyz = np.array([q_xyzw[3], q_xyzw[0], q_xyzw[1], q_xyzw[2]])
 
-    # Euler ZYX (yaw, pitch, roll) for ctrl
-    euler_zyx = rot.as_euler("ZYX")
+    # Intrinsic (uppercase in scipy): rotate about body axes
+    intr_zyx = rot.as_euler("ZYX")  # intrinsic ZYX = extrinsic xyz
+    intr_xyz = rot.as_euler("XYZ")  # intrinsic XYZ = extrinsic zyx
 
-    # Euler XYZ for reference
-    euler_xyz = rot.as_euler("XYZ")
+    # Extrinsic (lowercase in scipy): rotate about fixed world axes
+    extr_zyx = rot.as_euler("zyx")  # extrinsic zyx = intrinsic XYZ
+    extr_xyz = rot.as_euler("xyz")  # extrinsic xyz = intrinsic ZYX
 
     print(f"\n{name}:")
     print(
@@ -33,11 +35,19 @@ def print_rotation(name: str, rot: R):
     print(
         f"  Quat (xyzw): [{q_xyzw[0]:9.6f}, {q_xyzw[1]:9.6f}, {q_xyzw[2]:9.6f}, {q_xyzw[3]:9.6f}]"
     )
+    print(f"  --- Intrinsic (body-frame axes) ---")
     print(
-        f"  Euler ZYX (ctrl): yaw={euler_zyx[0]:7.4f}, pitch={euler_zyx[1]:7.4f}, roll={euler_zyx[2]:7.4f}"
+        f"  Intrinsic ZYX (ctrl): yaw={intr_zyx[0]:7.4f}, pitch={intr_zyx[1]:7.4f}, roll={intr_zyx[2]:7.4f}"
     )
     print(
-        f"  Euler XYZ:        [{euler_xyz[0]:7.4f}, {euler_xyz[1]:7.4f}, {euler_xyz[2]:7.4f}]"
+        f"  Intrinsic XYZ:        [{intr_xyz[0]:7.4f}, {intr_xyz[1]:7.4f}, {intr_xyz[2]:7.4f}]"
+    )
+    print(f"  --- Extrinsic (fixed-frame axes) ---")
+    print(
+        f"  Extrinsic ZYX:        [{extr_zyx[0]:7.4f}, {extr_zyx[1]:7.4f}, {extr_zyx[2]:7.4f}]"
+    )
+    print(
+        f"  Extrinsic XYZ:        [{extr_xyz[0]:7.4f}, {extr_xyz[1]:7.4f}, {extr_xyz[2]:7.4f}]"
     )
 
 
@@ -46,7 +56,7 @@ def main():
         description="Convert base orientation to base and EEF representations.",
         epilog="Examples:\n"
         "  python base_eef_converter.py 0 0 0           # euler XYZ (default)\n"
-        "  python base_eef_converter.py 0 1.5707 0 --zyx  # euler ZYX (MuJoCo ctrl)\n"
+        "  python base_eef_converter.py 0 1.5707 0 --zyx  # intrinsic ZYX (MuJoCo ctrl)\n"
         "  python base_eef_converter.py 1 0 0 0         # quat wxyz\n",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -59,7 +69,7 @@ def main():
     parser.add_argument(
         "--zyx",
         action="store_true",
-        help="Use ZYX euler convention (yaw pitch roll) instead of XYZ",
+        help="Use intrinsic ZYX euler convention (yaw pitch roll) instead of intrinsic XYZ",
     )
     parser.add_argument(
         "--tool-in-base",
@@ -76,11 +86,11 @@ def main():
         if args.zyx:
             yaw, pitch, roll = args.values
             base_rot = R.from_euler("ZYX", [yaw, pitch, roll])
-            print(f"Input: Euler ZYX (yaw={yaw}, pitch={pitch}, roll={roll})")
+            print(f"Input: Intrinsic ZYX (yaw={yaw}, pitch={pitch}, roll={roll})")
         else:
             x, y, z = args.values
             base_rot = R.from_euler("XYZ", [x, y, z])
-            print(f"Input: Euler XYZ ({x}, {y}, {z})")
+            print(f"Input: Intrinsic XYZ ({x}, {y}, {z})")
     elif len(args.values) == 4:
         w, x, y, z = args.values
         base_rot = R.from_quat([x, y, z, w])
