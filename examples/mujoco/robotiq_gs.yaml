@@ -1,0 +1,17 @@
+# Shared Robotiq 2F-85 GS body gaussians config.
+# Include via Hydra defaults in any *_gs.yaml that uses the Robotiq gripper.
+env:
+  env:
+    config:
+      gaussian_render:
+        body_gaussians:
+          robotiq_interface:  assets/gs/robots/robotiq/base.ply
+          robotiq_base:       assets/gs/robots/robotiq/robotiq_base.ply
+          left_driver:        assets/gs/robots/robotiq/left_driver.ply
+          left_coupler:       assets/gs/robots/robotiq/left_coupler.ply
+          left_spring_link:   assets/gs/robots/robotiq/left_spring_link.ply
+          left_follower:      assets/gs/robots/robotiq/left_follower.ply
+          right_driver:       assets/gs/robots/robotiq/right_driver.ply
+          right_coupler:      assets/gs/robots/robotiq/right_coupler.ply
+          right_spring_link:  assets/gs/robots/robotiq/right_spring_link.ply
+          right_follower:     assets/gs/robots/robotiq/right_follower.ply

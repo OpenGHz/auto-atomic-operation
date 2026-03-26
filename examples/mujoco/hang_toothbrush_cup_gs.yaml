@@ -1,5 +1,6 @@
 defaults:
   - hang_toothbrush_cup
+  - robotiq_gs
   - _self_
 
 gs_dir: assets/gs/scenes/hang_toothbrush_cup

@@ -1,5 +1,6 @@
 defaults:
   - stack_color_blocks
+  - robotiq_gs
   - _self_
 
 gs_dir: assets/gs/scenes/stack_color_blocks

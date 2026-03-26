@@ -1,5 +1,6 @@
 defaults:
   - cup_on_coaster
+  - robotiq_gs
   - _self_
 
 gs_dir: assets/gs/scenes/cup_on_coaster

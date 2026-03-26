@@ -1,5 +1,6 @@
 defaults:
   - arrange_flowers
+  - robotiq_gs
   - _self_
 
 gs_dir: assets/gs/scenes/arrange_flowers

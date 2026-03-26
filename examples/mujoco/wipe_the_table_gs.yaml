@@ -1,5 +1,6 @@
 defaults:
   - wipe_the_table
+  - robotiq_gs
   - _self_
 
 gs_dir: assets/gs/scenes/wipe_the_table

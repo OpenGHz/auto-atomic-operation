@@ -1,5 +1,6 @@
 defaults:
   - press_three_buttons
+  - robotiq_gs
   - _self_
 
 gs_dir: assets/gs/scenes/press_three_buttons
