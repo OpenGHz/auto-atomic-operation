@@ -1,53 +1,16 @@
+defaults:
+  - base
+  - _self_
+
 env:
-  _target_: auto_atom.runtime.ComponentRegistry.register_env
   name: close_drawer
   env:
-    _target_: auto_atom.basis.mujoco_env.UnifiedMujocoEnv
     config:
-      _target_: auto_atom.basis.mujoco_env.EnvConfig
       model_path: assets/xmls/scenes/open_close_drawer/demo.xml
-      # Start with the drawer fully open (drawer_slide joint = -0.12 m)
       initial_joint_positions:
         drawer_slide: -0.12
-      operators:
-        - name: arm
-          arm_actuators: []
-          eef_actuators: [fingers_actuator]
-          eef_output_name: eef
-          pose_site: eef_pose
-      enabled_sensors:
-        - camera
-        - pose
-        - joint_position
-        - joint_velocity
-        - joint_effort
-      sim_freq: 500
-      update_freq: 25
       mask_objects: ["handle", "drawer"]
       operations: ["pull"]
-      cameras:
-        - name: hand_cam
-          width: 640
-          height: 480
-          enable_color: true
-          enable_depth: true
-          enable_mask: false
-          enable_heat_map: false
-          parent_frame: eef_pose
-        - name: front_cam
-          width: 640
-          height: 480
-          enable_color: true
-          enable_depth: true
-          enable_mask: false
-          enable_heat_map: false
-        - name: side_cam
-          width: 640
-          height: 480
-          enable_color: true
-          enable_depth: true
-          enable_mask: false
-          enable_heat_map: false
       viewer:
         lookat: [0.0, 0.04, 0.12]
         distance: 0.75
@@ -56,11 +19,8 @@ env:
         step_delay: 0.025
         hold_seconds: 1.0
 
-backend: auto_atom.backend.mjc.mujoco_backend.build_mujoco_backend
-
 task:
   env_name: close_drawer
-  seed: 42
   stages:
     # Grasp the handle and push the drawer closed.
     # Drawer starts fully open: joint=-0.12 m, handle world pos = (0, -0.071, 0.132).
@@ -85,7 +45,3 @@ task:
           # Push forward 12 cm in +Y (world) to fully close the drawer (joint range −0.12 → 0)
           - position: [0.0, 0.12, 0.0]
             reference: eef_world
-
-operators:
-  - name: arm
-    role: manipulator

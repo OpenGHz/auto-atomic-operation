@@ -1,53 +1,16 @@
+defaults:
+  - base
+  - _self_
+
 env:
-  _target_: auto_atom.runtime.ComponentRegistry.register_env
   name: close_hinge_door
   env:
-    _target_: auto_atom.basis.mujoco_env.UnifiedMujocoEnv
     config:
-      _target_: auto_atom.basis.mujoco_env.EnvConfig
-      model_path: assets/xmls/scenes/open_hinge_door/demo.xml
-      # Start with the door open (~75 deg, matching the open_hinge_door post_move angle)
+      model_path: assets/xmls/scenes/open_close_hinge_door/demo.xml
       initial_joint_positions:
         hinge_joint_1: -1.3
-      operators:
-        - name: arm
-          arm_actuators: []
-          eef_actuators: [fingers_actuator]
-          eef_output_name: eef
-          pose_site: eef_pose
-      enabled_sensors:
-        - camera
-        - pose
-        - joint_position
-        - joint_velocity
-        - joint_effort
-      sim_freq: 500
-      update_freq: 25
       mask_objects: ["handle", "door"]
       operations: ["pull"]
-      cameras:
-        - name: hand_cam
-          width: 640
-          height: 480
-          enable_color: true
-          enable_depth: true
-          enable_mask: false
-          enable_heat_map: false
-          parent_frame: eef_pose
-        - name: front_cam
-          width: 640
-          height: 480
-          enable_color: true
-          enable_depth: true
-          enable_mask: false
-          enable_heat_map: false
-        - name: side_cam
-          width: 640
-          height: 480
-          enable_color: true
-          enable_depth: true
-          enable_mask: false
-          enable_heat_map: false
       viewer:
         lookat: [-0.2, 0.0, 0.55]
         distance: 1.5
@@ -56,11 +19,8 @@ env:
         step_delay: 0.025
         hold_seconds: 1.5
 
-backend: auto_atom.backend.mjc.mujoco_backend.build_mujoco_backend
-
 task:
   env_name: close_hinge_door
-  seed: 42
   stages:
     # Grasp handle of the open door and push it closed.
     # Door starts open at hinge_joint_1 = -1.3 rad (~75 deg).
@@ -88,7 +48,3 @@ task:
               angle: 0
               absolute: true
             reference: world
-
-operators:
-  - name: arm
-    role: manipulator

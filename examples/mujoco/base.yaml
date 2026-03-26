@@ -1,0 +1,62 @@
+# Base configuration for MuJoCo tasks
+# This file contains common settings shared across all tasks
+
+env:
+  _target_: auto_atom.runtime.ComponentRegistry.register_env
+  env:
+    _target_: auto_atom.basis.mujoco_env.UnifiedMujocoEnv
+    config:
+      _target_: auto_atom.basis.mujoco_env.EnvConfig
+      operators:
+        - name: arm
+          arm_actuators: []
+          eef_actuators: [fingers_actuator]
+          eef_output_name: eef
+          pose_site: eef_pose
+          imu_acc: imu_acc
+          imu_gyro: imu_gyro
+          imu_quat: imu_quat
+          pose_sensor_pos: global_gripper_pos
+          pose_sensor_quat: global_gripper_quat
+          tactile_prefixes: ["left_", "right_"]
+      enabled_sensors:
+        - camera
+        - pose
+        - tactile
+        - joint_position
+        - joint_velocity
+        - joint_effort
+      sim_freq: 500
+      update_freq: 20
+      operations: ["pick", "place", "push", "pull", "press"]
+      cameras:
+        - name: hand_cam
+          width: 640
+          height: 480
+          enable_color: true
+          enable_depth: true
+          enable_mask: false
+          enable_heat_map: false
+          parent_frame: eef_pose
+        - name: front_cam
+          width: 640
+          height: 480
+          enable_color: true
+          enable_depth: true
+          enable_mask: false
+          enable_heat_map: false
+        - name: side_cam
+          width: 640
+          height: 480
+          enable_color: true
+          enable_depth: true
+          enable_mask: false
+          enable_heat_map: false
+
+backend: auto_atom.backend.mjc.mujoco_backend.build_mujoco_backend
+
+task:
+  seed: 42
+
+operators:
+  - name: arm

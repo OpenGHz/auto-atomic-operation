@@ -212,3 +212,4 @@ tests/profiles/
 assets/gs
 claude.md
 test.py
+.claude/

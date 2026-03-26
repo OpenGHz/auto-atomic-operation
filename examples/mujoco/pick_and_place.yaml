@@ -1,60 +1,13 @@
+defaults:
+  - base
+  - _self_
+
 env:
-  _target_: auto_atom.runtime.ComponentRegistry.register_env
   name: mujoco_pick_place_demo
   env:
-    _target_: auto_atom.basis.mujoco_env.UnifiedMujocoEnv
     config:
-      _target_: auto_atom.basis.mujoco_env.EnvConfig
       model_path: assets/xmls/scenes/pick_and_place/demo.xml
-      operators:
-        - name: arm
-          arm_actuators: []
-          eef_actuators: [fingers_actuator]
-          eef_output_name: eef
-          pose_site: eef_pose
-          imu_acc: imu_acc
-          imu_gyro: imu_gyro
-          imu_quat: imu_quat
-          pose_sensor_pos: global_gripper_pos
-          pose_sensor_quat: global_gripper_quat
-          tactile_prefixes: ["left_", "right_"]
-      enabled_sensors:
-        - camera
-        - pose
-        - tactile
-        - joint_position
-        - joint_velocity
-        - joint_effort
-      sim_freq: 500
-      update_freq: 50
       mask_objects: ["source_block", "target_pedestal"]
-      operations: ["pick", "place", "push", "pull", "press"]
-      # interests:
-      #   - ["source_block", "target_pedestal"]
-      #   - ["pick", "place"]
-      cameras:
-        - name: hand_cam
-          width: 640
-          height: 480
-          enable_color: true
-          enable_depth: true
-          enable_mask: false
-          enable_heat_map: true
-          parent_frame: eef_pose
-        - name: front_cam
-          width: 640
-          height: 480
-          enable_color: true
-          enable_depth: true
-          enable_mask: false
-          enable_heat_map: true
-        - name: side_cam
-          width: 640
-          height: 480
-          enable_color: true
-          enable_depth: true
-          enable_mask: false
-          enable_heat_map: true
       viewer:
         lookat: [0.04, 0.0, 0.1]
         distance: 0.55
@@ -63,11 +16,8 @@ env:
         step_delay: 0.03
         hold_seconds: 1.0
 
-backend: auto_atom.backend.mjc.mujoco_backend.build_mujoco_backend
-
 task:
   env_name: mujoco_pick_place_demo
-  seed: 42
   # randomization_debug: true
   # Pose randomization applied at each reset.
   # source_block has a free joint so its x/y and yaw are randomised.

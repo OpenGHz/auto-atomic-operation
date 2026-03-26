@@ -61,10 +61,10 @@ def main(cfg: DictConfig) -> None:
         print()
 
         for i in count():
+            # input("Press Enter to continue...")
             update = runner.update()
             print(f"Step {i}:" + "=" * 40)
             print(update)
-            # input("Press Enter to continue...")
             if update.done:
                 break
 

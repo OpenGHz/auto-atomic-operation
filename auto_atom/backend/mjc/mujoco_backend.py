@@ -10,6 +10,7 @@ import numpy as np
 from pydantic import BaseModel
 
 from ...framework import (
+    ArmPoseConfig,
     AutoAtomConfig,
     EefControlConfig,
     OperatorConfig,
@@ -803,21 +804,54 @@ def build_mujoco_backend(
         if operator.initial_state is not None:
             handler = operator_handlers[operator.name]
             if operator.initial_state.arm is not None:
-                vals = operator.initial_state.arm
-                if len(vals) >= 6:
-                    # Convert [x, y, z, yaw, pitch, roll] to mocap pose.
+                arm_config = operator.initial_state.arm
+
+                # Handle both old flat list format and new structured format
+                if isinstance(arm_config, list):
+                    # Old format: [x, y, z, yaw, pitch, roll]
+                    if len(arm_config) >= 6:
+                        from scipy.spatial.transform import Rotation as R
+
+                        pos = np.array(arm_config[:3], dtype=np.float64)
+                        quat_xyzw = R.from_euler(
+                            "ZYX", [arm_config[3], arm_config[4], arm_config[5]]
+                        ).as_quat()
+                        quat_wxyz = np.array(
+                            [quat_xyzw[3], quat_xyzw[0], quat_xyzw[1], quat_xyzw[2]],
+                            dtype=np.float64,
+                        )
+                        handler._home_mocap_pos = pos
+                        handler._home_mocap_quat = quat_wxyz
+                else:
+                    # New structured format: {position: [...], orientation: [...]}
                     from scipy.spatial.transform import Rotation as R
 
-                    pos = np.array(vals[:3], dtype=np.float64)
-                    quat_xyzw = R.from_euler(
-                        "ZYX", [vals[3], vals[4], vals[5]]
-                    ).as_quat()
-                    quat_wxyz = np.array(
-                        [quat_xyzw[3], quat_xyzw[0], quat_xyzw[1], quat_xyzw[2]],
-                        dtype=np.float64,
-                    )
-                    handler._home_mocap_pos = pos
-                    handler._home_mocap_quat = quat_wxyz
+                    # Override position if provided
+                    if arm_config.position is not None:
+                        if len(arm_config.position) >= 3:
+                            handler._home_mocap_pos = np.array(
+                                arm_config.position[:3], dtype=np.float64
+                            )
+
+                    # Override orientation if provided
+                    if arm_config.orientation is not None:
+                        ori = arm_config.orientation
+                        if len(ori) == 3:
+                            # Euler angles: [yaw, pitch, roll]
+                            quat_xyzw = R.from_euler("ZYX", ori).as_quat()
+                        elif len(ori) == 4:
+                            # Quaternion: [x, y, z, w]
+                            quat_xyzw = np.array(ori, dtype=np.float64)
+                        else:
+                            raise ValueError(
+                                f"orientation must be 3 floats (Euler) or 4 floats (quaternion), got {len(ori)}"
+                            )
+                        # Convert to wxyz format
+                        quat_wxyz = np.array(
+                            [quat_xyzw[3], quat_xyzw[0], quat_xyzw[1], quat_xyzw[2]],
+                            dtype=np.float64,
+                        )
+                        handler._home_mocap_quat = quat_wxyz
             if operator.initial_state.eef is not None:
                 handler._home_ctrl[handler.eef_ctrl_index] = operator.initial_state.eef
     object_names = {stage.object for stage in config.stages if stage.object}

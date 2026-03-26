@@ -1,4 +1,4 @@
-<mujoco model="open_hinge_door_demo">
+<mujoco model="open_close_hinge_door_demo">
   <include file="../../robots/robotiq.xml"/>
 
   <visual>

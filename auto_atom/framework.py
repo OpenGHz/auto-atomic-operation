@@ -247,11 +247,29 @@ class AutoAtomConfig(BaseModel):
     """When True the first N resets cycle through extreme poses (each axis at its min/max, then all-min and all-max) before switching to random sampling.  Use this to verify that configured ranges are not too large."""
 
 
+class ArmPoseConfig(BaseModel):
+    """Structured arm pose configuration with separate position and orientation."""
+
+    position: Optional[List[float]] = None
+    """3D position [x, y, z]. When omitted, keyframe position is kept."""
+
+    orientation: Optional[List[float]] = None
+    """Orientation as Euler angles [yaw, pitch, roll] (3 floats) or quaternion [x, y, z, w] (4 floats).
+    When omitted, keyframe orientation is kept."""
+
+
 class OperatorInitialState(BaseModel):
     """Optional override for an operator's home control state applied at reset."""
 
-    arm: Optional[List[float]] = None
-    """Override values for the arm actuator controls (ctrl[0:len(arm)]).
+    arm: Optional[Union[List[float], ArmPoseConfig]] = None
+    """Override values for the arm actuator controls.
+
+    Supports two formats:
+    1. Flat list: [x, y, z, yaw, pitch, roll] (backward compatible)
+    2. Structured dict: {position: [x,y,z], orientation: [yaw,pitch,roll] or [x,y,z,w]}
+       - Both position and orientation are optional in structured format
+       - orientation can be Euler angles (3 floats) or quaternion (4 floats)
+
     When omitted the keyframe value is kept."""
 
     eef: Optional[float] = None

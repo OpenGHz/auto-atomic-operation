@@ -1,55 +1,17 @@
+defaults:
+  - base
+  - _self_
+
 env:
-  _target_: auto_atom.runtime.ComponentRegistry.register_env
   name: wipe_the_table
   env:
-    _target_: auto_atom.basis.mujoco_env.UnifiedMujocoEnv
     config:
-      _target_: auto_atom.basis.mujoco_env.EnvConfig
       model_path: assets/xmls/scenes/wipe_the_table/demo.xml
-      operators:
-        - name: arm
-          arm_actuators: []
-          eef_actuators: [fingers_actuator]
-          eef_output_name: eef
-          pose_site: eef_pose
-          imu_acc: imu_acc
-          imu_gyro: imu_gyro
-          imu_quat: imu_quat
-          pose_sensor_pos: global_gripper_pos
-          pose_sensor_quat: global_gripper_quat
-          tactile_prefixes: ["left_", "right_"]
-      enabled_sensors:
-        - camera
-        - pose
-        - tactile
-        - joint_position
-        - joint_velocity
-        - joint_effort
-      sim_freq: 500
-      update_freq: 20
       mask_objects: ["blue_duck", "chicken_doll", "transparent_tape_paper", "white_box"]
       operations: ["pick", "place"]
-      cameras:
-        - name: front_cam
-          width: 640
-          height: 480
-          enable_color: true
-          enable_depth: true
-          enable_mask: false
-          enable_heat_map: false
-        - name: side_cam
-          width: 640
-          height: 480
-          enable_color: true
-          enable_depth: true
-          enable_mask: false
-          enable_heat_map: false
-
-backend: auto_atom.backend.mjc.mujoco_backend.build_mujoco_backend
 
 task:
   env_name: wipe_the_table
-  seed: 42
   randomization:
     blue_duck:
       x: [-0.01, 0.01]

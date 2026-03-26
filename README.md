@@ -89,6 +89,8 @@ Uses the in-memory mock backend — ideal for testing task logic in isolation.
 | `stack_color_blocks` | `press_three_buttons` |
 | ![open_drawer](assets/videos/open_drawer.gif) | ![close_drawer](assets/videos/close_drawer.gif) |
 | `open_drawer` | `close_drawer` |
+| ![open_hinge_door](assets/videos/open_hinge_door.gif) | ![close_hinge_door](assets/videos/close_hinge_door.gif) |
+| `open_hinge_door` | `close_hinge_door` |
 
 Make sure to install Git LFS and pull the assets after cloning:
 
