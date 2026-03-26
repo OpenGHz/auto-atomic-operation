@@ -489,6 +489,13 @@ class MujocoOperatorHandler(OperatorHandler):
             self.env.data.qvel[eef_vidx] = 0.0
         mujoco.mj_forward(self.env.model, self.env.data)
 
+    def set_home_end_effector_pose(self, pose: PoseState) -> None:
+        """Update the home mocap pose from a desired EEF world pose."""
+        desired_base_pose = compose_pose(pose, inverse_pose(self._tool_pose_in_base))
+        self._home_mocap_pos = np.asarray(desired_base_pose.position, dtype=np.float64)
+        qx, qy, qz, qw = desired_base_pose.orientation
+        self._home_mocap_quat = np.array([qw, qx, qy, qz], dtype=np.float64)
+
     def set_pose(self, pose: PoseState) -> None:
         """Force-set the operator base world pose in one step.
 
@@ -570,6 +577,7 @@ class MujocoTaskBackend(SceneBackend):
             self._record_default_poses()
         if self.randomization:
             self._apply_randomization()
+        self.env.refresh_viewer()
 
     def teardown(self) -> None:
         self.env.close()
@@ -809,6 +817,7 @@ def build_mujoco_backend(
             handler = operator_handlers[operator.name]
             if operator.initial_state.arm is not None:
                 arm_config = operator.initial_state.arm
+                pose = handler.get_end_effector_pose()
 
                 # Handle both old flat list format and new structured format
                 if isinstance(arm_config, list):
@@ -820,21 +829,24 @@ def build_mujoco_backend(
                         quat_xyzw = R.from_euler(
                             "ZYX", [arm_config[3], arm_config[4], arm_config[5]]
                         ).as_quat()
-                        quat_wxyz = np.array(
-                            [quat_xyzw[3], quat_xyzw[0], quat_xyzw[1], quat_xyzw[2]],
-                            dtype=np.float64,
+                        pose = PoseState(
+                            position=tuple(float(v) for v in pos),
+                            orientation=tuple(float(v) for v in quat_xyzw),
                         )
-                        handler._home_mocap_pos = pos
-                        handler._home_mocap_quat = quat_wxyz
                 else:
-                    # New structured format: {position: [...], orientation: [...]}
+                    # New structured format: {position: [...], orientation: [...]}.
+                    # This pose is interpreted in the EEF world frame so that
+                    # runner.reset() reports the configured values back verbatim.
                     from scipy.spatial.transform import Rotation as R
 
                     # Override position if provided
                     if arm_config.position is not None:
                         if len(arm_config.position) >= 3:
-                            handler._home_mocap_pos = np.array(
-                                arm_config.position[:3], dtype=np.float64
+                            pose = PoseState(
+                                position=tuple(
+                                    float(v) for v in arm_config.position[:3]
+                                ),
+                                orientation=pose.orientation,
                             )
 
                     # Override orientation if provided
@@ -850,12 +862,11 @@ def build_mujoco_backend(
                             raise ValueError(
                                 f"orientation must be 3 floats (Euler) or 4 floats (quaternion), got {len(ori)}"
                             )
-                        # Convert to wxyz format
-                        quat_wxyz = np.array(
-                            [quat_xyzw[3], quat_xyzw[0], quat_xyzw[1], quat_xyzw[2]],
-                            dtype=np.float64,
+                        pose = PoseState(
+                            position=pose.position,
+                            orientation=tuple(float(v) for v in quat_xyzw),
                         )
-                        handler._home_mocap_quat = quat_wxyz
+                handler.set_home_end_effector_pose(pose)
             if operator.initial_state.eef is not None:
                 handler._home_ctrl[handler.eef_ctrl_index] = operator.initial_state.eef
     object_names = {stage.object for stage in config.stages if stage.object}

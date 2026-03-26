@@ -916,6 +916,11 @@ class UnifiedMujocoEnv:
             if self.config.viewer.step_delay > 0.0:
                 time.sleep(self.config.viewer.step_delay)
 
+    def refresh_viewer(self) -> None:
+        """Redraw the passive viewer without advancing physics."""
+        if self._viewer_running():
+            self._sync_viewer()
+
     def _wrench_from_tactile(
         self, op: OperatorBinding
     ) -> tuple[np.ndarray, np.ndarray]:
