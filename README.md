@@ -148,6 +148,15 @@ hf download OpenGHz/auto-atom-assets --repo-type=dataset --include "assets/gs/*"
 
 If the download is slow, you may need to configure a terminal proxy first. You can also download the assets in your browser from https://huggingface.co/datasets/OpenGHz/auto-atom-assets/tree/main.
 
+| | |
+|:---:|:---:|
+| ![cup_on_coaster_gs](assets/videos/cup_on_coaster_gs.gif) | ![stack_color_blocks_gs](assets/videos/stack_color_blocks_gs.gif) |
+| `cup_on_coaster_gs` | `stack_color_blocks_gs` |
+| ![press_three_buttons_gs](assets/videos/press_three_buttons_gs.gif) | ![arrange_flowers_gs](assets/videos/arrange_flowers_gs.gif) |
+| `press_three_buttons_gs` | `arrange_flowers_gs` |
+| ![hang_toothbrush_cup_gs](assets/videos/hang_toothbrush_cup_gs.gif) | ![wipe_the_table_gs](assets/videos/wipe_the_table_gs.gif) |
+| `hang_toothbrush_cup_gs` | `wipe_the_table_gs` |
+
 Configuration files related to 3D GS end with `_gs.yaml` and are run in the same way as described above.
 
 ## Data Collection
