@@ -58,7 +58,9 @@ def main(cfg: DictConfig) -> None:
 
     try:
         print("Reset task")
-        pprint(runner.reset())
+        reset_update = runner.reset()
+        pprint(reset_update)
+        print("Scene reset complete; viewer refreshed. Starting task updates...")
         print()
 
         for i in count():
