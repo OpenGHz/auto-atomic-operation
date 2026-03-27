@@ -43,46 +43,10 @@ from pathlib import Path
 
 import numpy as np
 
-
-# ---------------------------------------------------------------------------
-# Quaternion helpers
-# ---------------------------------------------------------------------------
-
-
-def euler_intrinsic_xyz_to_quat_xyzw(ax: float, ay: float, az: float) -> np.ndarray:
-    """Convert MuJoCo intrinsic XYZ euler angles (radians) to xyzw quaternion.
-
-    MuJoCo ``euler="ax ay az"`` with default sequence xyz uses intrinsic rotations:
-    q = qx(ax) ⊗ qy(ay) ⊗ qz(az), where each qi is a rotation about that axis.
-
-    Args:
-        ax: Rotation around X axis in radians.
-        ay: Rotation around Y axis in radians.
-        az: Rotation around Z axis in radians.
-
-    Returns:
-        np.ndarray: Quaternion [x, y, z, w].
-    """
-    cx, sx = np.cos(ax / 2), np.sin(ax / 2)
-    cy, sy = np.cos(ay / 2), np.sin(ay / 2)
-    cz, sz = np.cos(az / 2), np.sin(az / 2)
-
-    def qmul(a: np.ndarray, b: np.ndarray) -> np.ndarray:
-        ax_, ay_, az_, aw = a
-        bx, by, bz, bw = b
-        return np.array(
-            [
-                aw * bx + ax_ * bw + ay_ * bz - az_ * by,
-                aw * by - ax_ * bz + ay_ * bw + az_ * bx,
-                aw * bz + ax_ * by - ay_ * bx + az_ * bw,
-                aw * bw - ax_ * bx - ay_ * by - az_ * bz,
-            ]
-        )
-
-    qx = np.array([sx, 0.0, 0.0, cx])
-    qy = np.array([0.0, sy, 0.0, cy])
-    qz = np.array([0.0, 0.0, sz, cz])
-    return qmul(qmul(qx, qy), qz)
+from auto_atom.utils.pose import (
+    mujoco_euler_to_quaternion,
+    quaternion_to_rotation_matrix,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -108,15 +72,13 @@ def preprocess_ply(
     # Import here so the script can be imported without GPU available
     from gaussian_renderer.core.util_gau import load_ply, save_ply
     from gaussian_renderer.transform_gs_model import transform_gaussian
-    from scipy.spatial.transform import Rotation
 
     dst.parent.mkdir(parents=True, exist_ok=True)
 
     gaussian_data = load_ply(str(src))
 
-    R = Rotation.from_quat(quat_xyzw).as_matrix()
     T = np.eye(4)
-    T[:3, :3] = R
+    T[:3, :3] = quaternion_to_rotation_matrix(quat_xyzw)
 
     transform_gaussian(gaussian_data, T, scale_factor=1.0, silent=True)
     save_ply(gaussian_data, str(dst))
@@ -181,7 +143,7 @@ def main() -> None:
         quat_xyzw = np.array(args.rotation, dtype=np.float64)
     else:
         ax, ay, az = args.euler
-        quat_xyzw = euler_intrinsic_xyz_to_quat_xyzw(ax, ay, az)
+        quat_xyzw = np.array(mujoco_euler_to_quaternion(ax, ay, az), dtype=np.float64)
         print(
             f"Euler ({ax:.6f}, {ay:.6f}, {az:.6f}) rad  →  xyzw quaternion: {quat_xyzw}"
         )

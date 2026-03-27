@@ -25,7 +25,14 @@ from ...runtime import (
     PoseRandomRange,
     SceneBackend,
 )
-from ...utils.pose import PoseState, compose_pose, inverse_pose
+from ...utils.pose import (
+    PoseState,
+    compose_pose,
+    euler_to_quaternion,
+    inverse_pose,
+    quaternion_angular_distance,
+    quaternion_to_rotation_matrix,
+)
 from ...utils.transformations import quaternion_slerp
 from ...basis.mjc.mujoco_env import EnvConfig, UnifiedMujocoEnv
 
@@ -223,7 +230,7 @@ class MujocoOperatorHandler(OperatorHandler):
         ):
             current_eef = self.get_end_effector_pose()
             # Calculate interpolation fraction based on orientation error
-            ori_error = self._orientation_error(
+            ori_error = quaternion_angular_distance(
                 current_eef.orientation, self._move_target_orientation
             )
             # Use smaller steps when error is large for smoother motion
@@ -255,7 +262,9 @@ class MujocoOperatorHandler(OperatorHandler):
                 np.asarray(current_pose.position) - np.asarray(pose.position)
             )
         )
-        ori_error = self._orientation_error(current_pose.orientation, pose.orientation)
+        ori_error = quaternion_angular_distance(
+            current_pose.orientation, pose.orientation
+        )
 
         details = {
             "event": "moving"
@@ -351,12 +360,6 @@ class MujocoOperatorHandler(OperatorHandler):
             orientation=tuple(float(v) for v in quat),
         )
 
-    def _orientation_error(self, quat1: tuple, quat2: tuple) -> float:
-        """Calculate angular error between two quaternions in radians."""
-        quat_dot = abs(float(np.dot(np.asarray(quat1), np.asarray(quat2))))
-        quat_dot = min(1.0, max(-1.0, quat_dot))
-        return 2.0 * np.arccos(quat_dot)
-
     def get_base_pose(self) -> PoseState:
         pos, quat = self.env.get_body_pose(self.root_body_name)
         return PoseState(
@@ -418,29 +421,7 @@ class MujocoOperatorHandler(OperatorHandler):
             # Convert object position to EEF frame
             obj_pos = np.asarray(target_pose.position, dtype=np.float64)
             eef_pos = np.asarray(eef_pose.position, dtype=np.float64)
-            eef_quat = np.asarray(eef_pose.orientation, dtype=np.float64)  # xyzw
-
-            # Quaternion to rotation matrix (xyzw format)
-            qx, qy, qz, qw = eef_quat
-            R = np.array(
-                [
-                    [
-                        1 - 2 * (qy**2 + qz**2),
-                        2 * (qx * qy - qz * qw),
-                        2 * (qx * qz + qy * qw),
-                    ],
-                    [
-                        2 * (qx * qy + qz * qw),
-                        1 - 2 * (qx**2 + qz**2),
-                        2 * (qy * qz - qx * qw),
-                    ],
-                    [
-                        2 * (qx * qz - qy * qw),
-                        2 * (qy * qz + qx * qw),
-                        1 - 2 * (qx**2 + qy**2),
-                    ],
-                ]
-            )
+            R = quaternion_to_rotation_matrix(eef_pose.orientation)
 
             # Transform to EEF frame and compute lateral error perpendicular to grasp axis
             obj_in_eef = R.T @ (obj_pos - eef_pos)
@@ -701,28 +682,7 @@ class MujocoTaskBackend(SceneBackend):
         # Convert to EEF frame
         obj_pos = np.asarray(target_pose.position, dtype=np.float64)
         eef_pos = np.asarray(eef_pose.position, dtype=np.float64)
-        qx, qy, qz, qw = np.asarray(eef_pose.orientation, dtype=np.float64)
-
-        # Rotation matrix from quaternion
-        R = np.array(
-            [
-                [
-                    1 - 2 * (qy**2 + qz**2),
-                    2 * (qx * qy - qz * qw),
-                    2 * (qx * qz + qy * qw),
-                ],
-                [
-                    2 * (qx * qy + qz * qw),
-                    1 - 2 * (qx**2 + qz**2),
-                    2 * (qy * qz - qx * qw),
-                ],
-                [
-                    2 * (qx * qz - qy * qw),
-                    2 * (qy * qz + qx * qw),
-                    1 - 2 * (qx**2 + qy**2),
-                ],
-            ]
-        )
+        R = quaternion_to_rotation_matrix(eef_pose.orientation)
 
         obj_in_eef = R.T @ (obj_pos - eef_pos)
         grasp_axis = 2  # Default Z-axis
@@ -823,21 +783,19 @@ def build_mujoco_backend(
                 if isinstance(arm_config, list):
                     # Old format: [x, y, z, yaw, pitch, roll]
                     if len(arm_config) >= 6:
-                        from scipy.spatial.transform import Rotation as R
-
-                        pos = np.array(arm_config[:3], dtype=np.float64)
-                        quat_xyzw = R.from_euler(
-                            "ZYX", [arm_config[3], arm_config[4], arm_config[5]]
-                        ).as_quat()
+                        pos = arm_config[:3]
+                        # ZYX euler [yaw, pitch, roll] → rpy tuple (roll, pitch, yaw)
+                        quat_xyzw = euler_to_quaternion(
+                            (arm_config[5], arm_config[4], arm_config[3])
+                        )
                         pose = PoseState(
                             position=tuple(float(v) for v in pos),
-                            orientation=tuple(float(v) for v in quat_xyzw),
+                            orientation=quat_xyzw,
                         )
                 else:
                     # New structured format: {position: [...], orientation: [...]}.
                     # This pose is interpreted in the EEF world frame so that
                     # runner.reset() reports the configured values back verbatim.
-                    from scipy.spatial.transform import Rotation as R
 
                     # Override position if provided
                     if arm_config.position is not None:
@@ -853,8 +811,8 @@ def build_mujoco_backend(
                     if arm_config.orientation is not None:
                         ori = arm_config.orientation
                         if len(ori) == 3:
-                            # Euler angles: [yaw, pitch, roll]
-                            quat_xyzw = R.from_euler("ZYX", ori).as_quat()
+                            # Euler angles: [yaw, pitch, roll] → rpy (roll, pitch, yaw)
+                            quat_xyzw = euler_to_quaternion((ori[2], ori[1], ori[0]))
                         elif len(ori) == 4:
                             # Quaternion: [x, y, z, w]
                             quat_xyzw = np.array(ori, dtype=np.float64)

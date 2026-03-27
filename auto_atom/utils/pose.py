@@ -184,3 +184,25 @@ def quaternion_from_matrix_3x3(matrix: np.ndarray) -> Orientation:
         y = (m[1, 2] + m[2, 1]) / s
         z = 0.25 * s
     return normalize_quaternion((x, y, z, w))
+
+
+def quaternion_to_rotation_matrix(quat: Orientation) -> np.ndarray:
+    """Return the 3x3 rotation matrix for the given xyzw quaternion."""
+    return quaternion_matrix(normalize_quaternion(quat))[:3, :3]
+
+
+def quaternion_angular_distance(q1: Orientation, q2: Orientation) -> float:
+    """Return angular distance between two xyzw quaternions in radians."""
+    dot = abs(
+        float(
+            np.dot(np.asarray(q1, dtype=np.float64), np.asarray(q2, dtype=np.float64))
+        )
+    )
+    dot = min(1.0, dot)
+    return 2.0 * np.arccos(dot)
+
+
+def mujoco_euler_to_quaternion(ax: float, ay: float, az: float) -> Orientation:
+    """Convert MuJoCo intrinsic XYZ euler angles (radians) to xyzw quaternion."""
+    quat = quaternion_from_euler(ax, ay, az, axes="rxyz")
+    return normalize_quaternion(tuple(float(v) for v in quat))

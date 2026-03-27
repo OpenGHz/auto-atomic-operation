@@ -24,6 +24,7 @@ env:
         distance: 0.8
         azimuth: 135
         elevation: -28
+        hold_seconds: 3.0
       gaussian_render:
         background_ply: assets/gs/backgrounds/example.ply
         body_gaussians:
