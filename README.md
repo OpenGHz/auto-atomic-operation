@@ -162,9 +162,10 @@ If the download is slow, you may need to configure a terminal proxy first. You c
 
 Configuration files related to 3D GS end with `_gs.yaml` and are run in the same way as described above.
 
-## Data Collection
+## Tools
 
-See the **[Data Collection Guide](docs/data_collection.md)** for recording task demos (GIF/MP4) and comparing GS vs native MuJoCo rendering.
+- **[Data Collection Guide](docs/data_collection.md)** — recording task demos (GIF/MP4) and comparing GS vs native MuJoCo rendering
+- **[Tune Initial State](docs/tune_initial_state.md)** — interactive tkinter + MuJoCo viewer tool for tuning operator base pose, EEF pose, and gripper before writing the values into task YAML
 
 ## Quick Start
 
