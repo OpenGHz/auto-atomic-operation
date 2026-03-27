@@ -1,4 +1,4 @@
-"""Record a demo as MP4 and GIF using the MuJoCo backend.
+"""Record a demo as MP4/GIF plus replayable low-dimensional data.
 
 Uses the same config files as ``run_demo.py``. Switch tasks with ``--config-name``
 and override any value via Hydra:
@@ -8,8 +8,9 @@ and override any value via Hydra:
     python examples/record_demo.py --config-name stack_color_blocks
     python examples/record_demo.py --config-name press_three_buttons
 
-Output files are written to ``assets/videos/<config_name>.mp4`` and
-``assets/videos/<config_name>.gif``.
+Video files are written to ``assets/videos/<config_name>.mp4`` and
+``assets/videos/<config_name>.gif``. Replay data is written to
+``assets/demos/<config_name>.npz`` and ``assets/demos/<config_name>.json``.
 
 Extra Hydra overrides:
 
@@ -18,7 +19,9 @@ Extra Hydra overrides:
     python examples/record_demo.py +recorder.gif_width=480
 """
 
+import json
 import os
+from dataclasses import asdict
 import hydra
 import imageio.v3 as iio
 import numpy as np
@@ -35,8 +38,112 @@ class RecorderConfig(BaseModel):
     camera: str = Field(default="front_cam")
     fps: int = Field(default=25)
     gif_width: int = Field(default=320)
-    save_gif: bool = Field(default=True)
+    save_gif: bool = Field(default=False)
     save_mp4: bool = Field(default=False)
+    save_demo: bool = Field(default=True)
+
+
+def _is_low_dim_value(value: object) -> bool:
+    if isinstance(value, np.ndarray):
+        return value.ndim <= 1
+    if isinstance(value, np.generic):
+        return True
+    if isinstance(value, (bool, int, float, str)) or value is None:
+        return True
+    if isinstance(value, (list, tuple)):
+        arr = np.asarray(value)
+        return arr.ndim <= 1
+    if isinstance(value, dict):
+        return all(_is_low_dim_value(v) for v in value.values())
+    return False
+
+
+def _to_jsonable(value: object) -> object:
+    if isinstance(value, np.ndarray):
+        return value.tolist()
+    if isinstance(value, np.generic):
+        return value.item()
+    if isinstance(value, dict):
+        return {k: _to_jsonable(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_to_jsonable(v) for v in value]
+    return value
+
+
+def _extract_low_dim_observation(obs: dict[str, dict]) -> dict[str, dict]:
+    low_dim: dict[str, dict] = {}
+    excluded_suffixes = (
+        "/color/image_raw",
+        "/aligned_depth_to_color/image_raw",
+        "/mask/image_raw",
+        "/mask/heat_map",
+        "/tactile/point_cloud2",
+    )
+    for key, payload in obs.items():
+        if key.endswith(excluded_suffixes):
+            continue
+        data = payload.get("data")
+        if not _is_low_dim_value(data):
+            continue
+        low_dim[key] = {
+            "data": _to_jsonable(data),
+            "t": _to_jsonable(payload.get("t")),
+        }
+    return low_dim
+
+
+def _extract_action_pose(obs: dict[str, dict]) -> dict[str, dict[str, object]]:
+    action_pose: dict[str, dict[str, object]] = {}
+    for key, payload in obs.items():
+        if key.startswith("/robot/action/") and key.endswith("/pose"):
+            data = payload.get("data")
+            if not isinstance(data, dict):
+                continue
+            operator = key.split("/")[3]
+            action_pose[operator] = {
+                "position": _to_jsonable(data.get("position")),
+                "orientation": _to_jsonable(data.get("orientation")),
+                "t": _to_jsonable(payload.get("t")),
+            }
+            continue
+        if key.startswith("action/") and key.endswith("/pose/position"):
+            operator = key.split("/")[1]
+            action_pose.setdefault(operator, {})
+            action_pose[operator]["position"] = _to_jsonable(payload.get("data"))
+            action_pose[operator]["t"] = _to_jsonable(payload.get("t"))
+            continue
+        if key.startswith("action/") and key.endswith("/pose/orientation"):
+            operator = key.split("/")[1]
+            action_pose.setdefault(operator, {})
+            action_pose[operator]["orientation"] = _to_jsonable(payload.get("data"))
+            action_pose[operator]["t"] = _to_jsonable(payload.get("t"))
+    return action_pose
+
+
+def _resolve_camera(
+    obs: dict[str, dict], requested_camera: str
+) -> tuple[str | None, str | None]:
+    requested_full = requested_camera
+    requested_short = requested_camera.removesuffix("_cam")
+    candidates = (
+        (requested_full, f"{requested_full}/color/image_raw"),
+        (requested_short, f"{requested_short}_cam/color/image_raw"),
+        (requested_short, f"/robot/camera/{requested_short}/color/image_raw"),
+    )
+    for camera_name, key in candidates:
+        if obs.get(key, {}).get("data") is not None:
+            return camera_name, key
+
+    for key, payload in obs.items():
+        if not key.endswith("/color/image_raw") or payload.get("data") is None:
+            continue
+        if key.startswith("/robot/camera/"):
+            parts = key.split("/")
+            if len(parts) >= 5 and "front" in parts[3]:
+                return parts[3], key
+        elif "front" in key.split("/")[0]:
+            return key.split("/")[0], key
+    return None, None
 
 
 @hydra.main(config_path="mujoco", config_name="pick_and_place", version_base=None)
@@ -53,47 +160,52 @@ def main(cfg: DictConfig) -> None:
     runner = TaskRunner().from_config(task_file)
 
     frames: list[np.ndarray] = []
+    low_dim_observations: list[dict[str, dict]] = []
+    action_pose_trace: list[dict[str, dict[str, object]]] = []
+    action_trace: list[np.ndarray] = []
+    update_trace: list[dict] = []
     resolved_camera: str | None = None
-
-    def resolve_camera(obs: dict) -> str | None:
-        """Return the camera key to use, or None if no suitable camera found."""
-        preferred = f"{rec_cfg.camera}/color/image_raw"
-        if obs.get(preferred, {}).get("data") is not None:
-            return rec_cfg.camera
-        # Fall back to any camera whose name contains "front"
-        for key in obs:
-            cam_name = key.split("/")[0]
-            if "front" in cam_name and obs[key].get("data") is not None:
-                print(
-                    f"Camera '{rec_cfg.camera}' not found, using '{cam_name}' instead."
-                )
-                return cam_name
-        return None
+    resolved_camera_key: str | None = None
 
     def capture() -> None:
         backend = runner._context and runner._context.backend
         if not isinstance(backend, MujocoTaskBackend):
             return
         obs = backend.env.capture_observation()
-        nonlocal resolved_camera
-        if resolved_camera is None:
-            resolved_camera = resolve_camera(obs)
-            if resolved_camera is None:
+        low_dim_observations.append(_extract_low_dim_observation(obs))
+        action_pose_trace.append(_extract_action_pose(obs))
+        nonlocal resolved_camera, resolved_camera_key
+        if resolved_camera_key is None:
+            resolved_camera, resolved_camera_key = _resolve_camera(obs, rec_cfg.camera)
+            if resolved_camera_key is None:
                 raise RuntimeError(
-                    f"No usable front camera found in observation. "
+                    f"No usable camera found for '{rec_cfg.camera}'. "
                     f"Available keys: {list(obs.keys())}"
                 )
-        data = obs.get(f"{resolved_camera}/color/image_raw", {}).get("data")
+            if resolved_camera != rec_cfg.camera:
+                print(
+                    f"Camera '{rec_cfg.camera}' not found, using '{resolved_camera}' instead."
+                )
+        data = obs.get(resolved_camera_key, {}).get("data")
         if data is not None:
             frames.append(np.asarray(data, dtype=np.uint8))
 
     try:
         print("Reset task")
-        print(runner.reset())
+        reset_update = runner.reset()
+        print(reset_update)
         capture()
 
         while True:
             update = runner.update()
+            backend = runner._context and runner._context.backend
+            if isinstance(backend, MujocoTaskBackend):
+                action_trace.append(
+                    np.asarray(
+                        backend.env.data.ctrl[: backend.env.model.nu], dtype=np.float32
+                    ).copy()
+                )
+            update_trace.append(_to_jsonable(asdict(update)))
             capture()
             print(update)
             if update.done:
@@ -111,10 +223,15 @@ def main(cfg: DictConfig) -> None:
         return
 
     config_name = HydraConfig.get().job.config_name
-    out_dir = os.path.join(hydra.utils.get_original_cwd(), "assets", "videos")
-    os.makedirs(out_dir, exist_ok=True)
-    mp4_path = os.path.join(out_dir, f"{config_name}.mp4")
-    gif_path = os.path.join(out_dir, f"{config_name}.gif")
+    project_root = hydra.utils.get_original_cwd()
+    video_dir = os.path.join(project_root, "assets", "videos")
+    demo_dir = os.path.join(project_root, "assets", "demos")
+    os.makedirs(video_dir, exist_ok=True)
+    os.makedirs(demo_dir, exist_ok=True)
+    mp4_path = os.path.join(video_dir, f"{config_name}.mp4")
+    gif_path = os.path.join(video_dir, f"{config_name}.gif")
+    demo_npz_path = os.path.join(demo_dir, f"{config_name}.npz")
+    demo_json_path = os.path.join(demo_dir, f"{config_name}.json")
 
     # Write MP4
     if rec_cfg.save_mp4:
@@ -132,6 +249,41 @@ def main(cfg: DictConfig) -> None:
         gif_fps = min(rec_cfg.fps, 15)
         iio.imwrite(gif_path, gif_frames, fps=gif_fps, loop=0)
         print(f"Saved GIF  ({len(gif_frames)} frames @ {gif_fps} fps): {gif_path}")
+
+    if rec_cfg.save_demo:
+        action_array = (
+            np.stack(action_trace).astype(np.float32)
+            if action_trace
+            else np.zeros((0, 0), dtype=np.float32)
+        )
+        np.savez_compressed(demo_npz_path, actions=action_array)
+        with open(demo_json_path, "w", encoding="utf-8") as f:
+            json.dump(
+                {
+                    "config_name": config_name,
+                    "camera": resolved_camera,
+                    "fps": rec_cfg.fps,
+                    "num_frames": len(frames),
+                    "num_actions": int(action_array.shape[0]),
+                    "action_dim": int(action_array.shape[1])
+                    if action_array.ndim == 2
+                    else 0,
+                    "reset_update": _to_jsonable(asdict(reset_update)),
+                    "step_updates": update_trace,
+                    "low_dim_observations": low_dim_observations,
+                    "action_pose_trace": action_pose_trace,
+                    "execution_records": [
+                        _to_jsonable(asdict(record)) for record in runner.records
+                    ],
+                },
+                f,
+                indent=2,
+            )
+        print(
+            f"Saved demo data ({len(low_dim_observations)} observations, "
+            f"{len(action_trace)} actions): {demo_npz_path}"
+        )
+        print(f"Saved demo metadata: {demo_json_path}")
 
 
 if __name__ == "__main__":

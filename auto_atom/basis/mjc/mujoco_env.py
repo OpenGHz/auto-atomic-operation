@@ -617,7 +617,7 @@ class UnifiedMujocoEnv(MujocoBasis):
                         tgt_pos = pos.astype(np.float32)
                         tgt_ori = quat.astype(np.float32)
                     if structured:
-                        obs[f"{op.name}/target_pose"] = {
+                        obs[f"action/{op.name}/pose"] = {
                             "data": {
                                 "position": tgt_pos,
                                 "orientation": tgt_ori,
@@ -625,11 +625,11 @@ class UnifiedMujocoEnv(MujocoBasis):
                             "t": t,
                         }
                     else:
-                        obs[f"{op.name}/target_pose/position"] = {
+                        obs[f"action/{op.name}/pose/position"] = {
                             "data": tgt_pos,
                             "t": t,
                         }
-                        obs[f"{op.name}/target_pose/orientation"] = {
+                        obs[f"action/{op.name}/pose/orientation"] = {
                             "data": tgt_ori,
                             "t": t,
                         }

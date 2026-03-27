@@ -4,18 +4,20 @@ This guide covers the scripts used to record task demonstrations and compare ren
 
 ## Record Demo Video
 
-[`examples/record_demo.py`](../examples/record_demo.py) runs a task in the MuJoCo backend and saves the camera feed as a GIF and/or MP4. It reuses the same Hydra configs as `run_demo.py`.
+[`examples/record_demo.py`](../examples/record_demo.py) runs a task in the MuJoCo backend and saves the camera feed as a GIF and/or MP4. It also exports replayable demo data, including low-dimensional observations, action pose targets, and low-level control actions. It reuses the same Hydra configs as `run_demo.py`.
 
 ### Basic usage
 
 ```bash
 python examples/record_demo.py --config-name pick_and_place
-python examples/record_demo.py --config-name cup_on_coaster
-python examples/record_demo.py --config-name stack_color_blocks
-python examples/record_demo.py --config-name press_three_buttons
 ```
 
-Output files are written to `assets/videos/<config_name>.gif` and `assets/videos/<config_name>.mp4`.
+Output files are written to:
+
+- `assets/videos/<config_name>.gif`
+- `assets/videos/<config_name>.mp4`
+- `assets/demos/<config_name>.json`
+- `assets/demos/<config_name>.npz`
 
 ### Recorder options
 
@@ -26,8 +28,9 @@ All options are injected via Hydra with the `+recorder.` prefix:
 | `camera` | `front_cam` | Camera name to capture from |
 | `fps` | `25` | Frame rate for the recording |
 | `gif_width` | `320` | Width (pixels) of the output GIF |
-| `save_gif` | `true` | Whether to save a GIF |
+| `save_gif` | `false` | Whether to save a GIF |
 | `save_mp4` | `false` | Whether to save an MP4 |
+| `save_demo` | `true` | Whether to save replayable demo metadata and action arrays |
 
 ```bash
 # Save MP4 only
@@ -41,6 +44,60 @@ python examples/record_demo.py --config-name cup_on_coaster \
 # Wider GIF output
 python examples/record_demo.py --config-name stack_color_blocks \
     +recorder.gif_width=480
+```
+
+## Replay Recorded Demo
+
+[`examples/replay_demo.py`](../examples/replay_demo.py) replays data recorded by `record_demo.py`. It supports two replay modes:
+
+- `ctrl`: replay the saved low-level MuJoCo control actions from `assets/demos/<config_name>.npz`
+- `pose`: replay the saved `action/<operator>/pose` targets from `assets/demos/<config_name>.json` to validate whether the recorded pose targets are themselves sufficient
+
+### Basic usage
+
+```bash
+# Replay saved low-level ctrl actions
+python examples/replay_demo.py --config-name pick_and_place
+
+# Replay saved action pose targets
+python examples/replay_demo.py --config-name pick_and_place +replay.mode=pose
+
+# Replay another recorded demo name
+python examples/replay_demo.py --config-name pick_and_place \
+    +replay.demo_name=my_demo +replay.mode=pose
+```
+
+Replay videos are written to:
+
+- `assets/videos/<demo_name>_replay.gif`
+- `assets/videos/<demo_name>_replay.mp4`
+
+### Replay options
+
+All options are injected via Hydra with the `+replay.` prefix:
+
+| Option | Default | Description |
+| ------ | ------- | ----------- |
+| `demo_name` | `<config_name>` | Demo basename under `assets/demos/` |
+| `mode` | `ctrl` | Replay mode, either `ctrl` or `pose` |
+| `camera` | `front_cam` | Camera name used for replay recording |
+| `fps` | `25` | Frame rate for replay video export |
+| `gif_width` | `320` | Width (pixels) of the replay GIF |
+| `save_gif` | `true` | Whether to save a replay GIF |
+| `save_mp4` | `false` | Whether to save a replay MP4 |
+
+```bash
+# Save replay MP4 only
+python examples/replay_demo.py --config-name open_hinge_door \
+    +replay.save_mp4=true +replay.save_gif=false
+
+# Use pose replay to validate recorded pose targets
+python examples/replay_demo.py --config-name open_hinge_door \
+    +replay.mode=pose
+
+# Replay from another camera
+python examples/replay_demo.py --config-name cup_on_coaster \
+    +replay.camera=side_cam
 ```
 
 ## Compare GS Render
