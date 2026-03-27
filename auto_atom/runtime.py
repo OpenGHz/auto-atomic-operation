@@ -837,19 +837,26 @@ class TaskRunner:
         self._active_stage = None
         self._records = []
 
-        # Get initial poses for all operators
-        initial_poses = {}
-        for plan in self._plan:
-            operator_name = plan.operator_name
+        # Collect initial poses after randomization for diagnostics.
+        initial_poses: Dict[str, Any] = {}
+        for name in context.config.randomization:
             try:
-                operator = context.backend.get_operator_handler(operator_name)
-                current_pose = operator.get_end_effector_pose()
-                initial_poses[operator_name] = {
-                    "position": list(current_pose.position),
-                    "orientation": list(current_pose.orientation),
+                handler = context.backend.get_object_handler(name)
+                pose = handler.get_pose()
+                initial_poses[name] = {
+                    "position": [round(v, 4) for v in pose.position],
+                    "orientation": [round(v, 4) for v in pose.orientation],
                 }
-            except Exception:
-                pass  # Skip if operator not found or pose unavailable
+            except (KeyError, Exception):
+                try:
+                    op = context.backend.get_operator_handler(name)
+                    pose = op.get_base_pose()
+                    initial_poses[name] = {
+                        "position": [round(v, 4) for v in pose.position],
+                        "orientation": [round(v, 4) for v in pose.orientation],
+                    }
+                except Exception:
+                    pass
 
         update = self._build_pending_update()
         if initial_poses:

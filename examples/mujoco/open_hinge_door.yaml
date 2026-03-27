@@ -19,6 +19,12 @@ env:
 
 task:
   env_name: open_hinge_door
+  randomization:
+    arm:
+      x: [-0.05, 0.05]
+      y: [-0.05, 0.05]
+      # yaw: [-0.087, 0.087]   # ±5°，模拟安装误差
+      collision_radius: 0.15
   stages:
     # Pull handle of hinge_door_1 to swing it open.
     # Door hinge at +Y edge of panel; handle at (-0.05, -0.117, 0) relative to door body.
