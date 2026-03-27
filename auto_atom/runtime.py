@@ -6,7 +6,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Any, ClassVar, Dict, List, Optional
+from typing import Any, ClassVar, Dict, List, Optional, Protocol, runtime_checkable
 from hydra.utils import instantiate
 from omegaconf import DictConfig, OmegaConf
 from .framework import (
@@ -81,6 +81,22 @@ class ControlResult:
     """The coarse controller state returned after advancing one primitive action step."""
     details: Dict[str, Any] = field(default_factory=dict)
     """Backend-specific diagnostic details associated with the returned control signal."""
+
+
+@runtime_checkable
+class IKSolver(Protocol):
+    """Inverse kinematics solver protocol.
+
+    Implementations receive the desired end-effector pose **in the operator's
+    base frame** and the current arm joint positions, and return target joint
+    positions for the arm actuators.  Return ``None`` when no solution exists.
+    """
+
+    def solve(
+        self,
+        target_pose_in_base: PoseState,
+        current_qpos: np.ndarray,
+    ) -> Optional[np.ndarray]: ...
 
 
 class OperatorHandler(ABC):

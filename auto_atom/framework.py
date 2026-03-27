@@ -257,6 +257,11 @@ class ArmPoseConfig(BaseModel):
     """Orientation as Euler angles [yaw, pitch, roll] (3 floats) or quaternion [x, y, z, w] (4 floats).
     When omitted, keyframe orientation is kept."""
 
+    reference: PoseReference = PoseReference.WORLD
+    """Reference frame for interpreting position/orientation.
+    WORLD (default): pose is in world frame — backward compatible with mocap mode.
+    BASE: pose is relative to the operator's base frame — useful for arm setups."""
+
 
 class OperatorInitialState(BaseModel):
     """Optional override for an operator's home control state applied at reset."""
@@ -275,6 +280,12 @@ class OperatorInitialState(BaseModel):
     eef: Optional[float] = None
     """Override value for the end-effector/gripper control (0.0 = open, 0.82 = closed).
     When omitted the keyframe value is kept."""
+
+    base_pose: Optional[ArmPoseConfig] = None
+    """Override for the operator's base world pose.
+    For a real arm: the arm base body's world pose (fixed mounting position).
+    For mocap: a virtual reference origin in world (defaults to keyframe mocap position).
+    When omitted, the base pose is read from the simulation state at init."""
 
 
 class OperatorConfig(BaseModel):

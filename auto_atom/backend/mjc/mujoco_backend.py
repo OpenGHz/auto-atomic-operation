@@ -15,11 +15,13 @@ from ...framework import (
     EefControlConfig,
     OperatorConfig,
     PoseControlConfig,
+    PoseReference,
 )
 from ...runtime import (
     ComponentRegistry,
     ControlResult,
     ControlSignal,
+    IKSolver,
     ObjectHandler,
     OperatorHandler,
     PoseRandomRange,
@@ -116,7 +118,15 @@ class MujocoObjectHandler(ObjectHandler):
 
 @dataclass
 class MujocoOperatorHandler(OperatorHandler):
-    """Operator controller backed by the free-flying gripper model."""
+    """Operator controller supporting both mocap-driven and joint-space IK modes.
+
+    When ``arm_actuators`` is empty in the YAML config (the default), the
+    operator uses the legacy mocap+weld approach.  When ``arm_actuators`` is
+    populated, the handler switches to joint-space control: the desired EEF
+    pose is transformed into the operator base frame and handed to the
+    user-supplied ``ik_solver`` which returns joint targets that are applied
+    to the arm actuators.
+    """
 
     operator_name: str
     """The runtime-visible operator name for this controller."""
@@ -127,72 +137,94 @@ class MujocoOperatorHandler(OperatorHandler):
     eef_site_name: str = "eef_pose"
     """The site name used to read the operator end-effector pose."""
     mocap_body_name: str = "robotiq_mocap"
-    """The mocap body name used to drive the operator base pose."""
+    """The mocap body name used to drive the operator base pose (mocap mode only)."""
     freejoint_name: str = "robotiq_freejoint"
-    """The freejoint name for the physical base body."""
+    """The freejoint name for the physical base body (mocap mode only)."""
     eef_ctrl_index: int = 0
     """The control index corresponding to the gripper or end-effector actuator."""
     control: MujocoControlConfig = field(default_factory=MujocoControlConfig)
     """Control parameters including tolerances, grasp detection, and timeouts."""
+    ik_solver: Optional[IKSolver] = None
+    """Optional IK solver. When provided alongside non-empty arm_actuators,
+    the handler operates in joint-space control mode."""
+
+    # -- Derived state (set in __post_init__) --
+    _joint_mode: bool = field(init=False, repr=False)
+    """True when the operator has arm actuators and uses IK-based joint control."""
+    _base_pose: PoseState = field(init=False, repr=False)
+    """The operator base world pose (for world↔base conversions)."""
     _tool_pose_in_base: PoseState = field(init=False)
     """The fixed transform from the operator base frame to the tool frame."""
-    _mocap_id: int = field(init=False, repr=False)
-    """Index into data.mocap_pos / data.mocap_quat arrays."""
-    _fj_qpos_adr: int = field(init=False, repr=False)
-    """Start index of the freejoint in the qpos array (7 DOF: pos3 + quat_wxyz4)."""
-    _fj_dof_adr: int = field(init=False, repr=False)
-    """Start index of the freejoint in the qvel array (6 DOF)."""
+
+    # Mocap mode fields (only populated when _joint_mode is False).
+    _mocap_id: int = field(init=False, repr=False, default=-1)
+    _fj_qpos_adr: int = field(init=False, repr=False, default=0)
+    _fj_dof_adr: int = field(init=False, repr=False, default=0)
     _home_mocap_pos: np.ndarray = field(init=False, repr=False)
-    """Home position snapshot from keyframe for the mocap body."""
     _home_mocap_quat: np.ndarray = field(init=False, repr=False)
-    """Home quaternion (wxyz) snapshot from keyframe for the mocap body."""
+
+    # Joint mode field (only populated when _joint_mode is True).
+    _home_arm_qpos: Optional[np.ndarray] = field(init=False, repr=False, default=None)
+    """Snapshot of arm joint positions for home restore (joint mode only)."""
+
+    # Shared state.
     _last_move_key: Optional[str] = None
-    """The serialized pose command currently tracked by the motion controller."""
     _last_eef_key: Optional[str] = None
-    """The serialized end-effector command currently tracked by the controller."""
     _last_target: Optional[MujocoObjectHandler] = None
-    """The last target object involved in a primitive action, if any."""
     _move_steps: int = 0
-    """The number of simulation steps consumed by the active pose command."""
     _move_start_orientation: Optional[tuple] = None
-    """Starting orientation (xyzw quaternion) for SLERP interpolation."""
     _move_target_orientation: Optional[tuple] = None
-    """Target orientation (xyzw quaternion) for SLERP interpolation."""
     _eef_steps: int = 0
-    """The number of simulation steps consumed by the active eef command."""
     _home_ctrl: np.ndarray = field(init=False, repr=False)
-    """The nominal home control vector (gripper only) from the keyframe."""
 
     @property
     def name(self) -> str:
         return self.operator_name
 
     def __post_init__(self) -> None:
-        # Resolve mocap body index.
-        body_id = mujoco.mj_name2id(
-            self.env.model, mujoco.mjtObj.mjOBJ_BODY, self.mocap_body_name
-        )
-        if body_id < 0:
-            raise ValueError(f"Mocap body '{self.mocap_body_name}' not found.")
-        self._mocap_id = int(self.env.model.body_mocapid[body_id])
-        if self._mocap_id < 0:
-            raise ValueError(
-                f"Body '{self.mocap_body_name}' is not a mocap body "
-                f"(body_mocapid={self._mocap_id})."
+        # Detect control mode from arm_actuators binding.
+        arm_aidx = self.env._op_arm_aidx.get(self.operator_name, np.array([]))
+        self._joint_mode = len(arm_aidx) > 0
+
+        if self._joint_mode:
+            # -- Joint-space control mode --
+            if self.ik_solver is None:
+                raise ValueError(
+                    f"Operator '{self.operator_name}' has arm_actuators but no ik_solver was provided."
+                )
+            # Base pose is read from the root body in the initial XML state.
+            self._base_pose = self.get_base_pose()
+            # Snapshot home arm joint positions.
+            arm_qidx = self.env._op_arm_qidx[self.operator_name]
+            self._home_arm_qpos = self.env.data.qpos[arm_qidx].copy()
+            # Placeholders for unused mocap fields.
+            self._home_mocap_pos = np.zeros(3)
+            self._home_mocap_quat = np.array([1.0, 0.0, 0.0, 0.0])
+        else:
+            # -- Mocap control mode (legacy) --
+            body_id = mujoco.mj_name2id(
+                self.env.model, mujoco.mjtObj.mjOBJ_BODY, self.mocap_body_name
             )
+            if body_id < 0:
+                raise ValueError(f"Mocap body '{self.mocap_body_name}' not found.")
+            self._mocap_id = int(self.env.model.body_mocapid[body_id])
+            if self._mocap_id < 0:
+                raise ValueError(
+                    f"Body '{self.mocap_body_name}' is not a mocap body "
+                    f"(body_mocapid={self._mocap_id})."
+                )
+            jid = mujoco.mj_name2id(
+                self.env.model, mujoco.mjtObj.mjOBJ_JOINT, self.freejoint_name
+            )
+            if jid < 0:
+                raise ValueError(f"Freejoint '{self.freejoint_name}' not found.")
+            self._fj_qpos_adr = int(self.env.model.jnt_qposadr[jid])
+            self._fj_dof_adr = int(self.env.model.jnt_dofadr[jid])
+            self._home_mocap_pos = self.env.data.mocap_pos[self._mocap_id].copy()
+            self._home_mocap_quat = self.env.data.mocap_quat[self._mocap_id].copy()
+            self._base_pose = self.get_base_pose()
 
-        # Resolve freejoint addresses.
-        jid = mujoco.mj_name2id(
-            self.env.model, mujoco.mjtObj.mjOBJ_JOINT, self.freejoint_name
-        )
-        if jid < 0:
-            raise ValueError(f"Freejoint '{self.freejoint_name}' not found.")
-        self._fj_qpos_adr = int(self.env.model.jnt_qposadr[jid])
-        self._fj_dof_adr = int(self.env.model.jnt_dofadr[jid])
-
-        # Snapshot home poses from keyframe.
-        self._home_mocap_pos = self.env.data.mocap_pos[self._mocap_id].copy()
-        self._home_mocap_quat = self.env.data.mocap_quat[self._mocap_id].copy()
+        # Common initialization.
         self._home_ctrl = np.asarray(
             self.env.data.ctrl[: self.env.model.nu], dtype=np.float64
         ).copy()
@@ -205,6 +237,22 @@ class MujocoOperatorHandler(OperatorHandler):
         self.env.data.mocap_quat[self._mocap_id] = np.array(
             [qw, qx, qy, qz], dtype=np.float64
         )
+
+    def _step_joint_towards_target(self, eef_pose_in_base: PoseState) -> None:
+        """Solve IK and command arm actuators toward the joint targets."""
+        arm_qidx = self.env._op_arm_qidx[self.operator_name]
+        current_arm_qpos = self.env.data.qpos[arm_qidx].copy()
+
+        joint_targets = self.ik_solver.solve(eef_pose_in_base, current_arm_qpos)
+        if joint_targets is None:
+            # IK failed — hold current position and still step physics.
+            self.env.update()
+            return
+
+        arm_aidx = self.env._op_arm_aidx[self.operator_name]
+        ctrl = np.asarray(self.env.data.ctrl, dtype=np.float64).copy()
+        ctrl[arm_aidx] = joint_targets
+        self.env.step(ctrl)
 
     def move_to_pose(
         self,
@@ -249,11 +297,19 @@ class MujocoOperatorHandler(OperatorHandler):
                 position=pose.position, orientation=pose.orientation
             )
 
-        desired_base_pose = compose_pose(
-            desired_eef_pose, inverse_pose(self._tool_pose_in_base)
-        )
-        self._set_mocap_pose(desired_base_pose.position, desired_base_pose.orientation)
-        self.env.update()
+        if self._joint_mode:
+            # Joint mode: world→base, IK solve, step actuators.
+            eef_in_base = compose_pose(inverse_pose(self._base_pose), desired_eef_pose)
+            self._step_joint_towards_target(eef_in_base)
+        else:
+            # Mocap mode: drive kinematic target via weld constraint.
+            desired_base_pose = compose_pose(
+                desired_eef_pose, inverse_pose(self._tool_pose_in_base)
+            )
+            self._set_mocap_pose(
+                desired_base_pose.position, desired_base_pose.orientation
+            )
+            self.env.update()
         self._move_steps += 1
 
         current_pose = self.get_end_effector_pose()
@@ -447,15 +503,29 @@ class MujocoOperatorHandler(OperatorHandler):
 
     def home(self) -> None:
         self.reset_state()
-        # Restore mocap target to home pose.
-        self.env.data.mocap_pos[self._mocap_id] = self._home_mocap_pos.copy()
-        self.env.data.mocap_quat[self._mocap_id] = self._home_mocap_quat.copy()
-        # Teleport physical body to match (instant, no weld drift).
-        adr = self._fj_qpos_adr
-        self.env.data.qpos[adr : adr + 3] = self._home_mocap_pos
-        self.env.data.qpos[adr + 3 : adr + 7] = self._home_mocap_quat
-        self.env.data.qvel[self._fj_dof_adr : self._fj_dof_adr + 6] = 0.0
-        # Restore gripper ctrl and joint state.
+        if self._joint_mode:
+            # Restore arm joint positions.
+            arm_qidx = self.env._op_arm_qidx[self.operator_name]
+            arm_vidx = self.env._op_arm_vidx[self.operator_name]
+            arm_aidx = self.env._op_arm_aidx[self.operator_name]
+            if self._home_arm_qpos is not None:
+                self.env.data.qpos[arm_qidx] = self._home_arm_qpos
+            if len(arm_vidx) > 0:
+                self.env.data.qvel[arm_vidx] = 0.0
+            # Restore arm actuator ctrl to home joint positions.
+            for i, aidx in enumerate(arm_aidx):
+                ai = int(aidx)
+                if self._home_arm_qpos is not None and i < len(self._home_arm_qpos):
+                    self.env.data.ctrl[ai] = self._home_arm_qpos[i]
+        else:
+            # Mocap mode: restore mocap target and teleport physical body.
+            self.env.data.mocap_pos[self._mocap_id] = self._home_mocap_pos.copy()
+            self.env.data.mocap_quat[self._mocap_id] = self._home_mocap_quat.copy()
+            adr = self._fj_qpos_adr
+            self.env.data.qpos[adr : adr + 3] = self._home_mocap_pos
+            self.env.data.qpos[adr + 3 : adr + 7] = self._home_mocap_quat
+            self.env.data.qvel[self._fj_dof_adr : self._fj_dof_adr + 6] = 0.0
+        # Restore gripper ctrl and joint state (shared).
         _, eef_qidx, _, eef_vidx, _, eef_aidx = (
             self.env._split_component_joint_state_indices(self.operator_name)
         )
@@ -471,33 +541,52 @@ class MujocoOperatorHandler(OperatorHandler):
         mujoco.mj_forward(self.env.model, self.env.data)
 
     def set_home_end_effector_pose(self, pose: PoseState) -> None:
-        """Update the home mocap pose from a desired EEF world pose."""
-        desired_base_pose = compose_pose(pose, inverse_pose(self._tool_pose_in_base))
-        self._home_mocap_pos = np.asarray(desired_base_pose.position, dtype=np.float64)
-        qx, qy, qz, qw = desired_base_pose.orientation
-        self._home_mocap_quat = np.array([qw, qx, qy, qz], dtype=np.float64)
+        """Update the home pose from a desired EEF world pose."""
+        if self._joint_mode:
+            # Convert world EEF → base frame, IK solve, store as home joint positions.
+            eef_in_base = compose_pose(inverse_pose(self._base_pose), pose)
+            arm_qidx = self.env._op_arm_qidx[self.operator_name]
+            current_arm_qpos = self.env.data.qpos[arm_qidx].copy()
+            joint_targets = self.ik_solver.solve(eef_in_base, current_arm_qpos)
+            if joint_targets is not None:
+                self._home_arm_qpos = joint_targets.copy()
+        else:
+            desired_base_pose = compose_pose(
+                pose, inverse_pose(self._tool_pose_in_base)
+            )
+            self._home_mocap_pos = np.asarray(
+                desired_base_pose.position, dtype=np.float64
+            )
+            qx, qy, qz, qw = desired_base_pose.orientation
+            self._home_mocap_quat = np.array([qw, qx, qy, qz], dtype=np.float64)
 
     def set_pose(self, pose: PoseState) -> None:
-        """Force-set the operator base world pose in one step.
+        """Force-set the operator pose in one step.
 
-        Sets both the mocap target and the freejoint qpos so the physical body
-        is instantly teleported.  Zeros velocities and calls ``mj_forward`` so
-        the simulation state is immediately consistent.
-
-        ``pose`` is interpreted as the desired **base-body** world pose, which
-        is the same frame returned by ``get_base_pose``.
+        In mocap mode, ``pose`` is the desired **base-body** world pose.
+        In joint mode, ``pose`` is the desired **EEF** world pose — the handler
+        converts to base frame, solves IK, and writes joint positions directly.
         """
-        qx, qy, qz, qw = pose.orientation
-        pos = np.asarray(pose.position, dtype=np.float64)
-        quat_wxyz = np.array([qw, qx, qy, qz], dtype=np.float64)
-        # Set mocap target.
-        self.env.data.mocap_pos[self._mocap_id] = pos
-        self.env.data.mocap_quat[self._mocap_id] = quat_wxyz
-        # Teleport physical body.
-        adr = self._fj_qpos_adr
-        self.env.data.qpos[adr : adr + 3] = pos
-        self.env.data.qpos[adr + 3 : adr + 7] = quat_wxyz
-        self.env.data.qvel[self._fj_dof_adr : self._fj_dof_adr + 6] = 0.0
+        if self._joint_mode:
+            eef_in_base = compose_pose(inverse_pose(self._base_pose), pose)
+            arm_qidx = self.env._op_arm_qidx[self.operator_name]
+            arm_vidx = self.env._op_arm_vidx[self.operator_name]
+            current_arm_qpos = self.env.data.qpos[arm_qidx].copy()
+            joint_targets = self.ik_solver.solve(eef_in_base, current_arm_qpos)
+            if joint_targets is not None:
+                self.env.data.qpos[arm_qidx] = joint_targets
+            if len(arm_vidx) > 0:
+                self.env.data.qvel[arm_vidx] = 0.0
+        else:
+            qx, qy, qz, qw = pose.orientation
+            pos = np.asarray(pose.position, dtype=np.float64)
+            quat_wxyz = np.array([qw, qx, qy, qz], dtype=np.float64)
+            self.env.data.mocap_pos[self._mocap_id] = pos
+            self.env.data.mocap_quat[self._mocap_id] = quat_wxyz
+            adr = self._fj_qpos_adr
+            self.env.data.qpos[adr : adr + 3] = pos
+            self.env.data.qpos[adr + 3 : adr + 7] = quat_wxyz
+            self.env.data.qvel[self._fj_dof_adr : self._fj_dof_adr + 6] = 0.0
         mujoco.mj_forward(self.env.model, self.env.data)
         self.reset_state()
 
@@ -747,9 +836,48 @@ def create_mujoco_env(
     return env
 
 
+def _resolve_arm_pose(arm_config, fallback_pose: PoseState) -> PoseState:
+    """Parse an arm initial-state config into a world-frame PoseState."""
+    pose = fallback_pose
+    if isinstance(arm_config, list):
+        # Old format: [x, y, z, yaw, pitch, roll]
+        if len(arm_config) >= 6:
+            pos = arm_config[:3]
+            quat_xyzw = euler_to_quaternion(
+                (arm_config[5], arm_config[4], arm_config[3])
+            )
+            pose = PoseState(
+                position=tuple(float(v) for v in pos),
+                orientation=quat_xyzw,
+            )
+    else:
+        # Structured ArmPoseConfig format.
+        if arm_config.position is not None and len(arm_config.position) >= 3:
+            pose = PoseState(
+                position=tuple(float(v) for v in arm_config.position[:3]),
+                orientation=pose.orientation,
+            )
+        if arm_config.orientation is not None:
+            ori = arm_config.orientation
+            if len(ori) == 3:
+                quat_xyzw = euler_to_quaternion((ori[2], ori[1], ori[0]))
+            elif len(ori) == 4:
+                quat_xyzw = np.array(ori, dtype=np.float64)
+            else:
+                raise ValueError(
+                    f"orientation must be 3 floats (Euler) or 4 floats (quaternion), got {len(ori)}"
+                )
+            pose = PoseState(
+                position=pose.position,
+                orientation=tuple(float(v) for v in quat_xyzw),
+            )
+    return pose
+
+
 def build_mujoco_backend(
     task: AutoAtomConfig | Dict[str, Any],
     operators: List[OperatorConfig] | List[Dict[str, Any]],
+    ik_solver: Optional[IKSolver] = None,
 ) -> MujocoTaskBackend:
     config = (
         task
@@ -769,64 +897,43 @@ def build_mujoco_backend(
         )
 
     operator_handlers = {
-        operator.name: MujocoOperatorHandler(operator_name=operator.name, env=env)
+        operator.name: MujocoOperatorHandler(
+            operator_name=operator.name,
+            env=env,
+            ik_solver=ik_solver,
+        )
         for operator in operator_configs
     }
+
+    # Apply initial_state overrides.
     for operator in operator_configs:
-        if operator.initial_state is not None:
-            handler = operator_handlers[operator.name]
-            if operator.initial_state.arm is not None:
-                arm_config = operator.initial_state.arm
-                pose = handler.get_end_effector_pose()
+        if operator.initial_state is None:
+            continue
+        handler = operator_handlers[operator.name]
 
-                # Handle both old flat list format and new structured format
-                if isinstance(arm_config, list):
-                    # Old format: [x, y, z, yaw, pitch, roll]
-                    if len(arm_config) >= 6:
-                        pos = arm_config[:3]
-                        # ZYX euler [yaw, pitch, roll] → rpy tuple (roll, pitch, yaw)
-                        quat_xyzw = euler_to_quaternion(
-                            (arm_config[5], arm_config[4], arm_config[3])
-                        )
-                        pose = PoseState(
-                            position=tuple(float(v) for v in pos),
-                            orientation=quat_xyzw,
-                        )
-                else:
-                    # New structured format: {position: [...], orientation: [...]}.
-                    # This pose is interpreted in the EEF world frame so that
-                    # runner.reset() reports the configured values back verbatim.
+        # Apply base_pose override first (affects world↔base transforms).
+        if operator.initial_state.base_pose is not None:
+            bp = operator.initial_state.base_pose
+            base_ps = _resolve_arm_pose(bp, handler._base_pose)
+            handler._base_pose = base_ps
 
-                    # Override position if provided
-                    if arm_config.position is not None:
-                        if len(arm_config.position) >= 3:
-                            pose = PoseState(
-                                position=tuple(
-                                    float(v) for v in arm_config.position[:3]
-                                ),
-                                orientation=pose.orientation,
-                            )
+        # Apply arm (EEF) initial pose.
+        if operator.initial_state.arm is not None:
+            arm_config = operator.initial_state.arm
+            pose = handler.get_end_effector_pose()
+            pose = _resolve_arm_pose(arm_config, pose)
 
-                    # Override orientation if provided
-                    if arm_config.orientation is not None:
-                        ori = arm_config.orientation
-                        if len(ori) == 3:
-                            # Euler angles: [yaw, pitch, roll] → rpy (roll, pitch, yaw)
-                            quat_xyzw = euler_to_quaternion((ori[2], ori[1], ori[0]))
-                        elif len(ori) == 4:
-                            # Quaternion: [x, y, z, w]
-                            quat_xyzw = np.array(ori, dtype=np.float64)
-                        else:
-                            raise ValueError(
-                                f"orientation must be 3 floats (Euler) or 4 floats (quaternion), got {len(ori)}"
-                            )
-                        pose = PoseState(
-                            position=pose.position,
-                            orientation=tuple(float(v) for v in quat_xyzw),
-                        )
-                handler.set_home_end_effector_pose(pose)
-            if operator.initial_state.eef is not None:
-                handler._home_ctrl[handler.eef_ctrl_index] = operator.initial_state.eef
+            # If reference is BASE, convert from base frame to world.
+            if (
+                isinstance(arm_config, ArmPoseConfig)
+                and arm_config.reference == PoseReference.BASE
+            ):
+                pose = compose_pose(handler._base_pose, pose)
+
+            handler.set_home_end_effector_pose(pose)
+
+        if operator.initial_state.eef is not None:
+            handler._home_ctrl[handler.eef_ctrl_index] = operator.initial_state.eef
     object_names = {stage.object for stage in config.stages if stage.object}
     object_handlers = {
         object_name: MujocoObjectHandler(
