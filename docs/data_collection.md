@@ -105,21 +105,21 @@ ln -s <path_to_auto_atomic_operation>/examples/mujoco airbot_ie/configs/managers
 示例命令如下：
 
 ```bash
-airdc demonstrators=mujoco dataset.directory=mujoco visualizer=null managers=auto_atom/pick_place demonstrator.component.viewer=null
+airdc demonstrators=mujoco/basis dataset.directory=mujoco visualizer=null managers=auto_atom/pick_and_place demonstrator.component.viewer=null
 ```
 
 其中：
 - `demonstrators=mujoco`指定使用`MuJoCo`示教器进行数据采集。
 - `dataset.directory=mujoco`指定采集的数据将被保存到`mujoco`目录下。
 - `visualizer=null`不对相机的图像进行可视化。
-- `managers=auto_atom/pick_place`指定使用`pick_place`任务的流程管理器进行采集。
+- `managers=auto_atom/pick_and_place`指定使用`pick_and_place`任务的流程管理器进行采集。
 - `demonstrator.component.viewer=null`不启动mujoco viewer。
 
 
 只启动环境，不运行流程，可以使用以下命令：
 
 ```bash
-airdc demonstrators=mujoco dataset.directory=mujoco visualizer=null managers=auto_atom
+airdc demonstrators=mujoco/basis dataset.directory=mujoco managers=auto_atom/pick_and_place managers.auto_atom=null
 ```
 
 这将启动环境并保持空闲，等待用户通过其他命令来控制流程的运行。
