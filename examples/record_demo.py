@@ -92,32 +92,45 @@ def _extract_low_dim_observation(obs: dict[str, dict]) -> dict[str, dict]:
     return low_dim
 
 
-def _extract_action_pose(obs: dict[str, dict]) -> dict[str, dict[str, object]]:
-    action_pose: dict[str, dict[str, object]] = {}
-    for key, payload in obs.items():
-        if key.startswith("/robot/action/") and key.endswith("/pose"):
-            data = payload.get("data")
-            if not isinstance(data, dict):
-                continue
-            operator = key.split("/")[3]
-            action_pose[operator] = {
-                "position": _to_jsonable(data.get("position")),
-                "orientation": _to_jsonable(data.get("orientation")),
-                "t": _to_jsonable(payload.get("t")),
-            }
-            continue
-        if key.startswith("action/") and key.endswith("/pose/position"):
-            operator = key.split("/")[1]
-            action_pose.setdefault(operator, {})
-            action_pose[operator]["position"] = _to_jsonable(payload.get("data"))
-            action_pose[operator]["t"] = _to_jsonable(payload.get("t"))
-            continue
-        if key.startswith("action/") and key.endswith("/pose/orientation"):
-            operator = key.split("/")[1]
-            action_pose.setdefault(operator, {})
-            action_pose[operator]["orientation"] = _to_jsonable(payload.get("data"))
-            action_pose[operator]["t"] = _to_jsonable(payload.get("t"))
-    return action_pose
+def _iter_low_dim_leaf_items(
+    low_dim_step: dict[str, dict],
+) -> list[tuple[str, object, object]]:
+    items: list[tuple[str, object, object]] = []
+    for key, payload in low_dim_step.items():
+        data = payload.get("data")
+        t = payload.get("t")
+        if isinstance(data, dict):
+            for field_name, field_value in data.items():
+                items.append((f"{key}/{field_name}", field_value, t))
+        else:
+            items.append((key, data, t))
+    return items
+
+
+def _build_low_dim_npz_payload(
+    low_dim_observations: list[dict[str, dict]],
+) -> dict[str, np.ndarray]:
+    leaf_keys = sorted(
+        {
+            leaf_key
+            for step in low_dim_observations
+            for leaf_key, _, _ in _iter_low_dim_leaf_items(step)
+        }
+    )
+    payload: dict[str, np.ndarray] = {"low_dim_keys": np.asarray(leaf_keys, dtype=str)}
+    for idx, leaf_key in enumerate(leaf_keys):
+        values: list[np.ndarray] = []
+        times: list[float] = []
+        for step in low_dim_observations:
+            leaf_items = {k: (v, t) for k, v, t in _iter_low_dim_leaf_items(step)}
+            if leaf_key not in leaf_items:
+                raise ValueError(f"Missing low-dimensional key '{leaf_key}' in trace.")
+            value, t = leaf_items[leaf_key]
+            values.append(np.asarray(value, dtype=np.float32))
+            times.append(float(t))
+        payload[f"low_dim_data__{idx}"] = np.stack(values).astype(np.float32)
+        payload[f"low_dim_t__{idx}"] = np.asarray(times, dtype=np.float64)
+    return payload
 
 
 def _resolve_camera(
@@ -161,7 +174,6 @@ def main(cfg: DictConfig) -> None:
 
     frames: list[np.ndarray] = []
     low_dim_observations: list[dict[str, dict]] = []
-    action_pose_trace: list[dict[str, dict[str, object]]] = []
     action_trace: list[np.ndarray] = []
     update_trace: list[dict] = []
     resolved_camera: str | None = None
@@ -173,7 +185,6 @@ def main(cfg: DictConfig) -> None:
             return
         obs = backend.env.capture_observation()
         low_dim_observations.append(_extract_low_dim_observation(obs))
-        action_pose_trace.append(_extract_action_pose(obs))
         nonlocal resolved_camera, resolved_camera_key
         if resolved_camera_key is None:
             resolved_camera, resolved_camera_key = _resolve_camera(obs, rec_cfg.camera)
@@ -256,7 +267,9 @@ def main(cfg: DictConfig) -> None:
             if action_trace
             else np.zeros((0, 0), dtype=np.float32)
         )
-        np.savez_compressed(demo_npz_path, actions=action_array)
+        npz_payload: dict[str, np.ndarray] = {"actions": action_array}
+        npz_payload.update(_build_low_dim_npz_payload(low_dim_observations))
+        np.savez_compressed(demo_npz_path, **npz_payload)
         with open(demo_json_path, "w", encoding="utf-8") as f:
             json.dump(
                 {
@@ -271,7 +284,6 @@ def main(cfg: DictConfig) -> None:
                     "reset_update": _to_jsonable(asdict(reset_update)),
                     "step_updates": update_trace,
                     "low_dim_observations": low_dim_observations,
-                    "action_pose_trace": action_pose_trace,
                     "execution_records": [
                         _to_jsonable(asdict(record)) for record in runner.records
                     ],

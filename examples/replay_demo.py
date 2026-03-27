@@ -11,7 +11,6 @@ Examples:
 """
 
 import os
-import json
 import hydra
 import imageio.v3 as iio
 import numpy as np
@@ -61,14 +60,64 @@ def _resolve_camera(
     return None, None
 
 
-def _load_pose_trace(demo_json_path: str) -> list[dict[str, dict[str, object]]]:
-    if not os.path.exists(demo_json_path):
-        raise FileNotFoundError(f"Demo metadata file not found: {demo_json_path}")
-    with open(demo_json_path, "r", encoding="utf-8") as f:
-        metadata = json.load(f)
-    pose_trace = metadata.get("action_pose_trace", [])
-    if not isinstance(pose_trace, list):
-        raise ValueError("action_pose_trace must be a list in demo metadata.")
+def _load_low_dim_map(demo_data: np.lib.npyio.NpzFile) -> dict[str, np.ndarray]:
+    if "low_dim_keys" not in demo_data:
+        raise KeyError("NPZ missing 'low_dim_keys'.")
+
+    low_dim_keys = [str(key) for key in np.asarray(demo_data["low_dim_keys"])]
+    low_dim_map: dict[str, np.ndarray] = {}
+    for idx, key in enumerate(low_dim_keys):
+        data_key = f"low_dim_data__{idx}"
+        if data_key not in demo_data:
+            raise KeyError(f"NPZ missing '{data_key}' for low-dimensional key '{key}'.")
+        low_dim_map[key] = np.asarray(demo_data[data_key], dtype=np.float32)
+    return low_dim_map
+
+
+def _load_pose_trace(
+    demo_data: np.lib.npyio.NpzFile,
+) -> list[dict[str, dict[str, object]]]:
+    low_dim_map = _load_low_dim_map(demo_data)
+    operators: dict[str, dict[str, np.ndarray]] = {}
+
+    for key, values in low_dim_map.items():
+        parts = key.split("/")
+        if len(parts) >= 4 and parts[0] == "action" and parts[2] == "pose":
+            operator = parts[1]
+            field_name = parts[3]
+        elif (
+            len(parts) >= 6
+            and parts[0] == ""
+            and parts[1] == "robot"
+            and parts[2] == "action"
+            and parts[4] == "pose"
+        ):
+            operator = parts[3]
+            field_name = parts[5]
+        else:
+            continue
+        if field_name not in {"position", "orientation"}:
+            continue
+        operators.setdefault(operator, {})[field_name] = values
+
+    complete_ops = sorted(
+        operator
+        for operator, fields in operators.items()
+        if "position" in fields and "orientation" in fields
+    )
+    if not complete_ops:
+        raise KeyError("NPZ does not contain action pose position/orientation series.")
+
+    num_steps = operators[complete_ops[0]]["position"].shape[0]
+    pose_trace: list[dict[str, dict[str, object]]] = []
+    for step_idx in range(num_steps):
+        step_pose: dict[str, dict[str, object]] = {}
+        for operator in complete_ops:
+            step_pose[operator] = {
+                "position": operators[operator]["position"][step_idx],
+                "orientation": operators[operator]["orientation"][step_idx],
+            }
+        pose_trace.append(step_pose)
     return pose_trace
 
 
@@ -143,7 +192,6 @@ def main(cfg: DictConfig) -> None:
     demo_name = replay_cfg.demo_name or config_name
     project_root = hydra.utils.get_original_cwd()
     demo_npz_path = os.path.join(project_root, "assets", "demos", f"{demo_name}.npz")
-    demo_json_path = os.path.join(project_root, "assets", "demos", f"{demo_name}.json")
     video_dir = os.path.join(project_root, "assets", "videos")
     os.makedirs(video_dir, exist_ok=True)
     mp4_path = os.path.join(video_dir, f"{demo_name}_replay.mp4")
@@ -154,7 +202,7 @@ def main(cfg: DictConfig) -> None:
 
     demo_data = np.load(demo_npz_path)
     actions = np.asarray(demo_data["actions"], dtype=np.float32)
-    pose_trace = _load_pose_trace(demo_json_path) if replay_cfg.mode == "pose" else []
+    pose_trace = _load_pose_trace(demo_data) if replay_cfg.mode == "pose" else []
 
     frames: list[np.ndarray] = []
     resolved_camera: str | None = None
