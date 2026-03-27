@@ -562,7 +562,11 @@ class UnifiedMujocoEnv(MujocoBasis):
                     # Validate sensor vs site (once).
                     pos_id = self._pose_ids[op.name]["pos"]
                     quat_id = self._pose_ids[op.name]["quat"]
-                    if pos_id >= 0 and quat_id >= 0:
+                    if (
+                        op.name not in self._pose_validated_components
+                        and pos_id >= 0
+                        and quat_id >= 0
+                    ):
                         pos_w = self._sensor_data(pos_id)
                         quat_w = self._quat_wxyz_to_xyzw(self._sensor_data(quat_id))
                         self._validate_pose_sensor_matches_site(op.name, pos_w, quat_w)
@@ -629,6 +633,12 @@ class UnifiedMujocoEnv(MujocoBasis):
                             "data": tgt_ori,
                             "t": t,
                         }
+                # else:
+                #     raise ValueError(
+                #         f"Operator '{op.name}' has no pose site registered but "
+                #         f"DataType.POSE is enabled. Call register_operator with a valid "
+                #         f"eef_site or disable DataType.POSE for this operator."
+                #     )
 
             if DataType.IMU in self.config.enabled_sensors:
                 acc_id = self._imu_ids[op.name]["acc"]

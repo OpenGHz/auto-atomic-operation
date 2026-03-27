@@ -55,4 +55,5 @@ task:
               angle: -1.57
               # For smooth simulation, we set a max step for the arc.
               max_step: 0.1
+              absolute: true
             reference: world
