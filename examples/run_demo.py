@@ -72,10 +72,12 @@ def main(cfg: DictConfig) -> None:
             print("Scene reset complete; viewer refreshed. Starting task updates...")
             print()
 
+            update_count = 0
             for i in count():
                 if use_input:
                     input("Press Enter to continue...")
                 update = runner.update()
+                update_count += 1
                 print(f"Step {i}:" + "=" * 40)
                 pprint(update, sort_dicts=False)
                 if update.done:
@@ -91,6 +93,7 @@ def main(cfg: DictConfig) -> None:
                     "round": r + 1,
                     "initial_poses": reset_update.details.get("initial_poses", {}),
                     "success": update.success,
+                    "update_count": update_count,
                     "stages": [
                         {"name": rec.stage_name, "status": rec.status.value}
                         for rec in runner.records
@@ -101,24 +104,23 @@ def main(cfg: DictConfig) -> None:
             if rounds > 1:
                 print()
 
-        # Print summary when running multiple rounds.
-        if rounds > 1:
-            print()
-            print("=" * 60)
-            print("SUMMARY")
-            print("=" * 60)
-            n_success = sum(1 for s in round_summaries if s["success"])
-            print(f"Success rate: {n_success}/{rounds}")
-            print()
-            for s in round_summaries:
-                tag = "OK" if s["success"] else "FAIL"
-                print(f"  Round {s['round']}: [{tag}]")
-                for name, pose in s["initial_poses"].items():
-                    pos = pose["position"]
-                    print(f"    {name}: pos={pos}")
-                for st in s["stages"]:
-                    print(f"    stage {st['name']}: {st['status']}")
-            print("=" * 60)
+        print()
+        print("=" * 60)
+        print("SUMMARY")
+        print("=" * 60)
+        n_success = sum(1 for s in round_summaries if s["success"])
+        print(f"Success rate: {n_success}/{rounds}")
+        print()
+        for s in round_summaries:
+            tag = "OK" if s["success"] else "FAIL"
+            print(f"  Round {s['round']}: [{tag}]")
+            print(f"    total updates: {s['update_count']}")
+            for name, pose in s["initial_poses"].items():
+                pos = pose["position"]
+                print(f"    {name}: pos={pos}")
+            for st in s["stages"]:
+                print(f"    stage {st['name']}: {st['status']}")
+        print("=" * 60)
     finally:
         runner.close()
 
