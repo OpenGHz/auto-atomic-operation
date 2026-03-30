@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
+import numpy as np
+
 from .framework import (
     AutoAtomConfig,
     EefControlConfig,
@@ -24,12 +26,8 @@ from .runtime import (
 
 @dataclass
 class MockObjectHandler(ObjectHandler):
-    """Mock object handle."""
-
     kind: str = "mock_object"
-    """A simple type label describing the mock object implementation."""
     pose: PoseState = field(default_factory=PoseState)
-    """The current mock world pose returned for this object."""
 
     def get_pose(self) -> PoseState:
         return self.pose
@@ -37,20 +35,19 @@ class MockObjectHandler(ObjectHandler):
 
 @dataclass
 class MockOperatorHandler(OperatorHandler):
-    """Mock operator that completes each primitive action in two update ticks."""
-
     operator_name: str
-    """The public operator name exposed to the runtime."""
+    batch_size: int = 1
     role: str = "generic"
-    """An optional semantic role used by examples and debug output."""
-    _command_key: str = ""
-    """The serialized command signature used to detect command changes."""
-    _progress: int = 0
-    """The number of update ticks already spent on the active primitive action."""
+    _command_key: List[str] = field(default_factory=list)
+    _progress: np.ndarray = field(default_factory=lambda: np.zeros(1, dtype=np.int64))
     base_pose: PoseState = field(default_factory=PoseState)
-    """The mock base pose reported for this operator."""
     end_effector_pose: PoseState = field(default_factory=PoseState)
-    """The mock end-effector pose reported for this operator."""
+
+    def __post_init__(self) -> None:
+        self._command_key = [""] * self.batch_size
+        self._progress = np.zeros(self.batch_size, dtype=np.int64)
+        self.base_pose = self.base_pose.broadcast_to(self.batch_size)
+        self.end_effector_pose = self.end_effector_pose.broadcast_to(self.batch_size)
 
     @property
     def name(self) -> str:
@@ -60,63 +57,61 @@ class MockOperatorHandler(OperatorHandler):
         self,
         pose: PoseControlConfig,
         target: Optional[ObjectHandler],
+        env_mask: Optional[np.ndarray] = None,
     ) -> ControlResult:
-        command_key = f"pose:{_serialize_param(pose)}:{target.name if target else ''}"
-        self._prepare_command(command_key)
-        self._progress += 1
-        if self._progress == 1:
-            return ControlResult(
-                signal=ControlSignal.RUNNING,
-                details={
+        mask = self._normalize_mask(env_mask)
+        details = [{} for _ in range(self.batch_size)]
+        signals = np.asarray([ControlSignal.RUNNING] * self.batch_size, dtype=object)
+        for env_index, enabled in enumerate(mask):
+            if not enabled:
+                continue
+            command_key = (
+                f"pose:{_serialize_param(pose)}:{target.name if target else ''}"
+            )
+            self._prepare_command(env_index, command_key)
+            self._progress[env_index] += 1
+            if self._progress[env_index] == 1:
+                details[env_index] = {
                     "event": "moving",
                     "operator": self.name,
                     "role": self.role,
-                    "target": target.name if target else "",
-                    "pose": _serialize_param(pose),
-                },
+                }
+                continue
+            self.end_effector_pose.position[env_index] = np.asarray(
+                pose.position or self.end_effector_pose.position[env_index],
+                dtype=np.float64,
             )
-        self.end_effector_pose = PoseState(
-            position=pose.position
-            if pose.position
-            else self.end_effector_pose.position,
-            orientation=pose.orientation
-            if pose.orientation
-            else self.end_effector_pose.orientation,
-        )
-        return ControlResult(
-            signal=ControlSignal.REACHED,
-            details={
+            self.end_effector_pose.orientation[env_index] = np.asarray(
+                pose.orientation or self.end_effector_pose.orientation[env_index],
+                dtype=np.float64,
+            )
+            signals[env_index] = ControlSignal.REACHED
+            details[env_index] = {
                 "event": "pose_reached",
                 "operator": self.name,
-                "target": target.name if target else "",
-                "pose": _serialize_param(pose),
-            },
-        )
+            }
+        return ControlResult(signals=signals, details=details)
 
     def control_eef(
         self,
         eef: EefControlConfig,
+        env_mask: Optional[np.ndarray] = None,
     ) -> ControlResult:
-        command_key = f"eef:{eef.close}:{eef.joint_positions}"
-        self._prepare_command(command_key)
-        self._progress += 1
-        if self._progress == 1:
-            return ControlResult(
-                signal=ControlSignal.RUNNING,
-                details={
-                    "event": "eef_moving",
-                    "operator": self.name,
-                    "eef": _serialize_param(eef),
-                },
-            )
-        return ControlResult(
-            signal=ControlSignal.REACHED,
-            details={
-                "event": "eef_reached",
-                "operator": self.name,
-                "eef": _serialize_param(eef),
-            },
-        )
+        mask = self._normalize_mask(env_mask)
+        details = [{} for _ in range(self.batch_size)]
+        signals = np.asarray([ControlSignal.RUNNING] * self.batch_size, dtype=object)
+        for env_index, enabled in enumerate(mask):
+            if not enabled:
+                continue
+            command_key = f"eef:{eef.close}:{eef.joint_positions}"
+            self._prepare_command(env_index, command_key)
+            self._progress[env_index] += 1
+            if self._progress[env_index] == 1:
+                details[env_index] = {"event": "eef_moving", "operator": self.name}
+                continue
+            signals[env_index] = ControlSignal.REACHED
+            details[env_index] = {"event": "eef_reached", "operator": self.name}
+        return ControlResult(signals=signals, details=details)
 
     def get_end_effector_pose(self) -> PoseState:
         return self.end_effector_pose
@@ -124,37 +119,43 @@ class MockOperatorHandler(OperatorHandler):
     def get_base_pose(self) -> PoseState:
         return self.base_pose
 
-    def _prepare_command(self, command_key: str) -> None:
-        if self._command_key != command_key:
-            self._command_key = command_key
-            self._progress = 0
+    def _prepare_command(self, env_index: int, command_key: str) -> None:
+        if self._command_key[env_index] != command_key:
+            self._command_key[env_index] = command_key
+            self._progress[env_index] = 0
+
+    def _normalize_mask(self, env_mask: Optional[np.ndarray]) -> np.ndarray:
+        if env_mask is None:
+            return np.ones(self.batch_size, dtype=bool)
+        return np.asarray(env_mask, dtype=bool).reshape(-1)
 
 
 @dataclass
 class MockSceneBackend(SceneBackend):
-    """Simple scene backend with in-memory object and operator handlers."""
-
     env_name: str
-    """The registered environment name associated with this backend instance."""
+    batch_size: int = 1
     operators: Dict[str, MockOperatorHandler] = field(default_factory=dict)
-    """The operator handlers keyed by operator name."""
     objects: Dict[str, MockObjectHandler] = field(default_factory=dict)
-    """The object handlers keyed by object name."""
     lifecycle_events: List[str] = field(default_factory=list)
-    """A simple ordered log of setup, reset, and teardown calls."""
     interest_updates: List[Dict[str, List[str]]] = field(default_factory=list)
-    """Recorded interest-object and interest-operation updates pushed by the runner."""
 
     def setup(self, config: AutoAtomConfig) -> None:
         self.lifecycle_events.append(
             f"setup(env={config.env_name}, seed={config.seed})"
         )
 
-    def reset(self) -> None:
+    def reset(self, env_mask: Optional[np.ndarray] = None) -> None:
         self.lifecycle_events.append("reset()")
+        mask = (
+            np.ones(self.batch_size, dtype=bool)
+            if env_mask is None
+            else np.asarray(env_mask, dtype=bool).reshape(-1)
+        )
         for operator in self.operators.values():
-            operator._progress = 0
-            operator._command_key = ""
+            operator._progress[mask] = 0
+            for env_index, enabled in enumerate(mask):
+                if enabled:
+                    operator._command_key[env_index] = ""
 
     def teardown(self) -> None:
         self.lifecycle_events.append("teardown()")
@@ -177,14 +178,14 @@ class MockSceneBackend(SceneBackend):
             known = ", ".join(sorted(self.objects)) or "<empty>"
             raise KeyError(f"Unknown object '{name}'. Known objects: {known}") from exc
 
-    def is_object_grasped(self, operator_name: str, object_name: str) -> bool:
+    def is_object_grasped(self, operator_name: str, object_name: str) -> np.ndarray:
         _ = self.get_operator_handler(operator_name)
         _ = self.get_object_handler(object_name)
-        return False
+        return np.zeros(self.batch_size, dtype=bool)
 
-    def is_operator_grasping(self, operator_name: str) -> bool:
+    def is_operator_grasping(self, operator_name: str) -> np.ndarray:
         _ = self.get_operator_handler(operator_name)
-        return False
+        return np.zeros(self.batch_size, dtype=bool)
 
     def set_interest_objects_and_operations(
         self,
@@ -199,10 +200,8 @@ class MockSceneBackend(SceneBackend):
         )
 
 
-def create_mock_env(kind: str = "mock_env") -> Dict[str, str]:
-    """Create a simple mock environment payload for registry-based lookup."""
-
-    return {"kind": kind}
+def create_mock_env(kind: str = "mock_env", batch_size: int = 1) -> Dict[str, Any]:
+    return {"kind": kind, "batch_size": batch_size}
 
 
 def build_mock_backend(
@@ -220,10 +219,14 @@ def build_mock_backend(
         else OperatorConfig.model_validate(item)
         for item in operators
     ]
-    ComponentRegistry.get_env(config.env_name)
-    operators = {
+    env_payload = ComponentRegistry.get_env(config.env_name)
+    batch_size = (
+        int(env_payload.get("batch_size", 1)) if isinstance(env_payload, dict) else 1
+    )
+    operators_map = {
         operator.name: MockOperatorHandler(
             operator_name=operator.name,
+            batch_size=batch_size,
             role=operator.model_extra.get("role", "generic")
             if operator.model_extra
             else "generic",
@@ -238,18 +241,31 @@ def build_mock_backend(
         for operator in operator_configs
     }
     object_names = sorted({stage.object for stage in config.stages if stage.object})
-    objects = {}
-    for index, object_name in enumerate(object_names):
-        objects[object_name] = MockObjectHandler(
+    objects = {
+        object_name: MockObjectHandler(
             name=object_name,
             pose=PoseState(
-                position=(0.4 + 0.1 * index, -0.1 + 0.05 * index, 0.05 * (index + 1)),
-                orientation=(0.0, 0.0, 0.0, 1.0),
+                position=np.repeat(
+                    np.asarray(
+                        [[0.4 + 0.1 * index, -0.1 + 0.05 * index, 0.05 * (index + 1)]],
+                        dtype=np.float64,
+                    ),
+                    batch_size,
+                    axis=0,
+                ),
+                orientation=np.repeat(
+                    np.asarray([[0.0, 0.0, 0.0, 1.0]], dtype=np.float64),
+                    batch_size,
+                    axis=0,
+                ),
             ),
         )
+        for index, object_name in enumerate(object_names)
+    }
     return MockSceneBackend(
         env_name=config.env_name,
-        operators=operators,
+        batch_size=batch_size,
+        operators=operators_map,
         objects=objects,
     )
 

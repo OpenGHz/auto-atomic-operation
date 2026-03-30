@@ -1,4 +1,4 @@
-"""Mujoco backend adapting the generic task runner to the basis environment."""
+"""Mujoco backend adapting the generic task runner to batched basis envs."""
 
 from __future__ import annotations
 
@@ -9,10 +9,12 @@ import mujoco
 import numpy as np
 from pydantic import BaseModel
 
+from ...basis.mjc.mujoco_env import BatchedUnifiedMujocoEnv, EnvConfig
 from ...framework import (
     ArmPoseConfig,
     AutoAtomConfig,
     EefControlConfig,
+    OperatorRandomizationConfig,
     OperatorConfig,
     PoseControlConfig,
     PoseReference,
@@ -31,143 +33,91 @@ from ...utils.pose import (
     PoseState,
     euler_to_quaternion,
     quaternion_angular_distance,
+    quaternion_to_rpy,
     quaternion_to_rotation_matrix,
 )
 from ...utils.transformations import quaternion_slerp
-from ...basis.mjc.mujoco_env import EnvConfig, UnifiedMujocoEnv
 
 
 class MujocoToleranceConfig(BaseModel):
-    """Tolerance thresholds for pose and gripper control."""
-
     position: float = 0.01
-    """Position error threshold (meters) for pose control."""
     orientation: float = 0.08
-    """Orientation error threshold (radians) for pose control."""
     eef: float = 0.03
-    """Gripper position tolerance for eef control."""
 
 
 class MujocoGraspConfig(BaseModel):
-    """Grasp detection parameters."""
-
     lateral_threshold: float = 0.0
-    """Max lateral distance (meters) perpendicular to grasp direction.
-    Measured in EEF frame on the plane perpendicular to grasp_axis.
-    Set to 0 or negative to disable lateral distance check."""
     grasp_axis: int = 2
-    """Grasp direction axis in EEF frame: 0=X, 1=Y, 2=Z (default).
-    Lateral distance is computed on the plane perpendicular to this axis."""
     settle_steps: int = 5
-    """Minimum simulation steps before checking grasp, allowing fingers to fully clamp."""
 
 
 class MujocoControlConfig(BaseModel):
-    """Control loop parameters."""
-
     timeout_steps: int = 600
-    """Maximum simulation steps per primitive action before timeout."""
     tolerance: MujocoToleranceConfig = MujocoToleranceConfig()
-    """Tolerance thresholds for control."""
     grasp: MujocoGraspConfig = MujocoGraspConfig()
-    """Grasp detection parameters."""
     cartesian_max_linear_step: float = 0.0
-    """Default Cartesian translation step (metres) per control tick for pose moves.
-    Set to <= 0 to disable runtime Cartesian position segmentation."""
     cartesian_max_angular_step: float = 0.0
-    """Default Cartesian orientation step (radians) per control tick for pose moves.
-    Set to <= 0 to disable runtime Cartesian orientation segmentation."""
 
 
 @dataclass
 class MujocoObjectHandler(ObjectHandler):
-    """Object handle backed by a Mujoco body."""
-
-    env: UnifiedMujocoEnv
-    """The shared Mujoco basis environment used to query object state."""
+    env: BatchedUnifiedMujocoEnv
     body_name: str
-    """The Mujoco body name that stores this object's pose."""
     freejoint_name: Optional[str] = None
-    """The optional free-joint name associated with the object for direct manipulation."""
 
     def get_pose(self) -> PoseState:
         pos, quat = self.env.get_body_pose(self.body_name)
-        return PoseState(
-            position=tuple(float(v) for v in pos),
-            orientation=tuple(float(v) for v in quat),
-        )
+        return PoseState(position=pos, orientation=quat)
 
-    def set_pose(self, pose: PoseState) -> None:
-        """Force-set the object world pose via its free joint.
-
-        No-op when the object has no free joint (i.e. it is a static body).
-        After writing qpos the method calls ``mj_forward`` so that derived
-        quantities (xpos, xquat, …) are immediately consistent.
-        """
+    def set_pose(self, pose: PoseState, env_mask: Optional[np.ndarray] = None) -> None:
         if self.freejoint_name is None:
             return
-        jid = mujoco.mj_name2id(
-            self.env.model, mujoco.mjtObj.mjOBJ_JOINT, self.freejoint_name
+        pose = pose.broadcast_to(self.env.batch_size)
+        mask = (
+            np.ones(self.env.batch_size, dtype=bool)
+            if env_mask is None
+            else np.asarray(env_mask, dtype=bool).reshape(-1)
         )
-        if jid < 0:
-            return
-        qpos_adr = int(self.env.model.jnt_qposadr[jid])
-        dof_adr = int(self.env.model.jnt_dofadr[jid])
-        x, y, z = pose.position
-        qx, qy, qz, qw = pose.orientation  # xyzw → mujoco wxyz
-        self.env.data.qpos[qpos_adr : qpos_adr + 7] = [x, y, z, qw, qx, qy, qz]
-        self.env.data.qvel[dof_adr : dof_adr + 6] = 0.0
-        mujoco.mj_forward(self.env.model, self.env.data)
+        for env_index, single_env in enumerate(self.env.envs):
+            if not mask[env_index]:
+                continue
+            jid = mujoco.mj_name2id(
+                single_env.model, mujoco.mjtObj.mjOBJ_JOINT, self.freejoint_name
+            )
+            if jid < 0:
+                continue
+            qpos_adr = int(single_env.model.jnt_qposadr[jid])
+            dof_adr = int(single_env.model.jnt_dofadr[jid])
+            x, y, z = pose.position[env_index]
+            qx, qy, qz, qw = pose.orientation[env_index]
+            single_env.data.qpos[qpos_adr : qpos_adr + 7] = [x, y, z, qw, qx, qy, qz]
+            single_env.data.qvel[dof_adr : dof_adr + 6] = 0.0
+            mujoco.mj_forward(single_env.model, single_env.data)
 
 
 @dataclass
 class MujocoOperatorHandler(OperatorHandler):
-    """Operator controller supporting both mocap-driven and joint-space IK modes.
-
-    When ``arm_actuators`` is empty in the YAML config (the default), the
-    operator uses the legacy mocap+weld approach.  When ``arm_actuators`` is
-    populated, the handler switches to joint-space control: the desired EEF
-    pose is transformed into the operator base frame and handed to the
-    user-supplied ``ik_solver`` which returns joint targets that are applied
-    to the arm actuators.
-    """
-
     operator_name: str
-    """The runtime-visible operator name for this controller."""
-    env: UnifiedMujocoEnv
-    """The shared Mujoco basis environment used to step the simulation."""
+    env: BatchedUnifiedMujocoEnv
     root_body_name: str = "robotiq_interface"
-    """The root body name used to read the operator base pose."""
     eef_site_name: str = "eef_pose"
-    """The site name used to read the operator end-effector pose."""
     mocap_body_name: str = "robotiq_mocap"
-    """The mocap body name used to drive the operator base pose (mocap mode only)."""
     freejoint_name: str = "robotiq_freejoint"
-    """The freejoint name for the physical base body (mocap mode only)."""
     eef_ctrl_index: int = 0
-    """The control index corresponding to the gripper or end-effector actuator."""
     control: MujocoControlConfig = field(default_factory=MujocoControlConfig)
-    """Control parameters including tolerances, grasp detection, and timeouts."""
     ik_solver: Optional[IKSolver] = None
-    """Optional IK solver. When provided alongside non-empty arm_actuators,
-    the handler operates in joint-space control mode."""
     joint_control_mode: str = "per_step_ik"
-    """Joint-mode execution strategy: ``per_step_ik`` or ``solve_once_interpolate``."""
     joint_interp_speed: float = 0.05
-    """Approximate max per-joint delta (rad) applied per control step when interpolating."""
 
-    # Shared state.
-    _last_move_key: Optional[str] = None
-    _last_eef_key: Optional[str] = None
-    _last_target: Optional[MujocoObjectHandler] = None
-    _move_steps: int = 0
-    _move_start_orientation: Optional[tuple] = None
-    _move_target_orientation: Optional[tuple] = None
-    _move_best_pos_error: float = field(default=float("inf"), init=False, repr=False)
-    _move_best_ori_error: float = field(default=float("inf"), init=False, repr=False)
-    _move_stall_count: int = field(default=0, init=False, repr=False)
-    _move_step_scale: float = field(default=1.0, init=False, repr=False)
-    _eef_steps: int = 0
+    _last_move_key: List[str | None] = field(init=False, repr=False)
+    _last_eef_key: List[str | None] = field(init=False, repr=False)
+    _last_target: List[Optional[MujocoObjectHandler]] = field(init=False, repr=False)
+    _move_steps: np.ndarray = field(init=False, repr=False)
+    _move_best_pos_error: np.ndarray = field(init=False, repr=False)
+    _move_best_ori_error: np.ndarray = field(init=False, repr=False)
+    _move_stall_count: np.ndarray = field(init=False, repr=False)
+    _move_step_scale: np.ndarray = field(init=False, repr=False)
+    _eef_steps: np.ndarray = field(init=False, repr=False)
     _home_ctrl: np.ndarray = field(init=False, repr=False)
 
     @property
@@ -175,9 +125,28 @@ class MujocoOperatorHandler(OperatorHandler):
         return self.operator_name
 
     def __post_init__(self) -> None:
-        self._home_ctrl = np.asarray(
-            self.env.data.ctrl[: self.env.model.nu], dtype=np.float64
-        ).copy()
+        self._last_move_key = [None] * self.env.batch_size
+        self._last_eef_key = [None] * self.env.batch_size
+        self._last_target = [None] * self.env.batch_size
+        self._move_steps = np.zeros(self.env.batch_size, dtype=np.int64)
+        self._move_best_pos_error = np.full(
+            self.env.batch_size, np.inf, dtype=np.float64
+        )
+        self._move_best_ori_error = np.full(
+            self.env.batch_size, np.inf, dtype=np.float64
+        )
+        self._move_stall_count = np.zeros(self.env.batch_size, dtype=np.int64)
+        self._move_step_scale = np.ones(self.env.batch_size, dtype=np.float64)
+        self._eef_steps = np.zeros(self.env.batch_size, dtype=np.int64)
+        self._home_ctrl = np.stack(
+            [
+                np.asarray(
+                    single_env.data.ctrl[: single_env.model.nu], dtype=np.float64
+                ).copy()
+                for single_env in self.env.envs
+            ],
+            axis=0,
+        )
         self.env.register_operator(
             self.operator_name,
             root_body=self.root_body_name,
@@ -193,235 +162,337 @@ class MujocoOperatorHandler(OperatorHandler):
         self,
         pose: PoseControlConfig,
         target: Optional[ObjectHandler],
+        env_mask: Optional[np.ndarray] = None,
     ) -> ControlResult:
-        key = str(pose.model_dump(mode="json"))
-        if self._last_move_key != key:
-            self._last_move_key = key
-            self._move_steps = 0
-            self._move_best_pos_error = float("inf")
-            self._move_best_ori_error = float("inf")
-            self._move_stall_count = 0
-            self._move_step_scale = 1.0
-            # Save start and target orientations for SLERP interpolation
-            current_eef = self.get_end_effector_pose()
-            self._move_start_orientation = current_eef.orientation
-            self._move_target_orientation = pose.orientation
-        if isinstance(target, MujocoObjectHandler):
-            self._last_target = target
-
+        mask = self._normalize_mask(env_mask)
         current_eef = self.get_end_effector_pose()
-        desired_pos = np.asarray(pose.position, dtype=np.float64)
-        desired_ori = tuple(float(v) for v in pose.orientation)
+        desired_pos = np.repeat(
+            np.asarray(pose.position, dtype=np.float64).reshape(1, 3),
+            self.env.batch_size,
+            axis=0,
+        )
+        desired_ori = np.repeat(
+            np.asarray(pose.orientation, dtype=np.float64).reshape(1, 4),
+            self.env.batch_size,
+            axis=0,
+        )
+        signals = np.asarray(
+            [ControlSignal.RUNNING] * self.env.batch_size, dtype=object
+        )
+        details = [{} for _ in range(self.env.batch_size)]
+        for env_index in range(self.env.batch_size):
+            if not mask[env_index]:
+                continue
+            key = str(pose.model_dump(mode="json"))
+            if self._last_move_key[env_index] != key:
+                self._last_move_key[env_index] = key
+                self._move_steps[env_index] = 0
+                self._move_best_pos_error[env_index] = float("inf")
+                self._move_best_ori_error[env_index] = float("inf")
+                self._move_stall_count[env_index] = 0
+                self._move_step_scale[env_index] = 1.0
+            if isinstance(target, MujocoObjectHandler):
+                self._last_target[env_index] = target
 
-        current_pos_err = float(
-            np.linalg.norm(
-                np.asarray(current_eef.position, dtype=np.float64) - desired_pos
+            pos_err = float(
+                np.linalg.norm(current_eef.position[env_index] - desired_pos[env_index])
             )
-        )
-        current_ori_err = quaternion_angular_distance(
-            current_eef.orientation, desired_ori
-        )
-        improved = current_pos_err < (
-            self._move_best_pos_error - 1e-4
-        ) or current_ori_err < (self._move_best_ori_error - 1e-3)
-        if improved:
-            self._move_best_pos_error = min(self._move_best_pos_error, current_pos_err)
-            self._move_best_ori_error = min(self._move_best_ori_error, current_ori_err)
-            self._move_stall_count = 0
-            self._move_step_scale = min(1.0, self._move_step_scale * 1.1)
-        else:
-            self._move_stall_count += 1
-            if self._move_stall_count >= 8:
-                self._move_step_scale = max(0.1, self._move_step_scale * 0.5)
-                self._move_stall_count = 0
-
-        max_linear_step = float(
-            pose.max_linear_step
-            if pose.max_linear_step > 0.0
-            else self.control.cartesian_max_linear_step
-        )
-        max_angular_step = float(
-            pose.max_angular_step
-            if pose.max_angular_step > 0.0
-            else self.control.cartesian_max_angular_step
-        )
-        max_linear_step *= self._move_step_scale
-        max_angular_step *= self._move_step_scale
-
-        if max_linear_step > 0.0:
-            current_pos = np.asarray(current_eef.position, dtype=np.float64)
-            pos_delta = desired_pos - current_pos
-            pos_dist = float(np.linalg.norm(pos_delta))
-            if pos_dist > max_linear_step:
-                desired_pos = current_pos + pos_delta * (max_linear_step / pos_dist)
-
-        ori_error = quaternion_angular_distance(current_eef.orientation, desired_ori)
-        if max_angular_step > 0.0 and ori_error > max_angular_step:
-            desired_ori = quaternion_slerp(
-                current_eef.orientation,
-                desired_ori,
-                max_angular_step / ori_error,
-                shortestpath=True,
+            ori_err = quaternion_angular_distance(
+                current_eef.orientation[env_index], desired_ori[env_index]
             )
-        elif (
-            pose.use_slerp
-            and self._move_start_orientation
-            and self._move_target_orientation
-        ):
-            # Legacy smooth-orientation mode when no explicit angular step is set.
-            alpha = min(0.1, 0.05 / max(ori_error, 0.01))
-            desired_ori = quaternion_slerp(
-                current_eef.orientation,
-                self._move_target_orientation,
-                alpha,
-                shortestpath=True,
+            improved = pos_err < (
+                self._move_best_pos_error[env_index] - 1e-4
+            ) or ori_err < (self._move_best_ori_error[env_index] - 1e-3)
+            if improved:
+                self._move_best_pos_error[env_index] = min(
+                    self._move_best_pos_error[env_index], pos_err
+                )
+                self._move_best_ori_error[env_index] = min(
+                    self._move_best_ori_error[env_index], ori_err
+                )
+                self._move_stall_count[env_index] = 0
+                self._move_step_scale[env_index] = min(
+                    1.0, self._move_step_scale[env_index] * 1.1
+                )
+            else:
+                self._move_stall_count[env_index] += 1
+                if self._move_stall_count[env_index] >= 8:
+                    self._move_step_scale[env_index] = max(
+                        0.1, self._move_step_scale[env_index] * 0.5
+                    )
+                    self._move_stall_count[env_index] = 0
+
+            max_linear_step = (
+                float(
+                    pose.max_linear_step
+                    if pose.max_linear_step > 0.0
+                    else self.control.cartesian_max_linear_step
+                )
+                * self._move_step_scale[env_index]
             )
+            max_angular_step = (
+                float(
+                    pose.max_angular_step
+                    if pose.max_angular_step > 0.0
+                    else self.control.cartesian_max_angular_step
+                )
+                * self._move_step_scale[env_index]
+            )
+            pos_goal = desired_pos[env_index].copy()
+            ori_goal = desired_ori[env_index].copy()
+            if max_linear_step > 0.0:
+                pos_delta = pos_goal - current_eef.position[env_index]
+                pos_dist = float(np.linalg.norm(pos_delta))
+                if pos_dist > max_linear_step:
+                    pos_goal = current_eef.position[env_index] + pos_delta * (
+                        max_linear_step / pos_dist
+                    )
+            if max_angular_step > 0.0 and ori_err > max_angular_step:
+                ori_goal = quaternion_slerp(
+                    current_eef.orientation[env_index],
+                    ori_goal,
+                    fraction=max_angular_step / ori_err,
+                )
 
-        desired_eef_pose = PoseState(
-            position=tuple(float(v) for v in desired_pos),
-            orientation=tuple(float(v) for v in desired_ori),
-        )
-
-        cmd_pos_b, cmd_quat_b = self.env.world_to_base(
-            self.operator_name,
-            np.asarray(desired_eef_pose.position, dtype=np.float32),
-            np.asarray(desired_eef_pose.orientation, dtype=np.float32),
-        )
-        self.env.step_operator_toward_target(
-            self.operator_name,
-            cmd_pos_b,
-            cmd_quat_b,
-        )
-        self._move_steps += 1
-
-        tgt_pos_b, tgt_quat_b = self.env.world_to_base(
-            self.operator_name,
-            np.asarray(pose.position, dtype=np.float32),
-            np.asarray(pose.orientation, dtype=np.float32),
-        )
-        cur_pos_b, cur_quat_b = self.env.get_operator_eef_pose_in_base(
-            self.operator_name
-        )
-        pos_error = float(np.linalg.norm(cur_pos_b - tgt_pos_b))
-        ori_error = quaternion_angular_distance(
-            tuple(float(v) for v in cur_quat_b),
-            tuple(float(v) for v in tgt_quat_b),
-        )
-        current_pose = self.get_end_effector_pose()
-
-        details = {
-            "event": "moving"
-            if pos_error > self.control.tolerance.position
-            or ori_error > self.control.tolerance.orientation
-            else "pose_reached",
-            "operator": self.name,
-            "target": target.name if target else "",
-            "target_pose": pose.model_dump(mode="json"),
-            "current_pose": {
-                "position": list(current_pose.position),
-                "orientation": list(current_pose.orientation),
-            },
-            "position_error": pos_error,
-            "orientation_error": float(ori_error),
-        }
-        if (
-            pos_error <= self.control.tolerance.position
-            and ori_error <= self.control.tolerance.orientation
-        ):
-            return ControlResult(signal=ControlSignal.REACHED, details=details)
-        if self._move_steps >= self.control.timeout_steps:
-            details["event"] = "move_timeout"
-            return ControlResult(signal=ControlSignal.TIMED_OUT, details=details)
-        return ControlResult(signal=ControlSignal.RUNNING, details=details)
+            target_pos_b, target_quat_b = self.env.world_to_base(
+                self.operator_name, pos_goal, ori_goal
+            )
+            batched_pos_b = np.zeros((self.env.batch_size, 3), dtype=np.float32)
+            batched_quat_b = np.zeros((self.env.batch_size, 4), dtype=np.float32)
+            batched_pos_b[env_index] = target_pos_b[env_index]
+            batched_quat_b[env_index] = target_quat_b[env_index]
+            self.env.step_operator_toward_target(
+                self.operator_name,
+                batched_pos_b,
+                batched_quat_b,
+                env_mask=np.eye(self.env.batch_size, dtype=bool)[env_index],
+            )
+            self._move_steps[env_index] += 1
+            eef_world_after = self.get_end_effector_pose()
+            pos_err_after = float(
+                np.linalg.norm(eef_world_after.position[env_index] - pos_goal)
+            )
+            ori_err_after = quaternion_angular_distance(
+                eef_world_after.orientation[env_index], ori_goal
+            )
+            event = (
+                "moving"
+                if pos_err_after > self.control.tolerance.position
+                or ori_err_after > self.control.tolerance.orientation
+                else "pose_reached"
+            )
+            details[env_index] = {
+                "event": event,
+                "operator": self.name,
+                "target": target.name if target else "",
+                "target_pose": pose.model_dump(mode="json"),
+                "current_pose": {
+                    "position": [float(v) for v in eef_world_after.position[env_index]],
+                    "orientation": [
+                        float(v) for v in eef_world_after.orientation[env_index]
+                    ],
+                },
+                "position_error": pos_err_after,
+                "orientation_error": ori_err_after,
+                "steps": int(self._move_steps[env_index]),
+            }
+            if (
+                pos_err_after <= self.control.tolerance.position
+                and ori_err_after <= self.control.tolerance.orientation
+            ):
+                signals[env_index] = ControlSignal.REACHED
+                self._move_steps[env_index] = 0
+            elif self._move_steps[env_index] >= self.control.timeout_steps:
+                details[env_index]["event"] = "move_timeout"
+                signals[env_index] = ControlSignal.TIMED_OUT
+            else:
+                signals[env_index] = ControlSignal.RUNNING
+        return ControlResult(signals=signals, details=details)
 
     def control_eef(
         self,
         eef: EefControlConfig,
+        env_mask: Optional[np.ndarray] = None,
     ) -> ControlResult:
-        target_ctrl = self._eef_target(eef)
-        key = f"{target_ctrl:.6f}:{eef.model_dump(mode='json')}"
-        if self._last_eef_key != key:
-            self._last_eef_key = key
-            self._eef_steps = 0
-
-        ctrl = np.asarray(self.env.data.ctrl, dtype=np.float64).copy()
-        ctrl[self.eef_ctrl_index] = target_ctrl
-        self.env.step(ctrl)
-        self._eef_steps += 1
-
-        current = float(np.asarray(self.env.data.ctrl)[self.eef_ctrl_index])
-        eef_qidx = self.env._op_eef_qidx[self.operator_name]
-        actual = float(self.env.data.qpos[eef_qidx[0]]) if len(eef_qidx) > 0 else 0.0
-        error = abs(actual - target_ctrl)
-        grasped_name = ""
-        reached = False
-        event = "eef_moving"
-        if (
-            eef.close
-            and self._eef_steps >= self.control.grasp.settle_steps
-            and self._last_target is not None
-            and self._is_target_grasped(self._last_target)
-        ):
-            reached = True
-            event = "eef_grasped"
-            grasped_name = self._last_target.name
-        elif eef.close and actual >= max(
-            target_ctrl - self.control.tolerance.eef, 0.45
-        ):
-            reached = True
-            event = "eef_reached"
-        elif not eef.close and actual <= max(self.control.tolerance.eef, 0.05):
-            reached = True
-            event = "eef_reached"
-        details = {
-            "event": event,
-            "operator": self.name,
-            "eef": eef.model_dump(mode="json"),
-            "target_ctrl": target_ctrl,
-            "actual_qpos": actual,
-            "actual_ctrl": current,
-            "error": error,
-            "grasped_object": grasped_name,
-        }
-
-        # Add grasp detection details when closing gripper
-        if eef.close and self._last_target is not None:
-            grasp_check = self._check_grasp_conditions(self._last_target)
-            details["grasp_check"] = grasp_check
-
-        if reached:
-            return ControlResult(signal=ControlSignal.REACHED, details=details)
-        if self._eef_steps >= self.control.timeout_steps:
-            details["event"] = "eef_timeout"
-            return ControlResult(signal=ControlSignal.TIMED_OUT, details=details)
-        return ControlResult(signal=ControlSignal.RUNNING, details=details)
+        mask = self._normalize_mask(env_mask)
+        target_value = self._eef_target(eef)
+        signals = np.asarray(
+            [ControlSignal.RUNNING] * self.env.batch_size, dtype=object
+        )
+        details = [{} for _ in range(self.env.batch_size)]
+        for env_index, single_env in enumerate(self.env.envs):
+            if not mask[env_index]:
+                continue
+            command_key = f"{eef.close}:{eef.joint_positions}"
+            if self._last_eef_key[env_index] != command_key:
+                self._last_eef_key[env_index] = command_key
+                self._eef_steps[env_index] = 0
+            ctrl = np.asarray(single_env.data.ctrl, dtype=np.float64).copy()
+            ctrl[self.eef_ctrl_index] = target_value
+            self.env.step(
+                np.vstack(
+                    [
+                        ctrl
+                        if i == env_index
+                        else np.asarray(env.data.ctrl[: env.model.nu], dtype=np.float64)
+                        for i, env in enumerate(self.env.envs)
+                    ]
+                ),
+                env_mask=np.eye(self.env.batch_size, dtype=bool)[env_index],
+            )
+            self._eef_steps[env_index] += 1
+            current = float(np.asarray(single_env.data.ctrl)[self.eef_ctrl_index])
+            eef_qidx = single_env._op_eef_qidx[self.operator_name]
+            actual = (
+                float(single_env.data.qpos[eef_qidx[0]]) if len(eef_qidx) > 0 else 0.0
+            )
+            error = abs(actual - target_value)
+            grasped_name = ""
+            reached = False
+            settle_ready = self._eef_steps[env_index] >= self.control.grasp.settle_steps
+            event = "eef_moving"
+            if (
+                eef.close
+                and settle_ready
+                and self._last_target[env_index] is not None
+                and self._is_target_grasped(env_index, self._last_target[env_index])
+            ):
+                reached = True
+                grasped_name = self._last_target[env_index].name
+                event = "eef_grasped"
+            elif eef.close and actual >= max(
+                target_value - self.control.tolerance.eef, 0.45
+            ):
+                reached = True
+                event = "eef_reached"
+            elif not eef.close and actual <= max(self.control.tolerance.eef, 0.05):
+                reached = True
+                event = "eef_reached"
+            details[env_index] = {
+                "event": event,
+                "operator": self.name,
+                "eef": eef.model_dump(mode="json"),
+                "target_ctrl": target_value,
+                "actual_qpos": actual,
+                "actual_ctrl": current,
+                "error": error,
+                "eef_target": target_value,
+                "eef_command": current,
+                "eef_actual": actual,
+                "eef_error": error,
+                "settle_ready": settle_ready,
+                "steps": int(self._eef_steps[env_index]),
+                "grasped_object": grasped_name,
+            }
+            if eef.close and self._last_target[env_index] is not None:
+                details[env_index]["grasp_check"] = self._check_grasp_conditions(
+                    env_index, self._last_target[env_index]
+                )
+            if reached:
+                signals[env_index] = ControlSignal.REACHED
+                self._eef_steps[env_index] = 0
+            elif self._eef_steps[env_index] >= self.control.timeout_steps:
+                details[env_index]["event"] = "eef_timeout"
+                signals[env_index] = ControlSignal.TIMED_OUT
+            else:
+                signals[env_index] = ControlSignal.RUNNING
+        return ControlResult(signals=signals, details=details)
 
     def get_end_effector_pose(self) -> PoseState:
         pos, quat = self.env.get_operator_eef_pose_in_world(self.operator_name)
-        return PoseState(
-            position=tuple(float(v) for v in pos),
-            orientation=tuple(float(v) for v in quat),
-        )
+        return PoseState(position=pos, orientation=quat)
 
     def get_base_pose(self) -> PoseState:
         pos, quat = self.env.get_operator_base_pose(self.operator_name)
-        return PoseState(
-            position=tuple(float(v) for v in pos),
-            orientation=tuple(float(v) for v in quat),
+        return PoseState(position=pos, orientation=quat)
+
+    def reset_state(self, env_mask: Optional[np.ndarray] = None) -> None:
+        mask = self._normalize_mask(env_mask)
+        for env_index, enabled in enumerate(mask):
+            if enabled:
+                self._last_move_key[env_index] = None
+                self._last_eef_key[env_index] = None
+                self._last_target[env_index] = None
+                self._move_steps[env_index] = 0
+                self._eef_steps[env_index] = 0
+                self._move_best_pos_error[env_index] = float("inf")
+                self._move_best_ori_error[env_index] = float("inf")
+                self._move_stall_count[env_index] = 0
+                self._move_step_scale[env_index] = 1.0
+
+    def home(self, env_mask: Optional[np.ndarray] = None) -> None:
+        self.reset_state(env_mask)
+        self.env.home_operator(self.operator_name, env_mask=env_mask)
+
+    def set_home_end_effector_pose(
+        self,
+        pose: PoseState,
+        env_mask: Optional[np.ndarray] = None,
+    ) -> None:
+        pose = pose.broadcast_to(self.env.batch_size)
+        self.env.set_operator_home_eef_pose(
+            self.operator_name,
+            pose.position,
+            pose.orientation,
+            env_mask=env_mask,
+        )
+        self.home(env_mask)
+        mask = self._normalize_mask(env_mask)
+        for env_index, enabled in enumerate(mask):
+            if enabled:
+                self._home_ctrl[env_index, self.eef_ctrl_index] = self.env.envs[
+                    env_index
+                ].data.ctrl[self.eef_ctrl_index]
+
+    def set_pose(self, pose: PoseState, env_mask: Optional[np.ndarray] = None) -> None:
+        self.reset_state(env_mask)
+        pose = pose.broadcast_to(self.env.batch_size)
+        # ``OperatorHandler.set_pose`` is the runtime-facing "base pose" API.
+        # For mocap operators this must only update the virtual base frame used
+        # for world/base conversions and diagnostics, not physically move the
+        # mocap/root body.
+        self.env.override_operator_base_pose(
+            self.operator_name,
+            pose.position,
+            pose.orientation,
+            env_mask=env_mask,
         )
 
-    def _is_target_grasped(self, target: "MujocoObjectHandler") -> bool:
-        grasp_check = self._check_grasp_conditions(target)
-        return (
+    def _eef_target(self, eef: EefControlConfig) -> float:
+        if eef.joint_positions:
+            return float(eef.joint_positions[0])
+        return 0.82 if eef.close else 0.0
+
+    def _normalize_mask(self, env_mask: Optional[np.ndarray]) -> np.ndarray:
+        if env_mask is None:
+            return np.ones(self.env.batch_size, dtype=bool)
+        mask = np.asarray(env_mask, dtype=bool).reshape(-1)
+        if mask.shape[0] != self.env.batch_size:
+            raise ValueError(
+                f"env_mask must have shape ({self.env.batch_size},), got {mask.shape}"
+            )
+        return mask
+
+    def _is_target_grasped(
+        self,
+        env_index: int,
+        target: "MujocoObjectHandler",
+    ) -> bool:
+        grasp_check = self._check_grasp_conditions(env_index, target)
+        return bool(
             grasp_check["left_contact"]
             and grasp_check["right_contact"]
             and grasp_check["lateral_ok"]
         )
 
-    def _check_grasp_conditions(self, target: "MujocoObjectHandler") -> dict:
-        """Check individual grasp conditions and return detailed status."""
+    def _check_grasp_conditions(
+        self,
+        env_index: int,
+        target: "MujocoObjectHandler",
+    ) -> Dict[str, Any]:
+        single_env = self.env.envs[env_index]
         target_body_id = mujoco.mj_name2id(
-            self.env.model, mujoco.mjtObj.mjOBJ_BODY, target.body_name
+            single_env.model, mujoco.mjtObj.mjOBJ_BODY, target.body_name
         )
         if target_body_id < 0:
             return {
@@ -434,17 +505,19 @@ class MujocoOperatorHandler(OperatorHandler):
 
         left_contact = False
         right_contact = False
-        for idx in range(self.env.data.ncon):
-            contact = self.env.data.contact[idx]
+        for idx in range(single_env.data.ncon):
+            contact = single_env.data.contact[idx]
             geom1 = int(contact.geom1)
             geom2 = int(contact.geom2)
-            body1 = int(self.env.model.geom_bodyid[geom1])
-            body2 = int(self.env.model.geom_bodyid[geom2])
+            body1 = int(single_env.model.geom_bodyid[geom1])
+            body2 = int(single_env.model.geom_bodyid[geom2])
             if target_body_id not in {body1, body2}:
                 continue
             other_geom = geom2 if body1 == target_body_id else geom1
             other_name = (
-                mujoco.mj_id2name(self.env.model, mujoco.mjtObj.mjOBJ_GEOM, other_geom)
+                mujoco.mj_id2name(
+                    single_env.model, mujoco.mjtObj.mjOBJ_GEOM, other_geom
+                )
                 or ""
             )
             if other_name.startswith("left_"):
@@ -454,20 +527,15 @@ class MujocoOperatorHandler(OperatorHandler):
 
         target_pose = target.get_pose()
         eef_pose = self.get_end_effector_pose()
-
         lateral_threshold = self.control.grasp.lateral_threshold
         if lateral_threshold <= 0:
-            # Distance check disabled
             lateral_ok = True
             lateral_error = 0.0
         else:
-            # Convert object position to EEF frame
-            obj_pos = np.asarray(target_pose.position, dtype=np.float64)
-            eef_pos = np.asarray(eef_pose.position, dtype=np.float64)
-            R = quaternion_to_rotation_matrix(eef_pose.orientation)
-
-            # Transform to EEF frame and compute lateral error perpendicular to grasp axis
-            obj_in_eef = R.T @ (obj_pos - eef_pos)
+            obj_pos = np.asarray(target_pose.position[env_index], dtype=np.float64)
+            eef_pos = np.asarray(eef_pose.position[env_index], dtype=np.float64)
+            rot = quaternion_to_rotation_matrix(eef_pose.orientation[env_index])
+            obj_in_eef = rot.T @ (obj_pos - eef_pos)
             grasp_axis = self.control.grasp.grasp_axis
             lateral_indices = [i for i in range(3) if i != grasp_axis]
             lateral_error = float(np.linalg.norm(obj_in_eef[lateral_indices]))
@@ -481,80 +549,53 @@ class MujocoOperatorHandler(OperatorHandler):
             "lateral_threshold": lateral_threshold,
         }
 
-    def reset_state(self) -> None:
-        self._last_move_key = None
-        self._last_eef_key = None
-        self._last_target = None
-        self._move_steps = 0
-        self._eef_steps = 0
-        self._move_start_orientation = None
-        self._move_target_orientation = None
-
-    def home(self) -> None:
-        self.reset_state()
-        self.env.home_operator(self.operator_name)
-
-    def set_home_end_effector_pose(self, pose: PoseState) -> None:
-        self.env.set_operator_home_eef_pose(
-            self.operator_name, pose.position, pose.orientation
-        )
-
-    def set_pose(self, pose: PoseState) -> None:
-        self.reset_state()
-        self.env.teleport_operator(self.operator_name, pose.position, pose.orientation)
-
-    def _eef_target(self, eef: EefControlConfig) -> float:
-        if eef.joint_positions:
-            return float(eef.joint_positions[0])
-        return 0.82 if eef.close else 0.0
-
 
 @dataclass
 class MujocoTaskBackend(SceneBackend):
-    """Framework backend implemented on top of ``UnifiedMujocoEnv``."""
-
-    env: UnifiedMujocoEnv
-    """The registered Mujoco basis environment used by this backend instance."""
+    env: BatchedUnifiedMujocoEnv
     operator_handlers: Dict[str, MujocoOperatorHandler]
-    """The operator handlers available to execute task stages."""
     object_handlers: Dict[str, MujocoObjectHandler]
-    """The object handlers available for stage target lookup and state queries."""
-    randomization: Dict[str, PoseRandomRange] = field(default_factory=dict)
-    """Per-entity randomization ranges keyed by object or operator name.
-
-    Applied at the end of every ``reset()`` call.  Each key must match a name
-    in ``object_handlers`` or ``operator_handlers``.  Unknown keys are ignored
-    with a warning.
-    """
+    randomization: Dict[str, PoseRandomRange | OperatorRandomizationConfig] = field(
+        default_factory=dict
+    )
     random_seed: Optional[int] = None
-    """Seed for the internal NumPy random generator.  ``None`` means non-deterministic."""
     randomization_debug: bool = False
-    """When True the first resets cycle through extreme poses for debugging."""
     _rng: np.random.Generator = field(init=False, repr=False)
-    _default_poses: Dict[str, PoseState] = field(
+    _default_object_poses: Dict[str, PoseState] = field(
         init=False, repr=False, default_factory=dict
     )
-    _debug_extreme_queue: Optional[List[Any]] = field(
-        init=False, repr=False, default=None
+    _default_operator_base_poses: Dict[str, PoseState] = field(
+        init=False, repr=False, default_factory=dict
     )
-    _debug_extreme_index: int = field(init=False, repr=False, default=0)
+    _default_operator_eef_poses: Dict[str, PoseState] = field(
+        init=False, repr=False, default_factory=dict
+    )
 
     def __post_init__(self) -> None:
         self._rng = np.random.default_rng(self.random_seed)
+
+    @property
+    def batch_size(self) -> int:
+        return self.env.batch_size
 
     def setup(self, config: AutoAtomConfig) -> None:
         for operator in self.operator_handlers.values():
             operator.home()
         self._record_default_poses()
 
-    def reset(self) -> None:
-        self.env.reset()
+    def reset(self, env_mask: Optional[np.ndarray] = None) -> None:
+        mask = self._normalize_mask(env_mask)
+        self.env.reset(mask)
         for operator in self.operator_handlers.values():
-            operator.home()
-        if not self._default_poses:
+            operator.home(mask)
+        if not (
+            self._default_object_poses
+            or self._default_operator_base_poses
+            or self._default_operator_eef_poses
+        ):
             self._record_default_poses()
         if self.randomization:
-            self._apply_randomization()
+            self._apply_randomization(mask)
         self.env.refresh_viewer()
 
     def teardown(self) -> None:
@@ -578,188 +619,222 @@ class MujocoTaskBackend(SceneBackend):
             known = ", ".join(sorted(self.object_handlers)) or "<empty>"
             raise KeyError(f"Unknown object '{name}'. Known objects: {known}") from exc
 
-    def get_element_pose(self, name: str) -> PoseState:
-        """Look up a named site, body, or joint and return its world pose.
+    def _record_default_poses(self) -> None:
+        for name, handler in self.object_handlers.items():
+            self._default_object_poses[name] = handler.get_pose()
+        for name, handler in self.operator_handlers.items():
+            self._default_operator_base_poses[name] = handler.get_base_pose()
+            self._default_operator_eef_poses[name] = handler.get_end_effector_pose()
 
-        Resolution order: site → body → joint.  For joints the anchor
-        position in world frame is computed from the parent body pose and
-        the joint's local ``pos`` attribute.
-        """
-        model, data = self.env.model, self.env.data
-        # Try site
+    def _apply_randomization(self, env_mask: np.ndarray) -> None:
+        for name, rand_range in self.randomization.items():
+            if name in self.object_handlers:
+                if isinstance(rand_range, OperatorRandomizationConfig):
+                    raise TypeError(
+                        f"Object '{name}' randomization must be a PoseRandomRange, "
+                        "not an operator randomization config."
+                    )
+                base_pose = self._default_object_poses.get(
+                    name, self.object_handlers[name].get_pose()
+                )
+                sampled = self._sample_random_pose(base_pose, rand_range, env_mask)
+                self.object_handlers[name].set_pose(sampled, env_mask=env_mask)
+            elif name in self.operator_handlers:
+                handler = self.operator_handlers[name]
+                if isinstance(rand_range, OperatorRandomizationConfig):
+                    if rand_range.base is not None:
+                        default_base_pose = self._default_operator_base_poses.get(
+                            name, handler.get_base_pose()
+                        )
+                        sampled_base = self._sample_random_pose(
+                            default_base_pose, rand_range.base, env_mask
+                        )
+                        handler.set_pose(sampled_base, env_mask=env_mask)
+                    if rand_range.eef is not None:
+                        default_eef_pose = self._default_operator_eef_poses.get(
+                            name, handler.get_end_effector_pose()
+                        )
+                        sampled_eef = self._sample_random_pose(
+                            default_eef_pose, rand_range.eef, env_mask
+                        )
+                        handler.set_home_end_effector_pose(
+                            sampled_eef,
+                            env_mask=env_mask,
+                        )
+                else:
+                    default_base_pose = self._default_operator_base_poses.get(
+                        name, handler.get_base_pose()
+                    )
+                    sampled_base = self._sample_random_pose(
+                        default_base_pose, rand_range, env_mask
+                    )
+                    handler.set_pose(sampled_base, env_mask=env_mask)
+
+    def _sample_random_pose(
+        self, base_pose: PoseState, rand_range: PoseRandomRange, env_mask: np.ndarray
+    ) -> PoseState:
+        base_pose = base_pose.broadcast_to(self.batch_size)
+        position = base_pose.position.copy()
+        orientation = base_pose.orientation.copy()
+        for env_index, enabled in enumerate(env_mask):
+            if not enabled:
+                continue
+            position[env_index, 0] += float(self._rng.uniform(*rand_range.x))
+            position[env_index, 1] += float(self._rng.uniform(*rand_range.y))
+            position[env_index, 2] += float(self._rng.uniform(*rand_range.z))
+            r, p, y = quaternion_to_rpy(orientation[env_index])
+            orientation[env_index] = euler_to_quaternion(
+                (
+                    r + float(self._rng.uniform(*rand_range.roll)),
+                    p + float(self._rng.uniform(*rand_range.pitch)),
+                    y + float(self._rng.uniform(*rand_range.yaw)),
+                )
+            )
+        return PoseState(position=position, orientation=orientation)
+
+    def get_element_pose(self, name: str, env_index: int = 0) -> PoseState:
+        single_env = self.env.envs[env_index]
+        model, data = single_env.model, single_env.data
         sid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, name)
         if sid >= 0:
-            pos, quat = self.env.get_site_pose(name)
-            return PoseState(
-                position=tuple(float(v) for v in pos),
-                orientation=tuple(float(v) for v in quat),
-            )
-        # Try body
+            pos, quat = single_env.get_site_pose(name)
+            return PoseState(position=pos, orientation=quat)
         bid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, name)
         if bid >= 0:
-            pos, quat = self.env.get_body_pose(name)
-            return PoseState(
-                position=tuple(float(v) for v in pos),
-                orientation=tuple(float(v) for v in quat),
-            )
-        # Try joint — compute world anchor from the PARENT body's frame.
-        # The joint anchor is fixed in the parent frame; using the joint's own
-        # body would give wrong results when the joint has already rotated.
+            pos, quat = single_env.get_body_pose(name)
+            return PoseState(position=pos, orientation=quat)
         jid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, name)
         if jid >= 0:
             joint_bid = model.jnt_bodyid[jid]
             parent_bid = model.body_parentid[joint_bid]
             parent_pos = data.xpos[parent_bid]
             parent_rot = data.xmat[parent_bid].reshape(3, 3)
-            # Anchor in parent frame = body's local offset + joint's local pos
             body_local = model.body_pos[joint_bid]
             anchor_in_parent = body_local + model.jnt_pos[jid]
             world_pos = parent_pos + parent_rot @ anchor_in_parent
             parent_quat_wxyz = data.xquat[parent_bid]
-            qx, qy, qz, qw = (
-                parent_quat_wxyz[1],
-                parent_quat_wxyz[2],
-                parent_quat_wxyz[3],
-                parent_quat_wxyz[0],
-            )
             return PoseState(
-                position=tuple(float(v) for v in world_pos),
-                orientation=(float(qx), float(qy), float(qz), float(qw)),
+                position=world_pos,
+                orientation=(
+                    float(parent_quat_wxyz[1]),
+                    float(parent_quat_wxyz[2]),
+                    float(parent_quat_wxyz[3]),
+                    float(parent_quat_wxyz[0]),
+                ),
             )
         raise KeyError(
             f"No site, body, or joint named '{name}' found in the MuJoCo model."
         )
 
-    def get_joint_angle(self, name: str) -> float:
-        model, data = self.env.model, self.env.data
-        jid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, name)
+    def get_joint_angle(self, name: str, env_index: int = 0) -> float:
+        single_env = self.env.envs[env_index]
+        jid = mujoco.mj_name2id(single_env.model, mujoco.mjtObj.mjOBJ_JOINT, name)
         if jid < 0:
             raise KeyError(f"No joint named '{name}' found in the MuJoCo model.")
-        qadr = model.jnt_qposadr[jid]
-        return float(data.qpos[qadr])
+        qadr = single_env.model.jnt_qposadr[jid]
+        return float(single_env.data.qpos[qadr])
 
-    def is_object_grasped(self, operator_name: str, object_name: str) -> bool:
+    def is_object_grasped(self, operator_name: str, object_name: str) -> np.ndarray:
         operator = self.get_operator_handler(operator_name)
         target = self.get_object_handler(object_name)
         if target is None:
-            return False
+            return np.zeros(self.batch_size, dtype=bool)
+        result = np.zeros(self.batch_size, dtype=bool)
+        for env_index in range(self.batch_size):
+            result[env_index] = operator._is_target_grasped(env_index, target)
+        return result
 
-        target_body_id = mujoco.mj_name2id(
-            self.env.model, mujoco.mjtObj.mjOBJ_BODY, target.body_name
-        )
-        if target_body_id < 0:
-            return False
-
-        left_contact = False
-        right_contact = False
-        for idx in range(self.env.data.ncon):
-            contact = self.env.data.contact[idx]
-            geom1 = int(contact.geom1)
-            geom2 = int(contact.geom2)
-            body1 = int(self.env.model.geom_bodyid[geom1])
-            body2 = int(self.env.model.geom_bodyid[geom2])
-            if target_body_id not in {body1, body2}:
-                continue
-            other_geom = geom2 if body1 == target_body_id else geom1
-            other_name = (
-                mujoco.mj_id2name(self.env.model, mujoco.mjtObj.mjOBJ_GEOM, other_geom)
-                or ""
-            )
-            if other_name.startswith("left_"):
-                left_contact = True
-            if other_name.startswith("right_"):
-                right_contact = True
-
-        if not (left_contact and right_contact):
-            return False
-
-        target_pose = target.get_pose()
-        eef_pose = operator.get_end_effector_pose()
-
-        # Convert to EEF frame
-        obj_pos = np.asarray(target_pose.position, dtype=np.float64)
-        eef_pos = np.asarray(eef_pose.position, dtype=np.float64)
-        R = quaternion_to_rotation_matrix(eef_pose.orientation)
-
-        obj_in_eef = R.T @ (obj_pos - eef_pos)
-        grasp_axis = 2  # Default Z-axis
-        lateral_indices = [i for i in range(3) if i != grasp_axis]
-        lateral_error = np.linalg.norm(obj_in_eef[lateral_indices])
-        return bool(lateral_error <= 0.03)
-
-    def is_operator_grasping(self, operator_name: str) -> bool:
-        _ = self.get_operator_handler(operator_name)
+    def is_operator_grasping(self, operator_name: str) -> np.ndarray:
+        result = np.zeros(self.batch_size, dtype=bool)
         for object_name in self.object_handlers:
-            if self.is_object_grasped(operator_name, object_name):
-                return True
-        return False
+            result |= self.is_object_grasped(operator_name, object_name)
+        return result
 
-    def is_operator_contacting(self, operator_name: str, object_name: str) -> bool:
-        """Return True if any geom of the operator is in contact with the target object."""
+    def is_operator_contacting(
+        self, operator_name: str, object_name: str
+    ) -> np.ndarray:
         operator = self.get_operator_handler(operator_name)
         target = self.get_object_handler(object_name)
         if target is None:
-            return False
-        target_body_id = mujoco.mj_name2id(
-            self.env.model, mujoco.mjtObj.mjOBJ_BODY, target.body_name
-        )
-        if target_body_id < 0:
-            return False
-        # Collect all body IDs that belong to this operator (root + descendants).
-        root_body_id = mujoco.mj_name2id(
-            self.env.model, mujoco.mjtObj.mjOBJ_BODY, operator.root_body_name
-        )
-        operator_body_ids: set[int] = set()
-        for bid in range(self.env.model.nbody):
-            parent = int(self.env.model.body_parentid[bid])
-            if bid == root_body_id or (parent in operator_body_ids and bid != 0):
-                operator_body_ids.add(bid)
-        for idx in range(self.env.data.ncon):
-            contact = self.env.data.contact[idx]
-            geom1 = int(contact.geom1)
-            geom2 = int(contact.geom2)
-            body1 = int(self.env.model.geom_bodyid[geom1])
-            body2 = int(self.env.model.geom_bodyid[geom2])
-            if target_body_id in {body1, body2}:
-                other_body = body2 if body1 == target_body_id else body1
-                if other_body in operator_body_ids:
-                    return True
-        return False
+            return np.zeros(self.batch_size, dtype=bool)
+        result = np.zeros(self.batch_size, dtype=bool)
+        for env_index, single_env in enumerate(self.env.envs):
+            target_body_id = mujoco.mj_name2id(
+                single_env.model, mujoco.mjtObj.mjOBJ_BODY, target.body_name
+            )
+            if target_body_id < 0:
+                continue
+            root_body_id = mujoco.mj_name2id(
+                single_env.model, mujoco.mjtObj.mjOBJ_BODY, operator.root_body_name
+            )
+            operator_body_ids: set[int] = set()
+            for bid in range(single_env.model.nbody):
+                parent = int(single_env.model.body_parentid[bid])
+                if bid == root_body_id or (parent in operator_body_ids and bid != 0):
+                    operator_body_ids.add(bid)
+            for idx in range(single_env.data.ncon):
+                contact = single_env.data.contact[idx]
+                geom1 = int(contact.geom1)
+                geom2 = int(contact.geom2)
+                body1 = int(single_env.model.geom_bodyid[geom1])
+                body2 = int(single_env.model.geom_bodyid[geom2])
+                if target_body_id in {body1, body2}:
+                    other_body = body2 if body1 == target_body_id else body1
+                    if other_body in operator_body_ids:
+                        result[env_index] = True
+                        break
+        return result
 
     def set_interest_objects_and_operations(
         self,
         object_names: List[str],
         operation_names: List[str],
     ) -> None:
-        """Not implemented now"""
-        # self.env.set_interest_objects_and_operations(object_names, operation_names)
+        for env_index, single_env in enumerate(self.env.envs):
+            object_name = (
+                object_names[env_index] if env_index < len(object_names) else ""
+            )
+            operation_name = (
+                operation_names[env_index] if env_index < len(operation_names) else ""
+            )
+            if object_name and operation_name:
+                single_env.set_interest_objects_and_operations(
+                    [object_name], [operation_name]
+                )
+            else:
+                single_env.set_interest_objects_and_operations([], [])
+
+    def _normalize_mask(self, env_mask: Optional[np.ndarray]) -> np.ndarray:
+        if env_mask is None:
+            return np.ones(self.batch_size, dtype=bool)
+        mask = np.asarray(env_mask, dtype=bool).reshape(-1)
+        if mask.shape[0] != self.batch_size:
+            raise ValueError(
+                f"env_mask must have shape ({self.batch_size},), got {mask.shape}"
+            )
+        return mask
 
 
 def create_mujoco_env(
     env_name: str,
     config: EnvConfig,
-) -> UnifiedMujocoEnv:
-    env = UnifiedMujocoEnv(config)
+) -> BatchedUnifiedMujocoEnv:
+    env = BatchedUnifiedMujocoEnv(config)
     ComponentRegistry.register_env(env_name, env)
     return env
 
 
 def _resolve_arm_pose(arm_config, fallback_pose: PoseState) -> PoseState:
-    """Parse an arm initial-state config into a world-frame PoseState."""
     pose = fallback_pose
     if isinstance(arm_config, list):
-        # Old format: [x, y, z, yaw, pitch, roll]
         if len(arm_config) >= 6:
-            pos = arm_config[:3]
-            quat_xyzw = euler_to_quaternion(
-                (arm_config[5], arm_config[4], arm_config[3])
-            )
             pose = PoseState(
-                position=tuple(float(v) for v in pos),
-                orientation=quat_xyzw,
+                position=tuple(float(v) for v in arm_config[:3]),
+                orientation=euler_to_quaternion(
+                    (arm_config[5], arm_config[4], arm_config[3])
+                ),
             )
     else:
-        # Structured ArmPoseConfig format.
         if arm_config.position is not None and len(arm_config.position) >= 3:
             pose = PoseState(
                 position=tuple(float(v) for v in arm_config.position[:3]),
@@ -775,10 +850,7 @@ def _resolve_arm_pose(arm_config, fallback_pose: PoseState) -> PoseState:
                 raise ValueError(
                     f"orientation must be 3 floats (Euler) or 4 floats (quaternion), got {len(ori)}"
                 )
-            pose = PoseState(
-                position=pose.position,
-                orientation=tuple(float(v) for v in quat_xyzw),
-            )
+            pose = PoseState(position=pose.position, orientation=quat_xyzw)
     return pose
 
 
@@ -800,13 +872,13 @@ def build_mujoco_backend(
         for item in operators
     ]
     env = ComponentRegistry.get_env(config.env_name)
-    if not isinstance(env, UnifiedMujocoEnv):
+    if not isinstance(env, BatchedUnifiedMujocoEnv):
         raise TypeError(
-            f"Registered environment '{config.env_name}' must be a UnifiedMujocoEnv, got {type(env).__name__}."
+            f"Registered environment '{config.env_name}' must be a BatchedUnifiedMujocoEnv, got {type(env).__name__}."
         )
 
     extra = handler_kwargs or {}
-    operator_handlers = {}
+    operator_handlers: Dict[str, MujocoOperatorHandler] = {}
     for operator in operator_configs:
         op_extra = operator.model_extra or {}
         ik_extra = (
@@ -842,29 +914,24 @@ def build_mujoco_backend(
             },
         )
 
-    # Apply initial_state overrides.
     for operator in operator_configs:
         if operator.initial_state is None:
             continue
         handler = operator_handlers[operator.name]
-
-        # Apply base_pose override first (affects world↔base transforms).
         if operator.initial_state.base_pose is not None:
             bp = operator.initial_state.base_pose
-            base_ps = _resolve_arm_pose(bp, handler.get_base_pose())
+            base_ps = _resolve_arm_pose(bp, handler.get_base_pose().select(0))
             handler.env.override_operator_base_pose(
                 operator.name,
-                np.asarray(base_ps.position, dtype=np.float32),
-                np.asarray(base_ps.orientation, dtype=np.float32),
+                base_ps.broadcast_to(env.batch_size).position,
+                base_ps.broadcast_to(env.batch_size).orientation,
             )
 
-        # Apply arm (EEF) initial pose.
         if operator.initial_state.arm is not None:
             arm_config = operator.initial_state.arm
-            pose = handler.get_end_effector_pose()
-            pose = _resolve_arm_pose(arm_config, pose)
-
-            # If reference is BASE, convert from base frame to world.
+            pose = _resolve_arm_pose(
+                arm_config, handler.get_end_effector_pose().select(0)
+            )
             if (
                 isinstance(arm_config, ArmPoseConfig)
                 and arm_config.reference == PoseReference.BASE
@@ -874,37 +941,34 @@ def build_mujoco_backend(
                     np.asarray(pose.position, dtype=np.float32),
                     np.asarray(pose.orientation, dtype=np.float32),
                 )
-                pose = PoseState(
-                    position=tuple(float(v) for v in pos_w),
-                    orientation=tuple(float(v) for v in quat_w),
-                )
-
+                pose = PoseState(position=pos_w, orientation=quat_w)
             handler.set_home_end_effector_pose(pose)
 
         if operator.initial_state.eef is not None:
-            handler._home_ctrl[handler.eef_ctrl_index] = operator.initial_state.eef
+            handler._home_ctrl[:, handler.eef_ctrl_index] = operator.initial_state.eef
+
     object_names = {stage.object for stage in config.stages if stage.object}
-    object_handlers = {
-        object_name: MujocoObjectHandler(
+    object_handlers: Dict[str, MujocoObjectHandler] = {}
+    model = env.envs[0].model
+    for object_name in object_names:
+        freejoint_name: Optional[str] = None
+        if (
+            mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, f"{object_name}_joint")
+            >= 0
+        ):
+            freejoint_name = f"{object_name}_joint"
+        elif (
+            mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, f"{object_name}_joint0")
+            >= 0
+        ):
+            freejoint_name = f"{object_name}_joint0"
+        object_handlers[object_name] = MujocoObjectHandler(
             name=object_name,
             env=env,
             body_name=object_name,
-            freejoint_name=f"{object_name}_joint"
-            if mujoco.mj_name2id(
-                env.model, mujoco.mjtObj.mjOBJ_JOINT, f"{object_name}_joint"
-            )
-            >= 0
-            else (
-                f"{object_name}_joint0"
-                if mujoco.mj_name2id(
-                    env.model, mujoco.mjtObj.mjOBJ_JOINT, f"{object_name}_joint0"
-                )
-                >= 0
-                else None
-            ),
+            freejoint_name=freejoint_name,
         )
-        for object_name in object_names
-    }
+
     return MujocoTaskBackend(
         env=env,
         operator_handlers=operator_handlers,

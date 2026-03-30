@@ -22,6 +22,7 @@ Any value can be overridden from the command line via Hydra, e.g.::
 
 import sys
 import hydra
+import numpy as np
 from pathlib import Path
 from hydra.utils import instantiate
 from omegaconf import DictConfig, OmegaConf
@@ -80,7 +81,7 @@ def main(cfg: DictConfig) -> None:
                 update_count += 1
                 print(f"Step {i}:" + "=" * 40)
                 pprint(update, sort_dicts=False)
-                if update.done:
+                if bool(np.all(update.done)):
                     break
 
             print()
@@ -91,11 +92,15 @@ def main(cfg: DictConfig) -> None:
             round_summaries.append(
                 {
                     "round": r + 1,
-                    "initial_poses": reset_update.details.get("initial_poses", {}),
-                    "success": update.success,
+                    "initial_poses": {},
+                    "success": bool(np.all(update.success)),
                     "update_count": update_count,
                     "stages": [
-                        {"name": rec.stage_name, "status": rec.status.value}
+                        {
+                            "env_index": rec.env_index,
+                            "name": rec.stage_name,
+                            "status": rec.status.value,
+                        }
                         for rec in runner.records
                     ],
                 }
@@ -115,11 +120,8 @@ def main(cfg: DictConfig) -> None:
             tag = "OK" if s["success"] else "FAIL"
             print(f"  Round {s['round']}: [{tag}]")
             print(f"    total updates: {s['update_count']}")
-            for name, pose in s["initial_poses"].items():
-                pos = pose["position"]
-                print(f"    {name}: pos={pos}")
             for st in s["stages"]:
-                print(f"    stage {st['name']}: {st['status']}")
+                print(f"    env {st['env_index']} stage {st['name']}: {st['status']}")
         print("=" * 60)
     finally:
         runner.close()

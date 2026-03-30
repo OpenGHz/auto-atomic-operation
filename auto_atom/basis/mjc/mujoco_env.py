@@ -42,6 +42,7 @@ __all__ = [
     "OperatorBinding",
     "EnvConfig",
     "UnifiedMujocoEnv",
+    "BatchedUnifiedMujocoEnv",
 ]
 
 
@@ -129,14 +130,24 @@ class UnifiedMujocoEnv(MujocoBasis):
             )
 
         # --- Base pose (world frame) ---
-        base_pos, base_quat = self.get_body_pose(root_body)
-        base_pos = base_pos.astype(np.float32)
-        base_quat = base_quat.astype(np.float32)
+        # Joint-mode operators use the physical robot base. Pure mocap operators
+        # expose a virtual base frame whose default is the world origin.
+        physical_base_pos, physical_base_quat = self.get_body_pose(root_body)
+        physical_base_pos = physical_base_pos.astype(np.float32)
+        physical_base_quat = physical_base_quat.astype(np.float32)
+        if joint_mode:
+            base_pos = physical_base_pos
+            base_quat = physical_base_quat
+        else:
+            base_pos = np.zeros(3, dtype=np.float32)
+            base_quat = np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float32)
 
         # --- EEF pose → tool offset (base_T_eef) ---
         eef_pos_w, eef_quat_w = self.get_site_pose(eef_site)
+        tool_base_pos = physical_base_pos if not joint_mode else base_pos
+        tool_base_quat = physical_base_quat if not joint_mode else base_quat
         tool_pos, tool_quat = self._world_to_base(
-            eef_pos_w, eef_quat_w, base_pos, base_quat
+            eef_pos_w, eef_quat_w, tool_base_pos, tool_base_quat
         )
 
         # --- Home state ---
@@ -299,7 +310,10 @@ class UnifiedMujocoEnv(MujocoBasis):
         return s.base_pos, s.base_quat
 
     def override_operator_base_pose(
-        self, op_name: str, pos_w: np.ndarray, quat_w: np.ndarray
+        self,
+        op_name: str,
+        pos_w: np.ndarray,
+        quat_w: np.ndarray,
     ) -> None:
         """Override the stored operator base frame and refresh cached offsets.
 
@@ -309,6 +323,18 @@ class UnifiedMujocoEnv(MujocoBasis):
         s = self._get_op(op_name)
         s.base_pos = np.asarray(pos_w, dtype=np.float32)
         s.base_quat = np.asarray(quat_w, dtype=np.float32)
+        if not s.joint_mode:
+            eef_pos_w, eef_quat_w = self.get_site_pose(s.eef_site_name)
+            target_pos, target_quat = self._world_to_base(
+                eef_pos_w, eef_quat_w, s.base_pos, s.base_quat
+            )
+            s.target_pos_in_base = target_pos
+            s.target_quat_in_base = target_quat
+            if s.planned_target_pos_in_base is not None:
+                s.planned_target_pos_in_base = target_pos.copy()
+            if s.planned_target_quat_in_base is not None:
+                s.planned_target_quat_in_base = target_quat.copy()
+            return
         eef_pos_w, eef_quat_w = self.get_site_pose(s.eef_site_name)
         tool_pos, tool_quat = self._world_to_base(
             eef_pos_w, eef_quat_w, s.base_pos, s.base_quat
@@ -317,6 +343,41 @@ class UnifiedMujocoEnv(MujocoBasis):
         s.tool_offset_quat = tool_quat
         s.target_pos_in_base = tool_pos.copy()
         s.target_quat_in_base = tool_quat.copy()
+
+    def set_operator_base_pose(
+        self,
+        op_name: str,
+        pos_w: np.ndarray,
+        quat_w: np.ndarray,
+    ) -> None:
+        """Set the operator base pose with consistent semantics across backends.
+
+        Joint-mode operators only update the virtual base frame because the
+        physical robot base is fixed in the model. Pure mocap operators also
+        move the physical body rigidly so the existing base->EEF tool offset is
+        preserved under the new base frame.
+        """
+        s = self._get_op(op_name)
+        if s.joint_mode:
+            self.override_operator_base_pose(op_name, pos_w, quat_w)
+            return
+
+        s.base_pos = np.asarray(pos_w, dtype=np.float32)
+        s.base_quat = np.asarray(quat_w, dtype=np.float32)
+        base_body_pos, base_body_quat_xyzw = self._eef_in_base_to_base_body_world(
+            s,
+            s.tool_offset_pos,
+            s.tool_offset_quat,
+        )
+        self._write_mocap_pose(
+            s,
+            base_body_pos,
+            np.asarray(base_body_quat_xyzw, dtype=np.float32),
+            sync_freejoint=True,
+        )
+        mujoco.mj_forward(self.model, self.data)
+        s.target_pos_in_base = s.tool_offset_pos.copy()
+        s.target_quat_in_base = s.tool_offset_quat.copy()
 
     # ==================================================================
     # Pose control (actual physics interaction)
@@ -960,3 +1021,311 @@ class UnifiedMujocoEnv(MujocoBasis):
             }
 
         return dict(grouped)
+
+
+class BatchedUnifiedMujocoEnv:
+    """Aggregate multiple homogeneous ``UnifiedMujocoEnv`` replicas."""
+
+    def __init__(self, config: EnvConfig):
+        self.config = config
+        self.batch_size = int(config.batch_size)
+        self.envs: list[UnifiedMujocoEnv] = []
+        for env_index in range(self.batch_size):
+            viewer = config.viewer if env_index == config.viewer_env_index else None
+            env_cfg = config.model_copy(update={"batch_size": 1, "viewer": viewer})
+            self.envs.append(UnifiedMujocoEnv(env_cfg))
+
+    def register_operator(self, *args, **kwargs) -> None:
+        for env in self.envs:
+            env.register_operator(*args, **kwargs)
+
+    def world_to_base(
+        self, op_name: str, pos_w: np.ndarray, quat_w: np.ndarray
+    ) -> tuple[np.ndarray, np.ndarray]:
+        pos_w = np.asarray(pos_w, dtype=np.float32)
+        quat_w = np.asarray(quat_w, dtype=np.float32)
+        if pos_w.ndim == 1:
+            pos_w = np.repeat(pos_w.reshape(1, 3), self.batch_size, axis=0)
+        if quat_w.ndim == 1:
+            quat_w = np.repeat(quat_w.reshape(1, 4), self.batch_size, axis=0)
+        pos_out = []
+        quat_out = []
+        for env_index, env in enumerate(self.envs):
+            p, q = env.world_to_base(op_name, pos_w[env_index], quat_w[env_index])
+            pos_out.append(p)
+            quat_out.append(q)
+        return np.stack(pos_out), np.stack(quat_out)
+
+    def base_to_world(
+        self, op_name: str, pos_b: np.ndarray, quat_b: np.ndarray
+    ) -> tuple[np.ndarray, np.ndarray]:
+        pos_b = np.asarray(pos_b, dtype=np.float32)
+        quat_b = np.asarray(quat_b, dtype=np.float32)
+        if pos_b.ndim == 1:
+            pos_b = np.repeat(pos_b.reshape(1, 3), self.batch_size, axis=0)
+        if quat_b.ndim == 1:
+            quat_b = np.repeat(quat_b.reshape(1, 4), self.batch_size, axis=0)
+        pos_out = []
+        quat_out = []
+        for env_index, env in enumerate(self.envs):
+            p, q = env.base_to_world(op_name, pos_b[env_index], quat_b[env_index])
+            pos_out.append(p)
+            quat_out.append(q)
+        return np.stack(pos_out), np.stack(quat_out)
+
+    def get_operator_eef_pose_in_base(
+        self, op_name: str
+    ) -> tuple[np.ndarray, np.ndarray]:
+        poses = [env.get_operator_eef_pose_in_base(op_name) for env in self.envs]
+        return np.stack([p for p, _ in poses]), np.stack([q for _, q in poses])
+
+    def get_operator_eef_pose_in_world(
+        self, op_name: str
+    ) -> tuple[np.ndarray, np.ndarray]:
+        poses = [env.get_operator_eef_pose_in_world(op_name) for env in self.envs]
+        return np.stack([p for p, _ in poses]), np.stack([q for _, q in poses])
+
+    def get_operator_base_pose(self, op_name: str) -> tuple[np.ndarray, np.ndarray]:
+        poses = [env.get_operator_base_pose(op_name) for env in self.envs]
+        return np.stack([p for p, _ in poses]), np.stack([q for _, q in poses])
+
+    def override_operator_base_pose(
+        self,
+        op_name: str,
+        pos_w: np.ndarray,
+        quat_w: np.ndarray,
+        env_mask: np.ndarray | None = None,
+    ) -> None:
+        pos_w = np.asarray(pos_w, dtype=np.float32)
+        quat_w = np.asarray(quat_w, dtype=np.float32)
+        if pos_w.ndim == 1:
+            pos_w = np.repeat(pos_w.reshape(1, 3), self.batch_size, axis=0)
+        if quat_w.ndim == 1:
+            quat_w = np.repeat(quat_w.reshape(1, 4), self.batch_size, axis=0)
+        mask = (
+            np.ones(self.batch_size, dtype=bool)
+            if env_mask is None
+            else np.asarray(env_mask, dtype=bool).reshape(-1)
+        )
+        for env_index, env in enumerate(self.envs):
+            if mask[env_index]:
+                env.override_operator_base_pose(
+                    op_name,
+                    pos_w[env_index],
+                    quat_w[env_index],
+                )
+
+    def set_operator_base_pose(
+        self,
+        op_name: str,
+        pos_w: np.ndarray,
+        quat_w: np.ndarray,
+        env_mask: np.ndarray | None = None,
+    ) -> None:
+        pos_w = np.asarray(pos_w, dtype=np.float32)
+        quat_w = np.asarray(quat_w, dtype=np.float32)
+        if pos_w.ndim == 1:
+            pos_w = np.repeat(pos_w.reshape(1, 3), self.batch_size, axis=0)
+        if quat_w.ndim == 1:
+            quat_w = np.repeat(quat_w.reshape(1, 4), self.batch_size, axis=0)
+        mask = (
+            np.ones(self.batch_size, dtype=bool)
+            if env_mask is None
+            else np.asarray(env_mask, dtype=bool).reshape(-1)
+        )
+        for env_index, env in enumerate(self.envs):
+            if mask[env_index]:
+                env.set_operator_base_pose(
+                    op_name,
+                    pos_w[env_index],
+                    quat_w[env_index],
+                )
+
+    def step_operator_toward_target(
+        self,
+        op_name: str,
+        target_pos_b: np.ndarray,
+        target_quat_b: np.ndarray,
+        env_mask: np.ndarray | None = None,
+    ) -> None:
+        mask = (
+            np.ones(self.batch_size, dtype=bool)
+            if env_mask is None
+            else np.asarray(env_mask, dtype=bool).reshape(-1)
+        )
+        for env_index, env in enumerate(self.envs):
+            if mask[env_index]:
+                env.step_operator_toward_target(
+                    op_name,
+                    np.asarray(target_pos_b[env_index], dtype=np.float32),
+                    np.asarray(target_quat_b[env_index], dtype=np.float32),
+                )
+
+    def teleport_operator(
+        self,
+        op_name: str,
+        pos_w: np.ndarray,
+        quat_w: np.ndarray,
+        env_mask: np.ndarray | None = None,
+    ) -> None:
+        mask = (
+            np.ones(self.batch_size, dtype=bool)
+            if env_mask is None
+            else np.asarray(env_mask, dtype=bool).reshape(-1)
+        )
+        pos_w = np.asarray(pos_w, dtype=np.float32)
+        quat_w = np.asarray(quat_w, dtype=np.float32)
+        for env_index, env in enumerate(self.envs):
+            if mask[env_index]:
+                env.teleport_operator(op_name, pos_w[env_index], quat_w[env_index])
+
+    def home_operator(self, op_name: str, env_mask: np.ndarray | None = None) -> None:
+        mask = (
+            np.ones(self.batch_size, dtype=bool)
+            if env_mask is None
+            else np.asarray(env_mask, dtype=bool).reshape(-1)
+        )
+        for env_index, env in enumerate(self.envs):
+            if mask[env_index]:
+                env.home_operator(op_name)
+
+    def set_operator_home_eef_pose(
+        self,
+        op_name: str,
+        pos_w: np.ndarray,
+        quat_w: np.ndarray,
+        env_mask: np.ndarray | None = None,
+    ) -> None:
+        pos_w = np.asarray(pos_w, dtype=np.float32)
+        quat_w = np.asarray(quat_w, dtype=np.float32)
+        if pos_w.ndim == 1:
+            pos_w = np.repeat(pos_w.reshape(1, 3), self.batch_size, axis=0)
+        if quat_w.ndim == 1:
+            quat_w = np.repeat(quat_w.reshape(1, 4), self.batch_size, axis=0)
+        mask = (
+            np.ones(self.batch_size, dtype=bool)
+            if env_mask is None
+            else np.asarray(env_mask, dtype=bool).reshape(-1)
+        )
+        for env_index, env in enumerate(self.envs):
+            if mask[env_index]:
+                env.set_operator_home_eef_pose(
+                    op_name,
+                    pos_w[env_index],
+                    quat_w[env_index],
+                )
+
+    def get_body_pose(self, body_name: str) -> tuple[np.ndarray, np.ndarray]:
+        poses = [env.get_body_pose(body_name) for env in self.envs]
+        return np.stack([p for p, _ in poses]), np.stack([q for _, q in poses])
+
+    def get_site_pose(self, site_name: str) -> tuple[np.ndarray, np.ndarray]:
+        poses = [env.get_site_pose(site_name) for env in self.envs]
+        return np.stack([p for p, _ in poses]), np.stack([q for _, q in poses])
+
+    def step(self, action: np.ndarray, env_mask: np.ndarray | None = None) -> None:
+        action = np.asarray(action, dtype=np.float64)
+        if action.ndim == 1:
+            raise ValueError(
+                f"Batched step expects shape (B, action_dim), got {action.shape}"
+            )
+        if action.shape[0] != self.batch_size:
+            raise ValueError(
+                f"Expected action shape ({self.batch_size}, action_dim), got {action.shape}"
+            )
+        mask = (
+            np.ones(self.batch_size, dtype=bool)
+            if env_mask is None
+            else np.asarray(env_mask, dtype=bool).reshape(-1)
+        )
+        for env_index, env in enumerate(self.envs):
+            if mask[env_index]:
+                env.step(action[env_index])
+
+    def update(self, env_mask: np.ndarray | None = None) -> None:
+        mask = (
+            np.ones(self.batch_size, dtype=bool)
+            if env_mask is None
+            else np.asarray(env_mask, dtype=bool).reshape(-1)
+        )
+        for env_index, env in enumerate(self.envs):
+            if mask[env_index]:
+                env.update()
+
+    def reset(self, env_mask: np.ndarray | None = None) -> None:
+        mask = (
+            np.ones(self.batch_size, dtype=bool)
+            if env_mask is None
+            else np.asarray(env_mask, dtype=bool).reshape(-1)
+        )
+        for env_index, env in enumerate(self.envs):
+            if mask[env_index]:
+                env.reset()
+
+    def set_interest_objects_and_operations(
+        self,
+        object_names: list[str],
+        operation_names: list[str],
+    ) -> None:
+        if len(object_names) != len(operation_names):
+            raise ValueError(
+                "object_names and operation_names must have the same length."
+            )
+        if len(object_names) not in {1, self.batch_size}:
+            raise ValueError(
+                "Expected either broadcast length 1 or per-env length equal to batch_size."
+            )
+        broadcast = len(object_names) == 1
+        for env_index, env in enumerate(self.envs):
+            obj = object_names[0] if broadcast else object_names[env_index]
+            op = operation_names[0] if broadcast else operation_names[env_index]
+            if obj and op:
+                env.set_interest_objects_and_operations([obj], [op])
+            else:
+                env.set_interest_objects_and_operations([], [])
+
+    def capture_observation(self) -> dict[str, dict[str, Any]]:
+        obs_per_env = [env.capture_observation() for env in self.envs]
+        keys = set().union(*(obs.keys() for obs in obs_per_env))
+        batched: dict[str, dict[str, Any]] = {}
+        for key in keys:
+            items = [obs[key] for obs in obs_per_env if key in obs]
+            if len(items) != self.batch_size:
+                raise KeyError(
+                    f"Observation key '{key}' missing from some env replicas."
+                )
+            data_batch = []
+            for item in items:
+                data = item["data"]
+                if isinstance(data, dict):
+                    merged = batched.setdefault(key, {"data": {}, "t": []})
+                    for subkey, subval in data.items():
+                        merged["data"].setdefault(subkey, []).append(np.asarray(subval))
+                    merged["t"].append(item["t"])
+                else:
+                    data_batch.append(np.asarray(data))
+            if data_batch:
+                batched[key] = {
+                    "data": np.stack(data_batch, axis=0),
+                    "t": np.asarray([item["t"] for item in items]),
+                }
+        for key, item in list(batched.items()):
+            if isinstance(item["data"], dict):
+                item["data"] = {
+                    subkey: np.stack(values, axis=0)
+                    for subkey, values in item["data"].items()
+                }
+                item["t"] = np.asarray(item["t"])
+        return batched
+
+    def get_info(self) -> dict[str, Any]:
+        info = self.envs[0].get_info()
+        info["batch_size"] = self.batch_size
+        return info
+
+    def refresh_viewer(self) -> None:
+        self.envs[self.config.viewer_env_index].refresh_viewer()
+
+    def close(self) -> None:
+        for env in self.envs:
+            env.close()

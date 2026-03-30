@@ -7,7 +7,7 @@ gs_dir: assets/gs/scenes/hang_toothbrush_cup
 
 env:
   env:
-    _target_: auto_atom.basis.mjc.gs_mujoco_env.GSUnifiedMujocoEnv
+    _target_: auto_atom.basis.mjc.gs_mujoco_env.BatchedGSUnifiedMujocoEnv
     config:
       _target_: auto_atom.basis.mjc.gs_mujoco_env.GSEnvConfig
       model_path: assets/xmls/scenes/hang_toothbrush_cup/demo_gs.xml

@@ -1,20 +1,25 @@
-"""YAML-driven task runner built from primitive pose and end-effector controls."""
+"""YAML-driven batch-first task runner built from primitive controls."""
 
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from copy import deepcopy
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 from typing import Any, ClassVar, Dict, List, Optional, Protocol, runtime_checkable
+
+import math
+import numpy as np
 from hydra.utils import instantiate
 from omegaconf import DictConfig, OmegaConf
+
 from .framework import (
     ArcControlConfig,
     AutoAtomConfig,
     EefControlConfig,
-    Operation,
     OPERATION_CONDITIONS,
+    Operation,
     OperationConditionType,
     OperationConstraint,
     Orientation,
@@ -35,14 +40,9 @@ from .utils.pose import (
     quaternion_to_rpy,
     rotate_pose_around_axis,
 )
-import warnings
-import math
-import numpy as np
 
 
 class StageExecutionStatus(str, Enum):
-    """High-level stage status returned to users."""
-
     PENDING = "pending"
     RUNNING = "running"
     SUCCEEDED = "succeeded"
@@ -50,8 +50,6 @@ class StageExecutionStatus(str, Enum):
 
 
 class ControlSignal(str, Enum):
-    """Low-level controller signal returned by primitive operator commands."""
-
     RUNNING = "running"
     REACHED = "reached"
     TIMED_OUT = "timed_out"
@@ -60,39 +58,46 @@ class ControlSignal(str, Enum):
 
 @dataclass
 class ObjectHandler:
-    """Opaque object handle resolved by the scene backend."""
-
     name: str
-    """The unique object name used by stage configs and backend lookups."""
 
-    def get_pose(self) -> "PoseState":
-        """Return the current world pose of the object."""
+    def get_pose(self) -> PoseState:
         raise NotImplementedError
 
-    def set_pose(self, pose: "PoseState") -> None:  # noqa: ARG002
-        """Force-set the object world pose in one step (no physics integration)."""
+    def set_pose(
+        self,
+        pose: PoseState,
+        env_mask: Optional[np.ndarray] = None,  # noqa: ARG002
+    ) -> None:
         raise NotImplementedError
 
 
 @dataclass
 class ControlResult:
-    """Incremental low-level control result."""
+    signals: np.ndarray
+    details: List[Dict[str, Any]] = field(default_factory=list)
 
-    signal: ControlSignal
-    """The coarse controller state returned after advancing one primitive action step."""
-    details: Dict[str, Any] = field(default_factory=dict)
-    """Backend-specific diagnostic details associated with the returned control signal."""
+    def __post_init__(self) -> None:
+        self.signals = np.asarray(self.signals, dtype=object).reshape(-1)
+        if not self.details:
+            self.details = [{} for _ in range(len(self.signals))]
+        if len(self.details) != len(self.signals):
+            raise ValueError("details length must match signals length")
+
+    @classmethod
+    def filled(
+        cls,
+        batch_size: int,
+        signal: ControlSignal,
+        details: Optional[List[Dict[str, Any]]] = None,
+    ) -> "ControlResult":
+        return cls(
+            signals=np.asarray([signal] * batch_size, dtype=object),
+            details=details or [{} for _ in range(batch_size)],
+        )
 
 
 @runtime_checkable
 class IKSolver(Protocol):
-    """Inverse kinematics solver protocol.
-
-    Implementations receive the desired end-effector pose **in the operator's
-    base frame** and the current arm joint positions, and return target joint
-    positions for the arm actuators.  Return ``None`` when no solution exists.
-    """
-
     def solve(
         self,
         target_pose_in_base: PoseState,
@@ -101,8 +106,6 @@ class IKSolver(Protocol):
 
 
 class OperatorHandler(ABC):
-    """Operator exposes only primitive pose and end-effector controls."""
-
     @property
     @abstractmethod
     def name(self) -> str:
@@ -113,39 +116,47 @@ class OperatorHandler(ABC):
         self,
         pose: PoseControlConfig,
         target: Optional[ObjectHandler],
+        env_mask: Optional[np.ndarray] = None,
     ) -> ControlResult:
-        """Advance motion toward the desired pose."""
+        """Advance motion toward the desired pose for selected envs."""
 
     @abstractmethod
     def control_eef(
         self,
         eef: EefControlConfig,
+        env_mask: Optional[np.ndarray] = None,
     ) -> ControlResult:
-        """Advance the end-effector toward the desired state."""
+        """Advance the end-effector toward the desired state for selected envs."""
 
     @abstractmethod
     def get_end_effector_pose(self) -> PoseState:
-        """Return the current world pose of the operator end-effector."""
+        """Return batched world poses for the operator end-effector."""
 
     @abstractmethod
     def get_base_pose(self) -> PoseState:
-        """Return the current world pose of the operator base."""
+        """Return batched world poses for the operator base."""
 
-    def set_pose(self, pose: PoseState) -> None:  # noqa: ARG002
-        """Force-set the operator base world pose in one step (no physics integration)."""
+    def set_pose(
+        self,
+        pose: PoseState,
+        env_mask: Optional[np.ndarray] = None,  # noqa: ARG002
+    ) -> None:
         raise NotImplementedError
 
 
 class SceneBackend(ABC):
-    """Abstract scene backend used by the task runner."""
+    @property
+    @abstractmethod
+    def batch_size(self) -> int:
+        """Number of envs in the backend batch."""
 
     @abstractmethod
     def setup(self, config: AutoAtomConfig) -> None:
         """Prepare backend resources for this task."""
 
     @abstractmethod
-    def reset(self) -> None:
-        """Reset scene state for a new run."""
+    def reset(self, env_mask: Optional[np.ndarray] = None) -> None:
+        """Reset selected envs for a new run."""
 
     @abstractmethod
     def teardown(self) -> None:
@@ -160,59 +171,45 @@ class SceneBackend(ABC):
         """Resolve an object handler by name. Empty names may return None."""
 
     @abstractmethod
-    def is_object_grasped(self, operator_name: str, object_name: str) -> bool:
+    def is_object_grasped(self, operator_name: str, object_name: str) -> np.ndarray:
         """Return whether the operator is currently grasping the given object."""
 
     @abstractmethod
-    def is_operator_grasping(self, operator_name: str) -> bool:
+    def is_operator_grasping(self, operator_name: str) -> np.ndarray:
         """Return whether the operator is currently grasping any object."""
 
     def is_object_displaced(
         self,
         object_name: str,
-        original_pose: "PoseState",
+        original_pose: PoseState,
         threshold: float = 0.01,
-    ) -> bool:
-        """Return True if *object_name* has moved more than *threshold* metres from *original_pose*.
-
-        The default implementation uses Euclidean distance between positions.
-        Override for orientation-aware or physics-specific displacement metrics.
-        """
+    ) -> np.ndarray:
         handler = self.get_object_handler(object_name)
         if handler is None:
-            return False
+            return np.zeros(self.batch_size, dtype=bool)
         current = handler.get_pose()
-        delta = float(
-            np.linalg.norm(
-                np.asarray(current.position, dtype=np.float64)
-                - np.asarray(original_pose.position, dtype=np.float64)
-            )
+        if original_pose.batch_size != self.batch_size:
+            original_pose = original_pose.broadcast_to(self.batch_size)
+        delta = np.linalg.norm(
+            np.asarray(current.position, dtype=np.float64)
+            - np.asarray(original_pose.position, dtype=np.float64),
+            axis=1,
         )
         return delta > threshold
 
-    def is_operator_contacting(self, operator_name: str, object_name: str) -> bool:
-        """Return True if the operator end-effector is currently in contact with *object_name*.
+    def is_operator_contacting(
+        self,
+        operator_name: str,  # noqa: ARG002
+        object_name: str,  # noqa: ARG002
+    ) -> np.ndarray:
+        return np.zeros(self.batch_size, dtype=bool)
 
-        The default implementation always returns False.  Override in backends that
-        support contact sensing (e.g. MuJoCo contact pair queries or tactile sensors).
-        """
-        return False
-
-    def get_element_pose(self, name: str) -> "PoseState":
-        """Return the world pose of a named scene element (site, body, or joint).
-
-        Backends should override this to resolve the name against the physics
-        engine.  The default raises ``NotImplementedError``.
-        """
+    def get_element_pose(self, name: str, env_index: int = 0) -> PoseState:  # noqa: ARG002
         raise NotImplementedError(
             f"Backend does not support named element lookup (requested '{name}')."
         )
 
-    def get_joint_angle(self, name: str) -> float:
-        """Return the current angle (radians) of a named joint.
-
-        Backends should override this.  The default raises ``NotImplementedError``.
-        """
+    def get_joint_angle(self, name: str, env_index: int = 0) -> float:  # noqa: ARG002
         raise NotImplementedError(
             f"Backend does not support joint angle lookup (requested '{name}')."
         )
@@ -224,339 +221,49 @@ class SceneBackend(ABC):
     ) -> None:
         """Notify the backend about the current task-focus objects and operations."""
 
-    # ------------------------------------------------------------------
-    # Randomization helpers  (shared by all concrete backend subclasses)
-    # ------------------------------------------------------------------
-    #
-    # Concrete backends that support randomization must expose these
-    # instance attributes (e.g. as dataclass fields):
-    #
-    #   randomization  : Dict[str, PoseRandomRange]
-    #   _rng           : np.random.Generator
-    #   _default_poses : Dict[str, PoseState]
-    #
-    # and call ``_record_default_poses()`` from ``setup()`` / ``reset()``
-    # and ``_apply_randomization()`` at the end of ``reset()``.
-    # ------------------------------------------------------------------
-
-    def _record_default_poses(self) -> None:
-        """Snapshot the current pose of every entity listed in ``self.randomization``.
-
-        Call this once after the simulation has been reset to its canonical
-        initial state (i.e. after ``env.reset()`` and operator ``home()``).
-        """
-        randomization: Dict[str, "PoseRandomRange"] = getattr(self, "randomization", {})
-        default_poses: Dict[str, PoseState] = getattr(self, "_default_poses", {})
-        for name in randomization:
-            kind, handler = self._resolve_randomization_handler(name)
-            if handler is None:
-                continue
-            if kind == "object":
-                default_poses[name] = handler.get_pose()
-            else:
-                default_poses[name] = handler.get_base_pose()
-        # Ensure the attribute is updated in case it was a local default.
-        try:
-            self._default_poses = default_poses  # type: ignore[attr-defined]
-        except AttributeError:
-            pass
-
-    def _apply_randomization(self) -> None:
-        """Sample random pose offsets for all configured entities and apply them.
-
-        Pairwise collision rejection is performed: if any two entities' sampled
-        centres are closer than the sum of their ``collision_radius`` values the
-        sample is discarded and redrawn.  After ``_MAX_RANDOMIZATION_RETRIES``
-        failed attempts the last sample is applied with a warning.
-        """
-        randomization: Dict[str, "PoseRandomRange"] = getattr(self, "randomization", {})
-        rng: np.random.Generator = getattr(self, "_rng", np.random.default_rng())
-        default_poses: Dict[str, PoseState] = getattr(self, "_default_poses", {})
-
-        entries = []
-        for name, rand_range in randomization.items():
-            kind, handler = self._resolve_randomization_handler(name)
-            if handler is None:
-                warnings.warn(
-                    f"{type(self).__name__}: randomization key '{name}' does not match "
-                    "any known object or operator — skipping.",
-                    stacklevel=3,
-                )
-                continue
-            entries.append((name, kind, handler, rand_range))
-
-        if not entries:
-            return
-
-        # Debug mode: consume the pre-built extreme queue before going random.
-        if getattr(self, "randomization_debug", False):
-            queue = getattr(self, "_debug_extreme_queue", None)
-            if queue is None:
-                queue = self._build_debug_extreme_queue()
-                try:
-                    self._debug_extreme_queue = queue  # type: ignore[attr-defined]
-                except AttributeError:
-                    pass
-            idx: int = getattr(self, "_debug_extreme_index", 0)
-            if idx < len(queue):
-                poses, label = queue[idx]
-                try:
-                    self._debug_extreme_index = idx + 1  # type: ignore[attr-defined]
-                except AttributeError:
-                    pass
-                print(f"[DEBUG randomization] extreme {idx + 1}/{len(queue)}: {label}")
-                name_to_handler = {n: h for n, _, h, _ in entries}
-                for name, pose in poses.items():
-                    if name in name_to_handler:
-                        name_to_handler[name].set_pose(pose)
-                return
-            if idx == len(queue):
-                print(
-                    f"[DEBUG randomization] all {len(queue)} extreme cases exhausted"
-                    " — switching to random sampling"
-                )
-                try:
-                    self._debug_extreme_index = idx + 1  # type: ignore[attr-defined]
-                except AttributeError:
-                    pass
-
-        last_poses: Dict[str, PoseState] = {}
-        for _ in range(_MAX_RANDOMIZATION_RETRIES):
-            sampled: Dict[str, PoseState] = {}
-            for name, _kind, _handler, rand_range in entries:
-                default = default_poses.get(name, PoseState())
-                sampled[name] = self._sample_random_pose(rng, default, rand_range)
-
-            # Pairwise collision check based on Euclidean distance.
-            collision = False
-            names = list(sampled)
-            for i in range(len(names)):
-                for j in range(i + 1, len(names)):
-                    ni, nj = names[i], names[j]
-                    ri = randomization[ni].collision_radius
-                    rj = randomization[nj].collision_radius
-                    pi = np.asarray(sampled[ni].position, dtype=np.float64)
-                    pj = np.asarray(sampled[nj].position, dtype=np.float64)
-                    if float(np.linalg.norm(pi - pj)) < ri + rj:
-                        collision = True
-                        break
-                if collision:
-                    break
-
-            last_poses = sampled
-            if not collision:
-                break
-        else:
-            warnings.warn(
-                f"{type(self).__name__}: could not find a collision-free randomization "
-                f"after {_MAX_RANDOMIZATION_RETRIES} attempts — applying last sample.",
-                stacklevel=3,
-            )
-
-        for name, _kind, handler, _rand_range in entries:
-            handler.set_pose(last_poses[name])
-
-    @staticmethod
-    def _delta_pose(
-        default: PoseState,
-        dx: float = 0.0,
-        dy: float = 0.0,
-        dz: float = 0.0,
-        d_roll: float = 0.0,
-        d_pitch: float = 0.0,
-        d_yaw: float = 0.0,
-    ) -> PoseState:
-        """Return *default* displaced by the given world-frame deltas."""
-        new_pos = (
-            default.position[0] + dx,
-            default.position[1] + dy,
-            default.position[2] + dz,
-        )
-        r, p, y = quaternion_to_rpy(default.orientation)
-        return PoseState(
-            position=new_pos,
-            orientation=euler_to_quaternion((r + d_roll, p + d_pitch, y + d_yaw)),
-        )
-
-    @staticmethod
-    def _sample_random_pose(
-        rng: np.random.Generator,
-        default: PoseState,
-        rand_range: "PoseRandomRange",
-    ) -> PoseState:
-        """Return a new pose sampled uniformly within *rand_range* around *default*."""
-        return SceneBackend._delta_pose(
-            default,
-            dx=float(rng.uniform(*rand_range.x)),
-            dy=float(rng.uniform(*rand_range.y)),
-            dz=float(rng.uniform(*rand_range.z)),
-            d_roll=float(rng.uniform(*rand_range.roll)),
-            d_pitch=float(rng.uniform(*rand_range.pitch)),
-            d_yaw=float(rng.uniform(*rand_range.yaw)),
-        )
-
-    def _build_debug_extreme_queue(
-        self,
-    ) -> "List[tuple[Dict[str, PoseState], str]]":
-        """Build an ordered list of extreme-case pose configurations.
-
-        The sequence is:
-        1. All entities at all-axis minimum simultaneously.
-        2. All entities at all-axis maximum simultaneously.
-        3. For each entity, for each non-trivial axis (lo != hi):
-           - one case at the axis minimum (all other axes at default for that entity,
-             all other entities at their defaults)
-           - one case at the axis maximum (same)
-        """
-        _AXES = ("x", "y", "z", "roll", "pitch", "yaw")
-        _KWARG = {
-            "x": "dx",
-            "y": "dy",
-            "z": "dz",
-            "roll": "d_roll",
-            "pitch": "d_pitch",
-            "yaw": "d_yaw",
-        }
-        _UNIT = {
-            "x": "m",
-            "y": "m",
-            "z": "m",
-            "roll": "rad",
-            "pitch": "rad",
-            "yaw": "rad",
-        }
-
-        randomization: Dict[str, "PoseRandomRange"] = getattr(self, "randomization", {})
-        default_poses: Dict[str, PoseState] = getattr(self, "_default_poses", {})
-
-        def _defaults() -> Dict[str, PoseState]:
-            return {n: default_poses.get(n, PoseState()) for n in randomization}
-
-        cases: "List[tuple[Dict[str, PoseState], str]]" = []
-
-        # All entities at all-min simultaneously, then all-max.
-        for tag, eidx in (("all_min", 0), ("all_max", 1)):
-            c: Dict[str, PoseState] = {}
-            parts = []
-            for name, rand_range in randomization.items():
-                default = default_poses.get(name, PoseState())
-                kwargs = {_KWARG[ax]: getattr(rand_range, ax)[eidx] for ax in _AXES}
-                c[name] = self._delta_pose(default, **kwargs)
-                parts.append(name)
-            cases.append((c, f"{tag}: " + ", ".join(parts)))
-
-        # Per-entity, per-axis min / max (all other entities stay at default).
-        for name, rand_range in randomization.items():
-            default = default_poses.get(name, PoseState())
-            for axis in _AXES:
-                lo, hi = getattr(rand_range, axis)
-                if lo == hi:
-                    continue
-                for val, tag in ((lo, "min"), (hi, "max")):
-                    c = _defaults()
-                    c[name] = self._delta_pose(default, **{_KWARG[axis]: val})
-                    label = f"{name}.{axis}={val:.4g} {_UNIT[axis]} ({tag})"
-                    cases.append((c, label))
-
-        return cases
-
-    def _resolve_randomization_handler(
-        self, name: str
-    ) -> "tuple[str, Optional[ObjectHandler | OperatorHandler]]":
-        """Return ``(kind, handler)`` for *name*, trying objects then operators.
-
-        Returns ``(kind, None)`` when the name is not found in either registry.
-        ``kind`` is ``'object'`` or ``'operator'``.
-        """
-        try:
-            obj = self.get_object_handler(name)
-            if obj is not None:
-                return "object", obj
-        except (KeyError, NotImplementedError):
-            pass
-        try:
-            return "operator", self.get_operator_handler(name)
-        except (KeyError, NotImplementedError):
-            return "operator", None
-
-
-_MAX_RANDOMIZATION_RETRIES = 100
-
 
 @dataclass
 class ArcExecutionSnapshot:
-    """Shared snapshot state for a split relative arc sequence."""
-
     start_eef_pose: Optional[PoseState] = None
-    """EEF world pose captured at the start of the parent arc."""
     pivot_world_pos: Optional[Position] = None
-    """Pivot world position captured at the start of the parent arc."""
 
 
 @dataclass
 class PrimitiveAction:
-    """Single primitive control action derived from a stage."""
-
     kind: str
-    """The primitive action kind, typically ``pose`` or ``eef``."""
     pose: Optional[PoseControlConfig] = None
-    """The pose target for pose actions, or ``None`` for non-pose actions."""
     eef: Optional[EefControlConfig] = None
-    """The end-effector target for eef actions, or ``None`` for non-eef actions."""
     resolved_pose: Optional[PoseControlConfig] = None
-    """The runtime-resolved pose after applying reference-frame conversion, when available."""
     arc_snapshot: Optional[ArcExecutionSnapshot] = None
-    """Shared snapshot state for split relative arcs."""
     arc_cumulative_angle: Optional[float] = None
-    """Cumulative angle from the parent arc start to this sub-action."""
 
 
 @dataclass
 class ExecutionRecord:
-    """Final record for one completed or failed stage."""
-
+    env_index: int
     stage_index: int
-    """The zero-based index of the executed stage in the task definition."""
     stage_name: str
-    """The human-readable stage name reported to users and logs."""
     operator: str
-    """The operator name chosen to execute the stage."""
     operation: str
-    """The high-level operation name executed by the stage."""
     target_object: str
-    """The target object name associated with the stage, if any."""
     blocking: bool
-    """Whether the stage was configured to block task progression until completion."""
     status: StageExecutionStatus
-    """The final execution status reached by the stage."""
     details: Dict[str, Any] = field(default_factory=dict)
-    """Additional execution metadata collected while running the stage."""
 
 
 @dataclass
 class ExecutionContext:
-    """Mutable runtime context shared across the task lifecycle."""
-
     config: AutoAtomConfig
-    """The validated task configuration currently being executed."""
     backend: SceneBackend
-    """The scene backend instance bound to this task run."""
     task_file: TaskFileConfig
-    """The full validated task file, including operator declarations."""
 
 
 @dataclass
 class StageExecutionPlan:
-    """Validated executable stage plan."""
-
     stage_index: int
-    """The zero-based index of the stage in the original task definition."""
     stage: StageConfig
-    """The validated stage configuration to execute."""
     operator_name: str
-    """The resolved operator name that will execute this stage."""
     last_orientation_before: Optional[Orientation] = None
-    """The last configured orientation from preceding stages, for inheritance."""
 
     @property
     def stage_name(self) -> str:
@@ -565,49 +272,39 @@ class StageExecutionPlan:
 
 @dataclass
 class TaskUpdate:
-    """User-facing task progress returned by ``TaskRunner.update``."""
-
-    stage_index: Optional[int]
-    """The active stage index, or ``None`` when the task is idle or finished."""
-    stage_name: str
-    """The current stage name exposed to the caller."""
-    status: StageExecutionStatus
-    """The latest high-level status for the active stage or overall task."""
-    done: bool
-    """Whether the task has fully finished and will produce no further work."""
-    success: Optional[bool]
-    """The final task success flag when done, or ``None`` while still running."""
-    details: Dict[str, Any] = field(default_factory=dict)
-    """Additional progress metadata describing the latest update."""
-    phase: Optional[str] = None
-    """Current execution phase: 'pre_move', 'eef', or 'post_move'.
-    None when the task is idle or finished."""
-    phase_step: Optional[int] = None
-    """Zero-based index of the current waypoint within the active move phase
-    (pre_move or post_move). None when the phase is eef or the task is idle/finished."""
+    stage_index: Optional[np.ndarray]
+    stage_name: List[str]
+    status: np.ndarray
+    done: np.ndarray
+    success: np.ndarray
+    details: List[Dict[str, Any]] = field(default_factory=list)
+    phase: List[Optional[str]] = field(default_factory=list)
+    phase_step: Optional[np.ndarray] = None
 
 
 @dataclass
 class ActiveStageState:
-    """Internal state for the currently active stage."""
-
     plan: StageExecutionPlan
-    """The resolved execution plan for the active stage."""
     operator: OperatorHandler
-    """The operator handler currently executing primitive actions for this stage."""
     target: Optional[ObjectHandler]
-    """The resolved target object handler for the stage, if one is required."""
     actions: List[PrimitiveAction]
-    """The ordered primitive actions still being executed for this stage."""
     action_index: int = 0
-    """The index of the primitive action currently in progress."""
     initial_object_pose: Optional[PoseState] = None
-    """The world pose of the target object captured at stage start; used for displacement checks."""
+
+
+@dataclass
+class _EnvRuntimeState:
+    stage_cursor: int = 0
+    active: Optional[ActiveStageState] = None
+    done: bool = False
+    success: Optional[bool] = None
+    phase: Optional[str] = None
+    phase_step: Optional[int] = None
+    latest_status: StageExecutionStatus = StageExecutionStatus.PENDING
+    latest_details: Dict[str, Any] = field(default_factory=dict)
 
 
 class ComponentRegistry:
-    """Process-global registry storing named component instances shared within the current process."""
-
     _env_instances: ClassVar[Dict[str, Any]] = {}
 
     @classmethod
@@ -753,8 +450,6 @@ class TaskFlowBuilder:
                     update={"orientation": last_orientation}
                 )
 
-            # Split arc poses into small sub-steps so the gripper traces the arc
-            # instead of cutting through the chord.
             if effective_pose.arc is not None:
                 sub_poses = TaskFlowBuilder._split_arc(effective_pose)
                 if effective_pose.arc.absolute:
@@ -780,11 +475,6 @@ class TaskFlowBuilder:
 
     @staticmethod
     def _split_arc(pose: PoseControlConfig) -> List[PoseControlConfig]:
-        """Split a large arc into smaller sub-arcs of at most ``arc.max_step`` each.
-
-        Absolute arcs are NOT split — they re-resolve each control step at runtime
-        to track the remaining delta, so a single action suffices.
-        """
         arc = pose.arc
         assert arc is not None
         if arc.absolute:
@@ -792,19 +482,17 @@ class TaskFlowBuilder:
         total = abs(arc.angle)
         n_steps = max(1, math.ceil(total / arc.max_step))
         step_angle = arc.angle / n_steps
-        sub_poses: List[PoseControlConfig] = []
-        for _ in range(n_steps):
-            sub_poses.append(
-                PoseControlConfig(
-                    arc=ArcControlConfig(
-                        pivot=arc.pivot,
-                        axis=arc.axis,
-                        angle=step_angle,
-                    ),
-                    reference=pose.reference,
-                )
+        return [
+            PoseControlConfig(
+                arc=ArcControlConfig(
+                    pivot=arc.pivot,
+                    axis=arc.axis,
+                    angle=step_angle,
+                ),
+                reference=pose.reference,
             )
-        return sub_poses
+            for _ in range(n_steps)
+        ]
 
     @staticmethod
     def _require_moves(
@@ -829,26 +517,21 @@ class TaskFlowBuilder:
 
 
 class TaskRunner:
-    """Stateful task executor controlled by ``reset`` and repeated ``update`` calls."""
+    """Stateful batch task executor controlled by ``reset`` and repeated ``update`` calls."""
 
-    def __init__(
-        self,
-        builder: Optional[TaskFlowBuilder] = None,
-    ) -> None:
+    def __init__(self, builder: Optional[TaskFlowBuilder] = None) -> None:
         self.builder = builder or TaskFlowBuilder()
         self._context: Optional[ExecutionContext] = None
         self._plan: List[StageExecutionPlan] = []
-        self._active_stage: Optional[ActiveStageState] = None
-        self._stage_index = 0
         self._records: List[ExecutionRecord] = []
+        self._env_states: List[_EnvRuntimeState] = []
 
     @property
     def records(self) -> List[ExecutionRecord]:
         return list(self._records)
 
     def from_yaml(self, path: str | Path) -> "TaskRunner":
-        task_file = load_task_file(path)
-        return self.from_config(task_file)
+        return self.from_config(load_task_file(path))
 
     def from_config(self, config: TaskFileConfig) -> "TaskRunner":
         backend = config.backend(config.task, config.operators)
@@ -864,194 +547,165 @@ class TaskRunner:
         )
         self._plan = self.builder.build(self._context)
         self._context.backend.setup(self._context.config)
-        self._stage_index = 0
-        self._active_stage = None
+        self._env_states = [_EnvRuntimeState() for _ in range(backend.batch_size)]
         self._records = []
         return self
 
-    def reset(self) -> TaskUpdate:
+    def reset(self, env_mask: Optional[np.ndarray] = None) -> TaskUpdate:
         context = self._require_context()
-        context.backend.reset()
-        context.backend.set_interest_objects_and_operations([], [])
-        self._stage_index = 0
-        self._active_stage = None
-        self._records = []
-
-        # Collect initial poses after randomization for diagnostics.
-        initial_poses: Dict[str, Any] = {}
-        for name in context.config.randomization:
-            try:
-                handler = context.backend.get_object_handler(name)
-                pose = handler.get_pose()
-                initial_poses[name] = {
-                    "position": [round(v, 4) for v in pose.position],
-                    "orientation": [round(v, 4) for v in pose.orientation],
-                }
-            except (KeyError, Exception):
-                try:
-                    op = context.backend.get_operator_handler(name)
-                    pose = op.get_base_pose()
-                    initial_poses[name] = {
-                        "position": [round(v, 4) for v in pose.position],
-                        "orientation": [round(v, 4) for v in pose.orientation],
-                    }
-                except Exception:
-                    pass
-
-        update = self._build_pending_update()
-        if initial_poses:
-            update.details["initial_poses"] = initial_poses
-        return update
+        mask = self._normalize_mask(env_mask)
+        context.backend.reset(mask)
+        for env_index, enabled in enumerate(mask):
+            if enabled:
+                self._env_states[env_index] = _EnvRuntimeState()
+                self._env_states[
+                    env_index
+                ].latest_details = self._collect_reset_details(env_index, context)
+        self._set_interest_focus()
+        return self._build_task_update()
 
     def update(self) -> TaskUpdate:
         context = self._require_context()
-        if self._stage_index >= len(self._plan):
-            return TaskUpdate(
-                stage_index=None,
-                stage_name="",
-                status=StageExecutionStatus.SUCCEEDED,
-                done=True,
-                success=True,
-            )
+        for env_index, state in enumerate(self._env_states):
+            if state.done:
+                continue
+            self._update_env(env_index, state, context)
+        self._set_interest_focus()
+        return self._build_task_update()
 
-        if self._active_stage is None:
-            plan = self._plan[self._stage_index]
-            precondition_failure = (
-                # PULL defers its pre-condition check to after the eef phase.
+    def close(self) -> None:
+        if self._context is None:
+            return
+        self._context.backend.teardown()
+        self._context = None
+        self._plan = []
+        self._records = []
+        self._env_states = []
+
+    def _update_env(
+        self,
+        env_index: int,
+        state: _EnvRuntimeState,
+        context: ExecutionContext,
+    ) -> None:
+        if state.stage_cursor >= len(self._plan):
+            state.done = True
+            state.success = True
+            state.latest_status = StageExecutionStatus.SUCCEEDED
+            state.phase = None
+            state.phase_step = None
+            return
+
+        if state.active is None:
+            plan = self._plan[state.stage_cursor]
+            failure = (
                 None
                 if plan.stage.operation == Operation.PULL
                 else self._check_stage_condition(
+                    env_index=env_index,
                     context=context,
                     plan=plan,
                     condition_type=OperationConditionType.PERFORM,
                 )
             )
-            if precondition_failure is not None:
-                self._records.append(
-                    ExecutionRecord(
-                        stage_index=plan.stage_index,
-                        stage_name=plan.stage_name,
-                        operator=plan.operator_name,
-                        operation=plan.stage.operation.value,
-                        target_object=plan.stage.object,
-                        blocking=plan.stage.blocking,
-                        status=StageExecutionStatus.FAILED,
-                        details=precondition_failure,
-                    )
-                )
-                return self._build_update(
-                    plan=plan,
-                    status=StageExecutionStatus.FAILED,
-                    details=precondition_failure,
-                    done=True,
-                    success=False,
-                )
-            context.backend.set_interest_objects_and_operations(
-                [plan.stage.object] if plan.stage.object else [],
-                [plan.stage.operation.value] if plan.stage.object else [],
-            )
-            self._active_stage = self._start_stage(context, plan)
+            if failure is not None:
+                self._record_failure(env_index, plan, failure)
+                state.done = True
+                state.success = False
+                state.latest_status = StageExecutionStatus.FAILED
+                state.latest_details = failure
+                return
+            state.active = self._start_stage(env_index, context, plan)
+            state.latest_status = StageExecutionStatus.RUNNING
 
-        active = self._active_stage
+        assert state.active is not None
+        active = state.active
         action = active.actions[active.action_index]
+        mask = self._mask_for_env(env_index)
         result = self._run_action(
-            active.operator, action, active.target, context.backend
+            env_index=env_index,
+            operator=active.operator,
+            action=action,
+            target=active.target,
+            backend=context.backend,
+            env_mask=mask,
         )
+        signal = result.signals[env_index]
         details = {
+            "env_index": env_index,
             "action": action.kind,
             "action_index": active.action_index,
-            **result.details,
+            **result.details[env_index],
         }
 
-        if result.signal == ControlSignal.RUNNING:
+        if signal == ControlSignal.RUNNING:
             phase, phase_step = self._action_phase(active.actions, active.action_index)
-            return self._build_update(
-                plan=active.plan,
-                status=StageExecutionStatus.RUNNING,
-                details=details,
-                done=False,
-                success=None,
-                phase=phase,
-                phase_step=phase_step,
-            )
+            state.latest_status = StageExecutionStatus.RUNNING
+            state.latest_details = details
+            state.phase = phase
+            state.phase_step = phase_step
+            return
 
-        if result.signal == ControlSignal.REACHED:
+        if signal == ControlSignal.REACHED:
             completed_action = action
             active.action_index += 1
             op = active.plan.stage.operation
-
-            # --- Phase-boundary condition checks ---
             mid_failure: Optional[Dict[str, Any]] = None
             if completed_action.kind == "eef":
                 if op == Operation.PULL:
-                    # PULL pre-condition: grasped must hold after eef before post_move.
                     mid_failure = self._check_stage_condition(
+                        env_index=env_index,
                         context=context,
                         plan=active.plan,
                         condition_type=OperationConditionType.PERFORM,
                         initial_pose=active.initial_object_pose,
                     )
-                elif op == Operation.PICK and not context.backend.is_operator_grasping(
-                    active.operator.name
+                elif op == Operation.PICK and not bool(
+                    context.backend.is_operator_grasping(active.operator.name)[
+                        env_index
+                    ]
                 ):
-                    # PICK: early exit if grasp already failed (avoids unnecessary post_move).
                     mid_failure = self._check_stage_condition(
+                        env_index=env_index,
                         context=context,
                         plan=active.plan,
                         condition_type=OperationConditionType.SUCCESS,
                         initial_pose=active.initial_object_pose,
                     )
                 elif op == Operation.PRESS:
-                    # PRESS post-condition: contacted must hold at the press point (after eef).
                     mid_failure = self._check_stage_condition(
+                        env_index=env_index,
                         context=context,
                         plan=active.plan,
                         condition_type=OperationConditionType.SUCCESS,
                         initial_pose=active.initial_object_pose,
                     )
             if mid_failure is not None:
-                self._records.append(
-                    ExecutionRecord(
-                        stage_index=active.plan.stage_index,
-                        stage_name=active.plan.stage_name,
-                        operator=active.operator.name,
-                        operation=active.plan.stage.operation.value,
-                        target_object=active.plan.stage.object,
-                        blocking=active.plan.stage.blocking,
-                        status=StageExecutionStatus.FAILED,
-                        details=mid_failure,
-                    )
-                )
-                self._active_stage = None
-                context.backend.set_interest_objects_and_operations([], [])
-                return self._build_update(
-                    plan=active.plan,
-                    status=StageExecutionStatus.FAILED,
-                    details=mid_failure,
-                    done=True,
-                    success=False,
-                )
+                self._record_failure(env_index, active.plan, mid_failure)
+                state.active = None
+                state.done = True
+                state.success = False
+                state.latest_status = StageExecutionStatus.FAILED
+                state.latest_details = mid_failure
+                state.phase = None
+                state.phase_step = None
+                return
 
             if active.action_index < len(active.actions):
                 phase, phase_step = self._action_phase(
                     active.actions, active.action_index
                 )
-                return self._build_update(
-                    plan=active.plan,
-                    status=StageExecutionStatus.RUNNING,
-                    details=details,
-                    done=False,
-                    success=None,
-                    phase=phase,
-                    phase_step=phase_step,
-                )
+                state.latest_status = StageExecutionStatus.RUNNING
+                state.latest_details = details
+                state.phase = phase
+                state.phase_step = phase_step
+                return
 
-            # --- Final post-condition check (after all actions complete) ---
-            # PRESS post-condition was already checked after the eef phase; skip here.
             success_failure = (
                 None
                 if op == Operation.PRESS
                 else self._check_stage_condition(
+                    env_index=env_index,
                     context=context,
                     plan=active.plan,
                     condition_type=OperationConditionType.SUCCESS,
@@ -1059,29 +713,19 @@ class TaskRunner:
                 )
             )
             if success_failure is not None:
-                self._records.append(
-                    ExecutionRecord(
-                        stage_index=active.plan.stage_index,
-                        stage_name=active.plan.stage_name,
-                        operator=active.operator.name,
-                        operation=active.plan.stage.operation.value,
-                        target_object=active.plan.stage.object,
-                        blocking=active.plan.stage.blocking,
-                        status=StageExecutionStatus.FAILED,
-                        details=success_failure,
-                    )
-                )
-                self._active_stage = None
-                context.backend.set_interest_objects_and_operations([], [])
-                return self._build_update(
-                    plan=active.plan,
-                    status=StageExecutionStatus.FAILED,
-                    details=success_failure,
-                    done=True,
-                    success=False,
-                )
+                self._record_failure(env_index, active.plan, success_failure)
+                state.active = None
+                state.done = True
+                state.success = False
+                state.latest_status = StageExecutionStatus.FAILED
+                state.latest_details = success_failure
+                state.phase = None
+                state.phase_step = None
+                return
+
             self._records.append(
                 ExecutionRecord(
+                    env_index=env_index,
                     stage_index=active.plan.stage_index,
                     stage_name=active.plan.stage_name,
                     operator=active.operator.name,
@@ -1092,58 +736,52 @@ class TaskRunner:
                     details=details,
                 )
             )
-            self._stage_index += 1
-            self._active_stage = None
-            if self._stage_index >= len(self._plan):
-                context.backend.set_interest_objects_and_operations([], [])
-            return self._build_update(
-                plan=active.plan,
-                status=StageExecutionStatus.SUCCEEDED,
-                details=details,
-                done=self._stage_index >= len(self._plan),
-                success=True if self._stage_index >= len(self._plan) else None,
-            )
+            state.stage_cursor += 1
+            state.active = None
+            state.latest_status = StageExecutionStatus.SUCCEEDED
+            state.latest_details = details
+            state.phase = None
+            state.phase_step = None
+            if state.stage_cursor >= len(self._plan):
+                state.done = True
+                state.success = True
+            else:
+                state.success = None
+            return
 
+        failure = self._build_action_failure_details(active.plan, details, signal)
+        self._record_failure(env_index, active.plan, failure)
+        state.active = None
+        state.done = True
+        state.success = False
+        state.latest_status = StageExecutionStatus.FAILED
+        state.latest_details = failure
+        state.phase = None
+        state.phase_step = None
+
+    def _record_failure(
+        self,
+        env_index: int,
+        plan: StageExecutionPlan,
+        details: Dict[str, Any],
+    ) -> None:
         self._records.append(
             ExecutionRecord(
-                stage_index=active.plan.stage_index,
-                stage_name=active.plan.stage_name,
-                operator=active.operator.name,
-                operation=active.plan.stage.operation.value,
-                target_object=active.plan.stage.object,
-                blocking=active.plan.stage.blocking,
+                env_index=env_index,
+                stage_index=plan.stage_index,
+                stage_name=plan.stage_name,
+                operator=plan.operator_name,
+                operation=plan.stage.operation.value,
+                target_object=plan.stage.object,
+                blocking=plan.stage.blocking,
                 status=StageExecutionStatus.FAILED,
-                details=self._build_action_failure_details(
-                    plan=active.plan,
-                    details=details,
-                    signal=result.signal,
-                ),
+                details=details,
             )
         )
-        self._active_stage = None
-        context.backend.set_interest_objects_and_operations([], [])
-        return self._build_update(
-            plan=active.plan,
-            status=StageExecutionStatus.FAILED,
-            details=self._build_action_failure_details(
-                plan=active.plan,
-                details=details,
-                signal=result.signal,
-            ),
-            done=True,
-            success=False,
-        )
-
-    def close(self) -> None:
-        if self._context is None:
-            return
-        self._context.backend.teardown()
-        self._context = None
-        self._plan = []
-        self._active_stage = None
 
     def _start_stage(
         self,
+        env_index: int,
         context: ExecutionContext,
         plan: StageExecutionPlan,
     ) -> ActiveStageState:
@@ -1151,22 +789,20 @@ class TaskRunner:
         target = context.backend.get_object_handler(plan.stage.object)
         initial_object_pose: Optional[PoseState] = None
         if target is not None:
-            try:
-                initial_object_pose = target.get_pose()
-            except NotImplementedError:
-                pass
+            initial_object_pose = target.get_pose().select(env_index)
         return ActiveStageState(
             plan=plan,
             operator=operator,
             target=target,
-            actions=self.builder.build_actions(
-                plan.stage, plan.last_orientation_before
-            )[0],
+            actions=deepcopy(
+                self.builder.build_actions(plan.stage, plan.last_orientation_before)[0]
+            ),
             initial_object_pose=initial_object_pose,
         )
 
     @staticmethod
     def _check_stage_condition(
+        env_index: int,
         context: ExecutionContext,
         plan: StageExecutionPlan,
         condition_type: OperationConditionType,
@@ -1183,17 +819,19 @@ class TaskRunner:
         operator_name = plan.operator_name
         object_name = plan.stage.object
         backend = context.backend
-        is_grasping = backend.is_operator_grasping(operator_name)
+        is_grasping = bool(backend.is_operator_grasping(operator_name)[env_index])
 
         if constraint == OperationConstraint.GRASPED:
             satisfied = is_grasping
         elif constraint == OperationConstraint.RELEASED:
             satisfied = not is_grasping
         elif constraint == OperationConstraint.CONTACTED:
-            satisfied = backend.is_operator_contacting(operator_name, object_name)
+            satisfied = bool(
+                backend.is_operator_contacting(operator_name, object_name)[env_index]
+            )
         elif constraint == OperationConstraint.DISPLACED:
             satisfied = (
-                backend.is_object_displaced(object_name, initial_pose)
+                bool(backend.is_object_displaced(object_name, initial_pose)[env_index])
                 if initial_pose is not None and object_name
                 else True
             )
@@ -1208,7 +846,7 @@ class TaskRunner:
             if condition_type == OperationConditionType.PERFORM
             else "postcondition"
         )
-        _failure_map = {
+        failure_category, failure_reason = {
             OperationConstraint.GRASPED: (
                 "missing_grasp",
                 "operator is not grasping the required object",
@@ -1225,10 +863,7 @@ class TaskRunner:
                 "no_displacement",
                 f"object '{object_name}' has not been displaced beyond the threshold",
             ),
-        }
-        failure_category, failure_reason = _failure_map.get(
-            constraint, ("condition_mismatch", "stage condition is not satisfied")
-        )
+        }.get(constraint, ("condition_mismatch", "stage condition is not satisfied"))
 
         return {
             "event": f"stage_{phase}_failed",
@@ -1241,6 +876,7 @@ class TaskRunner:
             "operation": plan.stage.operation.value,
             "target_object": object_name,
             "is_operator_grasping": is_grasping,
+            "env_index": env_index,
         }
 
     @staticmethod
@@ -1272,14 +908,14 @@ class TaskRunner:
 
     @staticmethod
     def _run_action(
+        env_index: int,
         operator: OperatorHandler,
         action: PrimitiveAction,
         target: Optional[ObjectHandler],
-        backend: SceneBackend = None,
+        backend: SceneBackend,
+        env_mask: np.ndarray,
     ) -> ControlResult:
         if action.kind == "pose" and action.pose is not None:
-            # Snapshot-based references: resolve once and cache.
-            # Relative arcs are snapshot-based; absolute arcs re-resolve each tick.
             is_arc = action.pose.arc is not None
             is_snapshot = action.pose.reference in {
                 PoseReference.EEF_WORLD,
@@ -1289,6 +925,7 @@ class TaskRunner:
                 resolved_pose = action.resolved_pose
             else:
                 resolved_pose = TaskRunner._resolve_pose_command(
+                    env_index=env_index,
                     operator=operator,
                     pose=action.pose,
                     target=target,
@@ -1296,75 +933,64 @@ class TaskRunner:
                     action=action,
                 )
                 action.resolved_pose = resolved_pose
-            return operator.move_to_pose(resolved_pose, target)
+            return operator.move_to_pose(resolved_pose, target, env_mask=env_mask)
         if action.kind == "eef" and action.eef is not None:
-            return operator.control_eef(action.eef)
+            return operator.control_eef(action.eef, env_mask=env_mask)
         raise RuntimeError(f"Invalid primitive action '{action.kind}'.")
 
     @staticmethod
     def _resolve_arc_command(
+        env_index: int,
         operator: OperatorHandler,
         pose: PoseControlConfig,
         target: Optional[ObjectHandler],
-        backend: Optional[SceneBackend] = None,
+        backend: SceneBackend,
         action: Optional[PrimitiveAction] = None,
     ) -> PoseControlConfig:
-        """Resolve an arc pose command: rotate the current EEF pose around the pivot."""
         arc = pose.arc
         assert arc is not None
 
-        # Resolve angle: absolute mode computes delta from current joint angle,
-        # clamped to max_step so it converges over multiple control ticks.
         angle = arc.angle
-        current_eef: PoseState
         if arc.absolute:
             if not isinstance(arc.pivot, str):
-                raise ValueError(
-                    "Arc absolute mode requires pivot to be a joint name (str)."
-                )
-            if backend is None:
-                raise RuntimeError(
-                    "Arc absolute mode requires a backend for joint angle lookup."
-                )
-            current_joint = backend.get_joint_angle(arc.pivot)
+                raise ValueError("Arc absolute mode requires pivot to be a joint name.")
+            current_joint = backend.get_joint_angle(arc.pivot, env_index)
             delta = arc.angle - current_joint
-            # Clamp to max_step so the gripper traces the arc incrementally
             sign = 1.0 if delta >= 0 else -1.0
             angle = sign * min(abs(delta), arc.max_step)
-            pivot_world_pos = backend.get_element_pose(arc.pivot).position
-            current_eef = operator.get_end_effector_pose()
+            pivot_world_pos = backend.get_element_pose(arc.pivot, env_index).position[0]
+            current_eef = operator.get_end_effector_pose().select(env_index)
         elif action is not None and action.arc_snapshot is not None:
             snapshot = action.arc_snapshot
             if snapshot.pivot_world_pos is None:
                 snapshot.pivot_world_pos = TaskRunner._resolve_arc_pivot_world_pos(
+                    env_index=env_index,
                     operator=operator,
                     pose=pose,
                     target=target,
                     backend=backend,
                 )
             if snapshot.start_eef_pose is None:
-                snapshot.start_eef_pose = operator.get_end_effector_pose()
+                snapshot.start_eef_pose = operator.get_end_effector_pose().select(
+                    env_index
+                )
             pivot_world_pos = snapshot.pivot_world_pos
             current_eef = snapshot.start_eef_pose
             if action.arc_cumulative_angle is not None:
                 angle = action.arc_cumulative_angle
         else:
             pivot_world_pos = TaskRunner._resolve_arc_pivot_world_pos(
+                env_index=env_index,
                 operator=operator,
                 pose=pose,
                 target=target,
                 backend=backend,
             )
-            current_eef = operator.get_end_effector_pose()
-        rotated = rotate_pose_around_axis(
-            current_eef,
-            pivot_world_pos,
-            arc.axis,
-            angle,
-        )
+            current_eef = operator.get_end_effector_pose().select(env_index)
+        rotated = rotate_pose_around_axis(current_eef, pivot_world_pos, arc.axis, angle)
         return PoseControlConfig(
-            position=rotated.position,
-            orientation=rotated.orientation,
+            position=tuple(float(v) for v in rotated.position[0]),
+            orientation=tuple(float(v) for v in rotated.orientation[0]),
             reference=PoseReference.WORLD,
             relative=False,
             use_slerp=pose.use_slerp,
@@ -1374,38 +1000,35 @@ class TaskRunner:
 
     @staticmethod
     def _resolve_pose_command(
+        env_index: int,
         operator: OperatorHandler,
         pose: PoseControlConfig,
         target: Optional[ObjectHandler],
-        backend: Optional[SceneBackend] = None,
+        backend: SceneBackend,
         action: Optional[PrimitiveAction] = None,
     ) -> PoseControlConfig:
         if pose.arc is not None:
             return TaskRunner._resolve_arc_command(
-                operator, pose, target, backend, action
+                env_index, operator, pose, target, backend, action
             )
         reference_pose = TaskRunner._resolve_reference_pose(
+            env_index=env_index,
             operator=operator,
             pose=pose,
             target=target,
         )
-        current_pose = operator.get_end_effector_pose()
+        current_pose = operator.get_end_effector_pose().select(env_index)
         local_pose = TaskRunner._pose_config_to_local_pose(pose)
-        # When orientation/rotation is omitted, preserve the current EEF world orientation.
-        # This keeps orientation stable even when switching reference frames between waypoints.
         inherit_orientation = not pose.orientation and not pose.rotation
-        current_local = compose_pose(
-            inverse_pose(reference_pose),
-            current_pose,
-        )
+        current_local = compose_pose(inverse_pose(reference_pose), current_pose)
 
         if pose.relative:
             target_pose = compose_pose(current_local, local_pose)
         else:
             target_pose = (
                 PoseState(
-                    position=local_pose.position,
-                    orientation=current_local.orientation,
+                    position=local_pose.position[0],
+                    orientation=current_local.orientation[0],
                 )
                 if inherit_orientation
                 else local_pose
@@ -1413,8 +1036,8 @@ class TaskRunner:
 
         world_pose = compose_pose(reference_pose, target_pose)
         return PoseControlConfig(
-            position=world_pose.position,
-            orientation=world_pose.orientation,
+            position=tuple(float(v) for v in world_pose.position[0]),
+            orientation=tuple(float(v) for v in world_pose.orientation[0]),
             reference=PoseReference.WORLD,
             relative=False,
             use_slerp=pose.use_slerp,
@@ -1424,6 +1047,7 @@ class TaskRunner:
 
     @staticmethod
     def _resolve_reference_pose(
+        env_index: int,
         operator: OperatorHandler,
         pose: PoseControlConfig,
         target: Optional[ObjectHandler],
@@ -1436,104 +1060,192 @@ class TaskRunner:
         if reference == PoseReference.WORLD:
             return PoseState()
         if reference == PoseReference.BASE:
-            return operator.get_base_pose()
+            return operator.get_base_pose().select(env_index)
         if reference == PoseReference.EEF:
-            return operator.get_end_effector_pose()
+            return operator.get_end_effector_pose().select(env_index)
         if reference == PoseReference.OBJECT_WORLD:
             if target is None:
                 raise ValueError(
                     "Pose reference OBJECT_WORLD requires a target object."
                 )
-            object_pose = target.get_pose()
-            return PoseState(position=object_pose.position)
+            object_pose = target.get_pose().select(env_index)
+            return PoseState(position=object_pose.position[0])
         if reference == PoseReference.EEF_WORLD:
-            eef_pose = operator.get_end_effector_pose()
-            return PoseState(position=eef_pose.position)
+            eef_pose = operator.get_end_effector_pose().select(env_index)
+            return PoseState(position=eef_pose.position[0])
         if reference == PoseReference.OBJECT:
             if target is None:
                 raise ValueError("Pose reference OBJECT requires a target object.")
-            return target.get_pose()
+            return target.get_pose().select(env_index)
         raise NotImplementedError(f"Unsupported pose reference '{reference.value}'.")
 
     @staticmethod
     def _resolve_arc_pivot_world_pos(
+        env_index: int,
         operator: OperatorHandler,
         pose: PoseControlConfig,
         target: Optional[ObjectHandler],
-        backend: Optional[SceneBackend] = None,
+        backend: SceneBackend,
     ) -> Position:
         arc = pose.arc
         assert arc is not None
         if isinstance(arc.pivot, str):
-            if backend is None:
-                raise RuntimeError(
-                    f"Arc pivot '{arc.pivot}' is a name but no backend is available for lookup."
-                )
-            return backend.get_element_pose(arc.pivot).position
+            return tuple(
+                float(v)
+                for v in backend.get_element_pose(arc.pivot, env_index).position[0]
+            )
         reference_pose = TaskRunner._resolve_reference_pose(
+            env_index=env_index,
             operator=operator,
             pose=pose,
             target=target,
         )
         pivot_local = PoseState(position=arc.pivot)
-        return compose_pose(reference_pose, pivot_local).position
+        composed = compose_pose(reference_pose, pivot_local)
+        return tuple(float(v) for v in composed.position[0])
 
     @staticmethod
     def _pose_config_to_local_pose(pose: PoseControlConfig) -> PoseState:
         return pose_config_to_pose_state(pose)
 
-    def _build_pending_update(self) -> TaskUpdate:
-        if not self._plan:
-            return TaskUpdate(
-                stage_index=None,
-                stage_name="",
-                status=StageExecutionStatus.SUCCEEDED,
-                done=True,
-                success=True,
-            )
-        return self._build_update(
-            plan=self._plan[self._stage_index],
-            status=StageExecutionStatus.PENDING,
-            details={},
-            done=False,
-            success=None,
-        )
-
     @staticmethod
-    def _action_phase(actions: List[PrimitiveAction], action_index: int) -> tuple:
-        """Return (phase, phase_step) for the given action index."""
+    def _action_phase(
+        actions: List[PrimitiveAction], action_index: int
+    ) -> tuple[str, Optional[int]]:
         eef_idx: Optional[int] = None
-        for idx, a in enumerate(actions):
-            if a.kind == "eef":
+        for idx, action in enumerate(actions):
+            if action.kind == "eef":
                 eef_idx = idx
                 break
         if eef_idx is not None and action_index == eef_idx:
             return "eef", None
         if eef_idx is None or action_index < eef_idx:
             return "pre_move", action_index
-        # post_move
         return "post_move", action_index - (eef_idx + 1)
 
-    @staticmethod
-    def _build_update(
-        plan: StageExecutionPlan,
-        status: StageExecutionStatus,
-        details: Dict[str, Any],
-        done: bool,
-        success: Optional[bool],
-        phase: Optional[str] = None,
-        phase_step: Optional[int] = None,
-    ) -> TaskUpdate:
+    def _set_interest_focus(self) -> None:
+        context = self._require_context()
+        object_names: List[str] = []
+        operation_names: List[str] = []
+        for state in self._env_states:
+            if state.active is None:
+                object_names.append("")
+                operation_names.append("")
+            else:
+                object_names.append(state.active.plan.stage.object)
+                operation_names.append(state.active.plan.stage.operation.value)
+        context.backend.set_interest_objects_and_operations(
+            object_names, operation_names
+        )
+
+    def _build_task_update(self) -> TaskUpdate:
+        stage_index: List[int] = []
+        stage_name: List[str] = []
+        status: List[StageExecutionStatus] = []
+        done: List[bool] = []
+        success: List[Optional[bool]] = []
+        details: List[Dict[str, Any]] = []
+        phase: List[Optional[str]] = []
+        phase_step: List[int] = []
+        for state in self._env_states:
+            if state.active is not None:
+                stage_index.append(state.active.plan.stage_index)
+                stage_name.append(state.active.plan.stage_name)
+            elif state.stage_cursor < len(self._plan):
+                stage_index.append(self._plan[state.stage_cursor].stage_index)
+                stage_name.append(self._plan[state.stage_cursor].stage_name)
+            else:
+                stage_index.append(-1)
+                stage_name.append("")
+            status.append(state.latest_status)
+            done.append(state.done)
+            success.append(state.success)
+            details.append(dict(state.latest_details))
+            phase.append(state.phase)
+            phase_step.append(-1 if state.phase_step is None else state.phase_step)
         return TaskUpdate(
-            stage_index=plan.stage_index,
-            stage_name=plan.stage_name,
-            status=status,
-            done=done,
-            success=success,
+            stage_index=np.asarray(stage_index, dtype=np.int64),
+            stage_name=stage_name,
+            status=np.asarray(status, dtype=object),
+            done=np.asarray(done, dtype=bool),
+            success=np.asarray(success, dtype=object),
             details=details,
             phase=phase,
-            phase_step=phase_step,
+            phase_step=np.asarray(phase_step, dtype=np.int64),
         )
+
+    def _collect_reset_details(
+        self,
+        env_index: int,
+        context: ExecutionContext,
+    ) -> Dict[str, Any]:
+        initial_poses: Dict[str, Any] = {}
+        names_in_order: List[str] = []
+        seen_names: set[str] = set()
+
+        for stage in context.config.stages:
+            if stage.operator and stage.operator not in seen_names:
+                names_in_order.append(stage.operator)
+                seen_names.add(stage.operator)
+            if stage.object and stage.object not in seen_names:
+                names_in_order.append(stage.object)
+                seen_names.add(stage.object)
+
+        for name in context.config.randomization:
+            if name not in seen_names:
+                names_in_order.append(name)
+                seen_names.add(name)
+
+        for name in names_in_order:
+            object_handler: Optional[ObjectHandler]
+            try:
+                object_handler = context.backend.get_object_handler(name)
+            except KeyError:
+                object_handler = None
+            if object_handler is not None:
+                pose = object_handler.get_pose().select(env_index)
+                initial_poses[name] = self._serialize_pose(pose)
+                continue
+
+            try:
+                operator = context.backend.get_operator_handler(name)
+            except KeyError:
+                continue
+            entry_details = {
+                "base_pose": self._serialize_pose(
+                    operator.get_base_pose().select(env_index)
+                ),
+                "eef_pose": self._serialize_pose(
+                    operator.get_end_effector_pose().select(env_index)
+                ),
+            }
+            initial_poses[name] = entry_details
+        if not initial_poses:
+            return {}
+        return {"initial_poses": initial_poses}
+
+    @staticmethod
+    def _serialize_pose(pose: PoseState) -> Dict[str, List[float]]:
+        return {
+            "position": [round(float(v), 4) for v in pose.position[0]],
+            "orientation": [round(float(v), 4) for v in pose.orientation[0]],
+        }
+
+    def _normalize_mask(self, env_mask: Optional[np.ndarray]) -> np.ndarray:
+        batch_size = self._require_context().backend.batch_size
+        if env_mask is None:
+            return np.ones(batch_size, dtype=bool)
+        mask = np.asarray(env_mask, dtype=bool).reshape(-1)
+        if len(mask) != batch_size:
+            raise ValueError(
+                f"env_mask must have shape ({batch_size},), got {mask.shape}"
+            )
+        return mask
+
+    def _mask_for_env(self, env_index: int) -> np.ndarray:
+        mask = np.zeros(self._require_context().backend.batch_size, dtype=bool)
+        mask[env_index] = True
+        return mask
 
     def _require_context(self) -> ExecutionContext:
         if self._context is None:

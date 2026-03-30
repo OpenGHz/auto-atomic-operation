@@ -1,6 +1,6 @@
 # Implementing a Custom Backend
 
-A backend connects the task runner to a specific robot or simulator. The recommended approach follows a two-layer pattern:
+A backend connects the task runner to a specific robot or simulator. The runtime is batch-first: every public observation/action/state interface should carry a leading `env_dim`, and single-env execution is represented as `batch_size=1`. The recommended approach follows a two-layer pattern:
 
 1. **Basis environment** (`auto_atom/basis/`) — a standalone class that wraps the simulator or hardware SDK, with no dependency on the task runner framework.
 2. **Backend adapters** (`auto_atom/backend/<name>/`) — thin wrappers that implement the framework interfaces (`OperatorHandler`, `ObjectHandler`, `SceneBackend`) on top of the basis environment.
@@ -60,7 +60,7 @@ operators:
 ```
 
 > [!NOTE]
-> The `env` section is evaluated by Hydra before the backend factory is called. `ComponentRegistry.register_env` stores the constructed environment object under the given `name` so the factory can retrieve it with `ComponentRegistry.get_env(config.env_name)`.
+> The `env` section is evaluated by Hydra before the backend factory is called. `ComponentRegistry.register_env` stores the constructed batched environment object under the given `name` so the factory can retrieve it with `ComponentRegistry.get_env(config.env_name)`.
 
 ---
 

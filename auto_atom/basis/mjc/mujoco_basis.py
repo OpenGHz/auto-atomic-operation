@@ -155,6 +155,10 @@ class EnvConfig(BaseModel, frozen=True):
     """Viewer configuration. If None, the passive viewer is not launched."""
     structured: bool = False
     """Whether the observation value data should be flattened to 1D arrays when possible, e.g. for joint states."""
+    batch_size: int = 1
+    """Number of homogeneous env replicas to construct for batched execution."""
+    viewer_env_index: int = 0
+    """Which env replica owns the viewer when ``batch_size > 1``."""
 
     @model_validator(mode="after")
     def validate_frequencies(self):
@@ -188,6 +192,16 @@ class EnvConfig(BaseModel, frozen=True):
         if v is not None and v.disable:
             return None
         return v
+
+    @model_validator(mode="after")
+    def validate_batch(self):
+        if self.batch_size <= 0:
+            raise ValueError("batch_size must be >= 1")
+        if self.viewer_env_index < 0 or self.viewer_env_index >= self.batch_size:
+            raise ValueError(
+                f"viewer_env_index ({self.viewer_env_index}) must be in [0, {self.batch_size})"
+            )
+        return self
 
 
 class MujocoBasis:

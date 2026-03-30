@@ -5,7 +5,7 @@
 env:
   _target_: auto_atom.runtime.ComponentRegistry.register_env
   env:
-    _target_: auto_atom.basis.mjc.mujoco_env.UnifiedMujocoEnv
+    _target_: auto_atom.basis.mjc.mujoco_env.BatchedUnifiedMujocoEnv
     config:
       _target_: auto_atom.basis.mjc.mujoco_env.EnvConfig
       operators:

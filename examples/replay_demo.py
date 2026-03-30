@@ -127,51 +127,75 @@ def _apply_pose_targets(
     ctrl_action: np.ndarray | None,
 ) -> None:
     env = backend.env
-    joint_ctrl = np.asarray(env.data.ctrl[: env.model.nu], dtype=np.float64).copy()
-    if ctrl_action is not None:
-        n = min(len(ctrl_action), env.model.nu)
-        if n > 0:
-            joint_ctrl[:n] = np.asarray(ctrl_action[:n], dtype=np.float64)
-
+    batch_size = env.batch_size
+    joint_ctrl = []
     needs_step = False
     needs_update = False
+    for env_index, single_env in enumerate(env.envs):
+        ctrl = np.asarray(
+            single_env.data.ctrl[: single_env.model.nu], dtype=np.float64
+        ).copy()
+        if ctrl_action is not None:
+            action_row = (
+                np.asarray(ctrl_action[env_index], dtype=np.float64)
+                if ctrl_action.ndim == 2
+                else np.asarray(ctrl_action, dtype=np.float64)
+            )
+            n = min(len(action_row), single_env.model.nu)
+            if n > 0:
+                ctrl[:n] = action_row[:n]
+        joint_ctrl.append(ctrl)
 
     for operator_name, target in pose_targets.items():
         position = np.asarray(target.get("position"), dtype=np.float32)
         orientation = np.asarray(target.get("orientation"), dtype=np.float32)
-        state = env._get_op(operator_name)
-        state.target_pos_in_base = position.copy()
-        state.target_quat_in_base = orientation.copy()
+        if position.ndim == 1:
+            position = np.repeat(position.reshape(1, 3), batch_size, axis=0)
+        if orientation.ndim == 1:
+            orientation = np.repeat(orientation.reshape(1, 4), batch_size, axis=0)
 
-        if state.joint_mode:
-            arm_qidx = env._op_arm_qidx[operator_name]
-            current_arm_qpos = env.data.qpos[arm_qidx].copy()
-            joint_targets = state.ik_solver.solve(
-                PoseState(
-                    position=tuple(float(v) for v in position),
-                    orientation=tuple(float(v) for v in orientation),
-                ),
-                current_arm_qpos,
-            )
-            if joint_targets is not None:
-                arm_aidx = env._op_arm_aidx[operator_name]
-                joint_ctrl[arm_aidx] = joint_targets
-            needs_step = True
-        else:
-            base_body_pos, base_body_quat_xyzw = env._eef_in_base_to_base_body_world(
-                state, position, orientation
-            )
-            env._write_mocap_pose(state, base_body_pos, base_body_quat_xyzw)
-            needs_update = True
+        for env_index, single_env in enumerate(env.envs):
+            state = single_env._get_op(operator_name)
+            state.target_pos_in_base = position[env_index].copy()
+            state.target_quat_in_base = orientation[env_index].copy()
+            if state.joint_mode:
+                arm_qidx = single_env._op_arm_qidx[operator_name]
+                current_arm_qpos = single_env.data.qpos[arm_qidx].copy()
+                joint_targets = state.ik_solver.solve(
+                    PoseState(
+                        position=tuple(float(v) for v in position[env_index]),
+                        orientation=tuple(float(v) for v in orientation[env_index]),
+                    ),
+                    current_arm_qpos,
+                )
+                if joint_targets is not None:
+                    arm_aidx = single_env._op_arm_aidx[operator_name]
+                    joint_ctrl[env_index][arm_aidx] = joint_targets
+                needs_step = True
+            else:
+                base_body_pos, base_body_quat_xyzw = (
+                    single_env._eef_in_base_to_base_body_world(
+                        state, position[env_index], orientation[env_index]
+                    )
+                )
+                single_env._write_mocap_pose(state, base_body_pos, base_body_quat_xyzw)
+                needs_update = True
 
-    if ctrl_action is not None and env.model.nu > 0:
-        low = env.model.actuator_ctrlrange[: env.model.nu, 0]
-        high = env.model.actuator_ctrlrange[: env.model.nu, 1]
-        joint_ctrl[: env.model.nu] = np.clip(joint_ctrl[: env.model.nu], low, high)
-        env.data.ctrl[: env.model.nu] = joint_ctrl[: env.model.nu]
+    joint_ctrl_arr = np.stack(joint_ctrl, axis=0)
+    if ctrl_action is not None:
+        for env_index, single_env in enumerate(env.envs):
+            if single_env.model.nu > 0:
+                low = single_env.model.actuator_ctrlrange[: single_env.model.nu, 0]
+                high = single_env.model.actuator_ctrlrange[: single_env.model.nu, 1]
+                joint_ctrl_arr[env_index, : single_env.model.nu] = np.clip(
+                    joint_ctrl_arr[env_index, : single_env.model.nu], low, high
+                )
+                single_env.data.ctrl[: single_env.model.nu] = joint_ctrl_arr[
+                    env_index, : single_env.model.nu
+                ]
 
     if needs_step:
-        env.step(joint_ctrl)
+        env.step(joint_ctrl_arr)
     elif needs_update or ctrl_action is not None:
         env.update()
 
@@ -229,7 +253,8 @@ def main(cfg: DictConfig) -> None:
                 )
         data = obs.get(resolved_camera_key, {}).get("data")
         if data is not None:
-            frames.append(np.asarray(data, dtype=np.uint8))
+            frame = np.asarray(data, dtype=np.uint8)
+            frames.append(frame[0] if frame.ndim >= 4 else frame)
 
     try:
         print("Reset task for replay")
@@ -252,7 +277,9 @@ def main(cfg: DictConfig) -> None:
                 if action is None:
                     break
                 backend.env.step(action)
-                print(f"Replay step {i}: mode=ctrl action_dim={len(action)}")
+                print(
+                    f"Replay step {i}: mode=ctrl batch={action.shape[0]} action_dim={action.shape[1]}"
+                )
             capture()
     finally:
         runner.close()

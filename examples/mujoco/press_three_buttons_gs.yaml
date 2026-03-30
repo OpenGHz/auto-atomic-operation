@@ -7,7 +7,7 @@ gs_dir: assets/gs/scenes/press_three_buttons
 
 env:
   env:
-    _target_: auto_atom.basis.mjc.gs_mujoco_env.GSUnifiedMujocoEnv
+    _target_: auto_atom.basis.mjc.gs_mujoco_env.BatchedGSUnifiedMujocoEnv
     config:
       _target_: auto_atom.basis.mjc.gs_mujoco_env.GSEnvConfig
       model_path: assets/xmls/scenes/press_three_buttons/demo_gs.xml

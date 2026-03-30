@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Tuple
+from typing import Iterable, Tuple
 
 import numpy as np
 
@@ -19,14 +19,87 @@ from .transformations import (
 )
 
 
+def _as_batched_vector(
+    value: Iterable[float] | np.ndarray,
+    *,
+    width: int,
+    default: tuple[float, ...],
+) -> np.ndarray:
+    raw = default if value is None else value
+    arr = np.asarray(raw, dtype=np.float64)
+    if arr.size == 0:
+        arr = np.asarray(default, dtype=np.float64)
+    if arr.ndim == 1:
+        if arr.shape[0] != width:
+            raise ValueError(f"Expected shape ({width},), got {arr.shape}")
+        arr = arr.reshape(1, width)
+    elif arr.ndim == 2:
+        if arr.shape[1] != width:
+            raise ValueError(f"Expected shape (B, {width}), got {arr.shape}")
+    else:
+        raise ValueError(f"Expected rank-1 or rank-2 array, got {arr.ndim}")
+    return arr
+
+
 @dataclass
 class PoseState:
-    """Concrete world pose used by the runtime for frame conversions."""
+    """Concrete pose batch used by the runtime for frame conversions."""
 
-    position: Position = (0.0, 0.0, 0.0)
-    """The Cartesian position represented as ``(x, y, z)`` in world coordinates."""
-    orientation: Orientation = (0.0, 0.0, 0.0, 1.0)
-    """The quaternion orientation represented in ``xyzw`` order."""
+    position: np.ndarray | Iterable[float] = (0.0, 0.0, 0.0)
+    """Cartesian positions with shape ``(B, 3)``."""
+    orientation: np.ndarray | Iterable[float] = (0.0, 0.0, 0.0, 1.0)
+    """Quaternion orientations with shape ``(B, 4)`` in ``xyzw`` order."""
+
+    def __post_init__(self) -> None:
+        self.position = _as_batched_vector(
+            self.position,
+            width=3,
+            default=(0.0, 0.0, 0.0),
+        )
+        self.orientation = _as_batched_vector(
+            self.orientation,
+            width=4,
+            default=(0.0, 0.0, 0.0, 1.0),
+        )
+        if self.position.shape[0] != self.orientation.shape[0]:
+            raise ValueError(
+                "position and orientation must have the same batch dimension, got "
+                f"{self.position.shape[0]} and {self.orientation.shape[0]}"
+            )
+
+    @property
+    def batch_size(self) -> int:
+        return int(self.position.shape[0])
+
+    def select(self, env_index: int) -> "PoseState":
+        return PoseState(
+            position=self.position[env_index],
+            orientation=self.orientation[env_index],
+        )
+
+    def broadcast_to(self, batch_size: int) -> "PoseState":
+        if self.batch_size == batch_size:
+            return self
+        if self.batch_size != 1:
+            raise ValueError(
+                f"Cannot broadcast pose batch of size {self.batch_size} to {batch_size}"
+            )
+        return PoseState(
+            position=np.repeat(self.position, batch_size, axis=0),
+            orientation=np.repeat(self.orientation, batch_size, axis=0),
+        )
+
+    @classmethod
+    def stack(cls, poses: Iterable["PoseState"]) -> "PoseState":
+        pose_list = list(poses)
+        if not pose_list:
+            return cls()
+        return cls(
+            position=np.concatenate([pose.position for pose in pose_list], axis=0),
+            orientation=np.concatenate(
+                [pose.orientation for pose in pose_list], axis=0
+            ),
+        )
 
 
 def pose_config_to_pose_state(pose: PoseControlConfig) -> PoseState:
@@ -46,20 +119,34 @@ def resolve_orientation(pose: PoseControlConfig) -> Orientation:
 
 
 def compose_pose(parent: PoseState, child: PoseState) -> PoseState:
-    """Compose two poses."""
-    matrix = concatenate_matrices(as_matrix(parent), as_matrix(child))
-    return pose_state_from_matrix(matrix)
+    """Compose two pose batches."""
+    batch = max(parent.batch_size, child.batch_size)
+    parent = parent.broadcast_to(batch)
+    child = child.broadcast_to(batch)
+    matrices = [
+        concatenate_matrices(as_matrix(parent.select(i)), as_matrix(child.select(i)))
+        for i in range(batch)
+    ]
+    return PoseState.stack([pose_state_from_matrix(m) for m in matrices])
 
 
 def inverse_pose(pose: PoseState) -> PoseState:
-    """Invert a pose."""
-    inv_orientation = normalize_quaternion(tuple(quaternion_inverse(pose.orientation)))
-    inv_rotation = quaternion_matrix(inv_orientation)[:3, :3]
-    inv_translation = -inv_rotation.dot(np.asarray(pose.position, dtype=np.float64))
-    return PoseState(
-        position=tuple(float(v) for v in inv_translation),
-        orientation=inv_orientation,
-    )
+    """Invert a pose batch."""
+    results = []
+    for i in range(pose.batch_size):
+        single = pose.select(i)
+        inv_orientation = normalize_quaternion(
+            tuple(quaternion_inverse(single.orientation[0]))
+        )
+        inv_rotation = quaternion_matrix(inv_orientation)[:3, :3]
+        inv_translation = -inv_rotation.dot(single.position[0])
+        results.append(
+            PoseState(
+                position=tuple(float(v) for v in inv_translation),
+                orientation=inv_orientation,
+            )
+        )
+    return PoseState.stack(results)
 
 
 def euler_to_quaternion(rotation: Rotation) -> Orientation:
@@ -68,14 +155,17 @@ def euler_to_quaternion(rotation: Rotation) -> Orientation:
     return normalize_quaternion(tuple(float(v) for v in quat))
 
 
-def quaternion_to_rpy(quat: Orientation) -> Rotation:
+def quaternion_to_rpy(quat: Orientation | np.ndarray) -> Rotation:
     """Convert an xyzw quaternion to rpy Euler angles."""
     matrix = quaternion_matrix(normalize_quaternion(quat))
     rpy = euler_from_matrix(matrix, axes="sxyz")
     return tuple(float(v) for v in rpy)
 
 
-def rotate_vector(quat: Orientation, vec: Tuple[float, float, float]) -> Position:
+def rotate_vector(
+    quat: Orientation | np.ndarray,
+    vec: Tuple[float, float, float] | np.ndarray,
+) -> Position:
     """Rotate a vector by a quaternion."""
     rotation = quaternion_matrix(normalize_quaternion(quat))[:3, :3]
     rotated = rotation.dot(np.asarray(vec, dtype=np.float64))
@@ -88,18 +178,14 @@ def rotate_pose_around_axis(
     axis: Position,
     angle: float,
 ) -> PoseState:
-    """Rotate a pose around an axis passing through a pivot point.
-
-    Both position and orientation are rotated by ``angle`` radians around
-    the axis defined by ``pivot`` (a point on the axis) and ``axis``
-    (a unit direction vector).
-    """
+    """Rotate a single-env pose around an axis passing through a pivot point."""
+    if pose.batch_size != 1:
+        raise ValueError("rotate_pose_around_axis expects a single-env PoseState")
     pivot_np = np.asarray(pivot, dtype=np.float64)
     axis_np = np.asarray(axis, dtype=np.float64)
     axis_np = axis_np / np.linalg.norm(axis_np)
-    pos_np = np.asarray(pose.position, dtype=np.float64)
+    pos_np = np.asarray(pose.position[0], dtype=np.float64)
 
-    # Build rotation quaternion from axis-angle (xyzw order)
     half = angle / 2.0
     sin_half = np.sin(half)
     cos_half = np.cos(half)
@@ -111,22 +197,18 @@ def rotate_pose_around_axis(
     )
     rot_matrix = quaternion_matrix(rot_quat)[:3, :3]
 
-    # Rotate position around pivot
     offset = pos_np - pivot_np
     new_pos = pivot_np + rot_matrix.dot(offset)
     new_position: Position = tuple(float(v) for v in new_pos)
-
-    # Rotate orientation
     new_orientation = normalize_quaternion(
-        tuple(float(v) for v in quaternion_multiply(rot_quat, pose.orientation))
+        tuple(float(v) for v in quaternion_multiply(rot_quat, pose.orientation[0]))
     )
-
     return PoseState(position=new_position, orientation=new_orientation)
 
 
-def normalize_quaternion(quat: Orientation) -> Orientation:
+def normalize_quaternion(quat: Orientation | np.ndarray) -> Orientation:
     """Normalize a quaternion and fall back to identity if zero-length."""
-    array = np.asarray(quat, dtype=np.float64)
+    array = np.asarray(quat, dtype=np.float64).reshape(-1)
     norm = np.linalg.norm(array)
     if norm == 0.0:
         return (0.0, 0.0, 0.0, 1.0)
@@ -134,16 +216,21 @@ def normalize_quaternion(quat: Orientation) -> Orientation:
     return tuple(float(v) for v in normalized)
 
 
-def multiply_quaternions(a: Orientation, b: Orientation) -> Orientation:
+def multiply_quaternions(
+    a: Orientation | np.ndarray,
+    b: Orientation | np.ndarray,
+) -> Orientation:
     """Multiply two quaternions and normalize the result."""
     quat = quaternion_multiply(a, b)
     return normalize_quaternion(tuple(float(v) for v in quat))
 
 
 def as_matrix(pose: PoseState) -> np.ndarray:
-    """Convert a pose state into a homogeneous transform matrix."""
-    matrix = quaternion_matrix(normalize_quaternion(pose.orientation))
-    matrix = concatenate_matrices(translation_matrix(pose.position), matrix)
+    """Convert a single-env pose state into a homogeneous transform matrix."""
+    if pose.batch_size != 1:
+        raise ValueError("as_matrix expects a single-env PoseState")
+    matrix = quaternion_matrix(normalize_quaternion(pose.orientation[0]))
+    matrix = concatenate_matrices(translation_matrix(pose.position[0]), matrix)
     return matrix
 
 
@@ -186,16 +273,22 @@ def quaternion_from_matrix_3x3(matrix: np.ndarray) -> Orientation:
     return normalize_quaternion((x, y, z, w))
 
 
-def quaternion_to_rotation_matrix(quat: Orientation) -> np.ndarray:
+def quaternion_to_rotation_matrix(quat: Orientation | np.ndarray) -> np.ndarray:
     """Return the 3x3 rotation matrix for the given xyzw quaternion."""
     return quaternion_matrix(normalize_quaternion(quat))[:3, :3]
 
 
-def quaternion_angular_distance(q1: Orientation, q2: Orientation) -> float:
+def quaternion_angular_distance(
+    q1: Orientation | np.ndarray,
+    q2: Orientation | np.ndarray,
+) -> float:
     """Return angular distance between two xyzw quaternions in radians."""
     dot = abs(
         float(
-            np.dot(np.asarray(q1, dtype=np.float64), np.asarray(q2, dtype=np.float64))
+            np.dot(
+                np.asarray(q1, dtype=np.float64).reshape(-1),
+                np.asarray(q2, dtype=np.float64).reshape(-1),
+            )
         )
     )
     dot = min(1.0, dot)

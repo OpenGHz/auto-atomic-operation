@@ -238,6 +238,23 @@ class PoseRandomRange(BaseModel):
     """Approximate bounding radius used for pairwise collision rejection (metres)."""
 
 
+class OperatorRandomizationConfig(BaseModel):
+    """Randomization options for an operator.
+
+    ``base`` controls the operator base pose returned by ``get_base_pose()``.
+    For mocap operators this is the virtual base frame; for joint-mode
+    operators this is the robot base reference frame.
+
+    ``eef`` controls the operator home end-effector pose in world frame. After
+    sampling, reset re-homes the operator to the sampled EEF pose.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    base: Optional[PoseRandomRange] = None
+    eef: Optional[PoseRandomRange] = None
+
+
 class AutoAtomConfig(BaseModel):
     """Configuration for the AutoAtom operator."""
 
@@ -249,8 +266,19 @@ class AutoAtomConfig(BaseModel):
     """The registered environment name used to resolve the basis environment instance for the selected scene."""
     seed: int = 0
     """The random seed for the AutoAtom operator. This is used to ensure reproducibility of the operator's behavior."""
-    randomization: Dict[str, PoseRandomRange] = Field(default_factory=dict)
-    """Per-entity pose randomization applied at each reset.  Keys are object or operator names; values define the randomization range."""
+    randomization: Dict[str, Union[PoseRandomRange, OperatorRandomizationConfig]] = (
+        Field(default_factory=dict)
+    )
+    """Per-entity pose randomization applied at each reset.
+
+    Objects accept a direct ``PoseRandomRange``.
+
+    Operators accept either:
+    - a direct ``PoseRandomRange`` (backward-compatible shorthand for
+      base/virtual-base randomization), or
+    - ``OperatorRandomizationConfig`` with independent ``base`` and ``eef``
+      randomization ranges.
+    """
     randomization_debug: bool = False
     """When True the first N resets cycle through extreme poses (each axis at its min/max, then all-min and all-max) before switching to random sampling.  Use this to verify that configured ranges are not too large."""
 

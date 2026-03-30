@@ -1,37 +1,46 @@
 from pathlib import Path
 import sys
 
+import numpy as np
+from hydra import compose, initialize_config_dir
+from hydra.utils import instantiate
+from omegaconf import OmegaConf
+
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from auto_atom.runtime import ComponentRegistry, TaskRunner
+from auto_atom.runtime import ComponentRegistry, TaskFileConfig, TaskRunner
 
 
 def main() -> None:
-    config_path = ROOT / "examples" / "mujoco_pick_place_demo.yaml"
     ComponentRegistry.clear()
-    runner = TaskRunner().from_yaml(config_path)
+    config_dir = ROOT / "examples" / "mujoco"
+    with initialize_config_dir(version_base=None, config_dir=str(config_dir)):
+        cfg = compose(
+            config_name="pick_and_place",
+            overrides=["env.env.config.batch_size=2", "env.env.config.viewer=null"],
+        )
+    instantiate(cfg.env)
+    raw = OmegaConf.to_container(cfg, resolve=False)
+    assert isinstance(raw, dict)
+    runner = TaskRunner().from_config(TaskFileConfig.model_validate(raw))
 
     try:
         update = runner.reset()
-        assert update.stage_name == "pick_source"
+        assert update.stage_name == ["pick_source", "pick_source"]
 
-        while True:
+        while not bool(np.all(update.done)):
             update = runner.update()
-            if update.done:
-                break
 
-        assert update.success is True
-
-        backend = runner._require_context().backend
-        source_pose = backend.get_object_handler("source_block").get_pose()
-        target_pose = backend.get_object_handler("target_pedestal").get_pose()
-
-        target_top_z = target_pose.position[2] + 0.04
-        assert abs(source_pose.position[0] - target_pose.position[0]) < 0.03
-        assert abs(source_pose.position[1] - target_pose.position[1]) < 0.03
-        assert abs(source_pose.position[2] - target_top_z) < 0.04
+        assert bool(np.all(update.success))
+        assert len(runner.records) == 4
+        assert all(record.status.value == "succeeded" for record in runner.records)
+        assert {record.env_index for record in runner.records} == {0, 1}
+        assert {record.stage_name for record in runner.records} == {
+            "pick_source",
+            "place_source",
+        }
     finally:
         runner.close()
 

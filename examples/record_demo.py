@@ -199,7 +199,8 @@ def main(cfg: DictConfig) -> None:
                 )
         data = obs.get(resolved_camera_key, {}).get("data")
         if data is not None:
-            frames.append(np.asarray(data, dtype=np.uint8))
+            frame = np.asarray(data, dtype=np.uint8)
+            frames.append(frame[0] if frame.ndim >= 4 else frame)
 
     try:
         print("Reset task")
@@ -212,14 +213,20 @@ def main(cfg: DictConfig) -> None:
             backend = runner._context and runner._context.backend
             if isinstance(backend, MujocoTaskBackend):
                 action_trace.append(
-                    np.asarray(
-                        backend.env.data.ctrl[: backend.env.model.nu], dtype=np.float32
-                    ).copy()
+                    np.stack(
+                        [
+                            np.asarray(
+                                env.data.ctrl[: env.model.nu], dtype=np.float32
+                            ).copy()
+                            for env in backend.env.envs
+                        ],
+                        axis=0,
+                    )
                 )
             update_trace.append(_to_jsonable(asdict(update)))
             capture()
             print(update)
-            if update.done:
+            if bool(np.all(update.done)):
                 break
 
         print()
@@ -278,8 +285,11 @@ def main(cfg: DictConfig) -> None:
                     "fps": rec_cfg.fps,
                     "num_frames": len(frames),
                     "num_actions": int(action_array.shape[0]),
-                    "action_dim": int(action_array.shape[1])
-                    if action_array.ndim == 2
+                    "batch_size": int(action_array.shape[1])
+                    if action_array.ndim >= 2
+                    else 0,
+                    "action_dim": int(action_array.shape[2])
+                    if action_array.ndim == 3
                     else 0,
                     "reset_update": _to_jsonable(asdict(reset_update)),
                     "step_updates": update_trace,

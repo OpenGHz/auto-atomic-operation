@@ -7,7 +7,7 @@ gs_dir: assets/gs/scenes/wipe_the_table
 
 env:
   env:
-    _target_: auto_atom.basis.mjc.gs_mujoco_env.GSUnifiedMujocoEnv
+    _target_: auto_atom.basis.mjc.gs_mujoco_env.BatchedGSUnifiedMujocoEnv
     config:
       _target_: auto_atom.basis.mjc.gs_mujoco_env.GSEnvConfig
       model_path: assets/xmls/scenes/wipe_the_table/demo_gs.xml

@@ -151,11 +151,17 @@ class MinkIKSolver:
             ``arm_joint_names``, or ``None`` if the solve diverged.
         """
         # --- Convert base-frame target → world-frame SE3 for mink ---
+        if target_pose_in_base.batch_size != 1:
+            raise ValueError(
+                "MinkIKSolver.solve expects a single-env PoseState, "
+                f"got batch_size={target_pose_in_base.batch_size}"
+            )
+
         R_base = quaternion_to_rotation_matrix(
             tuple(float(v) for v in self._base_quat_xyzw)
         )
-        pos_b = np.asarray(target_pose_in_base.position, dtype=np.float64)
-        quat_b = np.asarray(target_pose_in_base.orientation, dtype=np.float64)
+        pos_b = np.asarray(target_pose_in_base.position[0], dtype=np.float64)
+        quat_b = np.asarray(target_pose_in_base.orientation[0], dtype=np.float64)
 
         pos_w = R_base @ pos_b + self._base_pos
         quat_w = quaternion_multiply(self._base_quat_xyzw, quat_b)
@@ -250,7 +256,7 @@ def build_franka_backend(
     from auto_atom.framework import AutoAtomConfig, OperatorConfig
     from auto_atom.runtime import ComponentRegistry
     from auto_atom.backend.mjc.mujoco_backend import build_mujoco_backend
-    from auto_atom.basis.mjc.mujoco_env import UnifiedMujocoEnv
+    from auto_atom.basis.mjc.mujoco_env import BatchedUnifiedMujocoEnv
 
     config = (
         task
@@ -264,11 +270,12 @@ def build_franka_backend(
         for item in operators
     ]
     env = ComponentRegistry.get_env(config.env_name)
-    if not isinstance(env, UnifiedMujocoEnv):
+    if not isinstance(env, BatchedUnifiedMujocoEnv):
         raise TypeError(
-            f"Environment '{config.env_name}' must be a UnifiedMujocoEnv, "
+            f"Environment '{config.env_name}' must be a BatchedUnifiedMujocoEnv, "
             f"got {type(env).__name__}."
         )
+    first_env = env.envs[0]
 
     # Merge IK params from the first operator that has an ``ik`` section.
     ik_params: Dict[str, Any] = {}
@@ -279,7 +286,7 @@ def build_franka_backend(
             break
 
     ik_solver = MinkIKSolver(
-        model=env.model,
+        model=first_env.model,
         arm_joint_names=_FRANKA_ARM_JOINTS,
         frame_name=_FRANKA_EEF_SITE,
         root_body_name=_FRANKA_ROOT_BODY,
@@ -291,7 +298,7 @@ def build_franka_backend(
         max_joint_delta=ik_params.get("max_joint_delta", 0.8),
     )
 
-    eef_aidx = env._op_eef_aidx.get("arm", np.array([]))
+    eef_aidx = first_env._op_eef_aidx.get("arm", np.array([]))
     eef_ctrl_index = int(eef_aidx[0]) if len(eef_aidx) > 0 else 0
 
     return build_mujoco_backend(

@@ -183,6 +183,7 @@ Configuration files related to 3D GS end with `_gs.yaml` and are run in the same
 ## Tools
 
 - **[Data Collection Guide](docs/data_collection.md)** — recording task demos (GIF/MP4) and comparing GS vs native MuJoCo rendering
+- **[Execution Completion Flow](docs/execution_completion_flow.md)** — how `pre_move`, `eef`, and `post_move` decide they are done, how that feeds into stage success/failure, and a flowchart of the control path
 - **[Tune Initial State](docs/tune_initial_state.md)** — interactive tkinter + MuJoCo viewer tool for tuning operator base pose, EEF pose, and gripper before writing the values into task YAML
 - **[XML / Mesh / GS Migration Notes](docs/skills/xml_mesh_gs_migration_notes.md)** — if you want to migrate your own XML, mesh, or Gaussian assets into this project's normalized asset layout, use this as the reference checklist
 
@@ -237,7 +238,7 @@ runner = TaskRunner().from_yaml(Path("task.yaml"))
 runner.reset()
 while True:
     update = runner.update()
-    if update.done:
+    if bool(update.done.all()):
         break
 
 for record in runner.records:
@@ -254,7 +255,7 @@ A task file has four top-level keys:
 
 | Key         | Description                                                                           |
 | ----------- | ------------------------------------------------------------------------------------- |
-| `env`       | Hydra `_target_` instantiation of the environment, registered via `ComponentRegistry` |
+| `env`       | Hydra `_target_` instantiation of the batched environment, registered via `ComponentRegistry` |
 | `backend`   | Dotted import path to the backend factory function                                    |
 | `task`      | Task definition: `env_name`, `seed`, and a list of `stages`                           |
 | `operators` | Named operators with assigned roles                                                   |

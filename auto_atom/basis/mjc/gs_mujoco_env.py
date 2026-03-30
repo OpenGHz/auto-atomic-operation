@@ -35,7 +35,11 @@ import torch
 from typing import Any, Dict, List
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from gaussian_renderer import GSRendererMuJoCo
-from auto_atom.basis.mjc.mujoco_env import EnvConfig, UnifiedMujocoEnv
+from auto_atom.basis.mjc.mujoco_env import (
+    BatchedUnifiedMujocoEnv,
+    EnvConfig,
+    UnifiedMujocoEnv,
+)
 
 
 class GaussianRenderConfig(BaseModel):
@@ -137,3 +141,16 @@ class GSUnifiedMujocoEnv(UnifiedMujocoEnv):
     def close(self) -> None:
         self._gs_renderer = None
         super().close()
+
+
+class BatchedGSUnifiedMujocoEnv(BatchedUnifiedMujocoEnv):
+    """Aggregate multiple homogeneous ``GSUnifiedMujocoEnv`` replicas."""
+
+    def __init__(self, config: GSEnvConfig):
+        self.config = config
+        self.batch_size = int(config.batch_size)
+        self.envs: list[GSUnifiedMujocoEnv] = []
+        for env_index in range(self.batch_size):
+            viewer = config.viewer if env_index == config.viewer_env_index else None
+            env_cfg = config.model_copy(update={"batch_size": 1, "viewer": viewer})
+            self.envs.append(GSUnifiedMujocoEnv(env_cfg))

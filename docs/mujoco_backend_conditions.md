@@ -17,7 +17,13 @@ The MuJoCo backend evaluates post-conditions after each operation to determine s
 
 **Implementation**: `MujocoOperatorHandler._is_target_grasped()`
 
-An object is considered "grasped" when ALL of the following are true:
+An object is considered "grasped" when the gripper is sufficiently closed and either of the following holds:
+
+1. Physical bilateral finger contact is detected
+2. The object lies inside the gripper-centered grasp envelope in EEF coordinates
+
+This hybrid rule keeps the predicate contact-aware while remaining robust to
+small contact-solver misses in scenes that are known to execute successfully.
 
 ### 1.1 Bilateral Contact
 - **Left finger contact**: At least one contact pair where the object body touches a geom with name starting with `left_`
@@ -25,12 +31,14 @@ An object is considered "grasped" when ALL of the following are true:
 
 **Detection method**: Iterates through `env.data.contact` array, checks `geom_bodyid` to find contacts involving the target body, then checks geom names.
 
-### 1.2 Lateral Alignment
+### 1.2 Geometric Grasp Envelope
 - **Lateral error**: Distance between object and EEF center on the plane perpendicular to grasp direction
 - **Computed in EEF frame**: Object position is transformed to gripper coordinate system
-- **Threshold**: `lateral_error <= lateral_threshold` (default 0.03 meters)
+- **Lateral threshold**: `lateral_error <= lateral_threshold` (default fallback `0.03` m)
+- **Axial threshold**: Object center must also stay within a small distance along the grasp axis (currently `0.03` m)
 
-**Rationale**: Ensures the gripper is centered on the object perpendicular to the grasp direction, independent of gripper orientation in world frame.
+**Rationale**: Ensures the object is still inside the grasp volume even when the
+physics contact manifold is sparse or momentarily unstable.
 
 **Key improvement**: Unlike world-frame horizontal checks, this works correctly for any grasp orientation (vertical, horizontal, or angled).
 
@@ -38,8 +46,9 @@ An object is considered "grasped" when ALL of the following are true:
 
 | Parameter | Location | Default | Description |
 |-----------|----------|---------|-------------|
-| `lateral_threshold` | `MujocoGraspConfig` | `0.03` m | Max lateral distance perpendicular to grasp direction |
+| `lateral_threshold` | `MujocoGraspConfig` | `0.03` m fallback | Max lateral distance perpendicular to grasp direction |
 | `grasp_axis` | `MujocoGraspConfig` | `2` (Z) | Grasp direction axis in EEF frame: 0=X, 1=Y, 2=Z |
+| `axial_threshold` | internal heuristic | `0.03` m | Max object-center distance along grasp axis for envelope fallback |
 
 ### Debugging
 

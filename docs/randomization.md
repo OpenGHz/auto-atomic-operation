@@ -6,7 +6,11 @@ This is used to evaluate task robustness under varying initial conditions.
 ## YAML Configuration
 
 Add a `randomization` block under `task` in your YAML config.
-Keys are object or operator names; values define per-axis offset ranges.
+Keys are object or operator names.
+
+- Objects take a direct per-axis range.
+- Operators can still use the old direct form for base randomization, or use a
+  nested form to randomize `base` and `eef` independently.
 
 ```yaml
 task:
@@ -22,6 +26,14 @@ task:
       x: [-0.015, 0.015]
       y: [-0.015, 0.015]
       collision_radius: 0.15
+    arm_precise:
+      base:
+        x: [-0.015, 0.015]
+        y: [-0.015, 0.015]
+      eef:
+        x: [-0.01, 0.01]
+        y: [-0.01, 0.01]
+        z: [-0.005, 0.005]
 ```
 
 ### Supported axes
@@ -37,6 +49,19 @@ task:
 
 Each axis takes a `[min, max]` tuple. Omitted axes default to `[0, 0]` (no randomization).
 
+### Operator semantics
+
+For operator entries:
+
+- direct form `arm: {x: ..., y: ...}` remains backward-compatible and means
+  base randomization
+- `base` randomizes `get_base_pose()`
+  - for mocap operators this is the virtual base frame
+  - for joint-mode operators this is the base reference frame
+- `eef` randomizes the operator home end-effector pose in world frame
+  - reset updates the stored home EEF pose and then homes the operator to it
+  - `base` and `eef` can be configured together
+
 ### collision_radius
 
 Each entity has a `collision_radius` (default 0.05 m). After sampling, pairwise
@@ -50,8 +75,8 @@ The randomization logic lives in `SceneBackend` (the mixin used by `MujocoTaskBa
 
 ### Lifecycle
 
-1. **`setup()`** — calls `_record_default_poses()` to snapshot the canonical pose
-   of every entity listed in `randomization` (after `env.reset()` and operator `home()`).
+1. **`setup()`** — snapshots canonical object poses, operator base poses, and
+   operator home EEF poses (after `env.reset()` and operator `home()`).
 
 2. **`reset()`** — after restoring the scene to its canonical state:
    - Calls `_record_default_poses()` if not already recorded.
@@ -60,20 +85,27 @@ The randomization logic lives in `SceneBackend` (the mixin used by `MujocoTaskBa
      2. Samples a uniform random offset per axis within `[min, max]`.
      3. Applies the offset to the default pose (translation is additive;
         rotation is additive in RPY then converted back to quaternion).
-     4. Checks pairwise collisions; resamples if needed.
-     5. Calls `handler.set_pose(new_pose)` for each entity.
+     4. Applies object poses, operator base poses, and operator home EEF poses
+        through their respective APIs.
    - Refreshes the viewer.
 
 3. **`TaskRunner.reset()`** — after the backend reset, collects the realized
-   poses of all randomized entities and returns them in
+   poses of all task-relevant entities (stage operators/objects, plus any extra
+   entities mentioned in `randomization`) and returns them in
    `TaskUpdate.details["initial_poses"]`. This allows the caller to log initial
    conditions without accessing backend internals.
+   For operators, the returned value always contains both `base_pose` and
+   `eef_pose`, regardless of whether the randomization entry used the direct
+   shorthand or the nested `base`/`eef` form.
 
 ### Entity resolution
 
 Each randomization key is resolved in order:
 1. `object_handlers[name]` — uses `get_pose()` / `set_pose()`.
-2. `operator_handlers[name]` — uses `get_base_pose()` / `set_pose()`.
+2. `operator_handlers[name]`
+   - direct form uses `get_base_pose()` / `set_pose()`
+   - nested form can additionally use `get_end_effector_pose()` /
+     `set_home_end_effector_pose()`
 3. If neither matches, a warning is emitted and the key is skipped.
 
 ## Multi-Round Evaluation
