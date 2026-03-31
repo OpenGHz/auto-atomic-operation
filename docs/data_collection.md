@@ -149,7 +149,7 @@ ln -s <path_to_auto_atomic_operation> third_party/
 将`操作任务配置`目录软链接到`airbot_ie/configs/managers/auto_atom`目录下：
 
 ```bash
-ln -s <path_to_auto_atomic_operation>/examples/mujoco airbot_ie/configs/managers/auto_atom/mujoco
+ln -s <path_to_auto_atomic_operation>/aao_configs airbot_ie/configs/managers/auto_atom/mujoco
 ```
 
 配置文件主要分为两部分：

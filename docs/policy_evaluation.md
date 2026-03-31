@@ -103,6 +103,7 @@ Use it for final aggregate metrics:
 ## Policy Interface
 
 The package entry point is [auto_atom/runner/policy_eval.py](../auto_atom/runner/policy_eval.py).
+By default, `aao_eval` resolves Hydra configs from `./aao_configs/` relative to the current working directory.
 
 The policy object is expected to support:
 
@@ -246,7 +247,7 @@ This means policy evaluation is not based on ad-hoc metrics. It uses the same st
 The repository includes:
 
 - [auto_atom/runner/policy_eval.py](../auto_atom/runner/policy_eval.py)
-- [policy_eval_mock.yaml](../examples/mujoco/policy_eval_mock.yaml)
+- [policy_eval_mock.yaml](../aao_configs/policy_eval_mock.yaml)
 
 Run the mock example:
 

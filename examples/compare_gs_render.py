@@ -32,6 +32,7 @@ from hydra.core.hydra_config import HydraConfig
 from hydra.utils import instantiate
 from omegaconf import DictConfig, OmegaConf
 
+from auto_atom.runner.common import get_config_dir
 from auto_atom.runtime import ComponentRegistry, TaskFileConfig, TaskRunner
 
 
@@ -106,7 +107,7 @@ def _save_comparison(
 
 
 @hydra.main(
-    config_path="mujoco",
+    config_path=str(get_config_dir()),
     config_name="press_three_buttons_gs",
     version_base=None,
 )

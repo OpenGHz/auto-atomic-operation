@@ -54,7 +54,7 @@ TaskRunner.update()
 
 #### 一次求解 + 关节插值
 
-这是当前 Franka 示例任务推荐的模式，`examples/mujoco/pick_and_place_franka.yaml`
+这是当前 Franka 示例任务推荐的模式，`aao_configs/pick_and_place_franka.yaml`
 默认使用它。
 
 执行过程：

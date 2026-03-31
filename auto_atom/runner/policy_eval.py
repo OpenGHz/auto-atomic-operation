@@ -15,7 +15,7 @@ from auto_atom import PolicyEvaluator
 
 from .common import (
     ExampleLoopHooks,
-    get_examples_dir,
+    get_config_dir,
     list_demos,
     prepare_task_file,
     print_final_summary,
@@ -126,12 +126,12 @@ def _call_policy(
 
 
 if "--list" in sys.argv:
-    list_demos(get_examples_dir())
+    list_demos(get_config_dir())
     sys.exit(0)
 
 
 @hydra.main(
-    config_path=str(get_examples_dir() / "mujoco"),
+    config_path=str(get_config_dir()),
     config_name="policy_eval_mock",
     version_base=None,
 )

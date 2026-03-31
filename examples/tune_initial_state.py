@@ -30,6 +30,7 @@ from auto_atom.backend.mjc.mujoco_backend import (
     MujocoTaskBackend,
 )
 from auto_atom.basis.mjc.mujoco_env import UnifiedMujocoEnv
+from auto_atom.runner.common import get_config_dir
 from auto_atom.runtime import ComponentRegistry, TaskFileConfig, TaskRunner
 from auto_atom.utils.pose import (
     PoseState,
@@ -317,7 +318,11 @@ class OperatorPanel:
 # ---------------------------------------------------------------------------
 
 
-@hydra.main(config_path="mujoco", config_name="pick_and_place", version_base=None)
+@hydra.main(
+    config_path=str(get_config_dir()),
+    config_name="pick_and_place",
+    version_base=None,
+)
 def main(cfg: DictConfig) -> None:
     raw = OmegaConf.to_container(cfg, resolve=False)
     if not isinstance(raw, dict):

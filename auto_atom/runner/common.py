@@ -32,13 +32,12 @@ class ExampleLoopHooks:
     max_updates: Optional[int] = None
 
 
-def get_examples_dir() -> Path:
-    return Path(__file__).resolve().parents[2] / "examples"
+def get_config_dir() -> Path:
+    return Path.cwd() / "aao_configs"
 
 
 def list_demos(base_dir: Optional[Path] = None) -> None:
-    root = base_dir or get_examples_dir()
-    config_dir = root / "mujoco"
+    config_dir = base_dir or get_config_dir()
     names = sorted(p.stem for p in config_dir.glob("*.yaml"))
     print(f"Available demos ({len(names)}):")
     for name in names:

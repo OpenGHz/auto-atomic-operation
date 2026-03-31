@@ -20,6 +20,7 @@ from omegaconf import DictConfig, OmegaConf
 from PIL import Image
 from pydantic import BaseModel, Field
 from auto_atom.backend.mjc.mujoco_backend import MujocoTaskBackend
+from auto_atom.runner.common import get_config_dir
 from auto_atom.utils.pose import PoseState
 from auto_atom.runtime import ComponentRegistry, TaskFileConfig, TaskRunner
 
@@ -200,7 +201,11 @@ def _apply_pose_targets(
         env.update()
 
 
-@hydra.main(config_path="mujoco", config_name="pick_and_place", version_base=None)
+@hydra.main(
+    config_path=str(get_config_dir()),
+    config_name="pick_and_place",
+    version_base=None,
+)
 def main(cfg: DictConfig) -> None:
     raw = OmegaConf.to_container(cfg, resolve=False)
     ComponentRegistry.clear()

@@ -56,7 +56,8 @@ pip install -e ".[mujoco]"
 
 ## Examples
 
-The runnable entry points live under [`auto_atom/runner/`](auto_atom/runner/), while [`examples/mujoco/`](examples/mujoco/) contains the YAML configs they consume:
+The runnable entry points live under [`auto_atom/runner/`](auto_atom/runner/).
+At runtime, `aao_demo` and `aao_eval` look for configs in `./aao_configs/` relative to the current working directory:
 
 ```
 auto_atom/
@@ -65,17 +66,18 @@ auto_atom/
     ├── policy_eval.py            # `aao_eval`
     └── common.py                 # shared runner loop / config loading
 
-examples/
-└── mujoco/
-    ├── pick_and_place.yaml        # Pick and place a block (default)
-    ├── pick_and_place_franka.yaml # Pick and place a block with a Franka arm
-    ├── cup_on_coaster.yaml        # Pick a cup and place it on a coaster
-    ├── stack_color_blocks.yaml    # Stack three colored blocks
-    ├── press_three_buttons.yaml   # Press three buttons in sequence
-    ├── open_drawer.yaml           # Pull a drawer open
-    ├── close_drawer.yaml          # Push a drawer closed
-    └── mock.yaml                  # Mock backend demo (no simulator required)
+aao_configs/
+├── pick_and_place.yaml        # Pick and place a block (default)
+├── pick_and_place_franka.yaml # Pick and place a block with a Franka arm
+├── cup_on_coaster.yaml        # Pick a cup and place it on a coaster
+├── stack_color_blocks.yaml    # Stack three colored blocks
+├── press_three_buttons.yaml   # Press three buttons in sequence
+├── open_drawer.yaml           # Pull a drawer open
+├── close_drawer.yaml          # Push a drawer closed
+└── mock.yaml                  # Mock backend demo (no simulator required)
 ```
+
+When using the package after `pip install`, make sure you run commands from a directory that contains `aao_configs/`, or create that folder there and place your task YAML files inside it.
 
 ### Mock example (no robot or simulator required)
 

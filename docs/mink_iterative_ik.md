@@ -261,8 +261,8 @@ dx ≈ J(q) dq
 
 配置一般在：
 
-- [`examples/mujoco/base_franka.yaml`](../examples/mujoco/base_franka.yaml)
-- [`examples/mujoco/pick_and_place_franka.yaml`](../examples/mujoco/pick_and_place_franka.yaml)
+- [`aao_configs/base_franka.yaml`](../aao_configs/base_franka.yaml)
+- [`aao_configs/pick_and_place_franka.yaml`](../aao_configs/pick_and_place_franka.yaml)
 
 重要参数有：
 
