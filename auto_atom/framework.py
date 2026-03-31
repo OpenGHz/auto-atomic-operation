@@ -16,7 +16,7 @@ class Operation(str, Enum):
     `MOVE`, `GRASP`, `RELEASE` are three fundamental operations that can be used to construct more complex operations like `PICK`, `PLACE`, `PUSH`, `PULL`, and `PRESS`."""
 
     MOVE = "move"
-    """Execute pre_move waypoints to reach the target pose without interacting with any object. No pre- or post-condition is checked. Failure occurs when the operator fails to reach the target pose within the position tolerance within the time limit."""
+    """Execute pre_move waypoints to reach the target pose without interacting with any object. No pre-condition is checked; post-condition `reached` is checked after the final pose action. Failure occurs when the operator fails to reach the target pose within the position tolerance within the time limit."""
     GRASP = "grasp"
     """Execute the eef phase (close gripper) at the current position. Pre-condition `released` is checked before the eef phase; post-condition `grasped` is checked after the eef phase. Failure occurs when the post-condition `grasped` is not satisfied (the gripper closes but no object is effectively grasped)."""
     RELEASE = "release"
@@ -44,6 +44,8 @@ class OperationConstraint(str, Enum):
     """Whether the operator is in contact with the target object."""
     DISPLACED = "displaced"
     """Whether the target object has been displaced from its original pose (e.g., the distance between the current pose of the object and its original pose is greater than a certain threshold) after the operation."""
+    REACHED = "reached"
+    """Whether the operator end-effector is within tolerance of the final target pose for the stage."""
     NONE = "none"
     """No constraint."""
 
@@ -57,6 +59,9 @@ class OperationConditionType(str, Enum):
 
 _Condition = OperationConditionType
 OPERATION_CONDITIONS = {
+    Operation.MOVE: {
+        _Condition.SUCCESS: OperationConstraint.REACHED,
+    },
     Operation.GRASP: {
         _Condition.PERFORM: OperationConstraint.RELEASED,
         _Condition.SUCCESS: OperationConstraint.GRASPED,

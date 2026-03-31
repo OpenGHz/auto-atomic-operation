@@ -177,8 +177,9 @@ So the relationship is:
 
 ### `move`
 
-- No extra operation condition
-- Final pose action reaching tolerance is effectively enough for stage success
+- No pre-condition
+- Stage success uses the post-condition `reached`
+- `reached` means the end-effector is within tolerance of the final target pose
 
 ### `grasp`
 

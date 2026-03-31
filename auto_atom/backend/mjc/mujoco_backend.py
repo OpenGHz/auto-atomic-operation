@@ -17,6 +17,7 @@ from ...framework import (
     OperatorRandomizationConfig,
     OperatorConfig,
     PoseControlConfig,
+    PoseRandomRange,
     PoseReference,
 )
 from ...runtime import (
@@ -26,7 +27,6 @@ from ...runtime import (
     IKSolver,
     ObjectHandler,
     OperatorHandler,
-    PoseRandomRange,
     SceneBackend,
 )
 from ...utils.pose import (

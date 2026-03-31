@@ -184,6 +184,7 @@ Configuration files related to 3D GS end with `_gs.yaml` and are run in the same
 
 - **[Data Collection Guide](docs/data_collection.md)** — recording task demos (GIF/MP4) and comparing GS vs native MuJoCo rendering
 - **[Execution Completion Flow](docs/execution_completion_flow.md)** — how `pre_move`, `eef`, and `post_move` decide they are done, how that feeds into stage success/failure, and a flowchart of the control path
+- **[Policy Evaluation](docs/policy_evaluation.md)** — evaluate an external policy model with `PolicyEvaluator`, reuse `TaskUpdate` / `ExecutionRecord` / `ExecutionSummary`, and connect policy outputs to environment actions
 - **[Tune Initial State](docs/tune_initial_state.md)** — interactive tkinter + MuJoCo viewer tool for tuning operator base pose, EEF pose, and gripper before writing the values into task YAML
 - **[XML / Mesh / GS Migration Notes](docs/skills/xml_mesh_gs_migration_notes.md)** — if you want to migrate your own XML, mesh, or Gaussian assets into this project's normalized asset layout, use this as the reference checklist
 
@@ -287,7 +288,7 @@ Pre- and post-conditions constrain when an operation may run and what constitute
 
 | Operation | Description | Required sub-phases | Pre-condition | Pre-condition checked | Post-condition | Post-condition checked |
 | --------- | ----------- | ------------------- | ------------- | --------------------- | -------------- | ---------------------- |
-| `move`    | Move to a target pose without interacting with any object | pre_move | — | — | — | — |
+| `move`    | Move to a target pose without interacting with any object | pre_move | — | — | `reached` | After pre_move |
 | `grasp`   | Close the gripper at the current position to grasp an object | eef | `released` | Before eef | `grasped` | After eef |
 | `release` | Open the gripper at the current position to release the held object | eef | `grasped` | Before eef | `released` | After eef |
 | `pick`    | Approach the object, grasp it, then retreat | pre_move, eef | `released` | Before pre_move | `grasped` | After post_move |
@@ -304,6 +305,7 @@ Pre- and post-conditions constrain when an operation may run and what constitute
 | `grasped`    | Operator is currently holding an object                                         |
 | `contacted`  | Operator end-effector is in contact with the target object                      |
 | `displaced`  | Target object has moved beyond a threshold distance from its original pose      |
+| `reached`    | Operator end-effector is within tolerance of the stage's final target pose      |
 
 For detailed implementation of these conditions in the MuJoCo backend, including detection logic and configurable thresholds, see [MuJoCo Backend Conditions](docs/mujoco_backend_conditions.md).
 

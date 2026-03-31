@@ -1,0 +1,30 @@
+env:
+  _target_: auto_atom.runtime.ComponentRegistry.register_env
+  name: mock_policy_eval
+  env:
+    _target_: auto_atom.mock.create_mock_env
+    kind: mock_env
+    batch_size: 1
+
+backend: auto_atom.mock.build_mock_backend
+
+task:
+  env_name: mock_policy_eval
+  seed: 7
+  stages:
+    - name: observe_home_pose
+      object: ""
+      operation: move
+      operator: arm
+      param:
+        pre_move:
+          - position: [0.2, 0.0, 0.3]
+            orientation: [0.0, 0.0, 0.0, 1.0]
+            reference: world
+
+operators:
+  - name: arm
+
+rounds: 1
+max_updates: 5
+use_input: false

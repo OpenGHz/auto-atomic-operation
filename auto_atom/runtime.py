@@ -25,7 +25,6 @@ from .framework import (
     Orientation,
     Position,
     PoseControlConfig,
-    PoseRandomRange,
     PoseReference,
     StageConfig,
     StageControlConfig,
@@ -37,7 +36,7 @@ from .utils.pose import (
     euler_to_quaternion,
     inverse_pose,
     pose_config_to_pose_state,
-    quaternion_to_rpy,
+    quaternion_angular_distance,
     rotate_pose_around_axis,
 )
 
@@ -280,6 +279,20 @@ class TaskUpdate:
     details: List[Dict[str, Any]] = field(default_factory=list)
     phase: List[Optional[str]] = field(default_factory=list)
     phase_step: Optional[np.ndarray] = None
+
+
+@dataclass
+class ExecutionSummary:
+    total_stages: int
+    max_updates: Optional[int]
+    updates_used: int
+    completed_stage_count: np.ndarray
+    final_stage_index: np.ndarray
+    final_stage_name: List[str]
+    final_status: np.ndarray
+    final_done: np.ndarray
+    final_success: np.ndarray
+    records: List[ExecutionRecord] = field(default_factory=list)
 
 
 @dataclass
@@ -530,6 +543,21 @@ class TaskRunner:
     def records(self) -> List[ExecutionRecord]:
         return list(self._records)
 
+    def summarize(
+        self,
+        update: Optional[TaskUpdate] = None,
+        *,
+        max_updates: Optional[int] = None,
+        updates_used: int = 0,
+    ) -> ExecutionSummary:
+        return _build_execution_summary(
+            update=update or self._build_task_update(),
+            records=self._records,
+            total_stages=len(self._plan),
+            max_updates=max_updates,
+            updates_used=updates_used,
+        )
+
     def from_yaml(self, path: str | Path) -> "TaskRunner":
         return self.from_config(load_task_file(path))
 
@@ -710,6 +738,7 @@ class TaskRunner:
                     plan=active.plan,
                     condition_type=OperationConditionType.SUCCESS,
                     initial_pose=active.initial_object_pose,
+                    completion_pose=self._completion_pose_from_active(active),
                 )
             )
             if success_failure is not None:
@@ -807,77 +836,16 @@ class TaskRunner:
         plan: StageExecutionPlan,
         condition_type: OperationConditionType,
         initial_pose: Optional[PoseState] = None,
+        completion_pose: Optional[PoseControlConfig] = None,
     ) -> Optional[Dict[str, Any]]:
-        constraints = OPERATION_CONDITIONS.get(plan.stage.operation)
-        if not constraints:
-            return None
-
-        constraint = constraints.get(condition_type)
-        if constraint is None or constraint == OperationConstraint.NONE:
-            return None
-
-        operator_name = plan.operator_name
-        object_name = plan.stage.object
-        backend = context.backend
-        is_grasping = bool(backend.is_operator_grasping(operator_name)[env_index])
-
-        if constraint == OperationConstraint.GRASPED:
-            satisfied = is_grasping
-        elif constraint == OperationConstraint.RELEASED:
-            satisfied = not is_grasping
-        elif constraint == OperationConstraint.CONTACTED:
-            satisfied = bool(
-                backend.is_operator_contacting(operator_name, object_name)[env_index]
-            )
-        elif constraint == OperationConstraint.DISPLACED:
-            satisfied = (
-                bool(backend.is_object_displaced(object_name, initial_pose)[env_index])
-                if initial_pose is not None and object_name
-                else True
-            )
-        else:
-            satisfied = True
-
-        if satisfied:
-            return None
-
-        phase = (
-            "precondition"
-            if condition_type == OperationConditionType.PERFORM
-            else "postcondition"
+        return _check_stage_condition(
+            env_index=env_index,
+            context=context,
+            plan=plan,
+            condition_type=condition_type,
+            initial_pose=initial_pose,
+            completion_pose=completion_pose,
         )
-        failure_category, failure_reason = {
-            OperationConstraint.GRASPED: (
-                "missing_grasp",
-                "operator is not grasping the required object",
-            ),
-            OperationConstraint.RELEASED: (
-                "unexpected_grasp",
-                "operator is still grasping when it should be empty-handed",
-            ),
-            OperationConstraint.CONTACTED: (
-                "no_contact",
-                f"operator end-effector is not in contact with '{object_name}'",
-            ),
-            OperationConstraint.DISPLACED: (
-                "no_displacement",
-                f"object '{object_name}' has not been displaced beyond the threshold",
-            ),
-        }.get(constraint, ("condition_mismatch", "stage condition is not satisfied"))
-
-        return {
-            "event": f"stage_{phase}_failed",
-            "failure_stage": phase,
-            "failure_category": failure_category,
-            "failure_reason": failure_reason,
-            "condition_type": condition_type.value,
-            "required_constraint": constraint.value,
-            "operator": operator_name,
-            "operation": plan.stage.operation.value,
-            "target_object": object_name,
-            "is_operator_grasping": is_grasping,
-            "env_index": env_index,
-        }
 
     @staticmethod
     def _build_action_failure_details(
@@ -905,6 +873,15 @@ class TaskRunner:
                 "failure_reason", "primitive action failed during execution"
             )
         return enriched
+
+    @staticmethod
+    def _completion_pose_from_active(
+        active: ActiveStageState,
+    ) -> Optional[PoseControlConfig]:
+        for action in reversed(active.actions):
+            if action.kind == "pose" and action.resolved_pose is not None:
+                return action.resolved_pose
+        return None
 
     @staticmethod
     def _run_action(
@@ -1251,6 +1228,225 @@ class TaskRunner:
         if self._context is None:
             raise RuntimeError("TaskRunner is not initialized. Call from_yaml() first.")
         return self._context
+
+
+def _check_stage_condition(
+    env_index: int,
+    context: ExecutionContext,
+    plan: StageExecutionPlan,
+    condition_type: OperationConditionType,
+    initial_pose: Optional[PoseState] = None,
+    completion_pose: Optional[PoseControlConfig] = None,
+) -> Optional[Dict[str, Any]]:
+    constraints = OPERATION_CONDITIONS.get(plan.stage.operation)
+    if not constraints:
+        return None
+
+    constraint = constraints.get(condition_type)
+    if constraint is None or constraint == OperationConstraint.NONE:
+        return None
+
+    operator_name = plan.operator_name
+    object_name = plan.stage.object
+    backend = context.backend
+    is_grasping = bool(backend.is_operator_grasping(operator_name)[env_index])
+
+    if constraint == OperationConstraint.GRASPED:
+        satisfied = is_grasping
+    elif constraint == OperationConstraint.RELEASED:
+        satisfied = not is_grasping
+    elif constraint == OperationConstraint.CONTACTED:
+        satisfied = bool(
+            backend.is_operator_contacting(operator_name, object_name)[env_index]
+        )
+    elif constraint == OperationConstraint.DISPLACED:
+        satisfied = (
+            bool(backend.is_object_displaced(object_name, initial_pose)[env_index])
+            if initial_pose is not None and object_name
+            else True
+        )
+    elif constraint == OperationConstraint.REACHED:
+        operator = backend.get_operator_handler(operator_name)
+        tolerance = getattr(
+            getattr(getattr(operator, "control", None), "tolerance", None),
+            "position",
+            0.01,
+        )
+        orientation_tolerance = getattr(
+            getattr(getattr(operator, "control", None), "tolerance", None),
+            "orientation",
+            0.08,
+        )
+        if completion_pose is None:
+            satisfied = False
+        else:
+            current_pose = operator.get_end_effector_pose().select(env_index)
+            position_error = float(
+                np.linalg.norm(
+                    np.asarray(current_pose.position[0], dtype=np.float64)
+                    - np.asarray(completion_pose.position, dtype=np.float64)
+                )
+            )
+            orientation_error = float(
+                quaternion_angular_distance(
+                    current_pose.orientation[0],
+                    np.asarray(completion_pose.orientation, dtype=np.float64),
+                )
+            )
+            satisfied = position_error <= float(
+                tolerance
+            ) and orientation_error <= float(orientation_tolerance)
+    else:
+        satisfied = True
+
+    if satisfied:
+        return None
+
+    phase = (
+        "precondition"
+        if condition_type == OperationConditionType.PERFORM
+        else "postcondition"
+    )
+    failure_category, failure_reason = {
+        OperationConstraint.GRASPED: (
+            "missing_grasp",
+            "operator is not grasping the required object",
+        ),
+        OperationConstraint.RELEASED: (
+            "unexpected_grasp",
+            "operator is still grasping when it should be empty-handed",
+        ),
+        OperationConstraint.CONTACTED: (
+            "no_contact",
+            f"operator end-effector is not in contact with '{object_name}'",
+        ),
+        OperationConstraint.DISPLACED: (
+            "no_displacement",
+            f"object '{object_name}' has not been displaced beyond the threshold",
+        ),
+        OperationConstraint.REACHED: (
+            "target_not_reached",
+            "operator end-effector is not within tolerance of the target pose",
+        ),
+    }.get(constraint, ("condition_mismatch", "stage condition is not satisfied"))
+    details = {
+        "event": f"stage_{phase}_failed",
+        "failure_stage": phase,
+        "failure_category": failure_category,
+        "failure_reason": failure_reason,
+        "condition_type": condition_type.value,
+        "required_constraint": constraint.value,
+        "operator": operator_name,
+        "operation": plan.stage.operation.value,
+        "target_object": object_name,
+        "is_operator_grasping": is_grasping,
+        "env_index": env_index,
+    }
+    if constraint == OperationConstraint.REACHED:
+        details["completion_pose_available"] = completion_pose is not None
+        if completion_pose is not None:
+            operator = backend.get_operator_handler(operator_name)
+            current_pose = operator.get_end_effector_pose().select(env_index)
+            details["target_pose"] = completion_pose.model_dump(mode="json")
+            details["current_pose"] = {
+                "position": [float(v) for v in current_pose.position[0]],
+                "orientation": [float(v) for v in current_pose.orientation[0]],
+            }
+            details["position_error"] = float(
+                np.linalg.norm(
+                    np.asarray(current_pose.position[0], dtype=np.float64)
+                    - np.asarray(completion_pose.position, dtype=np.float64)
+                )
+            )
+            details["orientation_error"] = float(
+                quaternion_angular_distance(
+                    current_pose.orientation[0],
+                    np.asarray(completion_pose.orientation, dtype=np.float64),
+                )
+            )
+    return details
+
+
+def _collect_reset_details(
+    env_index: int,
+    context: ExecutionContext,
+) -> Dict[str, Any]:
+    initial_poses: Dict[str, Any] = {}
+    for name in context.config.randomization:
+        object_handler: Optional[ObjectHandler]
+        try:
+            object_handler = context.backend.get_object_handler(name)
+        except KeyError:
+            object_handler = None
+        if object_handler is not None:
+            pose = object_handler.get_pose().select(env_index)
+            initial_poses[name] = _serialize_pose(pose)
+            continue
+
+        try:
+            operator = context.backend.get_operator_handler(name)
+        except KeyError:
+            continue
+        pose = operator.get_base_pose().select(env_index)
+        initial_poses[name] = _serialize_pose(pose)
+    if not initial_poses:
+        return {}
+    return {"initial_poses": initial_poses}
+
+
+def _serialize_pose(pose: PoseState) -> Dict[str, List[float]]:
+    return {
+        "position": [round(float(v), 4) for v in pose.position[0]],
+        "orientation": [round(float(v), 4) for v in pose.orientation[0]],
+    }
+
+
+def _build_execution_summary(
+    *,
+    update: TaskUpdate,
+    records: List[ExecutionRecord],
+    total_stages: int,
+    max_updates: Optional[int],
+    updates_used: int,
+) -> ExecutionSummary:
+    batch_size = len(update.stage_name)
+    completed_stage_count = np.zeros(batch_size, dtype=np.int64)
+    for record in records:
+        if record.status == StageExecutionStatus.SUCCEEDED:
+            completed_stage_count[record.env_index] += 1
+    return ExecutionSummary(
+        total_stages=total_stages,
+        max_updates=max_updates,
+        updates_used=updates_used,
+        completed_stage_count=completed_stage_count,
+        final_stage_index=np.asarray(update.stage_index, dtype=np.int64),
+        final_stage_name=list(update.stage_name),
+        final_status=np.asarray(update.status, dtype=object),
+        final_done=np.asarray(update.done, dtype=bool),
+        final_success=np.asarray(update.success, dtype=object),
+        records=list(records),
+    )
+
+
+def _resolve_policy_completion_pose(
+    *,
+    env_index: int,
+    operator: OperatorHandler,
+    target: Optional[ObjectHandler],
+    backend: SceneBackend,
+    action: PrimitiveAction,
+) -> Optional[PoseControlConfig]:
+    if action.pose is None:
+        return None
+    completion_action = deepcopy(action)
+    return TaskRunner._resolve_pose_command(
+        env_index=env_index,
+        operator=operator,
+        pose=completion_action.pose,
+        target=target,
+        backend=backend,
+        action=completion_action,
+    )
 
 
 def load_yaml(path: str | Path) -> Dict[str, Any]:
