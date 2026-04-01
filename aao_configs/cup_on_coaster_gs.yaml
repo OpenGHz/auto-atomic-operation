@@ -1,31 +1,17 @@
 defaults:
   - cup_on_coaster
   - robotiq_gs
+  - gs_mixin
   - _self_
-
-gs_dir: assets/gs/scenes/cup_on_coaster
 
 env:
   env:
-    _target_: auto_atom.basis.mjc.gs_mujoco_env.BatchedGSUnifiedMujocoEnv
-    config:
-      _target_: auto_atom.basis.mjc.gs_mujoco_env.GSEnvConfig
-      model_path: assets/xmls/scenes/cup_on_coaster/demo_gs.xml
-      cameras:
-        - name: front
-          width: 640
-          height: 480
-          enable_color: true
-          enable_depth: true
-          enable_mask: false
-          enable_heat_map: false
-      viewer:
-        lookat: [0.45, 0.05, 0.08]
-        distance: 0.8
-        azimuth: 135
-        elevation: -28
-      gaussian_render:
-        background_ply: assets/gs/backgrounds/example.ply
-        body_gaussians:
-          cup_gs:     ${gs_dir}/cup.ply
-          coaster_gs: ${gs_dir}/coaster.ply
+    viewer:
+      lookat: [0.45, 0.05, 0.08]
+      distance: 0.8
+      azimuth: 135
+      elevation: -28
+    gaussian_render:
+      body_gaussians:
+        cup_gs:     ${gs_dir}/cup.ply
+        coaster_gs: ${gs_dir}/coaster.ply

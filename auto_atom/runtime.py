@@ -1453,7 +1453,7 @@ def _resolve_policy_completion_pose(
 
 def load_yaml(path: str | Path) -> Dict[str, Any]:
     config = OmegaConf.load(Path(path))
-    data = OmegaConf.to_container(config, resolve=False)
+    data = OmegaConf.to_container(config, resolve=True)
     if not isinstance(data, dict):
         raise TypeError(f"YAML root must be a mapping: {path}")
     return data
@@ -1469,10 +1469,9 @@ def load_task_file(path: str | Path) -> TaskFileConfig:
     if not isinstance(config, DictConfig):
         raise TypeError(f"YAML root must be a mapping: {config_path}")
 
-    raw = OmegaConf.to_container(config, resolve=False)
-    if not isinstance(raw, dict):
-        raise TypeError(f"YAML root must be a mapping: {config_path}")
-
     if "env" in config and config.env is not None:
         instantiate(config.env)
+    raw = OmegaConf.to_container(config, resolve=True)
+    if not isinstance(raw, dict):
+        raise TypeError(f"YAML root must be a mapping: {config_path}")
     return TaskFileConfig.model_validate(raw)

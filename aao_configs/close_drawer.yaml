@@ -1,26 +1,25 @@
 defaults:
-  - base
+  - basis_mocap_eef
   - _self_
 
+scene_name: open_close_drawer
+task_name: close_drawer
+
 env:
-  name: close_drawer
   env:
-    config:
-      model_path: assets/xmls/scenes/open_close_drawer/demo.xml
-      initial_joint_positions:
-        drawer_slide: -0.12
-      mask_objects: ["handle", "drawer"]
-      operations: ["pull"]
-      viewer:
-        lookat: [0.0, 0.04, 0.12]
-        distance: 0.75
-        azimuth: 155
-        elevation: -22
-        step_delay: 0.025
-        hold_seconds: 1.0
+    initial_joint_positions:
+      drawer_slide: -0.12
+    mask_objects: ["handle", "drawer"]
+    operations: ["pull"]
+    viewer:
+      lookat: [0.0, 0.04, 0.12]
+      distance: 0.75
+      azimuth: 155
+      elevation: -22
+      step_delay: 0.025
+      hold_seconds: 1.0
 
 task:
-  env_name: close_drawer
   stages:
     # Grasp the handle and push the drawer closed.
     # Drawer starts fully open: joint=-0.12 m, handle world pos = (0, -0.071, 0.132).

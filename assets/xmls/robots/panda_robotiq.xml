@@ -143,6 +143,7 @@
     <mesh file="robotiq/spring_link.stl"/>
     <mesh file="robotiq/follower.stl"/>
     <mesh file="robotiq/tongue.stl"/>
+    <model name="tactile_sensor" file="../sensors/tactile_sensor.xml"/>
   </asset>
 
   <worldbody>
@@ -241,16 +242,19 @@
                     <body name="robotiq_base" childclass="2f85" quat="1 0 0 -1" pos="0 0 0.11" gravcomp="1">
                       <inertial mass="0.777441" pos="0 -2.70394e-05 0.0354675" quat="1 -0.00152849 0 0"
                         diaginertia="0.000260285 0.000225381 0.000152708"/>
-                        <camera name="hand_cam" mode="fixed"
-                            pos="0.0003378 0.068369519 0.055"
-                            xyaxes="-0.99908848 -0.03738158 0.02061130   -0.02467457 0.89973124 0.50574633"
-                            fovy="48" resolution="640 480"/>
+                      <body name="hand_cam_body"
+                        pos="0.0003378 0.068369519 0.055"
+                        euler="-2.7 0 3.1416">
+                        <camera name="hand_cam" mode="fixed" fovy="48" resolution="640 480"/>
+                        <site name="hand_cam" pos="0 0 0" euler="3.14159 0 0"/>
+                      </body>
                       <geom class="visual_gripper" pos="0 0 0.0108" quat="0 0 0 1" mesh="robotiq_base"/>
                       <geom class="visual_gripper" pos="0 0 0.004" quat="0.707107 -0.707107 0 0"   mesh="base_coupling"/>
                       <geom class="visual_gripper" pos="0 0 0.0108" quat="1 0 0 0"  material="metal" mesh="c-a01-85-open"/>
                       <!-- May have to update -->
                       <site name="base_top_site" pos="0 0 0.088" />
                       <site name="gripper_base_site" pos="0 0 0.11489" />
+                      <site name="eef_pose" pos="0 0 0.1489" />
                       <site name="gripper" pos="0 0 0.1489" />
                       <geom name="hand_capsule" class="collision_gripper" type="capsule" conaffinity="1" size="0.040000000000000001 0.06" rgba="1 1 1 0.29999999999999999" pos="0 0 0.01"/>
 
@@ -283,6 +287,10 @@
                           <body name="left_pad" pos="-0.0377897 -0.103916 -0.0091" quat="0.707107 -0.707107 3.16527e-05 -3.16527e-05" gravcomp="1">
                             <geom class="pad_box2" name="left_finger_pad"/>
                           </body>
+                          <body name="left_tactile_sensor_base" pos="0.0025 0.008 0.001" euler="0 1.5708 0">
+                            <site name="left_gripper_tip" pos="0 0 0"/>
+                            <attach model="tactile_sensor" body="touch_pad" prefix="left_"/>
+                          </body>
                         </body>
                       </body>
                       <!-- Right-hand side 4-bar linkage -->
@@ -313,6 +321,10 @@
                           <geom name="right_follower_pad2" class="pad_box2" type="capsule" size="0.009 0.012 0.008" pos="-0.0035 -0.002 -0.009" quat="1 1 0 0"/>
                           <body name="right_pad" pos="-0.0377897 -0.103916 -0.0091" quat="0.707107 -0.707107 3.16527e-05 -3.16527e-05" gravcomp="1">
                             <geom class="pad_box2" name="right_finger_pad"/>
+                          </body>
+                          <body name="right_tactile_sensor_base" pos="0.0025 0.008 0.001" euler="0 1.5708 0">
+                            <site name="right_gripper_tip" pos="0 0 0"/>
+                            <attach model="tactile_sensor" body="touch_pad" prefix="right_"/>
                           </body>
                         </body>
                       </body>

@@ -10,7 +10,7 @@ stepping.  It deliberately does **not** provide ``step(action)`` or
 from enum import Enum
 from math import tan, pi
 from pathlib import Path
-from typing import Any, Dict, List, Set
+from typing import Any, Dict, List, Set, Optional
 from pydantic import BaseModel, ConfigDict, Field, model_validator, field_validator
 from auto_atom.basis.mjc.tactile.tactile_sensor import TactileSensorManager
 import os
@@ -207,8 +207,10 @@ class EnvConfig(BaseModel, frozen=True):
 class MujocoBasis:
     """Low-level MuJoCo wrapper: model/data access, rendering, physics."""
 
-    def __init__(self, config: EnvConfig):
+    def __init__(self, config: Optional[EnvConfig] = None, **kwargs):
         self.get_logger().info("Initializing...")
+        if config is None:
+            config = EnvConfig.model_validate(kwargs)
         self.config = config
         self.model, self.data = self._load_model(config.model_path)
 

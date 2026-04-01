@@ -1,24 +1,22 @@
 defaults:
-  - base
+  - basis_mocap_eef
   - _self_
 
+scene_name: stack_color_blocks
+
 env:
-  name: stack_color_blocks
   env:
-    config:
-      model_path: assets/xmls/scenes/stack_color_blocks/demo.xml
-      mask_objects: ["cube_blue", "cube_orange", "cube_yellow"]
-      operations: ["pick", "place"]
-      viewer:
-        lookat: [-0.2, 0.0, 0.55]
-        distance: 1.5
-        azimuth: 290
-        elevation: -20
-        step_delay: 0.025
-        hold_seconds: 1.0
+    mask_objects: ["cube_blue", "cube_orange", "cube_yellow"]
+    operations: ["pick", "place"]
+    viewer:
+      lookat: [-0.2, 0.0, 0.55]
+      distance: 1.5
+      azimuth: 290
+      elevation: -20
+      step_delay: 0.025
+      hold_seconds: 1.0
 
 task:
-  env_name: stack_color_blocks
   randomization:
     cube_blue:
       x: [-0.015, 0.015]
@@ -109,6 +107,3 @@ task:
             reference: object_world
         eef:
           close: false
-
-operators:
-  - name: arm

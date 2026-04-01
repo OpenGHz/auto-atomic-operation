@@ -1,0 +1,18 @@
+defaults:
+  - basis
+
+env:
+  env:
+    # TODO: change to a dict for more flexible operator definitions
+    operators:
+      - name: arm
+        arm_actuators: []
+        eef_actuators: [fingers_actuator]
+        eef_output_name: eef
+        pose_site: eef_pose
+        imu_acc: imu_acc
+        imu_gyro: imu_gyro
+        imu_quat: imu_quat
+        pose_sensor_pos: global_gripper_pos
+        pose_sensor_quat: global_gripper_quat
+        tactile_prefixes: ["left_", "right_"]

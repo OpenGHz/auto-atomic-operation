@@ -45,13 +45,13 @@ def list_demos(base_dir: Optional[Path] = None) -> None:
 
 
 def prepare_task_file(cfg: DictConfig) -> TaskFileConfig:
-    raw = OmegaConf.to_container(cfg, resolve=False)
-    if not isinstance(raw, dict):
-        raise TypeError("Config root must be a mapping.")
-
     ComponentRegistry.clear()
     if "env" in cfg and cfg.env is not None:
         instantiate(cfg.env)
+
+    raw = OmegaConf.to_container(cfg, resolve=True)
+    if not isinstance(raw, dict):
+        raise TypeError("Config root must be a mapping.")
 
     return TaskFileConfig.model_validate(raw)
 

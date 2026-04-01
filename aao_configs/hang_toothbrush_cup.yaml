@@ -1,17 +1,15 @@
 defaults:
-  - base
+  - basis_mocap_eef
   - _self_
 
+scene_name: hang_toothbrush_cup
+
 env:
-  name: hang_toothbrush_cup
   env:
-    config:
-      model_path: assets/xmls/scenes/hang_toothbrush_cup/demo.xml
-      mask_objects: ["toothbrush_cup", "rack"]
-      operations: ["pick", "place"]
+    mask_objects: ["toothbrush_cup", "rack"]
+    operations: ["pick", "place"]
 
 task:
-  env_name: hang_toothbrush_cup
   stages:
     # Stage 1: Pick toothbrush cup by its handle (side grasp)
     # Cup center: (0.515, 0.056, 0.086) in GS scene
@@ -26,7 +24,7 @@ task:
         pre_move:
           # Waypoint 0: approach from +x side, ~0.285m away from cup center
           - position: [0.285, 0.004, 0.014]
-            orientation: [0.500024,  0.500024, -0.499976, -0.499976]
+            orientation: [0.500024, 0.500024, -0.499976, -0.499976]
             reference: object
           # Waypoint 1: move in to grasp handle, ~0.2m from cup center
           - position: [0.050, 0.004, 0.014]
@@ -66,6 +64,3 @@ task:
             reference: object_world
         eef:
           close: false
-
-operators:
-  - name: arm

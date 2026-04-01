@@ -1,35 +1,21 @@
 defaults:
   - wipe_the_table
   - robotiq_gs
+  - gs_mixin
   - _self_
-
-gs_dir: assets/gs/scenes/wipe_the_table
 
 env:
   env:
-    _target_: auto_atom.basis.mjc.gs_mujoco_env.BatchedGSUnifiedMujocoEnv
-    config:
-      _target_: auto_atom.basis.mjc.gs_mujoco_env.GSEnvConfig
-      model_path: assets/xmls/scenes/wipe_the_table/demo_gs.xml
-      cameras:
-        - name: front
-          width: 640
-          height: 480
-          enable_color: true
-          enable_depth: true
-          enable_mask: false
-          enable_heat_map: false
-      viewer:
-        lookat: [0.45, 0.0, 0.1]
-        distance: 1.0
-        azimuth: 135
-        elevation: -28
-      gaussian_render:
-        background_ply: assets/gs/backgrounds/example.ply
-        body_gaussians:
-          blue_duck_gs:              ${gs_dir}/blue_duck.ply
-          chicken_doll_gs:           ${gs_dir}/chicken_doll.ply
-          dog_gs:                    ${gs_dir}/dog.ply
-          white_box_gs:              ${gs_dir}/box.ply
-          yellow_brush_gs:           ${gs_dir}/yellow_brush.ply
-          transparent_tape_paper_gs: ${gs_dir}/transparent_tape_paper.ply
+    viewer:
+      lookat: [0.45, 0.0, 0.1]
+      distance: 1.0
+      azimuth: 135
+      elevation: -28
+    gaussian_render:
+      body_gaussians:
+        blue_duck_gs: ${gs_dir}/blue_duck.ply
+        chicken_doll_gs: ${gs_dir}/chicken_doll.ply
+        dog_gs: ${gs_dir}/dog.ply
+        white_box_gs: ${gs_dir}/box.ply
+        yellow_brush_gs: ${gs_dir}/yellow_brush.ply
+        transparent_tape_paper_gs: ${gs_dir}/transparent_tape_paper.ply

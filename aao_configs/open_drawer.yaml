@@ -1,24 +1,23 @@
 defaults:
-  - base
+  - basis_mocap_eef
   - _self_
 
+scene_name: open_close_drawer
+task_name: open_drawer
+
 env:
-  name: open_drawer
   env:
-    config:
-      model_path: assets/xmls/scenes/open_close_drawer/demo.xml
-      mask_objects: ["handle", "drawer"]
-      operations: ["pull"]
-      viewer:
-        lookat: [0.0, 0.04, 0.12]
-        distance: 0.75
-        azimuth: 155
-        elevation: -22
-        step_delay: 0.025
-        hold_seconds: 1.0
+    mask_objects: ["handle", "drawer"]
+    operations: ["pull"]
+    viewer:
+      lookat: [0.0, 0.04, 0.12]
+      distance: 0.75
+      azimuth: 155
+      elevation: -22
+      step_delay: 0.025
+      hold_seconds: 1.0
 
 task:
-  env_name: open_drawer
   stages:
     # Pull the handle to open the drawer.
     # Gripper is horizontal (rot_x=pi/2): points in +Y toward cabinet, fingers in ±Z (one up, one down).

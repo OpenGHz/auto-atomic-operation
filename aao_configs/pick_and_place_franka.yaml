@@ -1,23 +1,22 @@
 defaults:
-  - base_franka
+  - basis_franka
   - _self_
 
+scene_name: pick_and_place
+model_name: demo_franka
+
 env:
-  name: mujoco_pick_place_franka_demo
   env:
-    config:
-      model_path: assets/xmls/scenes/pick_and_place/demo_franka.xml
-      mask_objects: ["source_block", "target_pedestal"]
-      viewer:
-        lookat: [0.04, 0.0, 0.1]
-        distance: 0.55
-        azimuth: 135
-        elevation: -28
-        step_delay: 0.03
-        hold_seconds: 1.0
+    mask_objects: ["source_block", "target_pedestal"]
+    viewer:
+      lookat: [0.04, 0.0, 0.1]
+      distance: 0.55
+      azimuth: 135
+      elevation: -28
+      step_delay: 0.03
+      hold_seconds: 1.0
 
 task:
-  env_name: mujoco_pick_place_franka_demo
   randomization:
     source_block:
       x: [-0.03, 0.03]

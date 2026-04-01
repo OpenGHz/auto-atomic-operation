@@ -94,8 +94,8 @@ class _OperatorState:
 class UnifiedMujocoEnv(MujocoBasis):
     """MuJoCo environment with operator pose control and observation capture."""
 
-    def __init__(self, config: EnvConfig):
-        super().__init__(config)
+    def __init__(self, config: Optional[EnvConfig] = None, **kwargs):
+        super().__init__(config, **kwargs)
         self._operator_states: dict[str, _OperatorState] = {}
 
     # ==================================================================
@@ -1026,7 +1026,9 @@ class UnifiedMujocoEnv(MujocoBasis):
 class BatchedUnifiedMujocoEnv:
     """Aggregate multiple homogeneous ``UnifiedMujocoEnv`` replicas."""
 
-    def __init__(self, config: EnvConfig):
+    def __init__(self, config: Optional[EnvConfig] = None, **kwargs):
+        if config is None:
+            config = EnvConfig(**kwargs)
         self.config = config
         self.batch_size = int(config.batch_size)
         self.envs: list[UnifiedMujocoEnv] = []

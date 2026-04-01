@@ -1,18 +1,16 @@
 defaults:
-  - base
+  - basis_mocap_eef
   - _self_
 
+scene_name: wipe_the_table
+
 env:
-  name: wipe_the_table
   env:
-    config:
-      model_path: assets/xmls/scenes/wipe_the_table/demo.xml
-      # mask_objects: ["blue_duck", "chicken_doll", "transparent_tape_paper", "white_box"]
-      mask_objects: ["blue_duck", "white_box"]
-      operations: ["pick", "place"]
+    # mask_objects: ["blue_duck", "chicken_doll", "transparent_tape_paper", "white_box"]
+    mask_objects: ["blue_duck", "white_box"]
+    operations: ["pick", "place"]
 
 task:
-  env_name: wipe_the_table
   randomization:
     blue_duck:
       x: [-0.01, 0.01]
@@ -136,6 +134,3 @@ task:
     #         reference: object_world
     #     eef:
     #       close: false
-
-operators:
-  - name: arm

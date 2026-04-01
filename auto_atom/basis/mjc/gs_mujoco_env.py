@@ -32,7 +32,7 @@ When ``gaussian_render`` is set:
 
 from __future__ import annotations
 import torch
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from gaussian_renderer import GSRendererMuJoCo
 from auto_atom.basis.mjc.mujoco_env import (
@@ -146,7 +146,9 @@ class GSUnifiedMujocoEnv(UnifiedMujocoEnv):
 class BatchedGSUnifiedMujocoEnv(BatchedUnifiedMujocoEnv):
     """Aggregate multiple homogeneous ``GSUnifiedMujocoEnv`` replicas."""
 
-    def __init__(self, config: GSEnvConfig):
+    def __init__(self, config: Optional[GSEnvConfig] = None, **kwargs) -> None:
+        if config is None:
+            config = GSEnvConfig.model_validate(kwargs)
         self.config = config
         self.batch_size = int(config.batch_size)
         self.envs: list[GSUnifiedMujocoEnv] = []

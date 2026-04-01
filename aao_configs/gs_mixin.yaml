@@ -1,0 +1,13 @@
+model_name: demo_gs
+
+env:
+  env:
+    _target_: auto_atom.basis.mjc.gs_mujoco_env.BatchedGSUnifiedMujocoEnv
+    viewer:
+      lookat: [0.5, 0.08, 0.13]
+      distance: 0.8
+      azimuth: 135
+      elevation: -28
+      # disable: true
+    gaussian_render:
+      background_ply: ${assets_dir}/gs/backgrounds/example.ply

@@ -1,32 +1,18 @@
 defaults:
   - stack_color_blocks
   - robotiq_gs
+  - gs_mixin
   - _self_
-
-gs_dir: assets/gs/scenes/stack_color_blocks
 
 env:
   env:
-    _target_: auto_atom.basis.mjc.gs_mujoco_env.BatchedGSUnifiedMujocoEnv
-    config:
-      _target_: auto_atom.basis.mjc.gs_mujoco_env.GSEnvConfig
-      model_path: assets/xmls/scenes/stack_color_blocks/demo_gs.xml
-      cameras:
-        - name: front
-          width: 640
-          height: 480
-          enable_color: true
-          enable_depth: true
-          enable_mask: false
-          enable_heat_map: false
-      viewer:
-        lookat: [0.5, 0.02, 0.08]
-        distance: 0.8
-        azimuth: 135
-        elevation: -28
-      gaussian_render:
-        background_ply: assets/gs/backgrounds/example.ply
-        body_gaussians:
-          cube_blue_gs:   ${gs_dir}/cube_blue.ply
-          cube_yellow_gs: ${gs_dir}/cube_yellow.ply
-          cube_orange_gs: ${gs_dir}/cube_orange.ply
+    viewer:
+      lookat: [0.5, 0.02, 0.08]
+      distance: 0.8
+      azimuth: 135
+      elevation: -28
+    gaussian_render:
+      body_gaussians:
+        cube_blue_gs: ${gs_dir}/cube_blue.ply
+        cube_yellow_gs: ${gs_dir}/cube_yellow.ply
+        cube_orange_gs: ${gs_dir}/cube_orange.ply

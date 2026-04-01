@@ -1,24 +1,22 @@
 defaults:
-  - base
+  - basis_mocap_eef
   - _self_
 
+scene_name: press_three_buttons
+
 env:
-  name: press_three_buttons
   env:
-    config:
-      model_path: assets/xmls/scenes/press_three_buttons/demo.xml
-      mask_objects: ["button_blue", "button_green", "button_pink"]
-      operations: ["push", "press"]
-      viewer:
-        lookat: [0.06, -0.03, 0.1]
-        distance: 0.6
-        azimuth: 135
-        elevation: -28
-        step_delay: 0.03
-        hold_seconds: 1.0
+    mask_objects: ["button_blue", "button_green", "button_pink"]
+    operations: ["push", "press"]
+    viewer:
+      lookat: [0.06, -0.03, 0.1]
+      distance: 0.6
+      azimuth: 135
+      elevation: -28
+      step_delay: 0.03
+      hold_seconds: 1.0
 
 task:
-  env_name: press_three_buttons
   randomization:
     button_blue:
       x: [-0.01, 0.01]
@@ -88,4 +86,4 @@ task:
 operators:
   - name: arm
     initial_state:
-      eef: 0.82  # closed gripper for pressing buttons
+      eef: 0.82 # closed gripper for pressing buttons
