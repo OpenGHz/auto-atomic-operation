@@ -244,6 +244,7 @@ class PolicyEvaluator:
         self._records: List[ExecutionRecord] = []
         self._env_states: List[_EnvRuntimeState] = []
         self._policy_states: List[Optional[_PolicyStageState]] = []
+        self._has_reset: np.ndarray = np.zeros(0, dtype=bool)
 
     @property
     def records(self) -> List[ExecutionRecord]:
@@ -277,6 +278,7 @@ class PolicyEvaluator:
         self._context.backend.setup(self._context.config)
         self._env_states = [_EnvRuntimeState() for _ in range(backend.batch_size)]
         self._policy_states = [None for _ in range(backend.batch_size)]
+        self._has_reset = np.zeros(backend.batch_size, dtype=bool)
         self._records = []
         return self
 
@@ -291,6 +293,7 @@ class PolicyEvaluator:
                     env_index, context
                 )
                 self._policy_states[env_index] = None
+        self._has_reset[mask] = True
         self._set_interest_focus()
         return self._build_task_update()
 
@@ -310,6 +313,7 @@ class PolicyEvaluator:
     def update(self, action: Any, env_mask: Optional[np.ndarray] = None) -> TaskUpdate:
         context = self._require_context()
         mask = self._normalize_mask(env_mask)
+        self._validate_update_mask(mask)
         feedback = self.action_applier(context, action, mask)
         for env_index, enabled in enumerate(mask):
             if not enabled or self._env_states[env_index].done:
@@ -332,6 +336,7 @@ class PolicyEvaluator:
         self._records = []
         self._env_states = []
         self._policy_states = []
+        self._has_reset = np.zeros(0, dtype=bool)
 
     def summarize(
         self,
@@ -607,6 +612,16 @@ class PolicyEvaluator:
                 f"env_mask must have shape ({batch_size},), got {mask.shape}"
             )
         return mask
+
+    def _validate_update_mask(self, env_mask: np.ndarray) -> None:
+        missing = np.flatnonzero(env_mask & ~self._has_reset)
+        if missing.size == 0:
+            return
+        missing_str = ", ".join(str(int(i)) for i in missing.tolist())
+        raise RuntimeError(
+            "PolicyEvaluator.update() was called for envs that have not been reset: "
+            f"[{missing_str}]. Call reset(env_mask=...) for those envs first."
+        )
 
     def _require_context(self) -> ExecutionContext:
         if self._context is None:

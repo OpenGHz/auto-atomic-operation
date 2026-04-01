@@ -539,6 +539,7 @@ class TaskRunner:
         self._plan: List[StageExecutionPlan] = []
         self._records: List[ExecutionRecord] = []
         self._env_states: List[_EnvRuntimeState] = []
+        self._has_reset: np.ndarray = np.zeros(0, dtype=bool)
 
     @property
     def records(self) -> List[ExecutionRecord]:
@@ -578,6 +579,7 @@ class TaskRunner:
         self._context.plan = self._plan
         self._context.backend.setup(self._context.config)
         self._env_states = [_EnvRuntimeState() for _ in range(backend.batch_size)]
+        self._has_reset = np.zeros(backend.batch_size, dtype=bool)
         self._records = []
         return self
 
@@ -591,13 +593,16 @@ class TaskRunner:
                 self._env_states[
                     env_index
                 ].latest_details = self._collect_reset_details(env_index, context)
+        self._has_reset[mask] = True
         self._set_interest_focus()
         return self._build_task_update()
 
-    def update(self) -> TaskUpdate:
+    def update(self, env_mask: Optional[np.ndarray] = None) -> TaskUpdate:
         context = self._require_context()
+        mask = self._normalize_mask(env_mask)
+        self._validate_update_mask(mask)
         for env_index, state in enumerate(self._env_states):
-            if state.done:
+            if not mask[env_index] or state.done:
                 continue
             self._update_env(env_index, state, context)
         self._set_interest_focus()
@@ -611,6 +616,7 @@ class TaskRunner:
         self._plan = []
         self._records = []
         self._env_states = []
+        self._has_reset = np.zeros(0, dtype=bool)
 
     def _update_env(
         self,
@@ -1225,6 +1231,16 @@ class TaskRunner:
         mask = np.zeros(self._require_context().backend.batch_size, dtype=bool)
         mask[env_index] = True
         return mask
+
+    def _validate_update_mask(self, env_mask: np.ndarray) -> None:
+        missing = np.flatnonzero(env_mask & ~self._has_reset)
+        if missing.size == 0:
+            return
+        missing_str = ", ".join(str(int(i)) for i in missing.tolist())
+        raise RuntimeError(
+            "TaskRunner.update() was called for envs that have not been reset: "
+            f"[{missing_str}]. Call reset(env_mask=...) for those envs first."
+        )
 
     def _require_context(self) -> ExecutionContext:
         if self._context is None:
