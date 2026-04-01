@@ -347,7 +347,7 @@
 
     <!-- Camera matching background GS coordinate frame (table30_13_arrange_flowers) -->
     <camera name="front_cam" pos="1.3 0.1 0.9" xyaxes="-0.109 0.993 0.038 -0.6451 -0.1089 0.7563" fovy="43.36"/>
-    <camera name="side_cam" pos="0.63 0.93 0.3" xyaxes="-0.9793 0.2026 0.0000 0.0000 0.0000 1.0000" fovy="43.36"/>
+    <camera name="side_cam" pos="0.488 1.0 0.6" xyaxes="-0.9994 0.0338 0.0000 -0.0107 -0.3168 0.9484" fovy="43.36"/>
   </worldbody>
 
   <keyframe>

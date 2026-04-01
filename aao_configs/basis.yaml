@@ -15,8 +15,8 @@ env:
     - joint_position
     - joint_velocity
     - joint_effort
-  sim_freq: 500
-  update_freq: 100
+  sim_freq: 600
+  update_freq: 30
   operations: ["pick", "place", "push", "pull", "press"]
   cameras:
     - name: hand_cam

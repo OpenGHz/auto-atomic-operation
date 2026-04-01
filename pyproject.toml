@@ -25,7 +25,7 @@ aao_eval = "auto_atom.runner.policy_eval:main"
 
 [project.optional-dependencies]
 mujoco = ["mujoco"]
-gs = ["gaussian_renderer", "gsplat", "torch", "scipy", "plyfile"]
+gs = ["gaussian_renderer @ git+https://github.com/OpenGHz/GaussianRenderer.git", "gsplat", "torch", "scipy", "plyfile"]
 
 
 [tool.setuptools.packages.find]

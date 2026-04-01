@@ -144,14 +144,12 @@ gs_dir: assets/gs/scenes/press_three_buttons   # pre-rotated PLYs
 bg_dir: third_party/.../3dgs                   # background (no pre-rotation needed)
 
 env:
-  env:
-    config:
-      gaussian_render:
-        background_ply: ${bg_dir}/background.ply
-        body_gaussians:
-          button_blue_gs: ${gs_dir}/button_blue.ply    # outer body → pre-rotated PLY
-          button_green_gs: ${gs_dir}/button_green.ply
-          button_pink_gs: ${gs_dir}/button_pink.ply
+    gaussian_render:
+    background_ply: ${bg_dir}/background.ply
+    body_gaussians:
+        button_blue_gs: ${gs_dir}/button_blue.ply    # outer body → pre-rotated PLY
+        button_green_gs: ${gs_dir}/button_green.ply
+        button_pink_gs: ${gs_dir}/button_pink.ply
 ```
 
 The `body_gaussians` keys must match the **outer** (`*_gs`) body names in the XML.
@@ -189,6 +187,138 @@ When adding a new GS object to a scene:
 7. **Map the outer (`*_gs`) body** in `body_gaussians` YAML to the pre-rotated PLY.
 
 Following this pattern ensures both GS and non-GS renders are geometrically consistent without SH color distortion.
+
+---
+
+## Depth Semantics: GS vs Native MuJoCo
+
+When comparing third-party `press_da_button` data generation with `auto_atom`, it is important to distinguish between two very different notions of "depth".
+
+### `press_da_button`: depth comes from the Gaussian renderer
+
+The task entrypoints in [`third_party/press_da_button/justfile`](../third_party/press_da_button/justfile) only launch dataset scripts. The actual depth maps are produced inside:
+
+- [`01_press_three_buttons_data.py`](../third_party/press_da_button/gs_playground/experimental/env/table30/old_data_generation/01_press_three_buttons_data.py)
+- [`04_press_one_button_data.py`](../third_party/press_da_button/gs_playground/experimental/env/table30/old_data_generation/04_press_one_button_data.py)
+
+Both scripts call:
+
+```python
+rgb_t, depth_t = self.env.batch_render(data)
+```
+
+and then save `depth_t[..., 0]` to `.npy`.
+
+That `batch_render()` implementation lives in [`third_party/press_da_button/gs_playground/src/env/motrix_env/render_env.py`](../third_party/press_da_button/gs_playground/src/env/motrix_env/render_env.py). It does **not** use MuJoCo's native depth buffer. Instead it:
+
+1. Renders the background with a GS background renderer.
+2. Renders the foreground with a GS foreground renderer.
+3. Composites RGB and depth together.
+
+The key detail is the documented depth composition rule:
+
+```python
+depth = fg_depth * alpha + bg_depth * (1 - alpha)
+```
+
+So the saved depth is an **alpha-weighted GS depth**, not a hard nearest-surface z-buffer.
+
+### Why GS depth quality depends on opacity / alpha
+
+Because GS depth is blended with `alpha`, its numerical quality is tied to Gaussian opacity and coverage:
+
+- At object boundaries, foreground and background depth can be mixed.
+- Semi-transparent or weakly covered regions can produce "in-between" depths.
+- If Gaussian opacity is poorly tuned, the depth map may look soft, noisy, or slightly biased.
+- Improving RGB appearance does not automatically guarantee crisp geometric depth.
+
+This also shows up in the third-party mask code in [`04_press_one_button_data.py`](../third_party/press_da_button/gs_playground/experimental/env/table30/old_data_generation/04_press_one_button_data.py), where:
+
+- `alpha_t` is used as a visibility proxy (`alpha > 0.5`).
+- `btn_depth_t` is compared against full-scene `scene_depth_t` for occlusion culling.
+
+In other words, alpha is part of the geometry interpretation pipeline, not just the color pipeline.
+
+### What `alphas` means in the rasterizer
+
+In `gaussian_renderer`, the `rasterization(...)` call returns three values:
+
+- `renders`
+- `alphas`
+- `meta`
+
+Here `alphas` is the pixel-wise accumulated opacity / visibility map of the rendered Gaussian set. It should be understood as:
+
+- `alphas ≈ 0`: the pixel is barely covered by the current Gaussians
+- `alphas ≈ 1`: the pixel is strongly covered by the current Gaussians
+- `0 < alphas < 1`: the pixel lies in a soft edge, sparse coverage region, or mixed transition region
+
+This is different from per-Gaussian `opacity`:
+
+- `gaussians.opacity` is an input attribute stored per Gaussian
+- `alphas` is the rendered output after many Gaussians have been accumulated onto each pixel
+
+In the renderer pipeline, `alphas` is what controls foreground/background color blending. Conceptually:
+
+```python
+color = fg_color + bg_color * (1 - alpha)
+```
+
+One subtle but important distinction:
+
+- in depth/RGB compositing discussions, "alpha" refers to this true rasterizer output `alphas`
+- in some third-party mask code, a variable named `alpha_t` may actually hold rendered RGB and use `max(rgb)` as an alpha proxy rather than the true `alphas` tensor
+
+So when reading downstream mask code, it is important to distinguish between:
+
+- true rasterizer `alphas`
+- RGB-derived visibility proxies that are only named like alpha
+
+### GS mask visibility semantics
+
+The same occlusion logic also affects GS-derived binary masks. In the third-party `press_one_button` pipeline, a mask is first created from `alpha > threshold`, then pixels are removed when the object-only depth is farther than the full-scene depth.
+
+This means a GS mask is intended to represent the **visible** part of the object only:
+
+- visible regions stay in the mask
+- regions hidden behind other objects are removed by depth-based occlusion culling
+- the result is not a full amodal mask of the object
+
+Because this decision depends on GS alpha and GS depth, mask quality near boundaries still depends on opacity quality, coverage, and depth stability. In practice, partially occluded edges can look softer or less stable than native MuJoCo segmentation masks.
+
+### Current `auto_atom`: depth comes from MuJoCo's native renderer
+
+The current implementation in [`auto_atom/basis/mjc/mujoco_env.py`](../auto_atom/basis/mjc/mujoco_env.py) uses MuJoCo's native renderer:
+
+```python
+renderer.enable_depth_rendering()
+depth = np.asarray(renderer.render(), dtype=np.float32)
+renderer.disable_depth_rendering()
+```
+
+This is standard MuJoCo depth-buffer rendering:
+
+- no GS foreground/background compositing
+- no alpha-weighted depth blending
+- no dependence on Gaussian opacity
+
+So the current `auto_atom` depth is a rasterized MuJoCo depth map, closer to a hard visible-surface depth image.
+
+### Optional GS depth path already exists in `auto_atom`
+
+`auto_atom` also has a GS-based rendering path in [`auto_atom/basis/mjc/gs_mujoco_env.py`](../auto_atom/basis/mjc/gs_mujoco_env.py). That file explicitly documents that GS depth uses accumulated depth:
+
+```text
+render_mode="RGB+D" (accumulated depth ∑w_i z_i)
+```
+
+This is conceptually aligned with the third-party GS depth behavior: depth is produced by the Gaussian renderer and depends on rendering weights, rather than by MuJoCo's native depth buffer.
+
+### Practical takeaway
+
+- If you need physically crisp visible-surface depth, MuJoCo native depth is the safer default.
+- If you need appearance consistency with GS RGB, GS depth may align better visually, but it is inherently softer and more opacity-sensitive.
+- When debugging point cloud quality from GS-generated datasets, always inspect Gaussian opacity / alpha behavior in addition to camera intrinsics and extrinsics.
 
 ---
 
