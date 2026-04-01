@@ -127,7 +127,7 @@ env.data.mocap_quat[mocap_id] = [qw, qx, qy, qz]  # MuJoCo uses wxyz
 
 <!-- 约束绑定 -->
 <equality>
-  <weld body1="robotiq_mocap" body2="robotiq_interface" solref="0.02 1"/>
+  <weld body1="robotiq_mocap" body2="robotiq_interface" solref="0.05 1"/>
 </equality>
 ```
 
@@ -145,8 +145,39 @@ env.update()  # mj_step × n_substeps
 ```
 
 Weld 约束参数:
-- `solref="0.02 1"`: 临界阻尼，20ms 时间常数
+- `solref="0.05 1"`: 临界阻尼，50ms 时间常数
 - `solimp="0.95 0.99 0.001"`: 高精度约束跟踪
+
+### 如何调小每个仿真 step 的移动步幅
+
+如果想让 `robotiq_interface` 每个仿真 step 跟随 `robotiq_mocap` 时走得更小、更柔和，
+优先调整 `assets/xmls/robots/robotiq.xml` 中这条约束:
+
+```xml
+<weld body1="robotiq_mocap" body2="robotiq_interface" solref="0.05 1" solimp="0.95 0.99 0.001"/>
+```
+
+调参规则:
+
+- `solref` 第 1 个值可以近似看成“收敛时间常数”
+- 这个值越大，weld 跟随越慢，每个仿真 step 的位移/转角增量通常越小
+- 这个值越小，weld 跟随越快，每个仿真 step 更激进，也更容易显得突然
+- 第 2 个值这里保持 `1`，表示接近临界阻尼；一般先只调第 1 个值就够了
+
+实用建议:
+
+- 当前配置 `0.05 1`: 比 `0.02 1` 更平滑，适合作为默认值
+- 如果还想更慢一点，可以试 `0.08 1` 或 `0.1 1`
+- 如果觉得响应太肉、跟手性不够，可以回调到 `0.03 1` 或 `0.02 1`
+
+建议一次只改一个量，并结合实际任务观察:
+
+- 末端是否还有明显“跳一下”的感觉
+- 接触物体时是否更稳定
+- 跟随目标轨迹时是否出现明显滞后
+
+`solimp` 通常不用先动。它主要影响约束从软到硬的响应形状；在“只是想让每 step 走小一点”
+这个目标下，先调 `solref` 会更直接，也更容易预期。
 
 ## 7. 夹爪控制
 
