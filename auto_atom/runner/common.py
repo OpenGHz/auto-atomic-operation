@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 from pprint import pprint
+from time import perf_counter
 from typing import Callable, List, Optional, Sequence
 
 import numpy as np
@@ -24,7 +25,7 @@ from auto_atom import (
 class ExampleLoopHooks:
     reset_fn: Callable[[], TaskUpdate]
     step_fn: Callable[[int, TaskUpdate], TaskUpdate]
-    summarize_fn: Callable[[TaskUpdate, int, Optional[int]], ExecutionSummary]
+    summarize_fn: Callable[[TaskUpdate, int, Optional[int], float], ExecutionSummary]
     records_fn: Callable[[], Sequence[ExecutionRecord]]
     before_round_fn: Optional[Callable[[int], None]] = None
     reset_label: str = "Reset"
@@ -79,6 +80,7 @@ def run_example_rounds(
         print()
 
         steps_used = 0
+        start_time = perf_counter()
         for step in range(hooks.max_updates or 10**18):
             if use_input:
                 input("Press Enter to continue...")
@@ -93,7 +95,13 @@ def run_example_rounds(
             assert hooks.max_updates is not None
             print(f"Reached max_updates={hooks.max_updates}, stopping rollout.")
 
-        summary = hooks.summarize_fn(update, steps_used, hooks.max_updates)
+        elapsed_time_sec = perf_counter() - start_time
+        summary = hooks.summarize_fn(
+            update,
+            steps_used,
+            hooks.max_updates,
+            elapsed_time_sec,
+        )
 
         print()
         print("Execution records:")
@@ -123,7 +131,8 @@ def print_final_summary(round_summaries: Sequence[ExecutionSummary]) -> None:
     for i, summary in enumerate(round_summaries, start=1):
         tag = "OK" if bool(np.all(summary.final_success)) else "FAIL"
         print(f"  Round {i}: [{tag}]")
-        print(f"    total updates: {summary.updates_used}")
+        print(f"    completion steps: {summary.updates_used}")
+        print(f"    completion time: {summary.elapsed_time_sec:.3f}s")
         for record in summary.records:
             print(
                 f"    env {record.env_index} stage {record.stage_name}: {record.status.value}"

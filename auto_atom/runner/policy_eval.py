@@ -161,11 +161,12 @@ def main(cfg: DictConfig) -> None:
                         evaluator,
                     )
                 ),
-                summarize_fn=lambda update, steps_used, max_updates: (
+                summarize_fn=lambda update, steps_used, max_updates, elapsed_time_sec: (
                     evaluator.summarize(
                         update,
                         max_updates=max_updates,
                         updates_used=steps_used,
+                        elapsed_time_sec=elapsed_time_sec,
                     )
                 ),
                 records_fn=lambda: evaluator.records,

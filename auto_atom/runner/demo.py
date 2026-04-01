@@ -43,10 +43,13 @@ def main(cfg: DictConfig) -> None:
             hooks=ExampleLoopHooks(
                 reset_fn=runner.reset,
                 step_fn=lambda _step, _update: runner.update(),
-                summarize_fn=lambda update, steps_used, max_updates: runner.summarize(
-                    update,
-                    max_updates=max_updates,
-                    updates_used=steps_used,
+                summarize_fn=lambda update, steps_used, max_updates, elapsed_time_sec: (
+                    runner.summarize(
+                        update,
+                        max_updates=max_updates,
+                        updates_used=steps_used,
+                        elapsed_time_sec=elapsed_time_sec,
+                    )
                 ),
                 records_fn=lambda: runner.records,
                 reset_label="Reset task",

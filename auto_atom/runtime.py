@@ -293,6 +293,7 @@ class ExecutionSummary:
     final_status: np.ndarray
     final_done: np.ndarray
     final_success: np.ndarray
+    elapsed_time_sec: float = 0.0
     records: List[ExecutionRecord] = field(default_factory=list)
 
 
@@ -551,6 +552,7 @@ class TaskRunner:
         *,
         max_updates: Optional[int] = None,
         updates_used: int = 0,
+        elapsed_time_sec: float = 0.0,
     ) -> ExecutionSummary:
         return _build_execution_summary(
             update=update or self._build_task_update(),
@@ -558,6 +560,7 @@ class TaskRunner:
             total_stages=len(self._plan),
             max_updates=max_updates,
             updates_used=updates_used,
+            elapsed_time_sec=elapsed_time_sec,
         )
 
     def from_yaml(self, path: str | Path) -> "TaskRunner":
@@ -1426,6 +1429,7 @@ def _build_execution_summary(
     total_stages: int,
     max_updates: Optional[int],
     updates_used: int,
+    elapsed_time_sec: float = 0.0,
 ) -> ExecutionSummary:
     batch_size = len(update.stage_name)
     completed_stage_count = np.zeros(batch_size, dtype=np.int64)
@@ -1436,6 +1440,7 @@ def _build_execution_summary(
         total_stages=total_stages,
         max_updates=max_updates,
         updates_used=updates_used,
+        elapsed_time_sec=elapsed_time_sec,
         completed_stage_count=completed_stage_count,
         final_stage_index=np.asarray(update.stage_index, dtype=np.int64),
         final_stage_name=list(update.stage_name),

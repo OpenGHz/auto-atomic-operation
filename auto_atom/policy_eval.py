@@ -344,6 +344,7 @@ class PolicyEvaluator:
         *,
         max_updates: Optional[int] = None,
         updates_used: int = 0,
+        elapsed_time_sec: float = 0.0,
     ) -> ExecutionSummary:
         return _build_execution_summary(
             update=update or self._build_task_update(),
@@ -351,6 +352,7 @@ class PolicyEvaluator:
             total_stages=len(self._plan),
             max_updates=max_updates,
             updates_used=updates_used,
+            elapsed_time_sec=elapsed_time_sec,
         )
 
     def _update_env(
