@@ -131,6 +131,8 @@ class OperatorBinding(BaseModel, frozen=True):
 class EnvConfig(BaseModel, frozen=True):
     model_config = ConfigDict(validate_assignment=True, extra="forbid")
 
+    name: str = ""
+    """Optional registry name. When set, the constructed batched env self-registers under this name."""
     model_path: Path
     """The path to the Mujoco XML model file used to create the environment."""
     operators: List[OperatorBinding] = Field(default_factory=list)

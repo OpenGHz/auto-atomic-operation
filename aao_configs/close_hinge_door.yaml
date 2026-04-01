@@ -6,7 +6,6 @@ scene_name: open_close_hinge_door
 task_name: close_hinge_door
 
 env:
-  env:
     initial_joint_positions:
       hinge_joint_1: -1.3
     mask_objects: ["handle", "door"]

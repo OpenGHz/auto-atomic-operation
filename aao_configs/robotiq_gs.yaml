@@ -5,16 +5,15 @@ assets_dir: assets
 robot_gs_dir: ${assets_dir}/gs/robots/robotiq
 
 env:
-  env:
-    gaussian_render:
-      body_gaussians:
-        robotiq_interface:  ${robot_gs_dir}/base.ply
-        robotiq_base:       ${robot_gs_dir}/robotiq_base.ply
-        left_driver:        ${robot_gs_dir}/left_driver.ply
-        left_coupler:       ${robot_gs_dir}/left_coupler.ply
-        left_spring_link:   ${robot_gs_dir}/left_spring_link.ply
-        left_follower:      ${robot_gs_dir}/left_follower.ply
-        right_driver:       ${robot_gs_dir}/right_driver.ply
-        right_coupler:      ${robot_gs_dir}/right_coupler.ply
-        right_spring_link:  ${robot_gs_dir}/right_spring_link.ply
-        right_follower:     ${robot_gs_dir}/right_follower.ply
+  gaussian_render:
+    body_gaussians:
+      robotiq_interface: ${robot_gs_dir}/base.ply
+      robotiq_base: ${robot_gs_dir}/robotiq_base.ply
+      left_driver: ${robot_gs_dir}/left_driver.ply
+      left_coupler: ${robot_gs_dir}/left_coupler.ply
+      left_spring_link: ${robot_gs_dir}/left_spring_link.ply
+      left_follower: ${robot_gs_dir}/left_follower.ply
+      right_driver: ${robot_gs_dir}/right_driver.ply
+      right_coupler: ${robot_gs_dir}/right_coupler.ply
+      right_spring_link: ${robot_gs_dir}/right_spring_link.ply
+      right_follower: ${robot_gs_dir}/right_follower.ply

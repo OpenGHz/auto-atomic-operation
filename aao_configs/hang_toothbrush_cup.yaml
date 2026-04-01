@@ -5,9 +5,8 @@ defaults:
 scene_name: hang_toothbrush_cup
 
 env:
-  env:
-    mask_objects: ["toothbrush_cup", "rack"]
-    operations: ["pick", "place"]
+  mask_objects: ["toothbrush_cup", "rack"]
+  operations: ["pick", "place"]
 
 task:
   stages:

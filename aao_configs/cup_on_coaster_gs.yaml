@@ -5,13 +5,12 @@ defaults:
   - _self_
 
 env:
-  env:
-    viewer:
-      lookat: [0.45, 0.05, 0.08]
-      distance: 0.8
-      azimuth: 135
-      elevation: -28
-    gaussian_render:
-      body_gaussians:
-        cup_gs:     ${gs_dir}/cup.ply
-        coaster_gs: ${gs_dir}/coaster.ply
+  viewer:
+    lookat: [0.45, 0.05, 0.08]
+    distance: 0.8
+    azimuth: 135
+    elevation: -28
+  gaussian_render:
+    body_gaussians:
+      cup_gs: ${gs_dir}/cup.ply
+      coaster_gs: ${gs_dir}/coaster.ply

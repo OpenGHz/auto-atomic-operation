@@ -200,8 +200,15 @@ class MockSceneBackend(SceneBackend):
         )
 
 
-def create_mock_env(kind: str = "mock_env", batch_size: int = 1) -> Dict[str, Any]:
-    return {"kind": kind, "batch_size": batch_size}
+def create_mock_env(
+    kind: str = "mock_env",
+    batch_size: int = 1,
+    name: str = "",
+) -> Dict[str, Any]:
+    env = {"kind": kind, "batch_size": batch_size}
+    if name:
+        ComponentRegistry.register_env(name, env)
+    return env
 
 
 def build_mock_backend(

@@ -22,16 +22,15 @@ from tkinter import ttk
 from typing import List, Optional, Tuple
 
 import hydra
-from hydra.utils import instantiate
-from omegaconf import DictConfig, OmegaConf
+from omegaconf import DictConfig
 
 from auto_atom.backend.mjc.mujoco_backend import (
     MujocoOperatorHandler,
     MujocoTaskBackend,
 )
 from auto_atom.basis.mjc.mujoco_env import UnifiedMujocoEnv
-from auto_atom.runner.common import get_config_dir
-from auto_atom.runtime import ComponentRegistry, TaskFileConfig, TaskRunner
+from auto_atom.runner.common import get_config_dir, prepare_task_file
+from auto_atom.runtime import TaskRunner
 from auto_atom.utils.pose import (
     PoseState,
     euler_to_quaternion,
@@ -324,15 +323,7 @@ class OperatorPanel:
     version_base=None,
 )
 def main(cfg: DictConfig) -> None:
-    raw = OmegaConf.to_container(cfg, resolve=False)
-    if not isinstance(raw, dict):
-        raise TypeError("Config root must be a mapping.")
-
-    ComponentRegistry.clear()
-    if "env" in cfg and cfg.env is not None:
-        instantiate(cfg.env)
-
-    task_file = TaskFileConfig.model_validate(raw)
+    task_file = prepare_task_file(cfg)
     runner = TaskRunner().from_config(task_file)
     backend = runner._context.backend
     if not isinstance(backend, MujocoTaskBackend):

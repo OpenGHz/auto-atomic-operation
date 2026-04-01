@@ -4,45 +4,43 @@ model_name: demo
 task_name: ${scene_name}
 
 env:
-  _target_: auto_atom.runtime.ComponentRegistry.register_env
+  _target_: auto_atom.basis.mjc.mujoco_env.BatchedUnifiedMujocoEnv
   name: ${task_name}
-  env:
-    _target_: auto_atom.basis.mjc.mujoco_env.BatchedUnifiedMujocoEnv
-    model_path: ${assets_dir}/xmls/scenes/${scene_name}/${model_name}.xml
-    batch_size: 2
-    enabled_sensors:
-      - camera
-      - pose
-      - tactile
-      - joint_position
-      - joint_velocity
-      - joint_effort
-    sim_freq: 500
-    update_freq: 100
-    operations: ["pick", "place", "push", "pull", "press"]
-    cameras:
-      - name: hand_cam
-        width: 640
-        height: 480
-        enable_color: true
-        enable_depth: true
-        enable_mask: false
-        enable_heat_map: false
-        parent_frame: eef_pose
-      - name: front_cam
-        width: 640
-        height: 480
-        enable_color: true
-        enable_depth: true
-        enable_mask: false
-        enable_heat_map: false
-      - name: side_cam
-        width: 640
-        height: 480
-        enable_color: true
-        enable_depth: true
-        enable_mask: false
-        enable_heat_map: false
+  model_path: ${assets_dir}/xmls/scenes/${scene_name}/${model_name}.xml
+  batch_size: 2
+  enabled_sensors:
+    - camera
+    - pose
+    - tactile
+    - joint_position
+    - joint_velocity
+    - joint_effort
+  sim_freq: 500
+  update_freq: 100
+  operations: ["pick", "place", "push", "pull", "press"]
+  cameras:
+    - name: hand_cam
+      width: 640
+      height: 480
+      enable_color: true
+      enable_depth: true
+      enable_mask: false
+      enable_heat_map: false
+      parent_frame: eef_pose
+    - name: front_cam
+      width: 640
+      height: 480
+      enable_color: true
+      enable_depth: true
+      enable_mask: false
+      enable_heat_map: false
+    - name: side_cam
+      width: 640
+      height: 480
+      enable_color: true
+      enable_depth: true
+      enable_mask: false
+      enable_heat_map: false
 
 backend: auto_atom.backend.mjc.mujoco_backend.build_mujoco_backend
 

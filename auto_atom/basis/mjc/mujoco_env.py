@@ -687,50 +687,61 @@ class UnifiedMujocoEnv(MujocoBasis):
             arm_aidx = self._op_arm_aidx[op.name]
             eef_aidx = self._op_eef_aidx[op.name]
             arm_name, eef_name = self._op_output_names[op.name]
+            joint_components = [
+                (arm_name, arm_qidx, arm_vidx, arm_aidx),
+                (eef_name, eef_qidx, eef_vidx, eef_aidx),
+            ]
 
             if DataType.JOINT_POSITION in self.config.enabled_sensors:
                 if structured:
-                    for prefix, limb, qidx, vidx, aidx in [
-                        ("enc", arm_name, arm_qidx, arm_vidx, arm_aidx),
-                        ("enc", eef_name, eef_qidx, eef_vidx, eef_aidx),
-                        ("action", arm_name, arm_qidx, arm_vidx, arm_aidx),
-                        ("action", eef_name, eef_qidx, eef_vidx, eef_aidx),
-                    ]:
-                        obs[f"{prefix}/{limb}/joint_state"] = {
-                            "data": {
-                                "position": np.asarray(
+                    for limb, qidx, vidx, aidx in joint_components:
+                        if qidx.size == 0 and vidx.size == 0 and aidx.size == 0:
+                            continue
+                        for prefix in ("enc", "action"):
+                            obs[f"{prefix}/{limb}/joint_state"] = {
+                                "data": {
+                                    "position": np.asarray(
+                                        self.data.qpos[qidx], dtype=np.float32
+                                    ),
+                                    "velocity": np.asarray(
+                                        self.data.qvel[vidx], dtype=np.float32
+                                    ),
+                                    "effort": np.asarray(
+                                        self.data.ctrl[aidx], dtype=np.float32
+                                    ),
+                                },
+                                "t": t,
+                            }
+                else:
+                    for limb, qidx, _, aidx in joint_components:
+                        if qidx.size > 0:
+                            obs[f"{limb}/joint_state/position"] = {
+                                "data": np.asarray(
                                     self.data.qpos[qidx], dtype=np.float32
                                 ),
-                                "velocity": np.asarray(
-                                    self.data.qvel[vidx], dtype=np.float32
-                                ),
-                                "effort": np.asarray(
+                                "t": t,
+                            }
+                        if aidx.size > 0:
+                            obs[f"action/{limb}/joint_state/position"] = {
+                                "data": np.asarray(
                                     self.data.ctrl[aidx], dtype=np.float32
                                 ),
-                            },
-                            "t": t,
-                        }
-                else:
-                    for limb, qidx in [(arm_name, arm_qidx), (eef_name, eef_qidx)]:
-                        obs[f"{limb}/joint_state/position"] = {
-                            "data": np.asarray(self.data.qpos[qidx], dtype=np.float32),
-                            "t": t,
-                        }
-                    for limb, aidx in [(arm_name, arm_aidx), (eef_name, eef_aidx)]:
-                        obs[f"action/{limb}/joint_state/position"] = {
-                            "data": np.asarray(self.data.ctrl[aidx], dtype=np.float32),
-                            "t": t,
-                        }
+                                "t": t,
+                            }
 
             if not structured:
                 if DataType.JOINT_VELOCITY in self.config.enabled_sensors:
-                    for limb, vidx in [(arm_name, arm_vidx), (eef_name, eef_vidx)]:
+                    for limb, _, vidx, _ in joint_components:
+                        if vidx.size == 0:
+                            continue
                         obs[f"{limb}/joint_state/velocity"] = {
                             "data": np.asarray(self.data.qvel[vidx], dtype=np.float32),
                             "t": t,
                         }
                 if DataType.JOINT_EFFORT in self.config.enabled_sensors:
-                    for limb, aidx in [(arm_name, arm_aidx), (eef_name, eef_aidx)]:
+                    for limb, _, _, aidx in joint_components:
+                        if aidx.size == 0:
+                            continue
                         obs[f"{limb}/joint_state/effort"] = {
                             "data": np.asarray(self.data.ctrl[aidx], dtype=np.float32),
                             "t": t,
@@ -1028,7 +1039,7 @@ class BatchedUnifiedMujocoEnv:
 
     def __init__(self, config: Optional[EnvConfig] = None, **kwargs):
         if config is None:
-            config = EnvConfig(**kwargs)
+            config = EnvConfig.model_validate(kwargs)
         self.config = config
         self.batch_size = int(config.batch_size)
         self.envs: list[UnifiedMujocoEnv] = []
@@ -1036,6 +1047,10 @@ class BatchedUnifiedMujocoEnv:
             viewer = config.viewer if env_index == config.viewer_env_index else None
             env_cfg = config.model_copy(update={"batch_size": 1, "viewer": viewer})
             self.envs.append(UnifiedMujocoEnv(env_cfg))
+        if config.name:
+            from auto_atom.runtime import ComponentRegistry
+
+            ComponentRegistry.register_env(config.name, self)
 
     def register_operator(self, *args, **kwargs) -> None:
         for env in self.envs:

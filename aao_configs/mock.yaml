@@ -1,9 +1,7 @@
 env:
-  _target_: auto_atom.runtime.ComponentRegistry.register_env
+  _target_: auto_atom.mock.create_mock_env
   name: mock_single_arm
-  env:
-    _target_: auto_atom.mock.create_mock_env
-    kind: mock_env
+  kind: mock_env
 
 backend: auto_atom.mock.build_mock_backend
 

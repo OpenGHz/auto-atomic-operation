@@ -1,10 +1,8 @@
 env:
-  _target_: auto_atom.runtime.ComponentRegistry.register_env
+  _target_: auto_atom.mock.create_mock_env
   name: mock_policy_eval
-  env:
-    _target_: auto_atom.mock.create_mock_env
-    kind: mock_env
-    batch_size: 1
+  kind: mock_env
+  batch_size: 1
 
 backend: auto_atom.mock.build_mock_backend
 

@@ -2,20 +2,19 @@ defaults:
   - basis_mocap_eef
   - _self_
 
+scene_name: cup_on_coaster
+
 env:
-  name: cup_on_coaster
-  env:
-    mask_objects: ["cup", "coaster"]
-    viewer:
-      lookat: [0.04, 0.0, 0.09]
-      distance: 0.6
-      azimuth: 135
-      elevation: -28
-      step_delay: 0.03
-      hold_seconds: 1.0
+  mask_objects: ["cup", "coaster"]
+  viewer:
+    lookat: [0.04, 0.0, 0.09]
+    distance: 0.6
+    azimuth: 135
+    elevation: -28
+    step_delay: 0.03
+    hold_seconds: 1.0
 
 task:
-  env_name: cup_on_coaster
   randomization:
     cup:
       x: [-0.02, 0.02]

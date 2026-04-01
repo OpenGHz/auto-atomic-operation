@@ -5,16 +5,15 @@ defaults:
 scene_name: stack_color_blocks
 
 env:
-  env:
-    mask_objects: ["cube_blue", "cube_orange", "cube_yellow"]
-    operations: ["pick", "place"]
-    viewer:
-      lookat: [-0.2, 0.0, 0.55]
-      distance: 1.5
-      azimuth: 290
-      elevation: -20
-      step_delay: 0.025
-      hold_seconds: 1.0
+  mask_objects: ["cube_blue", "cube_orange", "cube_yellow"]
+  operations: ["pick", "place"]
+  viewer:
+    lookat: [-0.2, 0.0, 0.55]
+    distance: 1.5
+    azimuth: 290
+    elevation: -20
+    step_delay: 0.025
+    hold_seconds: 1.0
 
 task:
   randomization:

@@ -29,11 +29,10 @@ import hydra
 import mujoco
 import numpy as np
 from hydra.core.hydra_config import HydraConfig
-from hydra.utils import instantiate
-from omegaconf import DictConfig, OmegaConf
+from omegaconf import DictConfig
 
-from auto_atom.runner.common import get_config_dir
-from auto_atom.runtime import ComponentRegistry, TaskFileConfig, TaskRunner
+from auto_atom.runner.common import get_config_dir, prepare_task_file
+from auto_atom.runtime import ComponentRegistry, TaskRunner
 
 
 # ---------------------------------------------------------------------------
@@ -114,19 +113,11 @@ def _save_comparison(
 def main(cfg: DictConfig) -> None:
     show: bool = bool(cfg.get("show", False))
 
-    # ── 1. Instantiate env (same pattern as aao_demo) ───────────────────────
-    raw = OmegaConf.to_container(cfg, resolve=False)
-    assert isinstance(raw, dict)
-
-    ComponentRegistry.clear()
-    if "env" in cfg and cfg.env is not None:
-        instantiate(cfg.env)
-
-    env_name: str = OmegaConf.select(cfg, "env.name") or "env"
-    env = ComponentRegistry.get_env(env_name)
+    # ── 1. Instantiate env with resolved Hydra config ───────────────────────
+    task_file = prepare_task_file(cfg)
+    env = ComponentRegistry.get_env(task_file.task.env_name)
 
     # ── 2. Reset to initial keyframe ─────────────────────────────────────────
-    task_file = TaskFileConfig.model_validate(raw)
     runner = TaskRunner().from_config(task_file)
     runner.reset()
 

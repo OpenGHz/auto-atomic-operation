@@ -819,9 +819,7 @@ def create_mujoco_env(
     env_name: str,
     config: EnvConfig,
 ) -> BatchedUnifiedMujocoEnv:
-    env = BatchedUnifiedMujocoEnv(config)
-    ComponentRegistry.register_env(env_name, env)
-    return env
+    return BatchedUnifiedMujocoEnv(config.model_copy(update={"name": env_name}))
 
 
 def _resolve_arm_pose(arm_config, fallback_pose: PoseState) -> PoseState:

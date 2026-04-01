@@ -6,21 +6,20 @@ defaults:
   - basis
 
 env:
-  env:
-    operators:
-      - name: arm
-        arm_actuators:
-          - actuator1
-          - actuator2
-          - actuator3
-          - actuator4
-          - actuator5
-          - actuator6
-          - actuator7
-        eef_actuators: [fingers_actuator]
-        eef_output_name: eef
-        pose_site: gripper
-        tactile_prefixes: ["left_", "right_"]
+  operators:
+    - name: arm
+      arm_actuators:
+        - actuator1
+        - actuator2
+        - actuator3
+        - actuator4
+        - actuator5
+        - actuator6
+        - actuator7
+      eef_actuators: [fingers_actuator]
+      eef_output_name: eef
+      pose_site: gripper
+      tactile_prefixes: ["left_", "right_"]
 
 backend: auto_atom.backend.mjc.ik.mink_ik_solver.build_franka_backend
 

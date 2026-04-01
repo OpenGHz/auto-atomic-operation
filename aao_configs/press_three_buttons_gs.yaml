@@ -5,29 +5,28 @@ defaults:
   - _self_
 
 env:
-  env:
-    cameras:
-      - name: front_right
-        width: 640
-        height: 480
-        enable_color: true
-        enable_depth: true
-        enable_mask: false
-        enable_heat_map: false
-      - name: front_left
-        width: 640
-        height: 480
-        enable_color: true
-        enable_depth: true
-        enable_mask: false
-        enable_heat_map: false
-    viewer:
-      lookat: [0.45, 0.0, 0.08]
-      distance: 0.8
-      azimuth: 135
-      elevation: -28
-    gaussian_render:
-      body_gaussians:
-        button_blue_gs: ${gs_dir}/button_blue.ply
-        button_green_gs: ${gs_dir}/button_green.ply
-        button_pink_gs: ${gs_dir}/button_pink.ply
+  cameras:
+    - name: front_right
+      width: 640
+      height: 480
+      enable_color: true
+      enable_depth: true
+      enable_mask: false
+      enable_heat_map: false
+    - name: front_left
+      width: 640
+      height: 480
+      enable_color: true
+      enable_depth: true
+      enable_mask: false
+      enable_heat_map: false
+  viewer:
+    lookat: [0.45, 0.0, 0.08]
+    distance: 0.8
+    azimuth: 135
+    elevation: -28
+  gaussian_render:
+    body_gaussians:
+      button_blue_gs: ${gs_dir}/button_blue.ply
+      button_green_gs: ${gs_dir}/button_green.ply
+      button_pink_gs: ${gs_dir}/button_pink.ply

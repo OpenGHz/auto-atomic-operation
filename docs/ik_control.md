@@ -195,7 +195,6 @@ def solve(target_pose_in_base, current_qpos) -> Optional[np.ndarray]:
 
 ```yaml
 env:
-  env:
     config:
       operators:
         - name: arm

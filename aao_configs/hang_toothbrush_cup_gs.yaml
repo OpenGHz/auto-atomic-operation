@@ -5,14 +5,13 @@ defaults:
   - _self_
 
 env:
-  env:
-    viewer:
-      lookat: [0.5, 0.14, 0.1]
-      distance: 0.8
-      azimuth: 135
-      elevation: -28
-      hold_seconds: 3.0
-    gaussian_render:
-      body_gaussians:
-        rack_gs: ${gs_dir}/rack.ply
-        toothbrush_cup_gs: ${gs_dir}/toothbrush_cup.ply
+  viewer:
+    lookat: [0.5, 0.14, 0.1]
+    distance: 0.8
+    azimuth: 135
+    elevation: -28
+    hold_seconds: 3.0
+  gaussian_render:
+    body_gaussians:
+      rack_gs: ${gs_dir}/rack.ply
+      toothbrush_cup_gs: ${gs_dir}/toothbrush_cup.ply

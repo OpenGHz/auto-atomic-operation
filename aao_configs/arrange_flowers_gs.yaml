@@ -5,9 +5,8 @@ defaults:
   - _self_
 
 env:
-  env:
-    gaussian_render:
-      body_gaussians:
-        vase_gs:   ${gs_dir}/vase.ply
-        vase2_gs:  ${gs_dir}/vase2.ply
-        flower_gs: ${gs_dir}/flower1.ply
+  gaussian_render:
+    body_gaussians:
+      vase_gs: ${gs_dir}/vase.ply
+      vase2_gs: ${gs_dir}/vase2.ply
+      flower_gs: ${gs_dir}/flower1.ply

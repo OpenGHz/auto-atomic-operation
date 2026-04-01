@@ -26,13 +26,12 @@ import hydra
 import imageio.v3 as iio
 import numpy as np
 from hydra.core.hydra_config import HydraConfig
-from hydra.utils import instantiate
 from omegaconf import DictConfig, OmegaConf
 from PIL import Image
 from pydantic import BaseModel, Field
 from auto_atom.backend.mjc.mujoco_backend import MujocoTaskBackend
-from auto_atom.runner.common import get_config_dir
-from auto_atom.runtime import ComponentRegistry, TaskFileConfig, TaskRunner
+from auto_atom.runner.common import get_config_dir, prepare_task_file
+from auto_atom.runtime import TaskRunner
 
 
 class RecorderConfig(BaseModel):
@@ -166,15 +165,13 @@ def _resolve_camera(
     version_base=None,
 )
 def main(cfg: DictConfig) -> None:
-    raw = OmegaConf.to_container(cfg, resolve=False)
-    ComponentRegistry.clear()
-    instantiate(cfg)
+    raw = OmegaConf.to_container(cfg, resolve=True)
     if not isinstance(raw, dict):
         raise TypeError("Config root must be a mapping.")
 
     # Recorder settings (injectable via Hydra: recorder.camera=..., etc.)
     rec_cfg = RecorderConfig.model_validate(raw.pop("recorder", {}))
-    task_file = TaskFileConfig.model_validate(raw)
+    task_file = prepare_task_file(cfg)
     runner = TaskRunner().from_config(task_file)
 
     frames: list[np.ndarray] = []

@@ -5,16 +5,15 @@ defaults:
 scene_name: arrange_flowers
 
 env:
-  env:
-    mask_objects: ["flower", "vase2"]
-    operations: ["pick", "place"]
-    viewer:
-      lookat: [0.04, 0.0, 0.1]
-      distance: 0.55
-      azimuth: 135
-      elevation: -28
-      step_delay: 0.03
-      hold_seconds: 1.0
+  mask_objects: ["flower", "vase2"]
+  operations: ["pick", "place"]
+  viewer:
+    lookat: [0.04, 0.0, 0.1]
+    distance: 0.55
+    azimuth: 135
+    elevation: -28
+    step_delay: 0.03
+    hold_seconds: 1.0
 
 task:
   randomization:

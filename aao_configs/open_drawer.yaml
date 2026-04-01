@@ -6,16 +6,15 @@ scene_name: open_close_drawer
 task_name: open_drawer
 
 env:
-  env:
-    mask_objects: ["handle", "drawer"]
-    operations: ["pull"]
-    viewer:
-      lookat: [0.0, 0.04, 0.12]
-      distance: 0.75
-      azimuth: 155
-      elevation: -22
-      step_delay: 0.025
-      hold_seconds: 1.0
+  mask_objects: ["handle", "drawer"]
+  operations: ["pull"]
+  viewer:
+    lookat: [0.0, 0.04, 0.12]
+    distance: 0.75
+    azimuth: 155
+    elevation: -22
+    step_delay: 0.025
+    hold_seconds: 1.0
 
 task:
   stages:

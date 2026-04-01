@@ -5,10 +5,9 @@ defaults:
 scene_name: wipe_the_table
 
 env:
-  env:
-    # mask_objects: ["blue_duck", "chicken_doll", "transparent_tape_paper", "white_box"]
-    mask_objects: ["blue_duck", "white_box"]
-    operations: ["pick", "place"]
+  # mask_objects: ["blue_duck", "chicken_doll", "transparent_tape_paper", "white_box"]
+  mask_objects: ["blue_duck", "white_box"]
+  operations: ["pick", "place"]
 
 task:
   randomization:
