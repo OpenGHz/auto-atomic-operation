@@ -156,3 +156,7 @@ class BatchedGSUnifiedMujocoEnv(BatchedUnifiedMujocoEnv):
             viewer = config.viewer if env_index == config.viewer_env_index else None
             env_cfg = config.model_copy(update={"batch_size": 1, "viewer": viewer})
             self.envs.append(GSUnifiedMujocoEnv(env_cfg))
+        if config.name:
+            from auto_atom.runtime import ComponentRegistry
+
+            ComponentRegistry.register_env(config.name, self)
