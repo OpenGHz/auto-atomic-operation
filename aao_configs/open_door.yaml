@@ -2,8 +2,8 @@ defaults:
   - basis_mocap_eef
   - _self_
 
-scene_name: open_door_third_party
-task_name: open_door_third_party
+scene_name: open_door
+task_name: open_door
 
 env:
   mask_objects: ["handle_lever_body", "handle_body_phys"]

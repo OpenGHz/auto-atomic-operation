@@ -183,7 +183,7 @@ pip install -e ."[gs]"
 Run the following command to download the assets for the 3D GS assets for the demos:
 
 ```bash
-pip install huggingface_hub
+pip install huggingface_hub httpx[socks]
 hf download OpenGHz/auto-atom-assets --repo-type=dataset --include "assets/gs/*" --local-dir .
 ```
 

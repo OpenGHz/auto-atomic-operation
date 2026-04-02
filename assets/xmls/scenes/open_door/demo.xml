@@ -1,4 +1,4 @@
-<mujoco model="open_door_third_party_demo">
+<mujoco model="open_door_demo">
   <include file="../../robots/robotiq.xml"/>
 
   <visual>
