@@ -62,8 +62,17 @@ def _find_gs_image(obs: dict, cam_name: str) -> np.ndarray | None:
     ]
     for key in candidates:
         if key in obs:
-            return obs[key]["data"]
+            data = np.asarray(obs[key]["data"])
+            if data.ndim >= 4:
+                data = data[0]
+            return data
     return None
+
+
+def _resolve_single_env(env):
+    if hasattr(env, "envs"):
+        return env.envs[0]
+    return env
 
 
 def _save_comparison(
@@ -116,32 +125,36 @@ def main(cfg: DictConfig) -> None:
     # ── 1. Instantiate env with resolved Hydra config ───────────────────────
     task_file = prepare_task_file(cfg)
     env = ComponentRegistry.get_env(task_file.task.env_name)
+    single_env = _resolve_single_env(env)
 
     # ── 2. Reset to initial keyframe ─────────────────────────────────────────
     runner = TaskRunner().from_config(task_file)
-    runner.reset()
-
-    # ── 3. GS observation ───────────────────────────────────────────────────
-    gs_obs: dict = env.capture_observation()
-
-    # ── 4. Native render per camera ──────────────────────────────────────────
     rows: List[Tuple[str, np.ndarray, np.ndarray]] = []
+    try:
+        runner.reset()
 
-    for cam_name, renderer in env._renderers.items():
-        gs_img = _find_gs_image(gs_obs, cam_name)
-        if gs_img is None:
-            print(f"[warn] No GS color image for camera '{cam_name}', skipping.")
-            continue
+        # ── 3. GS observation ───────────────────────────────────────────────
+        gs_obs: dict = env.capture_observation()
 
-        cam_id = env._camera_ids[cam_name]
-        native_img = _native_color(
-            renderer, env.data, cam_id, env._renderer_scene_option
-        )
+        # ── 4. Native render per camera ──────────────────────────────────────
+        for cam_name, renderer in single_env._renderers.items():
+            gs_img = _find_gs_image(gs_obs, cam_name)
+            if gs_img is None:
+                print(f"[warn] No GS color image for camera '{cam_name}', skipping.")
+                continue
 
-        rows.append((cam_name, gs_img, native_img))
-        print(f"  {cam_name}: GS {gs_img.shape}  native {native_img.shape}")
+            cam_id = single_env._camera_ids[cam_name]
+            native_img = _native_color(
+                renderer,
+                single_env.data,
+                cam_id,
+                single_env._renderer_scene_option,
+            )
 
-    runner.close()
+            rows.append((cam_name, gs_img, native_img))
+            print(f"  {cam_name}: GS {gs_img.shape}  native {native_img.shape}")
+    finally:
+        runner.close()
 
     if not rows:
         print("No camera images captured. Ensure cameras have enable_color=True.")

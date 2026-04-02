@@ -597,7 +597,7 @@ class TaskRunner:
                     env_index
                 ].latest_details = self._collect_reset_details(env_index, context)
         self._has_reset[mask] = True
-        self._set_interest_focus()
+        # self._set_interest_focus()
         return self._build_task_update()
 
     def update(self, env_mask: Optional[np.ndarray] = None) -> TaskUpdate:
@@ -608,7 +608,7 @@ class TaskRunner:
             if not mask[env_index] or state.done:
                 continue
             self._update_env(env_index, state, context)
-        self._set_interest_focus()
+        # self._set_interest_focus()
         return self._build_task_update()
 
     def close(self) -> None:

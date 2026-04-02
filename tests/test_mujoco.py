@@ -12,7 +12,6 @@ import numpy as np
 import hydra
 from hydra.utils import instantiate
 from omegaconf import DictConfig, OmegaConf
-
 from auto_atom.runner.common import get_config_dir
 from auto_atom.runtime import ComponentRegistry
 

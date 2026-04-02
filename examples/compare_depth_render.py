@@ -45,6 +45,15 @@ def _resolve_single_env(env):
     return env
 
 
+def _resolve_gs_env(env):
+    if hasattr(env, "_fg_gs_renderer"):
+        return env
+    single_env = _resolve_single_env(env)
+    if hasattr(single_env, "_fg_gs_renderer"):
+        return single_env
+    return env
+
+
 def _native_depth(
     renderer: mujoco.Renderer,
     data: mujoco.MjData,
@@ -161,13 +170,9 @@ def main(cfg: DictConfig) -> None:
     task_file = prepare_task_file(cfg)
     env = ComponentRegistry.get_env(task_file.task.env_name)
     single_env = _resolve_single_env(env)
+    gs_env = _resolve_gs_env(env)
 
-    required_attrs = (
-        "_fg_gs_renderer",
-        "_render_gs_camera",
-        "_render_gs_camera_batch",
-    )
-    if not all(hasattr(single_env, attr) for attr in required_attrs):
+    if not hasattr(gs_env, "_fg_gs_renderer"):
         raise TypeError(
             "compare_depth_render.py requires a GS env "
             "(for example a config using BatchedGSUnifiedMujocoEnv)."
@@ -191,16 +196,60 @@ def main(cfg: DictConfig) -> None:
             native_depth = _to_depth_image(native_depth.copy())
             native_depth[native_depth > spec.depth_max] = 0.0
 
-            _, _, _, _, _, fg_depth = single_env._render_gs_camera_batch(
-                cam_id=cam_id,
-                width=spec.width,
-                height=spec.height,
-            )
-            _, comp_depth = single_env._render_gs_camera(
-                cam_id=cam_id,
-                width=spec.width,
-                height=spec.height,
-            )
+            if hasattr(gs_env, "_render_gs_camera_batch") and hasattr(
+                gs_env, "_render_gs_camera"
+            ):
+                _, _, _, _, _, fg_depth = gs_env._render_gs_camera_batch(
+                    cam_id=cam_id,
+                    width=spec.width,
+                    height=spec.height,
+                )
+                _, comp_depth = gs_env._render_gs_camera(
+                    cam_id=cam_id,
+                    width=spec.width,
+                    height=spec.height,
+                )
+            else:
+                body_pos = np.stack(
+                    [np.asarray(e.data.xpos, dtype=np.float32) for e in gs_env.envs]
+                )
+                body_quat = np.stack(
+                    [np.asarray(e.data.xquat, dtype=np.float32) for e in gs_env.envs]
+                )
+                fg_gsb = gs_env._fg_gs_renderer.batch_update_gaussians(
+                    body_pos, body_quat
+                )
+                cam_pos = np.stack(
+                    [
+                        np.asarray(e.data.cam_xpos[cam_id], dtype=np.float32)
+                        for e in gs_env.envs
+                    ]
+                ).reshape(gs_env.batch_size, 1, 3)
+                cam_xmat = np.stack(
+                    [
+                        np.asarray(e.data.cam_xmat[cam_id], dtype=np.float32)
+                        for e in gs_env.envs
+                    ]
+                ).reshape(gs_env.batch_size, 1, 9)
+                fovy = np.broadcast_to(
+                    np.asarray(
+                        gs_env.envs[0].model.cam_fovy[cam_id], dtype=np.float32
+                    ).reshape(1, 1),
+                    (gs_env.batch_size, 1),
+                ).copy()
+                _, fg_depth, _, _, _, comp_depth = gs_env._render_batched_camera(
+                    fg_gsb,
+                    cam_pos,
+                    cam_xmat,
+                    spec.height,
+                    spec.width,
+                    fovy,
+                    body_pos,
+                    body_quat,
+                    cam_id,
+                )
+                fg_depth = fg_depth[0, 0]
+                comp_depth = comp_depth[0, 0]
 
             fg_depth_np = _to_depth_image(
                 fg_depth.detach().cpu().numpy().astype(np.float32)

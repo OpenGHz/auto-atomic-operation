@@ -52,6 +52,70 @@ def _resolve_single_env(env):
     return env
 
 
+def _resolve_gs_env(env):
+    if hasattr(env, "_gs_mask_renderers"):
+        return env
+    single_env = _resolve_single_env(env)
+    if hasattr(single_env, "_gs_mask_renderers"):
+        return single_env
+    return env
+
+
+def _resolve_interest_pairs(single_env) -> tuple[list[str], list[str]]:
+    mask_objects = list(getattr(single_env.config, "mask_objects", []))
+    operations = list(getattr(single_env.config, "operations", []))
+    if not mask_objects or not operations:
+        return [], []
+    if len(mask_objects) == len(operations):
+        return mask_objects, operations
+    if len(operations) == 1:
+        return mask_objects, operations * len(mask_objects)
+    raise ValueError(
+        "Cannot infer mask_object -> operation mapping from config: "
+        f"mask_objects={mask_objects}, operations={operations}. "
+        "Expected equal lengths, or a single operation to broadcast."
+    )
+
+
+def _set_export_interest_focus(env, single_env) -> None:
+    object_names, operation_names = _resolve_interest_pairs(single_env)
+    if not object_names:
+        return
+    if hasattr(env, "envs"):
+        for child_env in env.envs:
+            # print(f"{object_names=}, {operation_names=}")
+            child_env.set_interest_objects_and_operations(object_names, operation_names)
+    else:
+        env.set_interest_objects_and_operations(object_names, operation_names)
+
+
+def _normalize_obs_image_shape(data: np.ndarray, expected_ndim: int) -> np.ndarray:
+    if data.ndim == expected_ndim + 1:
+        return data[0]
+    if data.ndim == expected_ndim:
+        return data
+    raise TypeError(
+        f"Expected observation with ndim {expected_ndim} or {expected_ndim + 1}, "
+        f"got shape {data.shape}"
+    )
+
+
+def _find_obs_image(
+    obs: dict, cam_name: str, suffix: str, expected_ndim: int
+) -> np.ndarray | None:
+    candidates = [
+        f"{cam_name}/{suffix}",
+        f"camera/{cam_name}/" + suffix,
+        f"camera/{cam_name.split('_')[0]}/" + suffix,
+    ]
+    for key in candidates:
+        if key not in obs:
+            continue
+        data = np.asarray(obs[key]["data"])
+        return _normalize_obs_image_shape(data, expected_ndim)
+    return None
+
+
 def _save_rgb(path: Path, rgb: np.ndarray) -> None:
     plt.imsave(path, np.asarray(rgb, dtype=np.uint8))
 
@@ -60,6 +124,92 @@ def _save_mask(path: Path, mask: np.ndarray) -> None:
     plt.imsave(
         path, np.asarray(mask, dtype=np.uint8) * 255, cmap="gray", vmin=0, vmax=255
     )
+
+
+def _channel_palette(num_channels: int) -> np.ndarray:
+    """Return a (num_channels, 3) uint8 palette with one distinct color per channel."""
+    if num_channels <= 0:
+        return np.zeros((0, 3), dtype=np.uint8)
+    cmap_name = "tab20" if num_channels > 10 else "tab10"
+    cmap = plt.get_cmap(cmap_name, max(num_channels, 1))
+    return np.asarray(
+        [np.round(np.asarray(cmap(i)[:3]) * 255.0) for i in range(num_channels)],
+        dtype=np.uint8,
+    )
+
+
+def _make_heatmap_rgb(
+    heat_map: np.ndarray,
+    operation_names: list[str] | None = None,
+) -> np.ndarray:
+    """Create an RGB image where each one-hot channel gets a unique color.
+
+    For pixels with multiple active channels the colors are averaged.
+    """
+    heat = np.asarray(heat_map, dtype=np.float32)
+    if heat.ndim != 3:
+        raise TypeError(f"Expected 3D heat map, got shape {heat.shape}")
+
+    H, W, C = heat.shape
+    palette = _channel_palette(C)  # (C, 3) uint8
+    rgb = np.zeros((H, W, 3), dtype=np.float32)
+    if C == 0:
+        return rgb.astype(np.uint8)
+
+    active_count = heat.sum(axis=-1, keepdims=True).clip(1.0)  # (H, W, 1)
+    for ch in range(C):
+        mask_ch = heat[..., ch : ch + 1]  # (H, W, 1)
+        rgb += mask_ch * palette[ch].astype(np.float32)
+    rgb /= active_count
+    return np.clip(rgb, 0.0, 255.0).astype(np.uint8)
+
+
+def _save_heatmap_with_legend(
+    path: Path,
+    heatmap_rgb: np.ndarray,
+    operation_names: list[str],
+    heat_map: np.ndarray,
+) -> None:
+    """Save heatmap RGB with a color legend bar at the bottom."""
+    palette = _channel_palette(len(operation_names))
+    active_channels = [
+        i
+        for i in range(len(operation_names))
+        if np.any(heat_map[..., i])
+        if i < heat_map.shape[-1]
+    ]
+    if not active_channels:
+        _save_rgb(path, heatmap_rgb)
+        return
+
+    fig, ax = plt.subplots(
+        figsize=(heatmap_rgb.shape[1] / 100, heatmap_rgb.shape[0] / 100 + 0.6),
+    )
+    ax.imshow(heatmap_rgb)
+    ax.axis("off")
+
+    # Draw legend patches at the bottom
+    from matplotlib.patches import Patch
+
+    handles = [
+        Patch(
+            facecolor=palette[i].astype(np.float32) / 255.0,
+            edgecolor="black",
+            label=operation_names[i] if i < len(operation_names) else f"ch{i}",
+        )
+        for i in active_channels
+    ]
+    ax.legend(
+        handles=handles,
+        loc="lower center",
+        bbox_to_anchor=(0.5, -0.02),
+        ncol=min(len(handles), 5),
+        frameon=True,
+        fontsize=8,
+    )
+    fig.tight_layout(pad=0.3)
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
 
 
 def _make_overlay(rgb: np.ndarray, mask: np.ndarray) -> np.ndarray:
@@ -103,18 +253,14 @@ def main(cfg: DictConfig) -> None:
     task_file = prepare_task_file(cfg)
     env = ComponentRegistry.get_env(task_file.task.env_name)
     single_env = _resolve_single_env(env)
+    gs_env = _resolve_gs_env(env)
 
-    required_attrs = (
-        "_render_gs_camera",
-        "_render_gs_masks_for_camera",
-        "_gs_mask_renderers",
-    )
-    if not all(hasattr(single_env, attr) for attr in required_attrs):
+    if not hasattr(gs_env, "_gs_mask_renderers"):
         raise TypeError(
             "save_gs_mask_render.py requires a GS env with GS mask helpers."
         )
 
-    if not single_env._gs_mask_renderers:
+    if not gs_env._gs_mask_renderers:
         raise RuntimeError(
             "No GS mask renderers were created. Check config.mask_objects and gaussian_render.body_gaussians."
         )
@@ -130,55 +276,66 @@ def main(cfg: DictConfig) -> None:
 
     try:
         runner.reset()
+        _set_export_interest_focus(env, single_env)
+        obs = env.capture_observation()
 
         step_idx = 0
         while True:
             for cam_name, spec in single_env._camera_specs.items():
-                cam_id = single_env._camera_ids[cam_name]
-                rgb_t, _depth_t = single_env._render_gs_camera(
-                    cam_id=cam_id,
-                    width=spec.width,
-                    height=spec.height,
+                rgb = _find_obs_image(obs, cam_name, "color/image_raw", expected_ndim=3)
+                binary_mask = _find_obs_image(
+                    obs, cam_name, "mask/image_raw", expected_ndim=2
                 )
-                (
-                    _fg_rgb,
-                    fg_depth,
-                    _bg_rgb,
-                    bg_depth,
-                    _full_rgb,
-                    _full_depth,
-                ) = single_env._render_gs_camera_batch(
-                    cam_id=cam_id,
-                    width=spec.width,
-                    height=spec.height,
-                )
-                scene_depth_t = single_env._compose_mask_scene_depth(
-                    fg_depth=fg_depth,
-                    bg_depth=bg_depth,
-                )
-                binary_mask, heat_map = single_env._render_gs_masks_for_camera(
-                    cam_id=cam_id,
-                    width=spec.width,
-                    height=spec.height,
-                    scene_depth_t=scene_depth_t,
+                heat_map = _find_obs_image(
+                    obs, cam_name, "mask/heat_map", expected_ndim=3
                 )
 
-                rgb = np.clip(rgb_t.detach().cpu().numpy() * 255.0, 0.0, 255.0).astype(
-                    np.uint8
-                )
+                if rgb is None:
+                    print(f"[warn] No GS RGB image for camera '{cam_name}', skipping.")
+                    continue
+                if binary_mask is None:
+                    print(f"[warn] No GS mask image for camera '{cam_name}', skipping.")
+                    continue
+
+                rgb = np.asarray(rgb, dtype=np.uint8)
+                binary_mask = np.asarray(binary_mask, dtype=np.uint8)
+                op_names = list(single_env.config.operations)
+                has_heat_map = heat_map is not None
+                if has_heat_map:
+                    heat_map = np.asarray(heat_map, dtype=np.uint8)
+                    heatmap_rgb = _make_heatmap_rgb(heat_map, op_names)
+                else:
+                    heatmap_rgb = None
                 overlay = _make_overlay(rgb, binary_mask)
 
                 if step_idx == 0:
                     _save_rgb(out_dir / f"{cam_name}_rgb.png", rgb)
                     _save_mask(out_dir / f"{cam_name}_mask.png", binary_mask)
                     _save_rgb(out_dir / f"{cam_name}_overlay.png", overlay)
+                    if heatmap_rgb is not None:
+                        _save_heatmap_with_legend(
+                            out_dir / f"{cam_name}_heatmap.png",
+                            heatmap_rgb,
+                            op_names,
+                            heat_map,
+                        )
+                        if not np.any(heat_map):
+                            print(
+                                f"[info] Heat map for camera '{cam_name}' is all zeros "
+                                "on the saved frame."
+                            )
+                    else:
+                        print(
+                            f"[info] No heat map observation for camera '{cam_name}', "
+                            "skipping heatmap RGB export."
+                        )
 
-                    if heat_map.ndim == 3 and heat_map.shape[-1] == len(
-                        single_env.config.operations
+                    if (
+                        has_heat_map
+                        and heat_map.ndim == 3
+                        and heat_map.shape[-1] == len(op_names)
                     ):
-                        for channel_idx, operation_name in enumerate(
-                            single_env.config.operations
-                        ):
+                        for channel_idx, operation_name in enumerate(op_names):
                             channel = heat_map[..., channel_idx]
                             if np.any(channel):
                                 _save_mask(
@@ -226,6 +383,7 @@ def main(cfg: DictConfig) -> None:
             update = runner.update()
             if bool(np.all(update.done)):
                 break
+            obs = env.capture_observation()
     finally:
         runner.close()
 

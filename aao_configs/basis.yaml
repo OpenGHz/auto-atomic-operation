@@ -7,8 +7,8 @@ cam_width: 640
 cam_height: 480
 enable_color: true
 enable_depth: true
-enable_mask: false
-enable_heat_map: false
+enable_mask: true
+enable_heat_map: true
 
 env:
   _target_: auto_atom.basis.mjc.mujoco_env.BatchedUnifiedMujocoEnv
