@@ -40,7 +40,7 @@ from __future__ import annotations
 
 import numpy as np
 import torch
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional, Set
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from gaussian_renderer import BatchSplatConfig, MjxBatchSplatRenderer, GSRendererMuJoCo
 from auto_atom.basis.mjc.mujoco_env import (
@@ -71,62 +71,67 @@ class GSEnvConfig(EnvConfig):
 
     gaussian_render: GaussianRenderConfig = GaussianRenderConfig()
     """Gaussian Splatting render config."""
-    gs_color_cameras: List[str] = Field(default_factory=list)
+    gs_color_cameras: Set[str] = Field(default_factory=set)
     """Names of cameras whose color output uses GS rendering. If empty, all cameras with ``enable_color=True`` are used."""
-    gs_depth_cameras: List[str] = Field(default_factory=list)
+    gs_depth_cameras: Set[str] = Field(default_factory=set)
     """Names of cameras whose depth output uses GS rendering. If empty, all cameras with ``enable_depth=True`` are used."""
-    gs_mask_cameras: List[str] = Field(default_factory=list)
-    """Names of cameras whose mask/heat_map output uses GS rendering.
-    Populated automatically from cameras with ``enable_mask`` or ``enable_heat_map``
+    gs_mask_cameras: Set[str] = Field(default_factory=set)
+    """Names of cameras whose binary mask output uses GS rendering.
+    Populated automatically from cameras with ``enable_mask=True``
     when ``mask_objects`` is non-empty; native MuJoCo segmentation is then disabled."""
+    gs_heat_map_cameras: Set[str] = Field(default_factory=set)
+    """Names of cameras whose heat_map output uses GS rendering.
+    Populated automatically from cameras with ``enable_heat_map=True``
+    when ``mask_objects`` is non-empty."""
     to_numpy: bool = True
     """Whether to convert GS renderer output to numpy arrays.
     Defaults to True for consistency with all other observation data types."""
 
     @model_validator(mode="after")
     def setup_gs_cameras(self):
-        color_cams = [c.name for c in self.cameras if c.enable_color]
-        gs_color_cameras = (
-            color_cams if not self.gs_color_cameras else self.gs_color_cameras
-        )
-        if set(gs_color_cameras) - set(color_cams):
+        color_cams = {c.name for c in self.cameras if c.enable_color}
+        gs_color = color_cams if not self.gs_color_cameras else self.gs_color_cameras
+        if gs_color - color_cams:
             raise ValueError(
-                f"gs_color_cameras {gs_color_cameras} must be a subset of "
+                f"gs_color_cameras {gs_color} must be a subset of "
                 f"cameras with enable_color=True: {color_cams}"
             )
-        object.__setattr__(self, "gs_color_cameras", gs_color_cameras)
+        object.__setattr__(self, "gs_color_cameras", gs_color)
 
-        depth_cams = [c.name for c in self.cameras if c.enable_depth]
-        gs_depth_cameras = (
-            depth_cams if not self.gs_depth_cameras else self.gs_depth_cameras
-        )
-        if set(gs_depth_cameras) - set(depth_cams):
+        depth_cams = {c.name for c in self.cameras if c.enable_depth}
+        gs_depth = depth_cams if not self.gs_depth_cameras else self.gs_depth_cameras
+        if gs_depth - depth_cams:
             raise ValueError(
-                f"gs_depth_cameras {gs_depth_cameras} must be a subset of "
+                f"gs_depth_cameras {gs_depth} must be a subset of "
                 f"cameras with enable_depth=True: {depth_cams}"
             )
-        object.__setattr__(self, "gs_depth_cameras", gs_depth_cameras)
+        object.__setattr__(self, "gs_depth_cameras", gs_depth)
 
         # Disable native mask/heat_map when GS mask renderers will handle them
-        mask_cams = [c.name for c in self.cameras if c.enable_mask or c.enable_heat_map]
-        gs_mask_cameras = (
-            mask_cams if not self.gs_mask_cameras else self.gs_mask_cameras
+        gs_mask = (
+            {c.name for c in self.cameras if c.enable_mask}
+            if not self.gs_mask_cameras
+            else self.gs_mask_cameras
         )
-        if self.mask_objects:
-            object.__setattr__(self, "gs_mask_cameras", gs_mask_cameras)
-        else:
-            object.__setattr__(self, "gs_mask_cameras", [])
+        gs_heat = (
+            {c.name for c in self.cameras if c.enable_heat_map}
+            if not self.gs_heat_map_cameras
+            else self.gs_heat_map_cameras
+        )
+        if not self.mask_objects:
+            gs_mask = set()
+            gs_heat = set()
+        object.__setattr__(self, "gs_mask_cameras", gs_mask)
+        object.__setattr__(self, "gs_heat_map_cameras", gs_heat)
 
-        gs_color_set = set(gs_color_cameras)
-        gs_depth_set = set(gs_depth_cameras)
-        gs_mask_set = set(gs_mask_cameras) if self.mask_objects else set()
         for cam in self.cameras:
-            if cam.name in gs_color_set:
+            if cam.name in gs_color:
                 object.__setattr__(cam, "enable_color", False)
-            if cam.name in gs_depth_set:
+            if cam.name in gs_depth:
                 object.__setattr__(cam, "enable_depth", False)
-            if cam.name in gs_mask_set:
+            if cam.name in gs_mask:
                 object.__setattr__(cam, "enable_mask", False)
+            if cam.name in gs_heat:
                 object.__setattr__(cam, "enable_heat_map", False)
         return self
 
@@ -138,8 +143,8 @@ class GSUnifiedMujocoEnv(UnifiedMujocoEnv):
     _GS_MASK_DEPTH_EPS = 0.01
 
     def __init__(self, config: GSEnvConfig) -> None:
-        self.config: GSEnvConfig
         super().__init__(config)
+        self.config: GSEnvConfig
         gs_cfg = config.gaussian_render
         combined_models = dict(gs_cfg.body_gaussians)
         if gs_cfg.background_ply:
@@ -182,9 +187,9 @@ class GSUnifiedMujocoEnv(UnifiedMujocoEnv):
 
     def _inject_gs_renders(self, obs: dict[str, dict[str, Any]]) -> None:
         """Render GS color and/or depth and insert into *obs* in-place."""
-        gs_color_set = set(self.config.gs_color_cameras)
-        gs_depth_set = set(self.config.gs_depth_cameras)
-        gs_mask_set = set(self.config.gs_mask_cameras)
+        gs_color_set = self.config.gs_color_cameras
+        gs_depth_set = self.config.gs_depth_cameras
+        gs_mask_set = self.config.gs_mask_cameras | self.config.gs_heat_map_cameras
         all_gs_cams = [
             c
             for c in self._camera_specs
@@ -253,14 +258,16 @@ class GSUnifiedMujocoEnv(UnifiedMujocoEnv):
                     height=spec.height,
                     scene_depth_t=scene_depth_t,
                 )
-                obs[f"{obs_cam_name}/mask/image_raw"] = {
-                    "data": binary_mask,
-                    "t": t,
-                }
-                obs[f"{obs_cam_name}/mask/heat_map"] = {
-                    "data": heat_map,
-                    "t": t,
-                }
+                if cam_name in self.config.gs_mask_cameras:
+                    obs[f"{obs_cam_name}/mask/image_raw"] = {
+                        "data": binary_mask,
+                        "t": t,
+                    }
+                if cam_name in self.config.gs_heat_map_cameras:
+                    obs[f"{obs_cam_name}/mask/heat_map"] = {
+                        "data": heat_map,
+                        "t": t,
+                    }
 
     def _render_gs_camera(
         self,
@@ -569,9 +576,9 @@ class BatchedGSUnifiedMujocoEnv(BatchedUnifiedMujocoEnv):
 
     def _inject_batched_gs_renders(self, obs: dict[str, dict[str, Any]]) -> None:
         """Batch-render GS color/depth/mask across all envs and inject into *obs*."""
-        gs_color_set = set(self.config.gs_color_cameras)
-        gs_depth_set = set(self.config.gs_depth_cameras)
-        gs_mask_set = set(self.config.gs_mask_cameras)
+        gs_color_set = self.config.gs_color_cameras
+        gs_depth_set = self.config.gs_depth_cameras
+        gs_mask_set = self.config.gs_mask_cameras | self.config.gs_heat_map_cameras
         all_gs_cams = [
             c
             for c in self._camera_specs
@@ -718,14 +725,16 @@ class BatchedGSUnifiedMujocoEnv(BatchedUnifiedMujocoEnv):
                     body_quat=body_quat,
                     scene_depth_t=scene_depth_t,
                 )
-                obs[f"{obs_cam_name}/mask/image_raw"] = {
-                    "data": binary_mask,
-                    "t": timestamps,
-                }
-                obs[f"{obs_cam_name}/mask/heat_map"] = {
-                    "data": heat_map,
-                    "t": timestamps,
-                }
+                if cam_name in self.config.gs_mask_cameras:
+                    obs[f"{obs_cam_name}/mask/image_raw"] = {
+                        "data": binary_mask,
+                        "t": timestamps,
+                    }
+                if cam_name in self.config.gs_heat_map_cameras:
+                    obs[f"{obs_cam_name}/mask/heat_map"] = {
+                        "data": heat_map,
+                        "t": timestamps,
+                    }
 
     # ------------------------------------------------------------------
     # batch GS rendering helpers
