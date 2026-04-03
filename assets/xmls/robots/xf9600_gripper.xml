@@ -17,14 +17,12 @@
       </default>
       <default class="collision">
         <geom material="collision_material" condim="3" contype="2" conaffinity="1" priority="1" group="3"
-              solref="0.015 1" solimp="0.95 0.99 0.001" friction="4 0.8 0.01" margin="0.0" gap="0.0005" />
-
-        <equality solimp="0.95 0.99 0.001" solref="0.015 1" />
+              solref="0.015 1" solimp="0.95 0.99 0.001" friction="1 0.8 0.01" margin="0.0" gap="0.0005" />
       </default>
 
       <default class="claw_joint">
-        <joint type="slide" axis="0 0 -1" range=".0 0.01545" damping="0.05" frictionloss="0.002" />
-        <position kp="800" kv="4" ctrlrange=".0 0.04" forcelimited="true" forcerange="-20 20" />
+        <joint type="slide" axis="0 0 -1" range=".0 0.02" damping="5" frictionloss="20" armature="0.1" actuatorfrcrange="-50 50" />
+        <position kp="5000" kv="140" ctrlrange=".0 0.02" forcerange="-50 50" />
       </default>
       <default class="l11j">
         <joint range="-1.28 1.28" />
@@ -673,62 +671,62 @@
   </actuator>
 
   <equality>
-    <connect body2="l51" body1="l11" anchor="-0.015601 -0.0035525 0" class="collision" />
-    <connect body2="l21" body1="l61" anchor="-0.015601 0.0035525 0" class="collision" />
-    <connect body2="l23" body1="l31" anchor="-0.014205 0.050022 0" class="collision" />
-    <connect body2="l53" body1="l41" anchor="-0.014263 -0.05006 0" class="collision" />
+    <connect body2="l51" body1="l11" anchor="-0.015601 -0.0035525 0" solimp="0.9999 0.9999 0.001 0.5 2" solref="-400000 -2500" />
+    <connect body2="l21" body1="l61" anchor="-0.015601 0.0035525 0" solimp="0.9999 0.9999 0.001 0.5 2" solref="-400000 -2500" />
+    <connect body2="l23" body1="l31" anchor="-0.014205 0.050022 0" solimp="0.9999 0.9999 0.001 0.5 2" solref="-50000 -600" />
+    <connect body2="l53" body1="l41" anchor="-0.014263 -0.05006 0" solimp="0.9999 0.9999 0.001 0.5 2" solref="-50000 -600" />
   </equality>
 
 
   <worldbody>
-    <body name="base_link" pos="0 0 0" quat="1 0 0 0" childclass="robot">
+    <body name="base_link" pos="0 0 0" quat="1 0 0 0" childclass="robot" gravcomp="1">
       <geom name="base_link_visual" pos="0 0 0" quat="1 0 0 0" type="mesh" mesh="base_link.STL" material="default_material" class="visual"/>
 
-      <body name="claw" pos="-0.042 0 0" quat="5.26835673519653e-09 0.7071067811865462 -5.268356735196549e-09 0.7071067811865488">
+      <body name="claw" pos="-0.042 0 0" quat="5.26835673519653e-09 0.7071067811865462 -5.268356735196549e-09 0.7071067811865488" gravcomp="1">
         <inertial pos="-0.000384093170639321 -8.57754285746345E-16 -6.23994419577615E-05" quat="1 0 0 0" mass="0.00214939142420216" diaginertia="7.11308979725899e-07 1.81162721250835e-08 7.0998178744497e-07"/>
         <joint name="clawj" class="claw_joint"/>
         <geom name="claw_visual" pos="0 0 0" quat="1 0 0 0" type="mesh" mesh="claw.STL" material="default_material" class="visual"/>
 
-        <body name="l11" pos="0 0.035 0" quat="-0.7071067811865462 0 0.7071067811865488 0">
+        <body name="l11" pos="0 0.035 0" quat="-0.7071067811865462 0 0.7071067811865488 0" gravcomp="1">
           <inertial pos="-0.00869218936528415 -0.00199792426642302 -0.0036905433214944" quat="1 0 0 0" mass="0.000518266456463187" diaginertia="2.87514560486621e-09 1.48561629551705e-08 1.64762893729227e-08"/>
           <joint name="l11j" class="l11j"/>
           <geom name="l11_visual" pos="0 0 0" quat="1 0 0 0" type="mesh" mesh="l11.STL" material="default_material" class="visual"/>
 
-          <body name="l12" pos="-0.01560062529516 -0.00355253295553001 0" quat="1 0 0 0">
+          <body name="l12" pos="-0.01560062529516 -0.00355253295553001 0" quat="1 0 0 0" gravcomp="1">
             <inertial pos="-3.46944695195361E-18 0 -0.00300073685934333" quat="1 0 0 0" mass="0.000115114238012858" diaginertia="2.111222901092e-09 2.111222901092e-09 2.17647033620583e-10"/>
             <geom name="l12_visual" pos="0 0 0" quat="1 0 0 0" type="mesh" mesh="l12.STL" material="default_material" class="visual"/>
           </body>
         </body>
 
-        <body name="l61" pos="0 -0.035 0" quat="-0.7071067811865462 0 0.7071067811865488 0">
+        <body name="l61" pos="0 -0.035 0" quat="-0.7071067811865462 0 0.7071067811865488 0" gravcomp="1">
           <inertial pos="-0.00879982425346378 0.00200677492170989 -0.00370787768991618" quat="1 0 0 0" mass="0.000511885346966713" diaginertia="2.86973210362641e-09 1.4832635178372e-08 1.64475182578043e-08"/>
           <joint name="l61j" class="l61j"/>
           <geom name="l61_visual" pos="0 0 0" quat="1 0 0 0" type="mesh" mesh="l61.STL" material="default_material" class="visual"/>
 
-          <body name="l62" pos="-0.01560062529516 0.00355253295553001 0" quat="1 0 0 0">
+          <body name="l62" pos="-0.01560062529516 0.00355253295553001 0" quat="1 0 0 0" gravcomp="1">
             <inertial pos="-3.46944695195361E-18 0 -0.00300073685934333" quat="1 0 0 0" mass="0.000115114238012858" diaginertia="2.111222901092e-09 2.111222901092e-09 2.17647033620584e-10"/>
             <geom name="l62_visual" pos="0 0 0" quat="1 0 0 0" type="mesh" mesh="l62.STL" material="default_material" class="visual"/>
           </body>
         </body>
       </body>
 
-      <body name="l21" pos="-0.0612 0.02 0" quat="1 0 0 0">
+      <body name="l21" pos="-0.0612 0.02 0" quat="1 0 0 0" gravcomp="1">
         <inertial pos="0.00492632006040301 0.016118878868356 8.53824458316327E-05" quat="1 0 0 0" mass="0.00163778794167731" diaginertia="1.06807583854416e-07 4.49584946125979e-08 9.64657839046892e-08"/>
         <joint name="l21j" class="l21j"/>
         <geom name="l21_visual" pos="0 0 0" quat="1 0 0 0" type="mesh" mesh="l21.STL" material="default_material" class="visual"/>
 
-        <body name="l22" pos="0.00749869730176 0.02384888967597 0" quat="1 0 0 0">
+        <body name="l22" pos="0.00749869730176 0.02384888967597 0" quat="1 0 0 0" gravcomp="1">
           <inertial pos="-0.0121224137716397 0.0141435871518401 -0.00310761237910269" quat="1 0 0 0" mass="0.00207537956841078" diaginertia="1.79548458825097e-07 1.20410521218554e-07 2.58597213600755e-07"/>
           <geom name="l22_visual" pos="0 0 0" quat="1 0 0 0" type="mesh" mesh="l22.STL" material="default_material" class="visual"/>
 
-          <body name="l23" pos="-0.02170236230146 0.02617264737347 0" quat="1 0 0 0">
+          <body name="l23" pos="-0.02170236230146 0.02617264737347 0" quat="1 0 0 0" gravcomp="1">
             <inertial pos="-0.0144874486599726 -0.0117613787166237 2.95354978831408E-05" quat="1 0 0 0" mass="0.00318032549537155" diaginertia="9.90144804686005e-08 3.1197889177706e-07 3.7254352689162e-07"/>
             <joint name="l23j" class="l23j"/>
             <geom name="l23_visual" pos="0 0 0" quat="1 0 0 0" type="mesh" mesh="l23.STL" material="default_material" class="visual"/>
             <geom name="right_finger_pad_upper" type="box" size="0.02 0.006 0.006" pos="-0.028 -0.0145 0" class="collision" rgba="1 0 0 0.3"/>
             <geom name="right_finger_pad_lower" type="box" size="0.02 0.006 0.006" pos="0.012 -0.0145 0" class="collision" rgba="0 1 0 0.3"/>
 
-            <body name="right_tactile" pos="-0.019701 -0.014499 0" quat="0.4999981633974483 0.49999999999662686 -0.49999999999662686 0.5000018366025516">
+            <body name="right_tactile" pos="-0.019701 -0.014499 0" quat="0.4999981633974483 0.49999999999662686 -0.49999999999662686 0.5000018366025516" gravcomp="1">
               <inertial pos="7.44670002401661E-05 0.00784747372261869 0.00195692056024735" quat="1 0 0 0" mass="0.000814180541801484" diaginertia="1.77999294668352e-08 8.5777623786915e-09 2.12505762180111e-08"/>
               <attach model="tactile_sensor" prefix="right_"/>
               <geom name="right_tactile_visual" pos="0 0 0" quat="1 0 0 0" type="mesh" mesh="right_tactile.STL" material="default_material" class="visual"/>
@@ -737,45 +735,45 @@
         </body>
       </body>
 
-      <body name="l31" pos="-0.0662 0.01 0" quat="1 0 0 0">
+      <body name="l31" pos="-0.0662 0.01 0" quat="1 0 0 0" gravcomp="1">
         <inertial pos="-0.00798741304677959 0.0281273444645686 -0.00307585192135534" quat="1 0 0 0" mass="0.00233330402481019" diaginertia="5.34551328714688e-07 7.69266428940346e-08 5.68867286778116e-07"/>
         <joint name="l31j" class="l31j"/>
         <geom name="l31_visual" pos="0 0 0" quat="1 0 0 0" type="mesh" mesh="l31.STL" material="default_material" class="visual"/>
 
-        <body name="l32" pos="-0.01420496196051 0.05002218563498 0" quat="1 0 0 0">
+        <body name="l32" pos="-0.01420496196051 0.05002218563498 0" quat="1 0 0 0" gravcomp="1">
           <inertial pos="0 -6.93889390390723E-18 -0.00335393515142834" quat="1 0 0 0" mass="0.000129251404954013" diaginertia="3.08446501904315e-09 3.08446501904315e-09 2.33551346429382e-10"/>
           <geom name="l32_visual" pos="0 0 0" quat="1 0 0 0" type="mesh" mesh="l32.STL" material="default_material" class="visual"/>
         </body>
       </body>
 
-      <body name="l41" pos="-0.0661415944844277 -0.00996187584710146 0" quat="1 0 0 0">
+      <body name="l41" pos="-0.0661415944844277 -0.00996187584710146 0" quat="1 0 0 0" gravcomp="1">
         <inertial pos="-0.00804581856235396 -0.0281654686174666 -0.00307585192135534" quat="1 0 0 0" mass="0.00233330402481019" diaginertia="5.34551328714688e-07 7.69266428940347e-08 5.68867286778116e-07"/>
         <joint name="l41j" class="l41j"/>
         <geom name="l41_visual" pos="0 0 0" quat="1 0 0 0" type="mesh" mesh="l41.STL" material="default_material" class="visual"/>
 
-        <body name="l42" pos="-0.0142633674760823 -0.0500603097878785 0" quat="1 0 0 0">
+        <body name="l42" pos="-0.0142633674760823 -0.0500603097878785 0" quat="1 0 0 0" gravcomp="1">
           <inertial pos="0 6.93889390390723E-18 -0.00335393515142834" quat="1 0 0 0" mass="0.000129251404954013" diaginertia="3.08446501904315e-09 3.08446501904315e-09 2.33551346429382e-10"/>
           <geom name="l42_visual" pos="0 0 0" quat="1 0 0 0" type="mesh" mesh="l42.STL" material="default_material" class="visual"/>
         </body>
       </body>
 
-      <body name="l51" pos="-0.0612 -0.02 0" quat="1 0 0 0">
+      <body name="l51" pos="-0.0612 -0.02 0" quat="1 0 0 0" gravcomp="1">
         <inertial pos="0.00493490261130028 -0.0161262435626905 8.52751652600214E-05" quat="1 0 0 0" mass="0.00163778457185244" diaginertia="1.06820768890745e-07 4.49452653027919e-08 9.64657848100493e-08"/>
         <joint name="l51j" class="l51j"/>
         <geom name="l51_visual" pos="0 0 0" quat="1 0 0 0" type="mesh" mesh="l51.STL" material="default_material" class="visual"/>
 
-        <body name="l52" pos="0.00749869730176 -0.02384888967597 0" quat="1 0 0 0">
+        <body name="l52" pos="0.00749869730176 -0.02384888967597 0" quat="1 0 0 0" gravcomp="1">
           <inertial pos="-0.0121201265305637 -0.0141476906325415 -0.00310757695607646" quat="1 0 0 0" mass="0.00207537980813618" diaginertia="1.79539625767514e-07 1.20419369442548e-07 2.58597227035285e-07"/>
           <geom name="l52_visual" pos="0 0 0" quat="1 0 0 0" type="mesh" mesh="l52.STL" material="default_material" class="visual"/>
 
-          <body name="l53" pos="-0.02170236230146 -0.02617264737347 0" quat="1 0 0 0">
+          <body name="l53" pos="-0.02170236230146 -0.02617264737347 0" quat="1 0 0 0" gravcomp="1">
             <inertial pos="-0.0144866815969075 0.011758001647388 5.06221520080064E-05" quat="1 0 0 0" mass="0.00318032549537155" diaginertia="9.90125378526371e-08 3.11980834393023e-07 3.7254352689162e-07"/>
             <joint name="l53j" class="l53j"/>
             <geom name="l53_visual" pos="0 0 0" quat="1 0 0 0" type="mesh" mesh="l53.STL" material="default_material" class="visual"/>
             <geom name="left_finger_pad_upper" type="box" size="0.02 0.006 0.006" pos="-0.028 0.0145 0" class="collision" rgba="1 0 0 0.3"/>
             <geom name="left_finger_pad_lower" type="box" size="0.02 0.006 0.006" pos="0.012 0.0145 0" class="collision" rgba="0 1 0 0.3"/>
 
-            <body name="left_tactile" pos="-0.019701 0.014499 0" quat="0.4999981633974483 -0.49999999999662686 0.49999999999662686 0.5000018366025516">
+            <body name="left_tactile" pos="-0.019701 0.014499 0" quat="0.4999981633974483 -0.49999999999662686 0.49999999999662686 0.5000018366025516" gravcomp="1">
               <inertial pos="7.44670002401705E-05 0.00784747372261869 0.00195692056024735" quat="1 0 0 0" mass="0.000814180541801481" diaginertia="1.77999294668351e-08 8.57776237869146e-09 2.1250576218011e-08"/>
               <attach model="tactile_sensor" prefix="left_"/>
               <geom name="left_tactile_visual" pos="0 0 0" quat="1 0 0 0" type="mesh" mesh="left_tactile.STL" material="default_material" class="visual"/>
@@ -784,21 +782,21 @@
         </body>
       </body>
 
-      <body name="left_cam" pos="0 0 0" quat="1 0 0 0">
+      <body name="left_cam" pos="0 0 0" quat="1 0 0 0" gravcomp="1">
         <inertial pos="-0.0686069459106828 -0.0250212456995469 0.0329716390391645" quat="1 0 0 0" mass="0.00178859726016835" diaginertia="5.04924129889974e-08 4.18636772588613e-08 4.22336158041563e-08"/>
         <geom name="left_cam_visual" pos="0 0 0" quat="1 0 0 0" type="mesh" mesh="left_cam.STL" material="default_material" class="visual"/>
 
-        <body name="cam_left" pos="-0.0675 -0.025 0.0325" euler="1.5708 1.5708 0">
+        <body name="cam_left" pos="-0.0675 -0.025 0.0325" euler="1.5708 1.5708 0" gravcomp="1">
           <camera name="cam_left" mode="fixed" fovy="42" resolution="640 352" pos="0 0 0" euler="-0.052359876 0 0"/>
           <site name="cam_left_site" size="0.005" rgba="1 0 0 1" pos="0 0 0" euler="-0.052359876 0 0"/>
         </body>
       </body>
 
-      <body name="right_cam" pos="0 0 0" quat="1 0 0 0">
+      <body name="right_cam" pos="0 0 0" quat="1 0 0 0" gravcomp="1">
         <inertial pos="-0.0686069459106828 0.0250212456995469 0.0329716390391645" quat="1 0 0 0" mass="0.00178859726016835" diaginertia="5.04924129890353e-08 4.18636772588991e-08 4.22336158041561e-08"/>
         <geom name="right_cam_visual" pos="0 0 0" quat="1 0 0 0" type="mesh" mesh="right_cam.STL" material="default_material" class="visual"/>
 
-        <body name="cam_right" pos="-0.0675 0.025 0.0325" euler="1.5708 1.5708 0">
+        <body name="cam_right" pos="-0.0675 0.025 0.0325" euler="1.5708 1.5708 0" gravcomp="1">
           <camera name="cam_right" mode="fixed" fovy="42" resolution="640 352" pos="0 0 0" euler="-0.052359876 0 0"/>
           <site name="cam_right_site" size="0.005" rgba="1 0 0 1" pos="0 0 0" euler="-0.052359876 0 0"/>
         </body>

@@ -41,47 +41,47 @@
 
       <geom type="mesh" rgba="0.75294 0.75294 0.75294 1" mesh="base_link" contype="0" conaffinity="0"/>
 
-      <body name="link1" pos="0 0 0.1701">
+      <body name="link1" pos="0 0 0.1701" gravcomp="1">
         <inertial pos="-1.7573e-05 -0.0014609 -0.01717" quat="0.958533 -0.257218 -0.0860136 -0.0874945" mass="0.865" diaginertia="0.00109134 0.000987754 0.00089081"/>
         <joint name="joint1" pos="0 0 0" axis="0 0 1" range="-2.96706 2.96706"/>
         <geom type="mesh" rgba="0.75294 0.75294 0.75294 1" mesh="link1"/>
 
-        <body name="link2" quat="0.640856 0.640858 -0.298834 0.298835">
+        <body name="link2" quat="0.640856 0.640858 -0.298834 0.298835" gravcomp="1">
           <inertial pos="0.00014159 0.049551 0.001674" quat="0.670864 0.741574 0.0018991 -0.00239455" mass="0.849" diaginertia="0.0012632 0.00115266 0.00089604"/>
           <joint name="joint2" pos="0 0 0" axis="0 0 1" range="-2.87979 1.0472"/>
           <geom type="mesh" rgba="0.75294 0.75294 0.75294 1" mesh="link2"/>
 
-          <body name="link3" pos="0 0.249 0" quat="0.707105 -0.707108 0 0">
+          <body name="link3" pos="0 0.249 0" quat="0.707105 -0.707108 0 0" gravcomp="1">
             <inertial pos="-0.0053869 -0.0016268 -0.053033" quat="0.999118 0.0290536 -0.0250255 0.0171155" mass="0.927" diaginertia="0.00210489 0.0020316 0.000855603"/>
             <joint name="joint3" pos="0 0 0" axis="0 0 1" range="-2.96706 2.96706"/>
             <geom type="mesh" rgba="0.75294 0.75294 0.75294 1" mesh="link3"/>
 
-            <body name="link4" quat="0.664462 -0.664464 -0.241844 -0.241845">
+            <body name="link4" quat="0.664462 -0.664464 -0.241844 -0.241845" gravcomp="1">
               <inertial pos="-0.00023761 0.087966 5.7235e-06" quat="0.525454 0.526447 -0.469623 0.475611" mass="0.479" diaginertia="0.000624242 0.000621287 0.000234671"/>
               <joint name="joint4" pos="0 0 0" axis="0 0 1" range="-4.53786 0.174533"/>
               <geom type="mesh" rgba="0.75294 0.75294 0.75294 1" mesh="link4"/>
 
-              <body name="link5" pos="0 0.334 0" quat="0.499998 -0.5 0.5 0.500002">
+              <body name="link5" pos="0 0.334 0" quat="0.499998 -0.5 0.5 0.500002" gravcomp="1">
                 <inertial pos="0.0002289 -0.0038069 -0.09288" quat="0.999328 -0.0358841 0.00233855 -0.00709206" mass="0.559" diaginertia="0.000977037 0.000871323 0.00037614"/>
                 <joint name="joint5" pos="0 0 0" axis="0 0 1" range="-2.96706 2.96706"/>
                 <geom type="mesh" rgba="0.75294 0.75294 0.75294 1" mesh="link5"/>
 
-                <body name="link6" quat="0.499998 0.5 -0.5 0.500002">
+                <body name="link6" quat="0.499998 0.5 -0.5 0.500002" gravcomp="1">
                   <inertial pos="0.00030144 0.00018049 8.6721e-05" quat="0.999968 0.00268226 -0.000147706 -0.00756031" mass="0.453" diaginertia="0.0001872 0.0001872 0.0001872"/>
                   <joint name="joint6" pos="0 0 0" axis="0 0 1" range="-0.785398 0.785398"/>
                   <geom type="mesh" rgba="0.75294 0.75294 0.75294 1" mesh="link6"/>
 
-                  <body name="link7" quat="0.707105 0.707108 0 0">
+                  <body name="link7" quat="0.707105 0.707108 0 0" gravcomp="1">
                     <inertial pos="0.0382672 0.000233908 0.011272" quat="0.692825 0.185729 0.185399 0.671659" mass="0.078" diaginertia="7.70679e-05 7.00351e-05 3.5964e-05"/>
                     <joint name="joint7" pos="0 0 0" axis="0 0 1" range="-1.5708 1.5708"/>
                     <geom type="mesh" rgba="0.75294 0.75294 0.75294 1" mesh="link7"/>
                     <geom pos="0.057 0 0" quat="0.707105 -0.707108 0 0" type="mesh" rgba="0.75294 0.75294 0.75294 1" mesh="tool" contype="0" conaffinity="0"/>
                     <site name="tool_site" pos="0.057 0 0" quat="0.707105 -0.707108 0 0" size="0.005" type="sphere"/>
 
-                    <body name="xf9600_mount" pos="0.057 0 0" quat="0 0 -0.707108 -0.707105">
+                    <body name="xf9600_mount" pos="0.057 0 0" quat="0 0 -0.707108 -0.707105" gravcomp="1">
                       <site name="xf9600_mount_site" pos="0 0 0" size="0.006" type="sphere" rgba="1 0 0 1"/>
 
-                      <body name="tcp_frame" pos="-0.1250 0 0" quat="1 0 0 0">
+                      <body name="tcp_frame" pos="-0.1250 0 0" quat="1 0 0 0" gravcomp="1">
                         <site name="tcp_site" pos="0 0 0" quat="1 0 0 0" size="0.008" type="sphere" rgba="0 1 0 1"/>
                       </body>
                       <attach model="xf9600_gripper" prefix="xfg_"/>
@@ -97,12 +97,12 @@
   </worldbody>
 
   <actuator>
-    <position name="joint1" joint="joint1" kp="3000" ctrlrange="-2.96706 2.96706"/>
-    <position name="joint2" joint="joint2" kp="3000" ctrlrange="-2.87979 1.0472"/>
-    <position name="joint3" joint="joint3" kp="3000" ctrlrange="-2.96706 2.96706"/>
-    <position name="joint4" joint="joint4" kp="3000" ctrlrange="-4.53786 0.174533"/>
-    <position name="joint5" joint="joint5" kp="3000" ctrlrange="-2.96706 2.96706"/>
-    <position name="joint6" joint="joint6" kp="3000" ctrlrange="-0.785398 0.785398"/>
-    <position name="joint7" joint="joint7" kp="3000" ctrlrange="-1.5708 1.5708"/>
+    <position name ="joint1" joint="joint1" kp="400" kv="40" ctrlrange="-2.96706 2.96706"/>
+    <position name ="joint2" joint="joint2" kp="400" kv="40" ctrlrange="-2.87979 1.0472"/>
+    <position name ="joint3" joint="joint3" kp="400" kv="40" ctrlrange="-2.96706 2.96706"/>
+    <position name ="joint4" joint="joint4" kp="400" kv="40" ctrlrange="-4.53786 0.174533"/>
+    <position name ="joint5" joint="joint5" kp="400" kv="40" ctrlrange="-2.96706 2.96706"/>
+    <position name ="joint6" joint="joint6" kp="400" kv="40" ctrlrange="-0.785398 0.785398"/>
+    <position name ="joint7" joint="joint7" kp="400" kv="40" ctrlrange="-1.5708 1.5708"/>
   </actuator>
 </mujoco>
