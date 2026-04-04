@@ -869,7 +869,8 @@ class MujocoBasis:
         for cam_name in self._camera_ids:
             info["cameras"][cam_name] = {
                 "camera_info": {
-                    stream_type: camera_info for stream_type in ("color", "depth")
+                    stream_type: camera_info[cam_name]
+                    for stream_type in ("color", "depth")
                 },
                 # TODO: should separate extrinsics for color and depth?
                 "camera_extrinsics": camera_extrinsics[cam_name],

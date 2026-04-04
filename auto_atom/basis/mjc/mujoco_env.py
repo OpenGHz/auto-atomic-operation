@@ -52,6 +52,21 @@ def _create_header(time_sec: float) -> dict[str, Any]:
     return {"stamp": {"sec": int(time_sec), "nanosec": int((time_sec % 1) * 1e9)}}
 
 
+def _create_image_data(data: np.ndarray, time_sec: float):
+    h, w = data.shape[:2]
+    c = data.shape[2] if data.ndim == 3 else 1
+
+    return {
+        "header": _create_header(time_sec),
+        "height": h,
+        "width": w,
+        "data": data.tolist(),
+        "encoding": {1: "", 3: "rgb8", 4: "rgba8", 5: "heatmap"}[c],
+        "step": w * c,
+        "is_bigendian": 0,
+    }
+
+
 @dataclass
 class _OperatorState:
     """Per-operator control state, created by :meth:`UnifiedMujocoEnv.register_operator`."""
@@ -837,8 +852,8 @@ class UnifiedMujocoEnv(MujocoBasis):
                             "data": {
                                 "header": _create_header(sim_time),
                                 "pose": {
-                                    "position": pos.astype(np.float32),
-                                    "orientation": quat.astype(np.float32),
+                                    "position": pos.tolist(),
+                                    "orientation": quat.tolist(),
                                 },
                             },
                             "t": t,
@@ -873,8 +888,8 @@ class UnifiedMujocoEnv(MujocoBasis):
                             "data": {
                                 "header": _create_header(sim_time),
                                 "pose": {
-                                    "position": tgt_pos,
-                                    "orientation": tgt_ori,
+                                    "position": tgt_pos.tolist(),
+                                    "orientation": tgt_ori.tolist(),
                                 },
                             },
                             "t": t,
@@ -958,6 +973,7 @@ class UnifiedMujocoEnv(MujocoBasis):
             if structured:
                 info = self.get_info()["cameras"]
             for cam_name, renderer in self._renderers.items():
+                obs_keys = set(obs.keys())
                 cam_id = self._camera_ids[cam_name]
                 spec = self._camera_specs[cam_name]
                 renderer.update_scene(
@@ -999,6 +1015,11 @@ class UnifiedMujocoEnv(MujocoBasis):
                             "t": t,
                         }
                 if structured:
+                    cam_keys = obs.keys() - obs_keys
+                    for key in cam_keys:
+                        obs[key]["data"] = _create_image_data(
+                            obs[key]["data"], sim_time
+                        )
                     cam_info = info[cam_name]
                     obs[f"{obs_cam_name}/camera_info"] = {
                         "data": cam_info["camera_info"]["color"],
