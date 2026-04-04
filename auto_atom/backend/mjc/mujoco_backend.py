@@ -441,6 +441,33 @@ class MujocoOperatorHandler(OperatorHandler):
     def home(self, env_mask: Optional[np.ndarray] = None) -> None:
         self.reset_state(env_mask)
         self.env.home_operator(self.operator_name, env_mask=env_mask)
+        # Apply the desired eef ctrl value from _home_ctrl.  home_operator()
+        # restores from the env-level home_ctrl snapshot (captured at
+        # registration time), which does not reflect initial_state.eef
+        # changes.  We set ctrl here and step the simulation so the gripper
+        # linkage settles physically rather than jumping qpos directly.
+        mask = self._normalize_mask(env_mask)
+        needs_settle = False
+        for env_index, enabled in enumerate(mask):
+            if not enabled:
+                continue
+            single_env = self.env.envs[env_index]
+            current = float(single_env.data.ctrl[self.eef_ctrl_index])
+            target = float(self._home_ctrl[env_index, self.eef_ctrl_index])
+            if abs(current - target) > 1e-6:
+                single_env.data.ctrl[self.eef_ctrl_index] = target
+                needs_settle = True
+        if needs_settle:
+            for env_index, enabled in enumerate(mask):
+                if enabled:
+                    se = self.env.envs[env_index]
+                    for _ in range(200):
+                        mujoco.mj_step(se.model, se.data)
+                    # Clear residual velocities and reset time so the
+                    # settle phase is invisible to the rest of the sim.
+                    se.data.qvel[:] = 0.0
+                    se.data.time = 0.0
+                    mujoco.mj_forward(se.model, se.data)
 
     def set_home_end_effector_pose(
         self,
