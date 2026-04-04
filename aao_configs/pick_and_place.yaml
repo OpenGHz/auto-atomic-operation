@@ -56,7 +56,7 @@ task:
         pre_move:
           - position: [0.0, 0.0, 0.12]
             reference: object_world
-          - position: [0.0, 0.0, 0.058]
+          - position: [0.0, 0.0, 0.062]
             reference: object_world
         post_move:
           - position: [0.0, 0.0, 0.16]

@@ -45,7 +45,7 @@ class RecorderConfig(BaseModel):
 
 def _is_low_dim_value(value: object) -> bool:
     if isinstance(value, np.ndarray):
-        return value.ndim <= 1
+        return value.ndim <= 2
     if isinstance(value, np.generic):
         return True
     if isinstance(value, (bool, int, float, str)) or value is None:
@@ -126,8 +126,9 @@ def _build_low_dim_npz_payload(
             if leaf_key not in leaf_items:
                 raise ValueError(f"Missing low-dimensional key '{leaf_key}' in trace.")
             value, t = leaf_items[leaf_key]
-            values.append(np.asarray(value, dtype=np.float32))
-            times.append(float(t))
+            values.append(np.asarray(value, dtype=np.float32).reshape(-1))
+            t_scalar = t[0] if isinstance(t, (list, np.ndarray)) else t
+            times.append(float(t_scalar))
         payload[f"low_dim_data__{idx}"] = np.stack(values).astype(np.float32)
         payload[f"low_dim_t__{idx}"] = np.asarray(times, dtype=np.float64)
     return payload
