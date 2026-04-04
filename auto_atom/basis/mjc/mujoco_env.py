@@ -674,6 +674,57 @@ class UnifiedMujocoEnv(MujocoBasis):
             self.data.ctrl[:n] = ctrl[:n]
         self.update()
 
+    def apply_joint_action(self, operator: str, action) -> None:
+        """Apply joint angles (arm + gripper) for an operator and step.
+
+        Parameters
+        ----------
+        operator : str
+            Registered operator name, e.g. ``"arm"``.
+        action : array-like, shape ``(n_arm + n_eef,)``
+            Target joint positions in radians.  The first ``n_arm`` elements
+            map to ``arm_actuators`` and the remaining to ``eef_actuators``
+            as declared in the YAML config.
+        """
+        action = np.asarray(action, dtype=np.float64).reshape(-1)
+        arm_aidx = self._op_arm_aidx[operator]
+        eef_aidx = self._op_eef_aidx[operator]
+        all_aidx = np.concatenate([arm_aidx, eef_aidx])
+        n = min(len(action), len(all_aidx))
+        ctrl = np.asarray(self.data.ctrl, dtype=np.float64).copy()
+        ctrl[all_aidx[:n]] = action[:n]
+        self.step(ctrl)
+
+    def apply_pose_action(
+        self, operator: str, position, orientation, gripper=None
+    ) -> None:
+        """Apply an EEF target pose (base frame) and optional gripper, then step.
+
+        Internally uses IK (joint-mode) or mocap write (mocap-mode).
+
+        Parameters
+        ----------
+        operator : str
+            Registered operator name, e.g. ``"arm"``.
+        position : array-like, shape ``(3,)``
+            Target EEF position in the operator's base frame.
+        orientation : array-like, shape ``(4,)``
+            Target EEF quaternion (xyzw) in the operator's base frame.
+        gripper : array-like, shape ``(n_eef,)``, optional
+            Gripper actuator target(s).  Written to ``eef_actuators`` ctrl
+            before stepping.  ``None`` keeps the current gripper ctrl.
+        """
+        pos = np.asarray(position, dtype=np.float32).reshape(3)
+        ori = np.asarray(orientation, dtype=np.float32).reshape(4)
+        if gripper is not None:
+            eef_aidx = self._op_eef_aidx[operator]
+            g = np.asarray(gripper, dtype=np.float64).reshape(-1)
+            n = min(len(g), len(eef_aidx))
+            low = self.model.actuator_ctrlrange[eef_aidx[:n], 0]
+            high = self.model.actuator_ctrlrange[eef_aidx[:n], 1]
+            self.data.ctrl[eef_aidx[:n]] = np.clip(g[:n], low, high)
+        self.step_operator_toward_target(operator, pos, ori)
+
     def capture_observation(self) -> dict[str, dict[str, Any]]:
         return self._collect_obs(self.config.structured)
 
@@ -1260,6 +1311,76 @@ class BatchedUnifiedMujocoEnv:
         for env_index, env in enumerate(self.envs):
             if mask[env_index]:
                 env.step(action[env_index])
+
+    def apply_joint_action(
+        self,
+        operator: str,
+        action,
+        env_mask: np.ndarray | None = None,
+    ) -> None:
+        """Apply joint angles (arm + gripper) for an operator across envs.
+
+        Parameters
+        ----------
+        operator : str
+            Registered operator name.
+        action : array-like, shape ``(n_joints,)`` or ``(B, n_joints)``
+            If 1-D, broadcast to all envs.
+        env_mask : array-like, optional
+            Bool mask selecting which envs to step.
+        """
+        action = np.asarray(action, dtype=np.float64)
+        if action.ndim == 1:
+            action = np.repeat(action.reshape(1, -1), self.batch_size, axis=0)
+        mask = (
+            np.ones(self.batch_size, dtype=bool)
+            if env_mask is None
+            else np.asarray(env_mask, dtype=bool).reshape(-1)
+        )
+        for i, env in enumerate(self.envs):
+            if mask[i]:
+                env.apply_joint_action(operator, action[i])
+
+    def apply_pose_action(
+        self,
+        operator: str,
+        position,
+        orientation,
+        gripper=None,
+        env_mask: np.ndarray | None = None,
+    ) -> None:
+        """Apply an EEF pose target (base frame) + optional gripper across envs.
+
+        Parameters
+        ----------
+        operator : str
+            Registered operator name.
+        position : array-like, shape ``(3,)`` or ``(B, 3)``
+        orientation : array-like, shape ``(4,)`` or ``(B, 4)``
+        gripper : array-like, shape ``(n_eef,)`` or ``(B, n_eef)``, optional
+        env_mask : array-like, optional
+        """
+        pos = np.asarray(position, dtype=np.float32)
+        ori = np.asarray(orientation, dtype=np.float32)
+        if pos.ndim == 1:
+            pos = np.repeat(pos.reshape(1, 3), self.batch_size, axis=0)
+        if ori.ndim == 1:
+            ori = np.repeat(ori.reshape(1, 4), self.batch_size, axis=0)
+        g = None
+        if gripper is not None:
+            g = np.asarray(gripper, dtype=np.float64)
+            if g.ndim == 1:
+                g = np.repeat(g.reshape(1, -1), self.batch_size, axis=0)
+        mask = (
+            np.ones(self.batch_size, dtype=bool)
+            if env_mask is None
+            else np.asarray(env_mask, dtype=bool).reshape(-1)
+        )
+        for i, env in enumerate(self.envs):
+            if mask[i]:
+                env.apply_pose_action(
+                    operator, pos[i], ori[i], g[i] if g is not None else None
+                )
 
     def update(self, env_mask: np.ndarray | None = None) -> None:
         mask = (

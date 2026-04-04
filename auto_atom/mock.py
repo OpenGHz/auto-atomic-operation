@@ -142,6 +142,21 @@ class MockEnv:
     def capture_observation(self) -> Dict[str, Dict[str, Any]]:
         return {}
 
+    def apply_joint_action(
+        self, operator: str, action: Any = None, env_mask: Any = None
+    ) -> None:
+        pass
+
+    def apply_pose_action(
+        self,
+        operator: str,
+        position: Any = None,
+        orientation: Any = None,
+        gripper: Any = None,
+        env_mask: Any = None,
+    ) -> None:
+        pass
+
 
 @dataclass
 class MockSceneBackend(SceneBackend):

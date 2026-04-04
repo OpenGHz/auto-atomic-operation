@@ -153,6 +153,19 @@ class EnvProtocol(Protocol):
 
     def capture_observation(self) -> Dict[str, Dict[str, Any]]: ...
 
+    def apply_joint_action(
+        self, operator: str, action: Any, env_mask: Optional[np.ndarray] = None
+    ) -> None: ...
+
+    def apply_pose_action(
+        self,
+        operator: str,
+        position: Any,
+        orientation: Any,
+        gripper: Any = None,
+        env_mask: Optional[np.ndarray] = None,
+    ) -> None: ...
+
 
 class SceneBackend(ABC):
     env: EnvProtocol
