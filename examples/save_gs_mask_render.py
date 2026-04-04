@@ -1,8 +1,8 @@
-"""Save per-camera GS mask images for visual inspection.
+"""Save per-camera mask images for visual inspection.
 
-This script loads a GS-enabled scene config, resets to the initial keyframe,
-renders GS RGB plus GS-derived binary masks for every configured camera, and
-saves the outputs under ``outputs/gs_mask_<config>_<timestamp>/``.
+This script loads a scene config (GS or native MuJoCo), resets to the initial
+keyframe, renders RGB plus binary masks for every configured camera, and saves
+the outputs under ``outputs/mask_render_<config>_<timestamp>/``.
 
 Saved files per camera:
 
@@ -14,6 +14,7 @@ Saved files per camera:
 Usage::
 
     python examples/save_gs_mask_render.py
+    python examples/save_gs_mask_render.py --config-name press_three_buttons
     python examples/save_gs_mask_render.py --config-name press_three_buttons_gs
     python examples/save_gs_mask_render.py show=true
     python examples/save_gs_mask_render.py +recorder.enabled=true
@@ -52,13 +53,14 @@ def _resolve_single_env(env):
     return env
 
 
-def _resolve_gs_env(env):
+def _is_gs_env(env) -> bool:
+    """Return True if the environment uses Gaussian Splatting rendering."""
     if hasattr(env, "_gs_mask_renderers"):
-        return env
-    single_env = _resolve_single_env(env)
-    if hasattr(single_env, "_gs_mask_renderers"):
-        return single_env
-    return env
+        return bool(env._gs_mask_renderers)
+    single = _resolve_single_env(env)
+    if hasattr(single, "_gs_mask_renderers"):
+        return bool(single._gs_mask_renderers)
+    return False
 
 
 def _resolve_interest_pairs(single_env) -> tuple[list[str], list[str]]:
@@ -240,7 +242,7 @@ def _select_video_frame(
 
 @hydra.main(
     config_path=str(get_config_dir()),
-    config_name="press_three_buttons_gs",
+    config_name="press_three_buttons",
     version_base=None,
 )
 def main(cfg: DictConfig) -> None:
@@ -253,22 +255,17 @@ def main(cfg: DictConfig) -> None:
     task_file = prepare_task_file(cfg)
     env = ComponentRegistry.get_env(task_file.task.env_name)
     single_env = _resolve_single_env(env)
-    gs_env = _resolve_gs_env(env)
+    use_gs = _is_gs_env(env)
 
-    if not hasattr(gs_env, "_gs_mask_renderers"):
-        raise TypeError(
-            "save_gs_mask_render.py requires a GS env with GS mask helpers."
-        )
-
-    if not gs_env._gs_mask_renderers:
-        raise RuntimeError(
-            "No GS mask renderers were created. Check config.mask_objects and gaussian_render.body_gaussians."
-        )
+    print(
+        f"[info] Rendering mode: {'Gaussian Splatting' if use_gs else 'native MuJoCo'}"
+    )
 
     runner = TaskRunner().from_config(task_file)
     config_name = HydraConfig.get().job.config_name
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    out_dir = Path("outputs") / f"gs_mask_{config_name}_{timestamp}"
+    render_tag = "gs" if use_gs else "mj"
+    out_dir = Path("outputs") / f"mask_render_{render_tag}_{config_name}_{timestamp}"
     out_dir.mkdir(parents=True, exist_ok=True)
     video_frames: dict[str, list[np.ndarray]] = {
         cam_name: [] for cam_name in single_env._camera_specs
@@ -291,10 +288,10 @@ def main(cfg: DictConfig) -> None:
                 )
 
                 if rgb is None:
-                    print(f"[warn] No GS RGB image for camera '{cam_name}', skipping.")
+                    print(f"[warn] No RGB image for camera '{cam_name}', skipping.")
                     continue
                 if binary_mask is None:
-                    print(f"[warn] No GS mask image for camera '{cam_name}', skipping.")
+                    print(f"[warn] No mask image for camera '{cam_name}', skipping.")
                     continue
 
                 rgb = np.asarray(rgb, dtype=np.uint8)
@@ -343,9 +340,7 @@ def main(cfg: DictConfig) -> None:
                                     channel,
                                 )
 
-                    print(
-                        f"Saved GS mask inspection images for camera '{cam_name}' to {out_dir}"
-                    )
+                    print(f"Saved mask images for camera '{cam_name}' to {out_dir}")
 
                     if show:
                         fig, axes = plt.subplots(1, 3, figsize=(12, 4), squeeze=False)
@@ -353,7 +348,7 @@ def main(cfg: DictConfig) -> None:
                         axes[0, 0].set_title(f"{cam_name} RGB")
                         axes[0, 0].axis("off")
                         axes[0, 1].imshow(binary_mask, cmap="gray", vmin=0, vmax=1)
-                        axes[0, 1].set_title(f"{cam_name} GS Mask")
+                        axes[0, 1].set_title(f"{cam_name} Mask")
                         axes[0, 1].axis("off")
                         axes[0, 2].imshow(overlay)
                         axes[0, 2].set_title(f"{cam_name} Overlay")

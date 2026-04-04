@@ -194,7 +194,7 @@ def build_p7_xf9600_backend(
             "root_body_name": _P7_ROOT_BODY,
             "eef_site_name": _P7_TCP_SITE,
             "eef_ctrl_index": eef_ctrl_index,
-            # "eef_open_value": eef_open_value,
-            # "eef_close_value": eef_close_value,
+            "eef_open_value": eef_open_value,
+            "eef_close_value": eef_close_value,
         },
     )

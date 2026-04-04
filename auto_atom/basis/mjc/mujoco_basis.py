@@ -10,7 +10,8 @@ stepping.  It deliberately does **not** provide ``step(action)`` or
 from enum import Enum
 from math import tan, pi
 from pathlib import Path
-from typing import Any, Dict, List, Set, Optional
+import copy
+from typing import Any, Callable, Dict, List, Set, Optional
 from pydantic import BaseModel, ConfigDict, Field, model_validator, field_validator
 from auto_atom.basis.mjc.tactile.tactile_sensor import TactileSensorManager
 import time
@@ -160,6 +161,18 @@ class EnvConfig(BaseModel, frozen=True):
     """Number of homogeneous env replicas to construct for batched execution."""
     viewer_env_index: int = 0
     """Which env replica owns the viewer when ``batch_size > 1``."""
+    pre_step_callbacks: List[Any] = Field(default_factory=list)
+    """Pre-step callback objects invoked before every ``mj_step()``.
+
+    Each entry should be a callable with signature ``cb(model, data)``.
+    If the object has a ``bind(model, data)`` method, it is called once
+    during env initialization to resolve joint indices, etc.
+
+    In YAML, specify each callback with a Hydra ``_target_`` pointing to a
+    class whose ``__init__`` accepts only configuration parameters (no
+    ``model``/``data``).  The framework calls ``bind()`` after loading the
+    model.
+    """
 
     @model_validator(mode="after")
     def validate_frequencies(self):
@@ -232,6 +245,14 @@ class MujocoBasis:
             mujoco.mj_resetData(self.model, self.data)
         mujoco.mj_forward(self.model, self.data)
         self._sync_mocap_to_freejoint()
+
+        # Bind pre-step callbacks (already instantiated by Hydra).
+        self._pre_step_callbacks: list[Callable] = []
+        for cb in config.pre_step_callbacks:
+            cb = copy.deepcopy(cb)
+            if hasattr(cb, "bind"):
+                cb.bind(self.model, self.data)
+            self._pre_step_callbacks.append(cb)
 
         # Pre-compute per-operator actuator and joint index arrays.
         self._operators = config.operators
@@ -728,6 +749,8 @@ class MujocoBasis:
 
     def update(self):
         for _ in range(self._n_substeps):
+            for cb in self._pre_step_callbacks:
+                cb(self.model, self.data)
             mujoco.mj_step(self.model, self.data)
         if self._viewer_running():
             self._sync_viewer()

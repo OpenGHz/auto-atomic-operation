@@ -56,6 +56,10 @@ class MujocoControlConfig(BaseModel):
     grasp: MujocoGraspConfig = MujocoGraspConfig()
     cartesian_max_linear_step: float = 0.0
     cartesian_max_angular_step: float = 0.0
+    adaptive_step_scaling: bool = False
+    """When True, automatically reduce step scale on stall and recover on progress.
+    Set to False for contact-heavy tasks (e.g. door pushing) where stall detection
+    causes unnecessary slowdown."""
 
 
 @dataclass
@@ -103,6 +107,8 @@ class MujocoOperatorHandler(OperatorHandler):
     mocap_body_name: str = "robotiq_mocap"
     freejoint_name: str = "robotiq_freejoint"
     eef_ctrl_index: int = 0
+    eef_open_value: float = 0.0
+    eef_close_value: float = 0.82
     control: MujocoControlConfig = field(default_factory=MujocoControlConfig)
     ik_solver: Optional[IKSolver] = None
     joint_control_mode: str = "per_step_ik"
@@ -199,27 +205,28 @@ class MujocoOperatorHandler(OperatorHandler):
             ori_err = quaternion_angular_distance(
                 current_eef.orientation[env_index], desired_ori[env_index]
             )
-            improved = pos_err < (
-                self._move_best_pos_error[env_index] - 1e-4
-            ) or ori_err < (self._move_best_ori_error[env_index] - 1e-3)
-            if improved:
-                self._move_best_pos_error[env_index] = min(
-                    self._move_best_pos_error[env_index], pos_err
-                )
-                self._move_best_ori_error[env_index] = min(
-                    self._move_best_ori_error[env_index], ori_err
-                )
-                self._move_stall_count[env_index] = 0
-                self._move_step_scale[env_index] = min(
-                    1.0, self._move_step_scale[env_index] * 1.1
-                )
-            else:
-                self._move_stall_count[env_index] += 1
-                if self._move_stall_count[env_index] >= 8:
-                    self._move_step_scale[env_index] = max(
-                        0.1, self._move_step_scale[env_index] * 0.5
+            if self.control.adaptive_step_scaling:
+                improved = pos_err < (
+                    self._move_best_pos_error[env_index] - 1e-4
+                ) or ori_err < (self._move_best_ori_error[env_index] - 1e-3)
+                if improved:
+                    self._move_best_pos_error[env_index] = min(
+                        self._move_best_pos_error[env_index], pos_err
+                    )
+                    self._move_best_ori_error[env_index] = min(
+                        self._move_best_ori_error[env_index], ori_err
                     )
                     self._move_stall_count[env_index] = 0
+                    self._move_step_scale[env_index] = min(
+                        1.0, self._move_step_scale[env_index] * 1.1
+                    )
+                else:
+                    self._move_stall_count[env_index] += 1
+                    if self._move_stall_count[env_index] >= 8:
+                        self._move_step_scale[env_index] = max(
+                            0.1, self._move_step_scale[env_index] * 0.5
+                        )
+                        self._move_stall_count[env_index] = 0
 
             max_linear_step = (
                 float(
@@ -359,12 +366,24 @@ class MujocoOperatorHandler(OperatorHandler):
                 reached = True
                 grasped_name = self._last_target[env_index].name
                 event = "eef_grasped"
-            elif eef.close and actual >= max(
-                target_value - self.control.tolerance.eef, 0.45
-            ):
+            elif eef.close and actual >= (target_value - self.control.tolerance.eef):
                 reached = True
                 event = "eef_reached"
-            elif not eef.close and actual <= max(self.control.tolerance.eef, 0.05):
+            elif (
+                eef.close
+                and self._eef_steps[env_index]
+                >= max(self.control.grasp.settle_steps, 30)
+                and actual > self.eef_open_value + self.control.tolerance.eef * 0.1
+            ):
+                # Gripper commanded to close but physically blocked by an
+                # object — qpos may never reach the target.  Accept when
+                # the actuator has had enough time and qpos has moved
+                # noticeably away from the fully-open position.
+                reached = True
+                event = "eef_reached"
+            elif not eef.close and actual <= (
+                self.eef_open_value + self.control.tolerance.eef
+            ):
                 reached = True
                 event = "eef_reached"
             details[env_index] = {
@@ -460,7 +479,7 @@ class MujocoOperatorHandler(OperatorHandler):
     def _eef_target(self, eef: EefControlConfig) -> float:
         if eef.joint_positions:
             return float(eef.joint_positions[0])
-        return 0.82 if eef.close else 0.0
+        return self.eef_close_value if eef.close else self.eef_open_value
 
     def _normalize_mask(self, env_mask: Optional[np.ndarray]) -> np.ndarray:
         if env_mask is None:
