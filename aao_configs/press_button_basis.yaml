@@ -1,0 +1,56 @@
+defaults:
+  - _self_
+  - press_three_buttons_gs_mixin
+
+scene_name: press_three_buttons
+
+env:
+  mask_objects: ["${object_name}"]
+  operations: ["press"]
+  viewer:
+    lookat: [0.06, -0.03, 0.1]
+    distance: 0.6
+    azimuth: 135
+    elevation: -28
+    step_delay: 0.03
+    hold_seconds: 1.0
+
+task:
+  randomization:
+    button_blue:
+      x: [-0.01, 0.01]
+      y: [-0.01, 0.01]
+      collision_radius: 0.05
+    button_green:
+      x: [-0.01, 0.01]
+      y: [-0.01, 0.01]
+      collision_radius: 0.05
+    button_pink:
+      x: [-0.01, 0.01]
+      y: [-0.01, 0.01]
+      collision_radius: 0.05
+    arm:
+      x: [-0.01, 0.01]
+      y: [-0.01, 0.01]
+      collision_radius: 0.15
+
+  stages:
+    - name: press_${object_name}
+      object: ${object_name}
+      operation: press
+      operator: arm
+      param:
+        pre_move:
+          - position: [0.0, 0.0, 0.12]
+            orientation: [-0.70710678, 0.70710678, 0.0, 0.0]
+            reference: object_world
+          - position: [0.0, 0.0, 0.035]
+            reference: object_world
+        post_move:
+          - position: [0.0, 0.0, 0.12]
+            reference: object_world
+
+task_operators:
+  - name: arm
+    initial_state:
+      eef: 0.82 # closed gripper for pressing buttons

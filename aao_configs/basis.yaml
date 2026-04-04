@@ -47,6 +47,7 @@ env:
       enable_depth: ${enable_depth}
       enable_mask: ${enable_mask}
       enable_heat_map: ${enable_heat_map}
+  # structured: true
 
 backend: auto_atom.backend.mjc.mujoco_backend.build_mujoco_backend
 
