@@ -310,6 +310,114 @@ To evaluate a real model:
 2. instantiate your policy from `cfg.policy`
 3. ensure the returned action matches the default action applier format, or provide a custom one
 
+## Remote Evaluation (rpyc)
+
+When the client machine does not have simulation dependencies (MuJoCo, etc.), you can split evaluation into a **server** (holds the simulator) and a **client** (only needs `rpyc` + `auto_atom`).
+
+```
+Server (MuJoCo installed)              Client (no sim deps)
+┌──────────────────────────┐           ┌──────────────────────────┐
+│ serve_policy_evaluator() │   rpyc    │ RemotePolicyEvaluator    │
+│ wraps PolicyEvaluator    │◄─────────►│ same public API          │
+└──────────────────────────┘           └──────────────────────────┘
+```
+
+### Start the Server
+
+```bash
+python examples/policy_eval_server.py
+python examples/policy_eval_server.py --host 0.0.0.0 --port 9999
+```
+
+Or from Python:
+
+```python
+from auto_atom.ipc import serve_policy_evaluator
+
+serve_policy_evaluator(host="0.0.0.0", port=18861)
+```
+
+The server starts with a default `action_applier` that calls `env.apply_pose_action(...)` and a default `observation_getter` that calls `env.capture_observation()`. To use custom callbacks:
+
+```python
+serve_policy_evaluator(
+    host="0.0.0.0",
+    port=18861,
+    action_applier=my_action_applier,
+    observation_getter=my_observation_getter,
+)
+```
+
+### Use the Client
+
+```python
+from auto_atom.ipc import RemotePolicyEvaluator
+
+evaluator = RemotePolicyEvaluator(host="localhost", port=18861)
+
+# Initialize — the server loads config and creates the simulator
+evaluator.from_config("press_three_buttons", overrides=["env.batch_size=1"])
+# or: evaluator.from_yaml("path/to/task.yaml")
+
+# Same API as PolicyEvaluator
+update = evaluator.reset()
+
+for step in range(max_steps):
+    obs = evaluator.get_observation()
+    action = policy.act(obs, update)
+    update = evaluator.update(action)
+    if update.done.all():
+        break
+
+summary = evaluator.summarize(max_updates=max_steps, updates_used=step + 1)
+records = evaluator.records
+evaluator.close()
+```
+
+All return types (`TaskUpdate`, `ExecutionRecord`, `ExecutionSummary`) are real `auto_atom` dataclass instances, not plain dicts.
+
+### Client API Reference
+
+| Method / Property | Returns | Description |
+|---|---|---|
+| `from_config(name, overrides=)` | `self` | Load task config on the server by Hydra config name |
+| `from_yaml(path)` | `self` | Load task config on the server from a YAML path |
+| `reset(env_mask=)` | `TaskUpdate` | Reset environments |
+| `get_observation()` | `Any` | Get current observation |
+| `update(action, env_mask=)` | `TaskUpdate` | Apply action and advance state |
+| `summarize(...)` | `ExecutionSummary` | Get execution summary |
+| `records` | `List[ExecutionRecord]` | Stage results |
+| `batch_size` | `int` | Number of environments |
+| `stage_plans` | `List[dict]` | Stage info (index, name, operator, operation, object) |
+| `ping()` | `dict` | Health check |
+| `close()` | `None` | Release resources and disconnect |
+
+### Import Isolation
+
+The `auto_atom.ipc` subpackage is fully isolated. `import auto_atom` does **not** trigger `import rpyc`:
+
+```python
+# This always works, even without rpyc installed
+import auto_atom
+
+# This requires rpyc
+from auto_atom.ipc import RemotePolicyEvaluator
+from auto_atom.ipc import serve_policy_evaluator
+```
+
+### Complete Example
+
+See [examples/policy_eval_server.py](../examples/policy_eval_server.py) and [examples/policy_eval_client.py](../examples/policy_eval_client.py) for a working example that replays a recorded demo through the remote evaluator.
+
+```bash
+# Terminal 1
+python examples/policy_eval_server.py
+
+# Terminal 2
+python examples/policy_eval_client.py
+python examples/policy_eval_client.py --host 10.0.0.5 --port 9999
+```
+
 ## Recommended Integration Pattern
 
 For a trained low-level policy, the cleanest setup is:
