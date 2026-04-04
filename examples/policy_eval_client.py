@@ -84,6 +84,11 @@ def main() -> None:
     policy = RecordedDemoPolicy(demo)
 
     try:
+        info = evaluator.get_info()
+        print(
+            f"Env: {info.get('env_name', '?')}, cameras: {list(info.get('cameras', {}).keys())}"
+        )
+
         policy.reset()
         update = evaluator.reset()
         plans = evaluator.stage_plans

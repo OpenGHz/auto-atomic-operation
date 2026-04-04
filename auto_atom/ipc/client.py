@@ -181,6 +181,17 @@ class RemotePolicyEvaluator:
     def stage_plans(self) -> List[Dict[str, Any]]:
         return obtain(self._conn.root.get_stage_plans_info())
 
+    def get_info(self) -> Dict[str, Any]:
+        """Return env info (config, cameras, etc.) from ``env.get_info()``."""
+        self._call_count += 1
+        t0 = time.perf_counter()
+        result = obtain(self._conn.root.get_info())
+        info = deserialize_value(result)
+        logger.info(
+            "get_info() -> keys=%s (%.3fs)", list(info.keys()), time.perf_counter() - t0
+        )
+        return info
+
     # ── connection ───────────────────────────────────────────────────
 
     @staticmethod

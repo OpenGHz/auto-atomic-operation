@@ -174,6 +174,10 @@ def create_service(
                 for p in plans
             ]
 
+        def exposed_get_info(self) -> Dict[str, Any]:
+            env = self._require_evaluator()._require_context().backend.env
+            return serialize_value(env.get_info())
+
     return PolicyEvaluatorService
 
 

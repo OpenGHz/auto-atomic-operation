@@ -367,6 +367,9 @@ evaluator = RemotePolicyEvaluator(host="localhost", port=18861)
 evaluator.from_config("press_three_buttons", overrides=["env.batch_size=1"])
 # or: evaluator.from_yaml("path/to/task.yaml")
 
+# Query env info (config, camera intrinsics/extrinsics, etc.)
+info = evaluator.get_info()
+
 # Same API as PolicyEvaluator
 update = evaluator.reset()
 
@@ -397,6 +400,7 @@ All return types (`TaskUpdate`, `ExecutionRecord`, `ExecutionSummary`) are real 
 | `records` | `List[ExecutionRecord]` | Stage results |
 | `batch_size` | `int` | Number of environments |
 | `stage_plans` | `List[dict]` | Stage info (index, name, operator, operation, object) |
+| `get_info()` | `dict` | Env info from `env.get_info()` (config, camera intrinsics/extrinsics, etc.) |
 | `ping()` | `dict` | Health check |
 | `close()` | `None` | Release resources and disconnect |
 
