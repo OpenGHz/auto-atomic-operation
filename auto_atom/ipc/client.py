@@ -18,6 +18,7 @@ Usage::
 
 from __future__ import annotations
 
+import logging
 import time
 from typing import Any, Dict, List, Optional
 
@@ -35,6 +36,8 @@ from .serialize import (
 )
 from .service import build_server_config
 
+logger = logging.getLogger(__name__)
+
 
 class RemotePolicyEvaluator:
     """Drop-in remote replacement for :class:`PolicyEvaluator`."""
@@ -46,6 +49,7 @@ class RemotePolicyEvaluator:
         connect_timeout_sec: float = 30.0,
         retry_interval_sec: float = 0.5,
     ) -> None:
+        self._call_count: int = 0
         self._conn = self._connect_with_retry(
             host, port, connect_timeout_sec, retry_interval_sec
         )
@@ -53,7 +57,9 @@ class RemotePolicyEvaluator:
     # ── lifecycle ────────────────────────────────────────────────────
 
     def from_yaml(self, path: str) -> "RemotePolicyEvaluator":
+        t0 = time.perf_counter()
         self._conn.root.from_yaml(str(path))
+        logger.info("from_yaml(%s) done in %.3fs", path, time.perf_counter() - t0)
         return self
 
     def from_config(
@@ -61,10 +67,18 @@ class RemotePolicyEvaluator:
         config_name: str,
         overrides: Optional[List[str]] = None,
     ) -> "RemotePolicyEvaluator":
+        t0 = time.perf_counter()
         self._conn.root.from_config(config_name, overrides or [])
+        logger.info(
+            "from_config(%s, %s) done in %.3fs",
+            config_name,
+            overrides,
+            time.perf_counter() - t0,
+        )
         return self
 
     def close(self) -> None:
+        logger.info("close() — total RPC calls made: %d", self._call_count)
         try:
             self._conn.root.close()
         except Exception:
@@ -75,24 +89,57 @@ class RemotePolicyEvaluator:
             pass
 
     def ping(self) -> Dict[str, Any]:
-        return obtain(self._conn.root.ping())
+        t0 = time.perf_counter()
+        result = obtain(self._conn.root.ping())
+        logger.debug("ping() -> %s (%.3fs)", result, time.perf_counter() - t0)
+        return result
 
     # ── core API ─────────────────────────────────────────────────────
 
     def reset(self, env_mask: Optional[np.ndarray] = None) -> TaskUpdate:
+        self._call_count += 1
+        t0 = time.perf_counter()
         wire_mask = serialize_value(env_mask) if env_mask is not None else None
         result = obtain(self._conn.root.reset(wire_mask))
-        return deserialize_task_update(result)
+        update = deserialize_task_update(result)
+        logger.info(
+            "reset() -> stage=%s done=%s (%.3fs)",
+            list(update.stage_name),
+            update.done.tolist(),
+            time.perf_counter() - t0,
+        )
+        return update
 
     def get_observation(self) -> Any:
+        self._call_count += 1
+        t0 = time.perf_counter()
         result = obtain(self._conn.root.get_observation())
-        return deserialize_value(result)
+        obs = deserialize_value(result)
+        dt = time.perf_counter() - t0
+        if isinstance(obs, dict):
+            logger.debug(
+                "get_observation() -> dict keys=%s (%.3fs)", list(obs.keys()), dt
+            )
+        else:
+            logger.debug("get_observation() -> %s (%.3fs)", type(obs).__name__, dt)
+        return obs
 
     def update(self, action: Any, env_mask: Optional[np.ndarray] = None) -> TaskUpdate:
+        self._call_count += 1
+        t0 = time.perf_counter()
         wire_action = serialize_value(action)
         wire_mask = serialize_value(env_mask) if env_mask is not None else None
         result = obtain(self._conn.root.update(wire_action, wire_mask))
-        return deserialize_task_update(result)
+        update = deserialize_task_update(result)
+        dt = time.perf_counter() - t0
+        logger.debug(
+            "update() #%d -> stage=%s done=%s (%.3fs)",
+            self._call_count,
+            list(update.stage_name),
+            update.done.tolist(),
+            dt,
+        )
+        return update
 
     def summarize(
         self,
@@ -101,6 +148,8 @@ class RemotePolicyEvaluator:
         updates_used: int = 0,
         elapsed_time_sec: float = 0.0,
     ) -> ExecutionSummary:
+        self._call_count += 1
+        t0 = time.perf_counter()
         result = obtain(
             self._conn.root.summarize(
                 max_updates=max_updates,
@@ -108,7 +157,14 @@ class RemotePolicyEvaluator:
                 elapsed_time_sec=elapsed_time_sec,
             )
         )
-        return deserialize_execution_summary(result)
+        summary = deserialize_execution_summary(result)
+        logger.info(
+            "summarize() -> completed=%s success=%s (%.3fs)",
+            summary.completed_stage_count.tolist(),
+            summary.final_success.tolist(),
+            time.perf_counter() - t0,
+        )
+        return summary
 
     # ── read-only properties ─────────────────────────────────────────
 
@@ -136,11 +192,22 @@ class RemotePolicyEvaluator:
     ) -> rpyc.Connection:
         deadline = time.monotonic() + connect_timeout_sec
         last_error: Optional[Exception] = None
+        attempt = 0
         while time.monotonic() < deadline:
+            attempt += 1
             try:
-                return rpyc.connect(host, port, config=build_server_config())
+                conn = rpyc.connect(host, port, config=build_server_config())
+                logger.info("Connected to %s:%d (attempt %d)", host, port, attempt)
+                return conn
             except Exception as exc:
                 last_error = exc
+                logger.debug(
+                    "Connection attempt %d to %s:%d failed: %s",
+                    attempt,
+                    host,
+                    port,
+                    exc,
+                )
                 time.sleep(retry_interval_sec)
         raise RuntimeError(
             f"Failed to connect to PolicyEvaluator rpyc server at "
