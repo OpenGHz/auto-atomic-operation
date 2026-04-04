@@ -322,6 +322,14 @@ Server (MuJoCo installed)              Client (no sim deps)
 └──────────────────────────┘           └──────────────────────────┘
 ```
 
+### Install Dependencies
+
+```bash
+pip install rpyc
+```
+
+The server machine also needs the simulation backend (e.g. `mujoco`). The client machine only needs `rpyc` and `auto_atom`.
+
 ### Start the Server
 
 ```bash
