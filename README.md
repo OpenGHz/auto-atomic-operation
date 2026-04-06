@@ -178,6 +178,7 @@ aao_demo "task.randomization.source_block.x=[-0.05,0.05]"
 Install 3D GS dependencies:
 ```bash
 pip install -e ."[gs]"
+# pip install "gaussian_renderer @ git+https://github.com/OpenGHz/GaussianRenderer.git"
 ```
 
 Run the following command to download the assets for the 3D GS assets for the demos:

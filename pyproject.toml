@@ -24,7 +24,7 @@ gs = [
   "torch",
   "scipy",
   "plyfile",
-  # "gaussian_renderer @ git+https://github.com/OpenGHz/GaussianRenderer.git",
+  "gaussian_renderer @ git+https://github.com/OpenGHz/GaussianRenderer.git",
 ]
 
 [tool.setuptools.packages.find]
