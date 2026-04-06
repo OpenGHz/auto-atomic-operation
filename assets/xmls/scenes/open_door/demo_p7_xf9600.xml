@@ -63,7 +63,8 @@
             material="groundplane"
             contype="1"/>
     </body>
-
+    <camera name="front_cam" pos="0.814 -0.615 0.495" xyaxes="0.858 -0.513 0.000 0.251 0.420 0.872" fovy="50"/>
+    <camera name="side_cam" pos="2.05 0.05 0.45" xyaxes="-0.149 0.989 0.000 -0.227 -0.034 0.973" fovy="50"/>
     <camera name="topside" pos="0.814 -0.615 0.495" xyaxes="0.858 -0.513 0.000 0.251 0.420 0.872"/>
 
     <body name="door_frame_physics"

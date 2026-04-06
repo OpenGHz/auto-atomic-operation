@@ -20,10 +20,10 @@ env:
       unlock_threshold: 0.12
       lock_zone: 0.05
   viewer:
-    lookat: [1.45, 0.12, 0.8]
-    distance: 1.4
-    azimuth: 210
-    elevation: -18
+    lookat: [1.25, 0.15, -0.2]
+    distance: 1.8
+    azimuth: 30
+    elevation: -15
     step_delay: 0.005
     hold_seconds: 0.5
 
@@ -64,13 +64,18 @@ task:
           #    World axis = [0,0,-1] (same as local axis)
           #    Negative angle = open door
           #    -0.35 rad ≈ 20° — within reachable workspace
-          - arc:
-              pivot: door_hinge
-              axis: [0, 0, -1]
-              angle: -0.35
-              absolute: true
-              max_step: 0.15
-            reference: world
+          # - arc:
+          #     pivot: door_hinge
+          #     axis: [0, 0, -1]
+          #     angle: -0.25
+          #     absolute: true
+          #     max_step: 0.15
+          #   reference: world
+          - position: [0.16, 0.0, -0.00]
+            reference: eef_world
+            # orientation: [-0.19902274, 0.68997457, -0.66492774, -0.20541703]
+            max_linear_step: 0.02
+            max_angular_step: 0.3
 
 task_operators:
   - name: arm

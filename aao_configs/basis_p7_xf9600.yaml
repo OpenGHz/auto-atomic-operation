@@ -1,17 +1,10 @@
 defaults:
-  - basis
+  - basis_xf9600
+  - _self_
 
 model_name: demo_p7_xf9600
 
 env:
-  batch_size: 1
-  enabled_sensors:
-    - pose
-    - joint_position
-    - joint_velocity
-  sim_freq: 200
-  update_freq: 100
-  cameras: []
   operators:
     - name: arm
       arm_actuators:

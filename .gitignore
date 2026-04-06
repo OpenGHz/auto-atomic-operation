@@ -215,3 +215,4 @@ claude.md
 test.py
 .claude/
 AGENTS.md
+MUJOCO_LOG.TXT
