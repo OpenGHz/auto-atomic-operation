@@ -1,5 +1,5 @@
 <mujoco model="open_door_demo_airbot_play">
-  <include file="../../robots/airbot_play.xml"/>
+  <include file="../../robots/airbot_play_with_xf9600.xml"/>
 
   <statistic center="0.3 0 0.4" extent="1"/>
 
