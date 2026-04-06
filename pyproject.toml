@@ -9,14 +9,8 @@ description = "A YAML-driven atomic operation framework for robotic manipulation
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
-authors = [
-  { name = "OpenGHz" },
-]
-dependencies = [
-  "hydra-core",
-  "numpy",
-  "pydantic>=2",
-]
+authors = [{ name = "OpenGHz" }]
+dependencies = ["hydra-core", "numpy", "pydantic>=2"]
 urls = { "repository" = "https://github.com/OpenGHz/auto-atomic-operation.git" }
 
 [project.scripts]
@@ -25,7 +19,13 @@ aao_eval = "auto_atom.runner.policy_eval:main"
 
 [project.optional-dependencies]
 mujoco = ["mujoco >=3.4.0", "PyOpenGL_accelerate"]
-gs = ["gaussian_renderer @ git+https://github.com/OpenGHz/GaussianRenderer.git", "gsplat", "torch", "scipy", "plyfile"]
+gs = [
+  "gsplat",
+  "torch",
+  "scipy",
+  "plyfile",
+  # "gaussian_renderer @ git+https://github.com/OpenGHz/GaussianRenderer.git",
+]
 
 [tool.setuptools.packages.find]
 include = ["auto_atom*"]
