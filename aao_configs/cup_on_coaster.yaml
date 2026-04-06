@@ -34,7 +34,7 @@ task:
         pre_move:
           # Approach high above the cup (center z=0.085)
           - position: [0.0, 0.0, 0.12]
-            orientation: [-0.70710678, 0.70710678, 0.0, 0.0]
+            orientation: [0.0, 0.70710678, 0.0, 0.70710678]
             reference: object_world
           # Descend to grasp height (0.006 above cup center)
           - position: [0.0, 0.0, 0.006]

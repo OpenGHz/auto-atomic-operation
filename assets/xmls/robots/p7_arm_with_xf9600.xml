@@ -82,7 +82,8 @@
                       <site name="xf9600_mount_site" pos="0 0 0" size="0.006" type="sphere" rgba="1 0 0 1"/>
 
                       <body name="tcp_frame" pos="-0.1250 0 0" quat="1 0 0 0" gravcomp="1">
-                        <site name="tcp_site" pos="0 0 0" quat="1 0 0 0" size="0.008" type="sphere" rgba="0 1 0 1"/>
+                        <site name="tcp_site" pos="0 0 0" quat="0 0 0 1" size="0.008" type="sphere" rgba="0 1 0 1"/>
+                        <site name="eef_pose" pos="0 0 0" quat="0 0 0 1" size="0.008" type="sphere" rgba="0 0 1 1"/>
                       </body>
                       <attach model="xf9600_gripper" prefix="xfg_"/>
                     </body>

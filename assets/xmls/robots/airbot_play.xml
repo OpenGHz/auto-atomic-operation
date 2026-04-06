@@ -106,7 +106,8 @@
                   <joint name="joint6" class="joint6"/>
                   <geom name="hand_box" type="box" pos="0 0 -0.07" size="0.025 0.08 0.015" rgba="1 0 0 1" class="collision"/>
                   <geom type="mesh" material="Paint_Matte_Black" mesh="link6" class="visual"/>
-                  <site name="endpoint" pos="0 0 0.023" euler="0 0 1.5708"/>
+                  <site name="endpoint" pos="0 0 0.023" quat="0.707107 0 -0.707107 0"/>
+                  <site name="eef_pose" pos="0 0 0.023" quat="0.707107 0 -0.707107 0"/>
                   <body name="left" gravcomp="1">
                     <inertial pos="0 0.018307 -0.012505" quat="0.95 0.1 0 0" mass="0.027004" diaginertia="2.55732e-05 2.9e-05 1.12468e-05"/>
                     <joint name="endleft" class="finger_left"/>

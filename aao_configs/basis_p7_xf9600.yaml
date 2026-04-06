@@ -22,6 +22,6 @@ env:
         - joint7
       eef_actuators: [xfg_claw_joint]
       eef_output_name: eef
-      pose_site: tcp_site
+      pose_site: eef_pose
 
 backend: auto_atom.backend.mjc.ik.p7_analytical_ik_solver.build_p7_xf9600_backend

@@ -254,8 +254,8 @@
                       <!-- May have to update -->
                       <site name="base_top_site" pos="0 0 0.088" />
                       <site name="gripper_base_site" pos="0 0 0.11489" />
-                      <site name="eef_pose" pos="0 0 0.1489" />
-                      <site name="gripper" pos="0 0 0.1489" />
+                      <site name="eef_pose" pos="0 0 0.1489" quat="0.5 -0.5 -0.5 -0.5" />
+                      <site name="gripper" pos="0 0 0.1489" quat="0.5 -0.5 -0.5 -0.5" />
                       <geom name="hand_capsule" class="collision_gripper" type="capsule" conaffinity="1" size="0.040000000000000001 0.06" rgba="1 1 1 0.29999999999999999" pos="0 0 0.01"/>
 
                       <!-- Left-hand side 4-bar linkage -->

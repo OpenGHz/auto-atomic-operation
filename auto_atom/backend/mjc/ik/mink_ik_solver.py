@@ -8,7 +8,7 @@ pass it to :func:`~auto_atom.backend.mjc.mujoco_backend.build_mujoco_backend`::
     from auto_atom.backend.mjc.ik.mink_ik_solver import MinkIKSolver, build_franka_backend
 
     # Directly:
-    ik_solver = MinkIKSolver(env.model, ["joint1", ..., "joint7"], "gripper")
+    ik_solver = MinkIKSolver(env.model, ["joint1", ..., "joint7"], "eef_pose")
     backend   = build_mujoco_backend(task, operators, ik_solver=ik_solver)
 
     # Or via the provided factory (used as YAML ``backend`` target):
@@ -46,7 +46,7 @@ class MinkIKSolver:
         targets follow this order.
     frame_name:
         Name of the MuJoCo *site* that represents the desired end-effector
-        frame (e.g. ``"gripper"``).
+        frame (e.g. ``"eef_pose"``).
     root_body_name:
         Name of the robot's root (base) body in the model. Used to compute the
         world-frame pose of the base so that the base-frame target can be
@@ -219,7 +219,7 @@ _FRANKA_ARM_JOINTS = [
     "joint6",
     "joint7",
 ]
-_FRANKA_EEF_SITE = "gripper"
+_FRANKA_EEF_SITE = "eef_pose"
 _FRANKA_ROOT_BODY = "link0"
 
 

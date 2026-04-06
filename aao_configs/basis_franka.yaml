@@ -18,7 +18,7 @@ env:
         - actuator7
       eef_actuators: [fingers_actuator]
       eef_output_name: eef
-      pose_site: gripper
+      pose_site: eef_pose
       tactile_prefixes: ["left_", "right_"]
 
 backend: auto_atom.backend.mjc.ik.mink_ik_solver.build_franka_backend

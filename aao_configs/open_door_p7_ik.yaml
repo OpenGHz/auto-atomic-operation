@@ -38,13 +38,13 @@ task:
           # 1. Approach: ~14cm in front of handle (relative to handle_body_phys)
           - position: [-0.14, 0.0955, -0.015]
             reference: object_world
-            orientation: [-0.19902274, 0.68997457, -0.66492774, -0.20541703]
+            orientation: [0.68997457, 0.19902274, -0.20541703, 0.66492774]
             max_linear_step: 0.04
             max_angular_step: 0.25
           # 2. Grasp position: ~7cm in front of handle
           - position: [-0.07, 0.1155, -0.015]
             reference: object_world
-            orientation: [-0.19902274, 0.68997457, -0.66492774, -0.20541703]
+            orientation: [0.68997457, 0.19902274, -0.20541703, 0.66492774]
             max_linear_step: 0.04
             max_angular_step: 0.2
         eef:
@@ -74,7 +74,7 @@ task:
           # 5. Retreat upward from current position
           # - position: [0.0, 0.0, 0.10]
           #   reference: eef_world
-          #   orientation: [-0.19902274, 0.68997457, -0.66492774, -0.20541703]
+          #   orientation: [0.68997457, 0.19902274, -0.20541703, 0.66492774]
           #   max_linear_step: 0.03
           #   max_angular_step: 0.25
 

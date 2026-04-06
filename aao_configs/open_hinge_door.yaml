@@ -8,6 +8,7 @@ task_name: open_hinge_door
 env:
   mask_objects: ["handle"]
   operations: ["pull"]
+  update_freq: 10
   viewer:
     lookat: [-0.2, 0.0, 0.55]
     distance: 1.5

@@ -8,6 +8,7 @@ task_name: close_hinge_door
 env:
   initial_joint_positions:
     hinge_joint_1: -1.3
+  update_freq: 10
   mask_objects: ["handle"]
   operations: ["push"]
   viewer:
@@ -32,7 +33,7 @@ task:
           # Use `object` reference so approach direction rotates with the open door.
           # The handle's local -X axis always points away from the door panel.
           - position: [-0.30, 0.0, 0.0]
-            rotation: [0, 1.5708, 0]
+            orientation: [0.70710678, 0.0, 0.0, 0.70710678]
             reference: object_world
           - position: [0.0, 0.0, 0.0]
             reference: object_world
@@ -52,10 +53,4 @@ task_operators:
     initial_state:
       arm:
         position: [-0.7324714064598083, 0.16528670489788055, 0.5574991106987]
-        orientation:
-          [
-            -0.019415181130170822,
-            0.7068436145782471,
-            0.01941005513072014,
-            0.7068369388580322,
-          ]
+        orientation: [0.70683769, 0.01941596, 0.01940928, 0.70684282]

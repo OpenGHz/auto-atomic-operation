@@ -12,8 +12,7 @@ task:
   stages:
     # Stage 1: Pick toothbrush cup by its handle (side grasp)
     # Cup center: (0.515, 0.056, 0.086) in GS scene
-    # Side-grasp orientation: EEF quat [-0.5, 0.5, -0.5, -0.5]
-    #   (ctrl euler: yaw=0, pitch=pi/2, roll=0 → gripper horizontal, pointing +x)
+    # Side-grasp orientation in the new eef_pose frame.
     # Approach from +x side of cup handle, then close in
     - name: pick_cup
       object: toothbrush_cup
@@ -23,7 +22,7 @@ task:
         pre_move:
           # Waypoint 0: approach from +x side, ~0.285m away from cup center
           - position: [0.285, 0.004, 0.014]
-            orientation: [0.500024, 0.500024, -0.499976, -0.499976]
+            orientation: [0.0, 0.0, -1.0, 0.0]
             reference: object
           # Waypoint 1: move in to grasp handle, ~0.2m from cup center
           - position: [0.050, 0.004, 0.014]
@@ -39,8 +38,7 @@ task:
     # After picking, cup is held by handle with side grasp.
     # Need to: rotate cup so its opening faces the rack branch,
     # then slide cup onto the branch.
-    # Rotated orientation: EEF quat [0, 0.70710678, 0.70710678, 0]
-    #   (ctrl euler: yaw=pi/2, pitch=0, roll=-pi/2 → cup opening faces rack)
+    # Rotated orientation in the new eef_pose frame so the cup opening faces the rack.
     # Rack center: (0.5, 0.234, 0.154) — branch tip is roughly at
     #   rack_center + (0, -0.08, 0.08) based on geometry
     - name: hang_cup
@@ -52,7 +50,7 @@ task:
           # Waypoint 0: position above rack branch with rotated orientation
           # Offset from rack center: approach from -y side, above the branch
           - position: [0.05, -0.13, 0.02]
-            rotation: [0, 1.57079633, 3.14159265]
+            orientation: [0.0, 0.70710678, 0.70710678, 0.0]
             reference: object
           # Waypoint 1: slide cup onto branch (move +y toward rack)
           - position: [0.05, -0.04, 0.02]

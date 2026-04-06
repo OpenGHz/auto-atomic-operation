@@ -30,7 +30,7 @@ task:
       param:
         pre_move:
           - position: [0.0, 0.0, 0.12]
-            orientation: [-0.70710678, 0.70710678, 0.0, 0.0]
+            orientation: [-0.70710678, 0.0, 0.70710678, 0.0]
             reference: object_world
             max_linear_step: 0.1
             max_angular_step: 0.9

@@ -3,8 +3,8 @@ gs_dir: ${assets_dir}/gs/scenes/${scene_name}
 model_name: demo
 task_name: ${scene_name}
 
-cam_width: 640
-cam_height: 480
+cam_width: 1280
+cam_height: 720
 enable_color: true
 enable_depth: true
 enable_mask: false
