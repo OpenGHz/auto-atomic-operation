@@ -780,12 +780,15 @@ class MujocoBasis:
         self._sync_mocap_to_freejoint()
         self._prev_ctrl = None
 
+    def _snapshot_ctrl(self) -> None:
+        """Capture current ctrl as the interpolation baseline for the next update."""
+        if self._ctrl_interp and self._prev_ctrl is None:
+            self._prev_ctrl = self.data.ctrl.copy()
+
     def update(self):
         if self._ctrl_interp:
             new_ctrl = self.data.ctrl.copy()
-            if self._prev_ctrl is None:
-                self._prev_ctrl = new_ctrl.copy()
-            old_ctrl = self._prev_ctrl
+            old_ctrl = self._prev_ctrl if self._prev_ctrl is not None else new_ctrl
             for i in range(self._n_substeps):
                 alpha = (i + 1) / self._n_substeps
                 self.data.ctrl[:] = old_ctrl + alpha * (new_ctrl - old_ctrl)

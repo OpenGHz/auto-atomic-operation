@@ -692,6 +692,7 @@ class UnifiedMujocoEnv(MujocoBasis):
     # ==================================================================
 
     def step(self, action: np.ndarray) -> None:
+        self._snapshot_ctrl()
         action = np.asarray(action, dtype=np.float64).reshape(-1)
         n = min(len(action), self.model.nu)
         if n > 0:
