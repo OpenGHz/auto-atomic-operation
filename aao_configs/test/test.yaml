@@ -1,0 +1,11 @@
+# @package _global_
+
+cam_width: 640
+cam_height: 480
+enable_color: true
+enable_depth: false
+enable_mask: false
+enable_heat_map: false
+
+env:
+  batch_size: 5
