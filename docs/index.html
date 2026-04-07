@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Auto Atomic Operation</title>
+  <meta http-equiv="X-UA-Compatible" content="IE=edge,chrome=1">
+  <meta name="description" content="A YAML-driven atomic operation framework for robotic manipulation">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, minimum-scale=1.0">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/docsify-themeable@0/dist/css/theme-simple.css">
+  <style>
+    :root {
+      --base-font-size: 15px;
+      --theme-color: #2f6fed;
+      --sidebar-width: 280px;
+      --cover-bg-top: #08111f;
+      --cover-bg-mid: #10243f;
+      --cover-bg-bottom: #1f4d78;
+      --cover-title: #f8fbff;
+      --cover-subtitle: #9fd7ff;
+      --cover-text: #dce8f5;
+      --cover-muted: #b7c9dd;
+      --cover-button-bg: #ffd166;
+      --cover-button-text: #10243f;
+      --cover-button-shadow: rgba(255, 209, 102, 0.35);
+    }
+    section.cover.show {
+      position: relative;
+      overflow: hidden;
+      background:
+        radial-gradient(circle at 18% 22%, rgba(115, 197, 255, 0.28) 0%, rgba(115, 197, 255, 0) 32%),
+        radial-gradient(circle at 82% 18%, rgba(255, 209, 102, 0.16) 0%, rgba(255, 209, 102, 0) 28%),
+        linear-gradient(145deg, var(--cover-bg-top) 0%, var(--cover-bg-mid) 48%, var(--cover-bg-bottom) 100%) !important;
+    }
+    section.cover.show::before {
+      content: "";
+      position: absolute;
+      inset: auto -10% -24% 32%;
+      height: 24rem;
+      background: radial-gradient(circle, rgba(255, 255, 255, 0.12) 0%, rgba(255, 255, 255, 0) 68%);
+      pointer-events: none;
+    }
+    section.cover.show::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background:
+        linear-gradient(120deg, rgba(255, 255, 255, 0.06) 0%, rgba(255, 255, 255, 0) 24%),
+        repeating-linear-gradient(
+          135deg,
+          rgba(255, 255, 255, 0.035) 0,
+          rgba(255, 255, 255, 0.035) 1px,
+          transparent 1px,
+          transparent 18px
+        );
+      mix-blend-mode: screen;
+      opacity: 0.42;
+      pointer-events: none;
+    }
+    section.cover .cover-main {
+      position: relative;
+      z-index: 1;
+      padding: 2.5rem 2rem;
+      border-radius: 28px;
+      background: linear-gradient(180deg, rgba(9, 19, 34, 0.32) 0%, rgba(9, 19, 34, 0.14) 100%);
+      box-shadow: 0 22px 60px rgba(2, 10, 24, 0.28);
+      backdrop-filter: blur(4px);
+    }
+    section.cover .cover-main > h1,
+    section.cover .cover-main > h1 a {
+      color: var(--cover-title) !important;
+      font-size: 3.5rem !important;
+      font-weight: 800 !important;
+      text-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+      letter-spacing: 1px;
+    }
+    section.cover .cover-main > blockquote > p {
+      color: var(--cover-subtitle) !important;
+      font-size: 1.4rem !important;
+      font-weight: 600;
+      text-shadow: 0 3px 12px rgba(0, 0, 0, 0.28);
+    }
+    section.cover .cover-main > p {
+      color: var(--cover-text) !important;
+      text-shadow: 0 1px 4px rgba(0, 0, 0, 0.28);
+    }
+    section.cover .cover-main ul li {
+      color: var(--cover-muted) !important;
+    }
+    section.cover .cover-main a:not(.anchor) {
+      color: #ffffff !important;
+    }
+    section.cover .cover-main > p:last-child a {
+      background-color: var(--cover-button-bg) !important;
+      color: var(--cover-button-text) !important;
+      border-color: var(--cover-button-bg) !important;
+      font-weight: 700;
+      box-shadow: 0 10px 26px var(--cover-button-shadow);
+    }
+    section.cover .cover-main > p:last-child a:hover {
+      background-color: rgba(255, 209, 102, 0.12) !important;
+      color: #fff3c6 !important;
+      border-color: var(--cover-button-bg) !important;
+    }
+    section.cover.has-mask .mask {
+      background-color: rgba(4, 10, 20, 0.16) !important;
+      opacity: 1 !important;
+    }
+  </style>
+</head>
+<body>
+  <div id="app"></div>
+  <script>
+    window.$docsify = {
+      name: 'Auto Atomic Operation',
+      repo: '',
+      homepage: 'README.md',
+      loadSidebar: true,
+      coverpage: true,
+      auto2top: true,
+      subMaxLevel: 3,
+      search: {
+        placeholder: 'Search',
+        noData: 'No results',
+        depth: 3
+      },
+      copyCode: {
+        buttonText: 'Copy',
+        successText: 'Copied'
+      },
+      pagination: {
+        previousText: 'Previous',
+        nextText: 'Next',
+        crossChapter: true
+      },
+      relativePath: true
+    };
+  </script>
+  <!-- Docsify core -->
+  <script src="https://cdn.jsdelivr.net/npm/docsify@4/lib/docsify.min.js"></script>
+  <!-- Plugins -->
+  <script src="https://cdn.jsdelivr.net/npm/docsify@4/lib/plugins/search.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/docsify-copy-code@2"></script>
+  <script src="https://cdn.jsdelivr.net/npm/docsify-pagination@2/dist/docsify-pagination.min.js"></script>
+  <!-- Syntax highlighting -->
+  <script src="https://cdn.jsdelivr.net/npm/prismjs@1/components/prism-python.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/prismjs@1/components/prism-yaml.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/prismjs@1/components/prism-bash.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/prismjs@1/components/prism-xml-doc.min.js"></script>
+</body>
+</html>
