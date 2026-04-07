@@ -120,6 +120,7 @@ class _OperatorState:
     # Joint-mode execution strategy.
     joint_control_mode: str = "per_step_ik"
     joint_interp_speed: float = 0.05
+    max_joint_delta: float = 0.35
     planned_joint_start_qpos: Optional[np.ndarray] = None
     planned_joint_target_qpos: Optional[np.ndarray] = None
     planned_joint_progress: int = 0
@@ -150,6 +151,7 @@ class UnifiedMujocoEnv(MujocoBasis):
         freejoint: str = "",
         joint_control_mode: str = "per_step_ik",
         joint_interp_speed: float = 0.05,
+        max_joint_delta: float = 0.35,
     ) -> None:
         """Register an operator and snapshot its home state.
 
@@ -251,6 +253,7 @@ class UnifiedMujocoEnv(MujocoBasis):
             target_quat_in_base=tool_quat.copy(),
             joint_control_mode=control_mode,
             joint_interp_speed=interp_speed,
+            max_joint_delta=max_joint_delta,
             planned_joint_start_qpos=home_arm_qpos.copy()
             if home_arm_qpos is not None
             else None,
@@ -442,6 +445,17 @@ class UnifiedMujocoEnv(MujocoBasis):
     # Pose control (actual physics interaction)
     # ==================================================================
 
+    @staticmethod
+    def _clamp_joint_delta(
+        solved: np.ndarray, seed: np.ndarray, max_delta: float
+    ) -> np.ndarray:
+        """Clamp per-step joint displacement to avoid branch jumps."""
+        delta = solved - seed
+        max_abs = float(np.max(np.abs(delta)))
+        if max_abs > max_delta:
+            return seed + delta * (max_delta / max_abs)
+        return solved
+
     def step_operator_toward_target(
         self, op_name: str, target_pos_b: np.ndarray, target_quat_b: np.ndarray
     ) -> None:
@@ -498,6 +512,9 @@ class UnifiedMujocoEnv(MujocoBasis):
                     if joint_targets is None:
                         self.update()
                         return
+                    joint_targets = self._clamp_joint_delta(
+                        joint_targets, current_arm_qpos, s.max_joint_delta
+                    )
                     s.planned_joint_start_qpos = current_arm_qpos.copy()
                     s.planned_joint_target_qpos = np.asarray(
                         joint_targets, dtype=np.float64
@@ -530,6 +547,9 @@ class UnifiedMujocoEnv(MujocoBasis):
                 if joint_targets is None:
                     self.update()
                     return
+                joint_targets = self._clamp_joint_delta(
+                    joint_targets, current_arm_qpos, s.max_joint_delta
+                )
 
             arm_aidx = self._op_arm_aidx[op_name]
             ctrl = np.asarray(self.data.ctrl, dtype=np.float64).copy()

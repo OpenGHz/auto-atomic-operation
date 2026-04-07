@@ -45,9 +45,6 @@ class AirbotKdlIKSolver:
     eef_type:
         ``ArmKdl`` end-effector key.  ``"none"`` works because the actual TCP
         offset is recomputed from the model.
-    max_joint_delta:
-        Per-step joint clamp (rad).  Limits the magnitude of the largest
-        joint change in any single solver call.
     """
 
     def __init__(
@@ -58,14 +55,12 @@ class AirbotKdlIKSolver:
         tcp_site_name: str = "eef_pose",
         arm_type: str = "play_short",
         eef_type: str = "none",
-        max_joint_delta: float = 0.35,
     ) -> None:
         if len(arm_joint_names) != 6:
             raise ValueError(
                 f"AirbotKdlIKSolver requires 6 arm joints, got {len(arm_joint_names)}"
             )
         self._arm_joint_names = list(arm_joint_names)
-        self._max_joint_delta = float(max_joint_delta)
         self._kdl = ArmKdl(arm_type=arm_type, eef_type=eef_type)
         self._configure_tcp_from_model(model, arm_base_body, tcp_site_name)
 
@@ -115,13 +110,7 @@ class AirbotKdlIKSolver:
             return None
 
         # ArmKdl already sorts by (limit_bias, ref_bias) — pick the first.
-        solved = np.asarray(solutions[0], dtype=np.float64)
-
-        delta = solved - q_seed
-        max_delta = float(np.max(np.abs(delta)))
-        if max_delta > self._max_joint_delta:
-            solved = q_seed + delta * (self._max_joint_delta / max_delta)
-        return solved
+        return np.asarray(solutions[0], dtype=np.float64)
 
     # ------------------------------------------------------------------
     # Internals
@@ -253,7 +242,6 @@ def build_airbot_play_xf9600_backend(
         tcp_site_name=_AIRBOT_TCP_SITE,
         arm_type=str(ik_params.get("arm_type", "play_short")),
         eef_type=str(ik_params.get("eef_type", "none")),
-        max_joint_delta=float(ik_params.get("max_joint_delta", 0.35)),
     )
 
     eef_aidx = first_env._op_eef_aidx.get("arm", np.array([]))
@@ -275,5 +263,6 @@ def build_airbot_play_xf9600_backend(
             "eef_ctrl_index": eef_ctrl_index,
             "eef_open_value": eef_open_value,
             "eef_close_value": eef_close_value,
+            "max_joint_delta": float(ik_params.get("max_joint_delta", 0.35)),
         },
     )

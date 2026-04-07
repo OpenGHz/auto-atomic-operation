@@ -109,4 +109,4 @@ task_operators:
       arm_type: play_short
       eef_type: none
       joint_control_mode: per_step_ik
-      max_joint_delta: 0.35
+    max_joint_delta: 0.35

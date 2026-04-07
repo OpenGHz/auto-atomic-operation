@@ -20,10 +20,8 @@ class P7AnalyticalIKSolver:
         arm_joint_names: List[str],
         flange_site_name: str = "tool_site",
         tcp_site_name: str = "eef_pose",
-        max_joint_delta: float = 0.35,
     ) -> None:
         self._arm_joint_names = arm_joint_names
-        self._max_joint_delta = max_joint_delta
         self._solver = KDL_7DOF()
         self._configure_tcp_from_model(model, flange_site_name, tcp_site_name)
 
@@ -65,12 +63,7 @@ class P7AnalyticalIKSolver:
         if not solutions:
             return None
 
-        solved = np.asarray(solutions[0], dtype=np.float64)
-        delta = solved - q_seed[:n_joints]
-        max_delta = float(np.max(np.abs(delta)))
-        if max_delta > self._max_joint_delta:
-            solved = q_seed[:n_joints] + delta * (self._max_joint_delta / max_delta)
-        return solved
+        return np.asarray(solutions[0], dtype=np.float64)
 
     @staticmethod
     def _site_transform(data: mujoco.MjData, site_id: int) -> np.ndarray:
@@ -163,7 +156,6 @@ def build_p7_xf9600_backend(
         arm_joint_names=_P7_ARM_JOINTS,
         flange_site_name=_P7_FLANGE_SITE,
         tcp_site_name=_P7_TCP_SITE,
-        max_joint_delta=float(ik_params.get("max_joint_delta", 0.35)),
     )
 
     eef_aidx = first_env._op_eef_aidx.get("arm", np.array([]))
@@ -185,5 +177,6 @@ def build_p7_xf9600_backend(
             "eef_ctrl_index": eef_ctrl_index,
             "eef_open_value": eef_open_value,
             "eef_close_value": eef_close_value,
+            "max_joint_delta": float(ik_params.get("max_joint_delta", 0.35)),
         },
     )

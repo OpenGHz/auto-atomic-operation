@@ -25,6 +25,7 @@ backend: auto_atom.backend.mjc.ik.mink_ik_solver.build_franka_backend
 
 task_operators:
   - name: arm
+    max_joint_delta: 1.8 # max per-joint displacement per control step (rad)
     ik:
       joint_control_mode: solve_once_interpolate # per_step_ik | solve_once_interpolate
       joint_interp_speed: 0.1 # max per-joint delta (rad) per control step during interpolation
@@ -33,4 +34,3 @@ task_operators:
       position_cost: 1.0 # EEF position tracking weight
       orientation_cost: 1.0 # EEF orientation tracking weight
       posture_cost: 1e-4 # joint posture regularization weight
-      max_joint_delta: 1.8 # max per-joint displacement per solve (rad)

@@ -116,6 +116,7 @@ class MujocoOperatorHandler(OperatorHandler):
     ik_solver: Optional[IKSolver] = None
     joint_control_mode: str = "per_step_ik"
     joint_interp_speed: float = 0.05
+    max_joint_delta: float = 0.35
 
     _last_move_key: List[str | None] = field(init=False, repr=False)
     _last_eef_key: List[str | None] = field(init=False, repr=False)
@@ -164,6 +165,7 @@ class MujocoOperatorHandler(OperatorHandler):
             freejoint=self.freejoint_name,
             joint_control_mode=self.joint_control_mode,
             joint_interp_speed=self.joint_interp_speed,
+            max_joint_delta=self.max_joint_delta,
         )
 
     def move_to_pose(
@@ -961,10 +963,24 @@ def build_mujoco_backend(
                     extra.get("joint_interp_speed", 0.1),
                 )
             ),
+            max_joint_delta=float(
+                op_extra.get(
+                    "max_joint_delta",
+                    ik_extra.get(
+                        "max_joint_delta",
+                        extra.get("max_joint_delta", 0.35),
+                    ),
+                )
+            ),
             **{
                 k: v
                 for k, v in extra.items()
-                if k not in {"joint_control_mode", "joint_interp_speed"}
+                if k
+                not in {
+                    "joint_control_mode",
+                    "joint_interp_speed",
+                    "max_joint_delta",
+                }
             },
         )
 

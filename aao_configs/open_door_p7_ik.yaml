@@ -100,6 +100,6 @@ task_operators:
         position: 0.008
         orientation: 0.10
         eef: 0.012
+    max_joint_delta: 0.35
     ik:
       joint_control_mode: per_step_ik
-      max_joint_delta: 0.35
