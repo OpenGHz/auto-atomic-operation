@@ -69,6 +69,46 @@ Euclidean distances are checked: if any two entities are closer than the sum of
 their radii, the sample is rejected and redrawn. After 100 failed attempts the
 last sample is applied with a warning.
 
+## Per-Waypoint Randomization
+
+In addition to entity-level randomization under `task.randomization`, individual
+waypoints inside a stage's `pre_move` / `post_move` list may carry their own
+`randomization` block. This adds a per-reset offset that is added to the
+waypoint's nominal `position` (and optionally orientation) at stage execution
+time, independently of entity pose randomization.
+
+```yaml
+stages:
+  - name: grasp_and_open
+    operator: arm
+    operation: push
+    param:
+      pre_move:
+        - position: [-0.10, 0.0955, -0.020]
+          reference: object_world
+          orientation: [0.7133, -0.0293, 0.0043, 0.7002]
+        - position: [-0.05, 0.0955, -0.020]
+          reference: object_world
+          randomization:
+            x: [-0.02, 0.00]
+            y: [-0.00, 0.02]
+            z: [-0.01, 0.01]
+```
+
+Semantics:
+
+- Supported axes are the same as entity randomization (`x/y/z/roll/pitch/yaw`);
+  omitted axes default to `[0, 0]`.
+- Offsets are expressed in the waypoint's own `reference` frame (e.g.
+  `object_world`, `world`, `eef_world`), so the perturbation follows the frame
+  the waypoint is anchored to.
+- Sampling happens once per `reset()` using the same RNG as entity
+  randomization, so `task.seed` reproduces per-waypoint offsets as well.
+- Per-waypoint randomization is independent from entity randomization and does
+  not participate in `collision_radius` rejection; keep ranges small enough that
+  the resulting motion stays reachable.
+- Debug mode (`randomization_debug: true`) also cycles per-waypoint extremes.
+
 ## How It Works
 
 The randomization logic lives in `SceneBackend` (the mixin used by `MujocoTaskBackend`).
