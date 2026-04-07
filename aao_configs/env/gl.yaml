@@ -1,0 +1,17 @@
+# @package _global_
+
+cuda_device: 0
+gl_backend: egl
+hydra:
+  job:
+    env_set:
+      # set environment variables for Graphics Library
+      CUDA_VISIBLE_DEVICES: ${cuda_device}
+      EGL_VISIBLE_DEVICES: ${cuda_device}
+      MUJOCO_EGL_DEVICE_ID: ${cuda_device}
+      EGL_PLATFORM: ${gl_backend}
+      MUJOCO_GL: ${gl_backend}
+      PYOPENGL_PLATFORM: ${gl_backend}
+      __EGL_VENDOR_LIBRARY_FILENAMES: /usr/share/glvnd/egl_vendor.d/10_nvidia.json
+      LD_PRELOAD: /usr/lib/x86_64-linux-gnu/libEGL_nvidia.so.0
+      NVIDIA_DRIVER_CAPABILITIES: all
