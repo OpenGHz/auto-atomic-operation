@@ -787,8 +787,8 @@
         <geom name="left_cam_visual" pos="0 0 0" quat="1 0 0 0" type="mesh" mesh="left_cam.STL" material="default_material" class="visual"/>
 
         <body name="cam_left" pos="-0.0675 -0.025 0.0325" euler="1.5708 1.5708 0" gravcomp="1">
-          <camera name="cam_left" mode="fixed" fovy="42" resolution="640 352" pos="0 0 0" euler="-0.052359876 0 0"/>
-          <site name="cam_left_site" size="0.005" rgba="1 0 0 1" pos="0 0 0" euler="-0.052359876 0 0"/>
+          <camera name="left_cam" mode="fixed" fovy="42" resolution="640 352" pos="0 0 0" euler="-0.052359876 0 0"/>
+          <site name="left_cam_site" size="0.005" rgba="1 0 0 1" pos="0 0 0" euler="-0.052359876 0 0"/>
         </body>
       </body>
 
@@ -797,8 +797,8 @@
         <geom name="right_cam_visual" pos="0 0 0" quat="1 0 0 0" type="mesh" mesh="right_cam.STL" material="default_material" class="visual"/>
 
         <body name="cam_right" pos="-0.0675 0.025 0.0325" euler="1.5708 1.5708 0" gravcomp="1">
-          <camera name="cam_right" mode="fixed" fovy="42" resolution="640 352" pos="0 0 0" euler="-0.052359876 0 0"/>
-          <site name="cam_right_site" size="0.005" rgba="1 0 0 1" pos="0 0 0" euler="-0.052359876 0 0"/>
+          <camera name="right_cam" mode="fixed" fovy="42" resolution="640 352" pos="0 0 0" euler="-0.052359876 0 0"/>
+          <site name="right_cam_site" size="0.005" rgba="1 0 0 1" pos="0 0 0" euler="-0.052359876 0 0"/>
         </body>
       </body>
     </body>

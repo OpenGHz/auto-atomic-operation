@@ -41,7 +41,7 @@ env:
       enable_mask: ${enable_mask}
       enable_heat_map: ${enable_heat_map}
       is_static: true
-  structured: true
+  # structured: true
   heatmap_operations: ["pick", "place", "push", "pull", "press"]
 
 backend: auto_atom.backend.mjc.mujoco_backend.build_mujoco_backend

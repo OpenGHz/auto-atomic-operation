@@ -983,7 +983,7 @@ class UnifiedMujocoEnv(MujocoBasis):
                 renderer.disable_depth_rendering()
                 renderer.disable_segmentation_rendering()
                 obs_cam_name = (
-                    "camera/" + cam_name.split("_")[0] if structured else cam_name
+                    "camera/" + cam_name.rsplit("_", 1)[0] if structured else cam_name
                 )
                 if spec.enable_color:
                     obs[f"{obs_cam_name}/color/image_raw"] = {

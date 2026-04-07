@@ -76,7 +76,7 @@ def main(cfg: DictConfig) -> None:
         for cam_cfg in cameras:
             cam_name = cam_cfg["name"]
             h, w = cam_cfg["height"], cam_cfg["width"]
-            obs_cam = "camera/" + cam_name.split("_")[0] if structured else cam_name
+            obs_cam = "camera/" + cam_name.rsplit("_", 1)[0] if structured else cam_name
             prefix = f"/robot/{obs_cam}" if structured else obs_cam
 
             if cam_cfg.get("enable_color", False):
