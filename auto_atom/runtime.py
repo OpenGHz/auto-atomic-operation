@@ -324,6 +324,9 @@ class ExecutionSummary:
     final_done: np.ndarray
     final_success: np.ndarray
     elapsed_time_sec: float = 0.0
+    env_completion_steps: Optional[np.ndarray] = None
+    env_completion_time_sec: Optional[np.ndarray] = None
+    completed_stage_info: Dict[str, List[Optional[str]]] = field(default_factory=dict)
     records: List[ExecutionRecord] = field(default_factory=list)
 
 

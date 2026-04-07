@@ -146,6 +146,12 @@ def serialize_execution_summary(summary: ExecutionSummary) -> Dict[str, Any]:
         "final_done": serialize_value(summary.final_done),
         "final_success": serialize_value(summary.final_success),
         "elapsed_time_sec": summary.elapsed_time_sec,
+        "env_completion_steps": serialize_value(summary.env_completion_steps),
+        "env_completion_time_sec": serialize_value(summary.env_completion_time_sec),
+        "completed_stage_info": {
+            stage_name: list(statuses)
+            for stage_name, statuses in summary.completed_stage_info.items()
+        },
         "records": [serialize_execution_record(r) for r in summary.records],
     }
 
@@ -164,6 +170,14 @@ def deserialize_execution_summary(data: Dict[str, Any]) -> ExecutionSummary:
         final_done=_to_ndarray(data["final_done"], "bool"),
         final_success=np.asarray(data["final_success"], dtype=object),
         elapsed_time_sec=data["elapsed_time_sec"],
+        env_completion_steps=_to_ndarray(data.get("env_completion_steps"), "int64"),
+        env_completion_time_sec=_to_ndarray(
+            data.get("env_completion_time_sec"), "float64"
+        ),
+        completed_stage_info={
+            str(stage_name): list(statuses)
+            for stage_name, statuses in data.get("completed_stage_info", {}).items()
+        },
         records=[deserialize_execution_record(r) for r in data.get("records", [])],
     )
 

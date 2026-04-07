@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from pprint import pprint
 from time import perf_counter
-from typing import Callable, List, Optional, Sequence
+from typing import Callable, Dict, List, Optional, Sequence
 
 import numpy as np
 from hydra.utils import instantiate
@@ -81,12 +81,20 @@ def run_example_rounds(
 
         steps_used = 0
         start_time = perf_counter()
+        batch_size = len(update.stage_name)
+        env_completion_steps = np.full(batch_size, -1, dtype=np.int64)
+        env_completion_time_sec = np.full(batch_size, np.nan, dtype=np.float64)
         for step in range(hooks.max_updates or 10**18):
             if use_input:
                 input("Press Enter to continue...")
 
             update = hooks.step_fn(step, update)
             steps_used += 1
+            elapsed_now = perf_counter() - start_time
+            done_mask = np.asarray(update.done, dtype=bool)
+            newly_done = done_mask & (env_completion_steps < 0)
+            env_completion_steps[newly_done] = steps_used
+            env_completion_time_sec[newly_done] = elapsed_now
             print(f"Step {step}:" + "=" * 40)
             pprint(update, sort_dicts=False)
             if bool(np.all(update.done)):
@@ -102,6 +110,9 @@ def run_example_rounds(
             hooks.max_updates,
             elapsed_time_sec,
         )
+        summary.env_completion_steps = env_completion_steps
+        summary.env_completion_time_sec = env_completion_time_sec
+        summary.completed_stage_info = _group_completed_stage_info(summary)
 
         print()
         print("Execution records:")
@@ -125,24 +136,39 @@ def print_final_summary(round_summaries: Sequence[ExecutionSummary]) -> None:
     print("=" * 60)
     print("SUMMARY")
     print("=" * 60)
-    n_success = sum(1 for s in round_summaries if bool(np.all(s.final_success)))
-    print(f"Success rate: {n_success}/{len(round_summaries)}")
+    if not round_summaries:
+        print("Success rate: 0/0")
+        print("=" * 60)
+        return
+
+    env_successes = sum(_count_env_successes(summary) for summary in round_summaries)
+    env_total = sum(len(summary.final_success) for summary in round_summaries)
+    print(f"Success rate: {env_successes}/{env_total}")
     print()
     for i, summary in enumerate(round_summaries, start=1):
-        tag = "OK" if bool(np.all(summary.final_success)) else "FAIL"
-        print(f"  Round {i}: [{tag}]")
-        print(f"    completion steps: {summary.updates_used}")
-        print(f"    completion time: {summary.elapsed_time_sec:.3f}s")
-        for record in summary.records:
-            print(
-                f"    env {record.env_index} stage {record.stage_name}: {record.status.value}"
-            )
-        print(f"    completed stages: {summary.completed_stage_count.tolist()}")
-        print(f"    final stage: {summary.final_stage_name}")
-        print(f"    final success: {summary.final_success.tolist()}")
+        round_joint_success = bool(np.all(summary.final_success))
+        tag = "OK" if round_joint_success else "FAIL"
+        round_env_success = _count_env_successes(summary)
+        batch_size = len(summary.final_success)
         failure_lines = _format_failure_lines(summary)
-        for line in failure_lines:
-            print(f"    {line}")
+        round_payload = {
+            "status": tag,
+            "success_rate": f"{round_env_success}/{batch_size}",
+            "completed_stage_info": _format_completed_stage_info(
+                summary.completed_stage_info
+            ),
+            "completion_steps": _format_optional_int_list(summary.env_completion_steps),
+            "completion_time": _format_optional_time_list(
+                summary.env_completion_time_sec
+            ),
+            "completed_stages": summary.completed_stage_count.tolist(),
+            "final_stage": summary.final_stage_name,
+            "final_success": summary.final_success.tolist(),
+        }
+        if failure_lines:
+            round_payload["failure_reasons"] = failure_lines
+        print(f"  Round {i}: [{tag}]")
+        pprint(round_payload, sort_dicts=False)
     print("=" * 60)
 
 
@@ -187,6 +213,52 @@ def _format_failure_lines(summary: ExecutionSummary) -> List[str]:
         lines.append(f"failure reason (env {env_index}, stage {stage_name}): unknown")
 
     return lines
+
+
+def _group_completed_stage_info(
+    summary: ExecutionSummary,
+) -> Dict[str, List[Optional[str]]]:
+    grouped: Dict[str, List[Optional[str]]] = {}
+    batch_size = len(summary.final_success)
+    for record in summary.records:
+        if record.stage_name not in grouped:
+            grouped[record.stage_name] = [None] * batch_size
+        grouped[record.stage_name][record.env_index] = record.status.value
+    return grouped
+
+
+def _format_completed_stage_info(
+    completed_stage_info: Dict[str, List[Optional[str]]],
+) -> Dict[str, List[Optional[str]]]:
+    return {
+        stage_name: list(statuses)
+        for stage_name, statuses in completed_stage_info.items()
+    }
+
+
+def _count_env_successes(summary: ExecutionSummary) -> int:
+    return int(np.count_nonzero(np.asarray(summary.final_success, dtype=bool)))
+
+
+def _format_optional_int_list(values: Optional[np.ndarray]) -> List[Optional[int]]:
+    if values is None:
+        return []
+    result: List[Optional[int]] = []
+    for value in np.asarray(values, dtype=np.int64).tolist():
+        result.append(None if value < 0 else int(value))
+    return result
+
+
+def _format_optional_time_list(values: Optional[np.ndarray]) -> List[Optional[str]]:
+    if values is None:
+        return []
+    result: List[Optional[str]] = []
+    for value in np.asarray(values, dtype=np.float64).tolist():
+        if np.isnan(value):
+            result.append(None)
+        else:
+            result.append(f"{float(value):.3f}s")
+    return result
 
 
 def _extract_failure_reason(details: object) -> Optional[str]:
