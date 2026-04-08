@@ -130,25 +130,55 @@ class _OperatorState:
 
 
 class KeyCreator:
+    """Build fully-qualified observation keys in a single call.
+
+    Callers should use the ``create_*_key`` methods for camera topics and
+    ``apply_prefix`` for non-camera topics. All returned keys already include
+    the top-level prefix (e.g. ``/robot/``) so no further concatenation is
+    needed.
+    """
+
     def __init__(self, structured: bool):
-        if structured:
-            color_suffix = "video_encoded"
-            depth_suffix = "depth/image_raw"
-        else:
-            color_suffix = "color/image_raw"
-            depth_suffix = "aligned_depth_to_color/image_raw"
         self.structured = structured
-        self.color_suffix = color_suffix
-        self.depth_suffix = depth_suffix
+        if structured:
+            self._prefix = "/robot/"
+            self._color_suffix = "video_encoded"
+            self._depth_suffix = "depth/image_raw"
+        else:
+            self._prefix = ""
+            self._color_suffix = "color/image_raw"
+            self._depth_suffix = "aligned_depth_to_color/image_raw"
 
-    def get_prefix(self) -> str:
-        return "/robot/" if self.structured else ""
+    def apply_prefix(self, relative_key: str) -> str:
+        """Prepend the top-level prefix (e.g. ``/robot/``) to a relative key."""
+        return f"{self._prefix}{relative_key}"
 
-    def create_camera_prefix(self, cam_name: str) -> str:
+    def _camera_prefix(self, cam_name: str) -> str:
         if self.structured:
             return "camera/" + cam_name.split("_")[-2]
-        else:
-            return cam_name
+        return cam_name
+
+    def create_color_key(self, cam_name: str) -> str:
+        return self.apply_prefix(
+            f"{self._camera_prefix(cam_name)}/{self._color_suffix}"
+        )
+
+    def create_depth_key(self, cam_name: str) -> str:
+        return self.apply_prefix(
+            f"{self._camera_prefix(cam_name)}/{self._depth_suffix}"
+        )
+
+    def create_mask_key(self, cam_name: str) -> str:
+        return self.apply_prefix(f"{self._camera_prefix(cam_name)}/mask/image_raw")
+
+    def create_heat_map_key(self, cam_name: str) -> str:
+        return self.apply_prefix(f"{self._camera_prefix(cam_name)}/mask/heat_map")
+
+    def create_camera_info_key(self, cam_name: str) -> str:
+        return self.apply_prefix(f"{self._camera_prefix(cam_name)}/camera_info")
+
+    def create_hand_eye_key(self, cam_name: str) -> str:
+        return self.apply_prefix(f"{self._camera_prefix(cam_name)}/hand_eye/transform")
 
 
 class UnifiedMujocoEnv(MujocoBasis):
@@ -841,6 +871,7 @@ class UnifiedMujocoEnv(MujocoBasis):
         sim_time = self.data.time
         t = int(sim_time * 1e9) if self.config.stamp_ns else float(sim_time)
         obs: dict[str, dict[str, Any]] = {}
+        kc = self._key_creator
 
         for op in self._operators.values():
             arm_qidx = self._op_arm_qidx[op.name]
@@ -861,7 +892,7 @@ class UnifiedMujocoEnv(MujocoBasis):
                         if qidx.size == 0 and vidx.size == 0 and aidx.size == 0:
                             continue
                         # Measurement side: real per-joint sensor values.
-                        obs[f"{limb}/joint_state"] = {
+                        obs[kc.apply_prefix(f"{limb}/joint_state")] = {
                             "data": {
                                 "position": self.data.qpos[qidx].tolist(),
                                 "velocity": self.data.qvel[vidx].tolist(),
@@ -871,7 +902,7 @@ class UnifiedMujocoEnv(MujocoBasis):
                         }
                         # Action side: only the commanded quantity is filled;
                         # fields that are not being commanded stay empty.
-                        obs[f"action/{limb}/joint_state"] = {
+                        obs[kc.apply_prefix(f"action/{limb}/joint_state")] = {
                             "data": {
                                 "position": self.data.ctrl[aidx].tolist(),
                                 "velocity": [],
@@ -882,12 +913,14 @@ class UnifiedMujocoEnv(MujocoBasis):
                 else:
                     for limb, qidx, _, aidx in joint_components:
                         if qidx.size > 0:
-                            obs[f"{limb}/joint_state/position"] = {
+                            obs[kc.apply_prefix(f"{limb}/joint_state/position")] = {
                                 "data": np.asarray(self.data.qpos[qidx]),
                                 "t": t,
                             }
                         if aidx.size > 0:
-                            obs[f"action/{limb}/joint_state/position"] = {
+                            obs[
+                                kc.apply_prefix(f"action/{limb}/joint_state/position")
+                            ] = {
                                 "data": np.asarray(self.data.ctrl[aidx]),
                                 "t": t,
                             }
@@ -897,7 +930,7 @@ class UnifiedMujocoEnv(MujocoBasis):
                     for limb, _, vidx, _ in joint_components:
                         if vidx.size == 0:
                             continue
-                        obs[f"{limb}/joint_state/velocity"] = {
+                        obs[kc.apply_prefix(f"{limb}/joint_state/velocity")] = {
                             "data": np.asarray(self.data.qvel[vidx]),
                             "t": t,
                         }
@@ -905,7 +938,7 @@ class UnifiedMujocoEnv(MujocoBasis):
                     for limb, _, _, aidx in joint_components:
                         if aidx.size == 0:
                             continue
-                        obs[f"{limb}/joint_state/effort"] = {
+                        obs[kc.apply_prefix(f"{limb}/joint_state/effort")] = {
                             "data": np.asarray(self.data.actuator_force[aidx]),
                             "t": t,
                         }
@@ -935,7 +968,7 @@ class UnifiedMujocoEnv(MujocoBasis):
 
                     rot9d = quaternion_matrix(quat)[:3, :3].ravel()
                     if structured:
-                        obs[f"{op.name}/pose"] = {
+                        obs[kc.apply_prefix(f"{op.name}/pose")] = {
                             "data": {
                                 "header": _create_header(sim_time),
                                 "pose": {
@@ -946,19 +979,19 @@ class UnifiedMujocoEnv(MujocoBasis):
                             "t": t,
                         }
                     else:
-                        obs[f"{op.name}/pose/position"] = {
+                        obs[kc.apply_prefix(f"{op.name}/pose/position")] = {
                             "data": pos,
                             "t": t,
                         }
-                        obs[f"{op.name}/pose/orientation"] = {
+                        obs[kc.apply_prefix(f"{op.name}/pose/orientation")] = {
                             "data": quat,
                             "t": t,
                         }
-                    obs[f"{op.name}/pose/rotation"] = {
+                    obs[kc.apply_prefix(f"{op.name}/pose/rotation")] = {
                         "data": euler_from_matrix(rot9d.reshape(3, 3)),
                         "t": t,
                     }
-                    obs[f"{op.name}/pose/rotation_6d"] = {
+                    obs[kc.apply_prefix(f"{op.name}/pose/rotation_6d")] = {
                         "data": rot9d[:6],
                         "t": t,
                     }
@@ -971,7 +1004,7 @@ class UnifiedMujocoEnv(MujocoBasis):
                         tgt_pos = pos
                         tgt_ori = quat
                     if structured:
-                        obs[f"action/{op.name}/pose"] = {
+                        obs[kc.apply_prefix(f"action/{op.name}/pose")] = {
                             "data": {
                                 "header": _create_header(sim_time),
                                 "pose": {
@@ -982,11 +1015,11 @@ class UnifiedMujocoEnv(MujocoBasis):
                             "t": t,
                         }
                     else:
-                        obs[f"action/{op.name}/pose/position"] = {
+                        obs[kc.apply_prefix(f"action/{op.name}/pose/position")] = {
                             "data": tgt_pos,
                             "t": t,
                         }
-                        obs[f"action/{op.name}/pose/orientation"] = {
+                        obs[kc.apply_prefix(f"action/{op.name}/pose/orientation")] = {
                             "data": tgt_ori,
                             "t": t,
                         }
@@ -1006,7 +1039,7 @@ class UnifiedMujocoEnv(MujocoBasis):
                     gyro = self._sensor_data(gyro_id)
                     imu_quat = self._sensor_data(quat_id)
                     if structured:
-                        obs[f"{op.name}/imu"] = {
+                        obs[kc.apply_prefix(f"{op.name}/imu")] = {
                             "data": {
                                 # "header": _create_header(sim_time),
                                 "linear_acceleration": acc,
@@ -1016,12 +1049,18 @@ class UnifiedMujocoEnv(MujocoBasis):
                             "t": t,
                         }
                     else:
-                        obs[f"{op.name}/imu/linear_acceleration"] = {
+                        obs[kc.apply_prefix(f"{op.name}/imu/linear_acceleration")] = {
                             "data": acc,
                             "t": t,
                         }
-                        obs[f"{op.name}/imu/angular_velocity"] = {"data": gyro, "t": t}
-                        obs[f"{op.name}/imu/orientation"] = {"data": imu_quat, "t": t}
+                        obs[kc.apply_prefix(f"{op.name}/imu/angular_velocity")] = {
+                            "data": gyro,
+                            "t": t,
+                        }
+                        obs[kc.apply_prefix(f"{op.name}/imu/orientation")] = {
+                            "data": imu_quat,
+                            "t": t,
+                        }
 
             if DataType.WRENCH in self.config.enabled_sensors:
                 force = self._sensor_data(self._wrench_ids[op.name]["force"])
@@ -1031,13 +1070,19 @@ class UnifiedMujocoEnv(MujocoBasis):
                 # force = np.asarray(force)
                 # torque = np.asarray(torque)
                 if structured:
-                    obs[f"{op.name}/wrench"] = {
+                    obs[kc.apply_prefix(f"{op.name}/wrench")] = {
                         "data": {"force": force, "torque": torque},
                         "t": t,
                     }
                 else:
-                    obs[f"{op.name}/wrench/force"] = {"data": force, "t": t}
-                    obs[f"{op.name}/wrench/torque"] = {"data": torque, "t": t}
+                    obs[kc.apply_prefix(f"{op.name}/wrench/force")] = {
+                        "data": force,
+                        "t": t,
+                    }
+                    obs[kc.apply_prefix(f"{op.name}/wrench/torque")] = {
+                        "data": torque,
+                        "t": t,
+                    }
 
         if (
             DataType.TACTILE in self.config.enabled_sensors
@@ -1053,7 +1098,7 @@ class UnifiedMujocoEnv(MujocoBasis):
                         key = f"tactile/{key_component}/points"
                     else:
                         key = f"{component}/tactile/point_cloud2"
-                    obs[key] = {"data": data, "t": t}
+                    obs[kc.apply_prefix(key)] = {"data": data, "t": t}
 
         if DataType.CAMERA in self.config.enabled_sensors:
             if structured:
@@ -1070,9 +1115,8 @@ class UnifiedMujocoEnv(MujocoBasis):
                 )
                 renderer.disable_depth_rendering()
                 renderer.disable_segmentation_rendering()
-                obs_cam_name = self._key_creator.create_camera_prefix(cam_name)
                 if spec.enable_color:
-                    color_key = f"{obs_cam_name}/{self._key_creator.color_suffix}"
+                    color_key = kc.create_color_key(cam_name)
                     obs[color_key] = {
                         "data": np.asarray(renderer.render(), dtype=np.uint8),
                         "t": t,
@@ -1083,7 +1127,7 @@ class UnifiedMujocoEnv(MujocoBasis):
                     depth = np.asarray(renderer.render())
                     renderer.disable_depth_rendering()
                     depth[depth > spec.depth_max] = 0.0
-                    obs[f"{obs_cam_name}/{self._key_creator.depth_suffix}"] = {
+                    obs[kc.create_depth_key(cam_name)] = {
                         "data": depth,
                         "t": t,
                     }
@@ -1092,12 +1136,12 @@ class UnifiedMujocoEnv(MujocoBasis):
                     segmentation = np.asarray(renderer.render(), dtype=np.int32)
                     renderer.disable_segmentation_rendering()
                     if spec.enable_mask:
-                        obs[f"{obs_cam_name}/mask/image_raw"] = {
+                        obs[kc.create_mask_key(cam_name)] = {
                             "data": self._build_binary_mask(segmentation),
                             "t": t,
                         }
                     if spec.enable_heat_map:
-                        obs[f"{obs_cam_name}/mask/heat_map"] = {
+                        obs[kc.create_heat_map_key(cam_name)] = {
                             "data": self._build_operation_mask(segmentation),
                             "t": t,
                         }
@@ -1106,13 +1150,13 @@ class UnifiedMujocoEnv(MujocoBasis):
                     for key in cam_keys:
                         obs[key]["data"] = create_image_data(obs[key]["data"], sim_time)
                     cam_info = info[cam_name]
-                    obs[f"{obs_cam_name}/camera_info"] = {
+                    obs[kc.create_camera_info_key(cam_name)] = {
                         "data": cam_info["camera_info"]["color"],
                         "t": t,
                     }
                     extrinsics = cam_info["camera_extrinsics"]
                     quat = quaternion_from_matrix_3x3(extrinsics["rotation_matrix"])
-                    obs[f"{obs_cam_name}/hand_eye/transform"] = {
+                    obs[kc.create_hand_eye_key(cam_name)] = {
                         "data": {
                             "header": _create_header(sim_time),
                             "child_frame_id": extrinsics["frame"],
@@ -1126,8 +1170,6 @@ class UnifiedMujocoEnv(MujocoBasis):
                         "t": t,
                     }
 
-        if prefix := self._key_creator.get_prefix():
-            return {f"{prefix}{key}": value for key, value in obs.items()}
         return obs
 
     # ------------------------------------------------------------------

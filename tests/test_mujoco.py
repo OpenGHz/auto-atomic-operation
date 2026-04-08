@@ -64,7 +64,7 @@ def main(cfg: DictConfig) -> None:
         def _get_image_array(obs_entry, shape, dtype=np.uint8):
             """Extract image array from obs entry, handling both raw and structured."""
             data = obs_entry["data"]
-            if structured:
+            if not isinstance(data, np.ndarray):
                 # data is a list of image message dicts (one per env)
                 return np.stack(
                     [_decode_image(d, shape[1:], dtype) for d in data], axis=0

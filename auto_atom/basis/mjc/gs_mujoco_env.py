@@ -206,15 +206,12 @@ class GSUnifiedMujocoEnv(UnifiedMujocoEnv):
         if not all_gs_cams:
             return
 
-        structured: bool = self.config.structured
+        kc = self._key_creator
         t = int(self.data.time * 1e9) if self.config.stamp_ns else float(self.data.time)
 
         for cam_name in all_gs_cams:
             spec = self._camera_specs[cam_name]
             cam_id = self._camera_ids[cam_name]
-            obs_cam_name = (
-                "camera/" + cam_name.split("_")[0] if structured else cam_name
-            )
             if cam_name in gs_color_set:
                 rgb_t = self._render_gs_color_camera(
                     cam_id=cam_id,
@@ -224,7 +221,7 @@ class GSUnifiedMujocoEnv(UnifiedMujocoEnv):
                 rgb = torch.clamp(rgb_t, 0.0, 1.0).mul(255).to(torch.uint8)
                 if self.config.to_numpy:
                     rgb = rgb.cpu().numpy()
-                obs[f"{obs_cam_name}/color/image_raw"] = {"data": rgb, "t": t}
+                obs[kc.create_color_key(cam_name)] = {"data": rgb, "t": t}
             depth_t: torch.Tensor | None = None
             scene_depth_t: torch.Tensor | None = None
             need_mask = cam_name in gs_mask_set and self._gs_mask_renderers
@@ -255,7 +252,7 @@ class GSUnifiedMujocoEnv(UnifiedMujocoEnv):
                     depth = torch.where(
                         depth > spec.depth_max, torch.zeros_like(depth), depth
                     )
-                obs[f"{obs_cam_name}/aligned_depth_to_color/image_raw"] = {
+                obs[kc.create_depth_key(cam_name)] = {
                     "data": depth,
                     "t": t,
                 }
@@ -267,12 +264,12 @@ class GSUnifiedMujocoEnv(UnifiedMujocoEnv):
                     scene_depth_t=scene_depth_t,
                 )
                 if cam_name in self.config.gs_mask_cameras:
-                    obs[f"{obs_cam_name}/mask/image_raw"] = {
+                    obs[kc.create_mask_key(cam_name)] = {
                         "data": binary_mask,
                         "t": t,
                     }
                 if cam_name in self.config.gs_heat_map_cameras:
-                    obs[f"{obs_cam_name}/mask/heat_map"] = {
+                    obs[kc.create_heat_map_key(cam_name)] = {
                         "data": heat_map,
                         "t": t,
                     }
@@ -711,10 +708,9 @@ class BatchedGSUnifiedMujocoEnv(BatchedUnifiedMujocoEnv):
                 # fg_rgb: (Nenv, Ncam, H, W, 3)
 
             # ---- Distribute per-camera outputs ----
-            prefix = self._key_creator.get_prefix()
+            kc = self._key_creator
             for cam_idx, cam_name in enumerate(cam_names):
                 spec = self._camera_specs[cam_name]
-                obs_cam_name = self._key_creator.create_camera_prefix(cam_name)
                 # color
                 has_color = True
                 if cam_name in gs_color_set and full_rgb is not None:
@@ -730,10 +726,10 @@ class BatchedGSUnifiedMujocoEnv(BatchedUnifiedMujocoEnv):
                 else:
                     has_color = False
                 if has_color:
-                    color_key = (
-                        f"{prefix}{obs_cam_name}/{self._key_creator.color_suffix}"
-                    )
-                    obs[color_key] = {"data": rgb, "t": timestamps}
+                    obs[kc.create_color_key(cam_name)] = {
+                        "data": rgb,
+                        "t": timestamps,
+                    }
 
                 # depth
                 if cam_name in gs_depth_set and full_depth is not None:
@@ -747,15 +743,12 @@ class BatchedGSUnifiedMujocoEnv(BatchedUnifiedMujocoEnv):
                             torch.zeros_like(depth),
                             depth,
                         )
-                    depth_key = (
-                        f"{prefix}{obs_cam_name}/{self._key_creator.depth_suffix}"
-                    )
                     data = (
                         create_image_data_batch(depth, timestamps)
                         if structured
                         else depth
                     )
-                    obs[depth_key] = {
+                    obs[kc.create_depth_key(cam_name)] = {
                         "data": data,
                         "t": timestamps,
                     }
@@ -781,7 +774,6 @@ class BatchedGSUnifiedMujocoEnv(BatchedUnifiedMujocoEnv):
                 for cam_idx, cam_name in enumerate(cam_names):
                     if cam_name not in gs_mask_set:
                         continue
-                    obs_cam_name = self._key_creator.create_camera_prefix(cam_name)
 
                     if cam_name in self.config.gs_mask_cameras:
                         data = (
@@ -789,7 +781,7 @@ class BatchedGSUnifiedMujocoEnv(BatchedUnifiedMujocoEnv):
                             if structured
                             else all_masks[:, cam_idx]
                         )
-                        obs[f"{prefix}{obs_cam_name}/mask/image_raw"] = {
+                        obs[kc.create_mask_key(cam_name)] = {
                             "data": data,
                             "t": timestamps,
                         }
@@ -801,7 +793,7 @@ class BatchedGSUnifiedMujocoEnv(BatchedUnifiedMujocoEnv):
                             if structured
                             else all_heat_maps[:, cam_idx]
                         )
-                        obs[f"{prefix}{obs_cam_name}/mask/heat_map"] = {
+                        obs[kc.create_heat_map_key(cam_name)] = {
                             "data": data,
                             "t": timestamps,
                         }
