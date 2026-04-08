@@ -838,6 +838,7 @@ class MujocoBasis:
             f = (spec.height / 2.0) / tan(fovy_rad / 2.0)
 
             camera_info = {
+                "header": {"frame_id": cam_name},
                 "width": spec.width,
                 "height": spec.height,
                 "distortion_model": "plumb_bob",

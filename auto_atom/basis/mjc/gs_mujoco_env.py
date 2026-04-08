@@ -51,9 +51,9 @@ from auto_atom.basis.mjc.mujoco_env import (
 )
 
 
-def create_image_data_batch(image_batch, timestamps):
+def create_image_data_batch(image_batch, timestamps, frame_id: str = ""):
     return [
-        create_image_data(image, time_sec)
+        create_image_data(image, time_sec, frame_id)
         for image, time_sec in zip(image_batch, timestamps / 1e9)
     ]
 
@@ -744,7 +744,7 @@ class BatchedGSUnifiedMujocoEnv(BatchedUnifiedMujocoEnv):
                             depth,
                         )
                     data = (
-                        create_image_data_batch(depth, timestamps)
+                        create_image_data_batch(depth, timestamps, cam_name)
                         if structured
                         else depth
                     )
@@ -777,7 +777,9 @@ class BatchedGSUnifiedMujocoEnv(BatchedUnifiedMujocoEnv):
 
                     if cam_name in self.config.gs_mask_cameras:
                         data = (
-                            create_image_data_batch(all_masks[:, cam_idx], timestamps)
+                            create_image_data_batch(
+                                all_masks[:, cam_idx], timestamps, cam_name
+                            )
                             if structured
                             else all_masks[:, cam_idx]
                         )
@@ -788,7 +790,7 @@ class BatchedGSUnifiedMujocoEnv(BatchedUnifiedMujocoEnv):
                     if cam_name in self.config.gs_heat_map_cameras:
                         data = (
                             create_image_data_batch(
-                                all_heat_maps[:, cam_idx], timestamps
+                                all_heat_maps[:, cam_idx], timestamps, cam_name
                             )
                             if structured
                             else all_heat_maps[:, cam_idx]

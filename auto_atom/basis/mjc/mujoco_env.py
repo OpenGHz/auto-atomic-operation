@@ -48,22 +48,44 @@ __all__ = [
 ]
 
 
-def _create_header(time_sec: float) -> dict[str, Any]:
-    return {"stamp": {"sec": int(time_sec), "nanosec": int((time_sec % 1) * 1e9)}}
+def _create_header(time_sec: float, frame_id: str = "") -> dict[str, Any]:
+    return {
+        "stamp": {"sec": int(time_sec), "nanosec": int((time_sec % 1) * 1e9)},
+        "frame_id": frame_id,
+    }
 
 
-def create_image_data(data: np.ndarray, time_sec: float):
+_ENCODINGS: dict[tuple[type, int], str] = {
+    (np.uint8, 1): "mono8",
+    (np.uint8, 3): "rgb8",
+    (np.uint8, 4): "rgba8",
+    (np.uint8, 5): "heatmap",
+    (np.uint16, 1): "mono16",
+    (np.uint16, 3): "rgb16",
+    (np.float32, 1): "32FC1",
+    (np.float64, 1): "64FC1",
+}
+
+
+def create_image_data(
+    data: np.ndarray, time_sec: float, frame_id: str = "", tobytes: bool = True
+) -> dict[str, Any]:
+    if data.ndim not in (2, 3):
+        raise ValueError(f"expected 2-D or 3-D image array, got ndim={data.ndim}")
     h, w = data.shape[:2]
     c = data.shape[2] if data.ndim == 3 else 1
-
+    key = (data.dtype.type, c)
+    if key not in _ENCODINGS:
+        raise ValueError(f"unsupported dtype/channel combination: {data.dtype}, c={c}")
+    contig = np.ascontiguousarray(data)
     return {
-        "header": _create_header(time_sec),
+        "header": _create_header(time_sec, frame_id),
         "height": h,
         "width": w,
-        "data": np.ascontiguousarray(data).tobytes(),
-        "encoding": {1: "", 3: "rgb8", 4: "rgba8", 5: "heatmap"}[c],
-        "step": w * c,
-        "is_bigendian": 0,
+        "data": contig.tobytes() if tobytes else contig,
+        "encoding": _ENCODINGS[key],
+        "step": w * c * contig.dtype.itemsize,
+        "is_bigendian": int(contig.dtype.byteorder == ">"),
     }
 
 
@@ -1146,15 +1168,19 @@ class UnifiedMujocoEnv(MujocoBasis):
                             "t": t,
                         }
                 if structured:
-                    cam_keys = obs.keys() - obs_keys - color_keys
+                    cam_keys = obs.keys() - obs_keys
+                    frame_id = cam_name
                     for key in cam_keys:
-                        obs[key]["data"] = create_image_data(obs[key]["data"], sim_time)
-                    cam_info = info[cam_name]
+                        obs[key]["data"] = create_image_data(
+                            obs[key]["data"], sim_time, frame_id, key not in color_keys
+                        )
+                    cam_info = dict(info[cam_name]["camera_info"]["color"])
+                    cam_info["header"] = _create_header(sim_time, frame_id)
                     obs[kc.create_camera_info_key(cam_name)] = {
-                        "data": cam_info["camera_info"]["color"],
+                        "data": cam_info,
                         "t": t,
                     }
-                    extrinsics = cam_info["camera_extrinsics"]
+                    extrinsics = info[cam_name]["camera_extrinsics"]
                     quat = quaternion_from_matrix_3x3(extrinsics["rotation_matrix"])
                     obs[kc.create_hand_eye_key(cam_name)] = {
                         "data": {
