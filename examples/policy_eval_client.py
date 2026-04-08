@@ -9,6 +9,7 @@ Usage::
 
     # Terminal 2: run this client
     python examples/policy_eval_client.py
+    python examples/policy_eval_client.py --config-name cup_on_coaster
     python examples/policy_eval_client.py --host 10.0.0.5 --port 9999
 """
 
@@ -23,9 +24,6 @@ import numpy as np
 from auto_atom import TaskUpdate
 from auto_atom.ipc import RemotePolicyEvaluator
 
-CONFIG_NAME = "press_three_buttons"
-DEMO_PATH = Path("assets/demos") / f"{CONFIG_NAME}.npz"
-
 
 def load_demo(path: Path) -> dict:
     data = np.load(path)
@@ -36,7 +34,71 @@ def load_demo(path: Path) -> dict:
     return {
         "position": arrays["action/arm/pose/position"],
         "orientation": arrays["action/arm/pose/orientation"],
-        "gripper": arrays["action/eef/joint_state/position"],
+        "gripper": arrays[
+            "action/gripper/joint_state/position"
+            if "action/gripper/joint_state/position" in arrays
+            else "action/eef/joint_state/position"
+        ],
+    }
+
+
+def _reshape_series(
+    values: np.ndarray, item_width: int, batch_size: int, name: str
+) -> np.ndarray:
+    if values.ndim != 2:
+        raise ValueError(
+            f"Expected {name} demo array with shape (T, N), got {values.shape}."
+        )
+    total_width = values.shape[1]
+    if total_width % item_width != 0:
+        raise ValueError(
+            f"{name} width {total_width} is not divisible by item width {item_width}."
+        )
+
+    recorded_batch_size = total_width // item_width
+    if batch_size > recorded_batch_size:
+        raise ValueError(
+            f"Demo recorded with batch_size={recorded_batch_size}, "
+            f"but evaluator requires batch_size={batch_size}."
+        )
+
+    reshaped = values.reshape(values.shape[0], recorded_batch_size, item_width)
+    return reshaped[:, :batch_size, :]
+
+
+def normalize_demo_for_batch(
+    demo: dict[str, np.ndarray], batch_size: int
+) -> dict[str, np.ndarray]:
+    position = _reshape_series(demo["position"], 3, batch_size, "position")
+    orientation = _reshape_series(demo["orientation"], 4, batch_size, "orientation")
+
+    gripper = demo["gripper"]
+    if gripper.ndim != 2:
+        raise ValueError(
+            f"Expected gripper demo array with shape (T, N), got {gripper.shape}."
+        )
+    recorded_batch_size = position.shape[1]
+    full_recorded_batch_size = demo["position"].shape[1] // 3
+    if gripper.shape[1] % full_recorded_batch_size != 0:
+        raise ValueError(
+            f"gripper width {gripper.shape[1]} is incompatible with "
+            f"recorded batch_size={full_recorded_batch_size}."
+        )
+    gripper_dof = gripper.shape[1] // full_recorded_batch_size
+    gripper = gripper.reshape(gripper.shape[0], full_recorded_batch_size, gripper_dof)
+    gripper = gripper[:, :batch_size, :]
+
+    if batch_size == 1:
+        return {
+            "position": position[:, 0, :],
+            "orientation": orientation[:, 0, :],
+            "gripper": gripper[:, 0, :],
+        }
+
+    return {
+        "position": position,
+        "orientation": orientation,
+        "gripper": gripper,
     }
 
 
@@ -63,22 +125,33 @@ class RecordedDemoPolicy:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Remote policy evaluation client")
+    parser.add_argument("--config-name", default="press_three_buttons")
+    parser.add_argument(
+        "--demo-path",
+        type=Path,
+        default=None,
+        help="Path to demo .npz file (default: assets/demos/<config_name>.npz)",
+    )
     parser.add_argument("--host", default="localhost")
     parser.add_argument("--port", type=int, default=18861)
     args = parser.parse_args()
 
-    if not DEMO_PATH.exists():
+    config_name: str = args.config_name
+    demo_path: Path = (
+        args.demo_path or Path("outputs/records/demos") / f"{config_name}.npz"
+    )
+
+    if not demo_path.exists():
         raise FileNotFoundError(
-            f"Demo not found: {DEMO_PATH}\n"
+            f"Demo not found: {demo_path}\n"
             f"Record first: python examples/record_demo.py "
-            f"--config-name {CONFIG_NAME} env.batch_size=1"
+            f"--config-name {config_name} env.batch_size=1"
         )
 
-    demo = load_demo(DEMO_PATH)
-    print(f"Loaded {len(demo['position'])} steps from {DEMO_PATH}")
-
     evaluator = RemotePolicyEvaluator(host=args.host, port=args.port)
-    evaluator.from_config(CONFIG_NAME, overrides=["env.batch_size=1"])
+    evaluator.from_config(config_name, overrides=["env.batch_size=1"])
+    demo = normalize_demo_for_batch(load_demo(demo_path), evaluator.batch_size)
+    print(f"Loaded {len(demo['position'])} steps from {demo_path}")
 
     max_updates = len(demo["position"]) + 50
     policy = RecordedDemoPolicy(demo)

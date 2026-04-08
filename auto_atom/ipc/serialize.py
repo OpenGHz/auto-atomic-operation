@@ -1,7 +1,8 @@
 """Wire-format (de)serialization for PolicyEvaluator data types.
 
-Every numpy array is encoded as ``{"__ndarray__": True, "data": ..., "dtype": ...}``
-so the receiving side can reconstruct it without ``allow_pickle``.
+Every numpy array is encoded as
+``{"__ndarray__": True, "data": ..., "dtype": ..., "shape": ...}``
+so the receiving side can reconstruct it efficiently without ``allow_pickle``.
 """
 
 from __future__ import annotations
@@ -26,9 +27,15 @@ _NDARRAY_TAG = "__ndarray__"
 
 
 def serialize_value(value: Any) -> Any:
-    """Recursively convert *value* to a JSON-safe wire representation."""
+    """Recursively convert *value* to a wire representation."""
     if isinstance(value, np.ndarray):
-        return {_NDARRAY_TAG: True, "data": value.tolist(), "dtype": str(value.dtype)}
+        contiguous = np.ascontiguousarray(value)
+        return {
+            _NDARRAY_TAG: True,
+            "data": contiguous.tobytes(),
+            "dtype": str(contiguous.dtype),
+            "shape": list(contiguous.shape),
+        }
     if isinstance(value, np.generic):
         return value.item()
     if isinstance(value, Enum):
@@ -47,7 +54,7 @@ def deserialize_value(value: Any) -> Any:
     """Recursively restore numpy arrays from their tagged-dict wire format."""
     if isinstance(value, dict):
         if value.get(_NDARRAY_TAG):
-            return np.array(value["data"], dtype=value["dtype"])
+            return _deserialize_ndarray(value)
         return {k: deserialize_value(v) for k, v in value.items()}
     if isinstance(value, (list, tuple)):
         converted = [deserialize_value(v) for v in value]
@@ -189,5 +196,23 @@ def _to_ndarray(value: Any, dtype: str) -> Optional[np.ndarray]:
     if value is None:
         return None
     if isinstance(value, dict) and value.get(_NDARRAY_TAG):
-        return np.array(value["data"], dtype=value["dtype"])
+        return _deserialize_ndarray(value)
     return np.asarray(value, dtype=dtype)
+
+
+def _deserialize_ndarray(value: Dict[str, Any]) -> np.ndarray:
+    data = value["data"]
+    dtype = np.dtype(value["dtype"])
+    shape = value.get("shape")
+
+    if isinstance(data, (bytes, bytearray, memoryview)):
+        array = np.frombuffer(data, dtype=dtype)
+        if shape is not None:
+            return array.reshape(shape)
+        return array
+
+    # Backward compatibility for the previous list-based wire format.
+    array = np.array(data, dtype=dtype)
+    if shape is not None:
+        return array.reshape(shape)
+    return array

@@ -1,16 +1,21 @@
-"""Replay recorded low-level actions with the MuJoCo backend.
+"""Replay recorded low-level actions with the PolicyEvaluator.
 
-By default this script loads ``assets/demos/<config_name>.npz`` produced by
-``record_demo.py`` and replays the saved control sequence step by step.
+By default this script loads ``outputs/records/demos/<config_name>.npz``
+produced by ``record_demo.py`` and replays the saved sequence step by step.
 
 Examples:
 
-    python examples/replay_demo.py --config-name open_hinge_door
+    python examples/replay_demo.py --config-name press_three_buttons
+    python examples/replay_demo.py --config-name pick_and_place +replay.mode=ctrl
     python examples/replay_demo.py --config-name pick_and_place +replay.save_gif=true
     python examples/replay_demo.py --config-name pick_and_place +replay.demo_name=my_demo
 """
 
+from __future__ import annotations
+
 import os
+from typing import Any, Optional
+
 import hydra
 import imageio.v3 as iio
 import numpy as np
@@ -18,20 +23,68 @@ from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, OmegaConf
 from PIL import Image
 from pydantic import BaseModel, Field
-from auto_atom.backend.mjc.mujoco_backend import MujocoTaskBackend
+
+from auto_atom import ExecutionContext, PolicyEvaluator, TaskUpdate
 from auto_atom.runner.common import get_config_dir, prepare_task_file
-from auto_atom.utils.pose import PoseState
-from auto_atom.runtime import TaskRunner
 
 
 class ReplayConfig(BaseModel):
     demo_name: str | None = Field(default=None)
-    mode: str = Field(default="ctrl")
+    mode: str = Field(default="pose")
     camera: str = Field(default="env1_cam")
     fps: int = Field(default=25)
     gif_width: int = Field(default=320)
     save_gif: bool = Field(default=True)
     save_mp4: bool = Field(default=False)
+
+
+# ---------------------------------------------------------------------------
+# Demo loading
+# ---------------------------------------------------------------------------
+
+
+def _load_low_dim_map(demo_data: np.lib.npyio.NpzFile) -> dict[str, np.ndarray]:
+    if "low_dim_keys" not in demo_data:
+        raise KeyError("NPZ missing 'low_dim_keys'.")
+
+    low_dim_keys = [str(key) for key in np.asarray(demo_data["low_dim_keys"])]
+    low_dim_map: dict[str, np.ndarray] = {}
+    for idx, key in enumerate(low_dim_keys):
+        data_key = f"low_dim_data__{idx}"
+        if data_key not in demo_data:
+            raise KeyError(f"NPZ missing '{data_key}' for low-dimensional key '{key}'.")
+        low_dim_map[key] = np.asarray(demo_data[data_key], dtype=np.float32)
+    return low_dim_map
+
+
+def _load_pose_demo(demo_data: np.lib.npyio.NpzFile) -> dict[str, np.ndarray]:
+    """Load pose + gripper arrays for pose-mode replay."""
+    low_dim = _load_low_dim_map(demo_data)
+    result: dict[str, np.ndarray] = {
+        "position": low_dim["action/arm/pose/position"],
+        "orientation": low_dim["action/arm/pose/orientation"],
+    }
+    gripper_key = "action/eef/joint_state/position"
+    if gripper_key in low_dim:
+        result["gripper"] = low_dim[gripper_key]
+    return result
+
+
+def _load_ctrl_demo(demo_data: np.lib.npyio.NpzFile) -> dict[str, np.ndarray]:
+    """Load joint ctrl arrays for ctrl-mode replay."""
+    low_dim = _load_low_dim_map(demo_data)
+    arm = low_dim["action/arm/joint_state/position"]
+    eef_key = "action/eef/joint_state/position"
+    if eef_key in low_dim:
+        ctrl = np.concatenate([arm, low_dim[eef_key]], axis=-1)
+    else:
+        ctrl = arm
+    return {"ctrl": ctrl}
+
+
+# ---------------------------------------------------------------------------
+# Camera helpers
+# ---------------------------------------------------------------------------
 
 
 def _resolve_camera(
@@ -60,144 +113,110 @@ def _resolve_camera(
     return None, None
 
 
-def _load_low_dim_map(demo_data: np.lib.npyio.NpzFile) -> dict[str, np.ndarray]:
-    if "low_dim_keys" not in demo_data:
-        raise KeyError("NPZ missing 'low_dim_keys'.")
-
-    low_dim_keys = [str(key) for key in np.asarray(demo_data["low_dim_keys"])]
-    low_dim_map: dict[str, np.ndarray] = {}
-    for idx, key in enumerate(low_dim_keys):
-        data_key = f"low_dim_data__{idx}"
-        if data_key not in demo_data:
-            raise KeyError(f"NPZ missing '{data_key}' for low-dimensional key '{key}'.")
-        low_dim_map[key] = np.asarray(demo_data[data_key], dtype=np.float32)
-    return low_dim_map
+def _extract_frame(obs: dict[str, dict], camera_key: str) -> np.ndarray | None:
+    data = obs.get(camera_key, {}).get("data")
+    if data is None:
+        return None
+    frame = np.asarray(data, dtype=np.uint8)
+    return frame[0] if frame.ndim >= 4 else frame
 
 
-def _load_pose_trace(
-    demo_data: np.lib.npyio.NpzFile,
-) -> list[dict[str, dict[str, object]]]:
-    low_dim_map = _load_low_dim_map(demo_data)
-    operators: dict[str, dict[str, np.ndarray]] = {}
+# ---------------------------------------------------------------------------
+# Replay policy
+# ---------------------------------------------------------------------------
 
-    for key, values in low_dim_map.items():
-        parts = key.split("/")
-        if len(parts) >= 4 and parts[0] == "action" and parts[2] == "pose":
-            operator = parts[1]
-            field_name = parts[3]
-        elif (
-            len(parts) >= 6
-            and parts[0] == ""
-            and parts[1] == "robot"
-            and parts[2] == "action"
-            and parts[4] == "pose"
-        ):
-            operator = parts[3]
-            field_name = parts[5]
+
+class ReplayPolicy:
+    """Replays recorded actions step by step (index-based, no observation)."""
+
+    def __init__(self, demo: dict[str, np.ndarray], mode: str) -> None:
+        self._demo = demo
+        self._mode = mode
+        if mode == "pose":
+            self._max = len(demo["position"]) - 1
         else:
-            continue
-        if field_name not in {"position", "orientation"}:
-            continue
-        operators.setdefault(operator, {})[field_name] = values
+            self._max = len(demo["ctrl"]) - 1
+        self._step = 0
 
-    complete_ops = sorted(
-        operator
-        for operator, fields in operators.items()
-        if "position" in fields and "orientation" in fields
-    )
-    if not complete_ops:
-        raise KeyError("NPZ does not contain action pose position/orientation series.")
+    def reset(self) -> None:
+        self._step = 0
 
-    num_steps = operators[complete_ops[0]]["position"].shape[0]
-    pose_trace: list[dict[str, dict[str, object]]] = []
-    for step_idx in range(num_steps):
-        step_pose: dict[str, dict[str, object]] = {}
-        for operator in complete_ops:
-            step_pose[operator] = {
-                "position": operators[operator]["position"][step_idx],
-                "orientation": operators[operator]["orientation"][step_idx],
+    @property
+    def num_steps(self) -> int:
+        return self._max + 1
+
+    def act(self) -> dict[str, Any]:
+        i = min(self._step, self._max)
+        self._step += 1
+        if self._mode == "pose":
+            action: dict[str, Any] = {
+                "position": self._demo["position"][i],
+                "orientation": self._demo["orientation"][i],
             }
-        pose_trace.append(step_pose)
-    return pose_trace
+            if "gripper" in self._demo:
+                action["gripper"] = self._demo["gripper"][i]
+            return action
+        return {"ctrl": self._demo["ctrl"][i]}
 
 
-def _apply_pose_targets(
-    backend: MujocoTaskBackend,
-    pose_targets: dict[str, dict[str, object]],
-    ctrl_action: np.ndarray | None,
+# ---------------------------------------------------------------------------
+# Action applier / observation getter
+# ---------------------------------------------------------------------------
+
+
+def action_applier(
+    context: ExecutionContext, action: Any, env_mask: Optional[np.ndarray] = None
 ) -> None:
-    env = backend.env
-    batch_size = env.batch_size
-    joint_ctrl = []
-    needs_step = False
-    needs_update = False
-    for env_index, single_env in enumerate(env.envs):
-        ctrl = np.asarray(
-            single_env.data.ctrl[: single_env.model.nu], dtype=np.float64
-        ).copy()
-        if ctrl_action is not None:
-            action_row = (
-                np.asarray(ctrl_action[env_index], dtype=np.float64)
-                if ctrl_action.ndim == 2
-                else np.asarray(ctrl_action, dtype=np.float64)
-            )
-            n = min(len(action_row), single_env.model.nu)
-            if n > 0:
-                ctrl[:n] = action_row[:n]
-        joint_ctrl.append(ctrl)
+    if action is None:
+        return
+    env = context.backend.env
+    if "ctrl" in action:
+        ctrl = np.asarray(action["ctrl"], dtype=np.float64)
+        if ctrl.ndim == 1:
+            ctrl = ctrl.reshape(1, -1).repeat(env.batch_size, axis=0)
+        env.step(ctrl, env_mask=env_mask)
+    else:
+        env.apply_pose_action(
+            "arm",
+            action["position"],
+            action["orientation"],
+            action.get("gripper"),
+            env_mask=env_mask,
+        )
 
-    for operator_name, target in pose_targets.items():
-        position = np.asarray(target.get("position"), dtype=np.float32)
-        orientation = np.asarray(target.get("orientation"), dtype=np.float32)
-        if position.ndim == 1:
-            position = np.repeat(position.reshape(1, 3), batch_size, axis=0)
-        if orientation.ndim == 1:
-            orientation = np.repeat(orientation.reshape(1, 4), batch_size, axis=0)
 
-        for env_index, single_env in enumerate(env.envs):
-            state = single_env._get_op(operator_name)
-            state.target_pos_in_base = position[env_index].copy()
-            state.target_quat_in_base = orientation[env_index].copy()
-            if state.joint_mode:
-                arm_qidx = single_env._op_arm_qidx[operator_name]
-                current_arm_qpos = single_env.data.qpos[arm_qidx].copy()
-                joint_targets = state.ik_solver.solve(
-                    PoseState(
-                        position=tuple(float(v) for v in position[env_index]),
-                        orientation=tuple(float(v) for v in orientation[env_index]),
-                    ),
-                    current_arm_qpos,
+def make_observation_getter(frames: list[np.ndarray], camera: str) -> tuple[Any, ...]:
+    """Build an observation_getter that captures camera frames as a side effect.
+
+    Returns (observation_getter_fn, state_dict). The state_dict holds the
+    resolved camera key (populated on first call).
+    """
+    state: dict[str, str | None] = {"camera_key": None, "camera_name": None}
+
+    def observation_getter(context: ExecutionContext) -> dict:
+        obs = context.backend.env.capture_observation()
+        if state["camera_key"] is None:
+            cam_name, cam_key = _resolve_camera(obs, camera)
+            if cam_key is None:
+                raise RuntimeError(
+                    f"No usable camera found for '{camera}'. "
+                    f"Available keys: {list(obs.keys())}"
                 )
-                if joint_targets is not None:
-                    arm_aidx = single_env._op_arm_aidx[operator_name]
-                    joint_ctrl[env_index][arm_aidx] = joint_targets
-                needs_step = True
-            else:
-                base_body_pos, base_body_quat_xyzw = (
-                    single_env._eef_in_base_to_base_body_world(
-                        state, position[env_index], orientation[env_index]
-                    )
-                )
-                single_env._write_mocap_pose(state, base_body_pos, base_body_quat_xyzw)
-                needs_update = True
+            state["camera_key"] = cam_key
+            state["camera_name"] = cam_name
+            if cam_name != camera:
+                print(f"Camera '{camera}' not found, using '{cam_name}' instead.")
+        frame = _extract_frame(obs, state["camera_key"])
+        if frame is not None:
+            frames.append(frame)
+        return obs
 
-    joint_ctrl_arr = np.stack(joint_ctrl, axis=0)
-    if ctrl_action is not None:
-        for env_index, single_env in enumerate(env.envs):
-            if single_env.model.nu > 0:
-                low = single_env.model.actuator_ctrlrange[: single_env.model.nu, 0]
-                high = single_env.model.actuator_ctrlrange[: single_env.model.nu, 1]
-                joint_ctrl_arr[env_index, : single_env.model.nu] = np.clip(
-                    joint_ctrl_arr[env_index, : single_env.model.nu], low, high
-                )
-                single_env.data.ctrl[: single_env.model.nu] = joint_ctrl_arr[
-                    env_index, : single_env.model.nu
-                ]
+    return observation_getter
 
-    if needs_step:
-        env.step(joint_ctrl_arr)
-    elif needs_update or ctrl_action is not None:
-        env.update()
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
 
 
 @hydra.main(
@@ -212,79 +231,68 @@ def main(cfg: DictConfig) -> None:
 
     replay_cfg = ReplayConfig.model_validate(raw.pop("replay", {}))
     task_file = prepare_task_file(cfg)
-    runner = TaskRunner().from_config(task_file)
 
     config_name = HydraConfig.get().job.config_name
     demo_name = replay_cfg.demo_name or config_name
     project_root = hydra.utils.get_original_cwd()
-    demo_npz_path = os.path.join(project_root, "assets", "demos", f"{demo_name}.npz")
-    video_dir = os.path.join(project_root, "assets", "videos")
+    demo_npz_path = os.path.join(
+        project_root, "outputs", "records", "demos", f"{demo_name}.npz"
+    )
+    video_dir = os.path.join(project_root, "outputs", "records", "videos")
     os.makedirs(video_dir, exist_ok=True)
     mp4_path = os.path.join(video_dir, f"{demo_name}_replay.mp4")
     gif_path = os.path.join(video_dir, f"{demo_name}_replay.gif")
 
     if not os.path.exists(demo_npz_path):
-        raise FileNotFoundError(f"Demo action file not found: {demo_npz_path}")
+        raise FileNotFoundError(f"Demo file not found: {demo_npz_path}")
 
     demo_data = np.load(demo_npz_path)
-    actions = np.asarray(demo_data["actions"], dtype=np.float32)
-    pose_trace = _load_pose_trace(demo_data) if replay_cfg.mode == "pose" else []
+    if replay_cfg.mode == "pose":
+        demo = _load_pose_demo(demo_data)
+    elif replay_cfg.mode == "ctrl":
+        demo = _load_ctrl_demo(demo_data)
+    else:
+        raise ValueError(
+            f"Unknown replay mode: {replay_cfg.mode!r} (expected 'pose' or 'ctrl')"
+        )
 
     frames: list[np.ndarray] = []
-    resolved_camera: str | None = None
-    resolved_camera_key: str | None = None
+    observation_getter = make_observation_getter(frames, replay_cfg.camera)
 
-    def capture() -> None:
-        backend = runner._context and runner._context.backend
-        if not isinstance(backend, MujocoTaskBackend):
-            return
-        obs = backend.env.capture_observation()
-        nonlocal resolved_camera, resolved_camera_key
-        if resolved_camera_key is None:
-            resolved_camera, resolved_camera_key = _resolve_camera(
-                obs, replay_cfg.camera
-            )
-            if resolved_camera_key is None:
-                raise RuntimeError(
-                    f"No usable camera found for '{replay_cfg.camera}'. "
-                    f"Available keys: {list(obs.keys())}"
-                )
-            if resolved_camera != replay_cfg.camera:
-                print(
-                    f"Camera '{replay_cfg.camera}' not found, using '{resolved_camera}' instead."
-                )
-        data = obs.get(resolved_camera_key, {}).get("data")
-        if data is not None:
-            frame = np.asarray(data, dtype=np.uint8)
-            frames.append(frame[0] if frame.ndim >= 4 else frame)
+    evaluator = PolicyEvaluator(
+        action_applier=action_applier,
+        observation_getter=observation_getter,
+    ).from_config(task_file)
+
+    policy = ReplayPolicy(demo, replay_cfg.mode)
 
     try:
-        print("Reset task for replay")
-        print(runner.reset())
-        backend = runner._context and runner._context.backend
-        if not isinstance(backend, MujocoTaskBackend):
-            raise TypeError("Replay currently only supports MujocoTaskBackend.")
+        policy.reset()
+        update = evaluator.reset()
+        evaluator.get_observation()  # initial frame
+        print(f"Stages: {[s.name for s in task_file.task.stages]}")
 
-        capture()
-        num_steps = len(pose_trace) if replay_cfg.mode == "pose" else len(actions)
-        for i in range(num_steps):
-            action = actions[i] if i < len(actions) else None
-            if replay_cfg.mode == "pose":
-                pose_targets = pose_trace[i]
-                _apply_pose_targets(backend, pose_targets, action)
-                print(
-                    f"Replay step {i}: mode=pose operators={sorted(pose_targets.keys())}"
-                )
-            else:
-                if action is None:
-                    break
-                backend.env.step(action)
-                print(
-                    f"Replay step {i}: mode=ctrl batch={action.shape[0]} action_dim={action.shape[1]}"
-                )
-            capture()
+        step = -1
+        for step in range(policy.num_steps):
+            action = policy.act()
+            update = evaluator.update(action)
+            evaluator.get_observation()  # capture frame
+            print(f"Replay step {step}: {update.stage_name}")
+            if bool(np.all(update.done)):
+                break
+
+        summary = evaluator.summarize(
+            update, max_updates=policy.num_steps, updates_used=step + 1
+        )
+        print(
+            f"\nCompleted {summary.completed_stage_count} stages "
+            f"in {summary.updates_used} steps"
+        )
+        for r in evaluator.records:
+            print(f"  {r.stage_name}: {r.status.value}")
+        print(f"Success: {list(summary.final_success)}")
     finally:
-        runner.close()
+        evaluator.close()
 
     if not frames:
         print("No frames captured during replay.")

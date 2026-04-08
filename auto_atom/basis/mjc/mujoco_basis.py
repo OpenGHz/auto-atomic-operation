@@ -238,6 +238,9 @@ class EnvConfig(BaseModel, frozen=True):
             self.interests[0].extend(self.mask_objects)
         if not self.interests[1]:
             self.interests[1].extend(self.operations)
+        object_names, operation_names = self.interests
+        if len(operation_names) == 1 and len(object_names) > 1:
+            operation_names[:] = operation_names * len(object_names)
         return self
 
     @field_validator("viewer")

@@ -85,7 +85,7 @@
     <!-- Camera matching background GS coordinate frame (table30_02_stack_color_blocks) -->
     <camera name="env1_cam" pos="1.070 0.029 0.747"
             xyaxes="-0.109 0.993 0.038 -0.659 -0.101 0.745" fovy="43.36"/>
-    <camera name="env2_cam" pos="0.488 1.0 0.6"
+    <camera name="env0_cam" pos="0.488 1.0 0.6"
             xyaxes="-0.9994 0.0338 0.0000 -0.0107 -0.3168 0.9484" fovy="43.36"/>
   </worldbody>
 

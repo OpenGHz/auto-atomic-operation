@@ -16,7 +16,7 @@ multiple envs in parallel. Replay data is written to
 
 Extra Hydra overrides:
 
-    python examples/record_demo.py +recorder.camera=env2_cam
+    python examples/record_demo.py +recorder.camera=env0_cam
     python examples/record_demo.py +recorder.fps=15
     python examples/record_demo.py +recorder.gif_width=480
     python examples/record_demo.py +recorder.max_updates=200
@@ -192,7 +192,6 @@ def main(cfg: DictConfig) -> None:
 
     frames_by_env: list[list[np.ndarray]] = []
     low_dim_observations: list[dict[str, dict]] = []
-    action_trace: list[np.ndarray] = []
     update_trace: list[dict] = []
     resolved_camera: str | None = None
     resolved_camera_key: str | None = None
@@ -247,19 +246,6 @@ def main(cfg: DictConfig) -> None:
 
             update = runner.update()
             updates_used += 1
-            backend = runner._context and runner._context.backend
-            if isinstance(backend, MujocoTaskBackend):
-                action_trace.append(
-                    np.stack(
-                        [
-                            np.asarray(
-                                env.data.ctrl[: env.model.nu], dtype=np.float32
-                            ).copy()
-                            for env in backend.env.envs
-                        ],
-                        axis=0,
-                    )
-                )
             update_trace.append(_to_jsonable(asdict(update)))
             capture()
             print(update)
@@ -318,12 +304,7 @@ def main(cfg: DictConfig) -> None:
             )
 
     if rec_cfg.save_demo:
-        action_array = (
-            np.stack(action_trace).astype(np.float32)
-            if action_trace
-            else np.zeros((0, 0), dtype=np.float32)
-        )
-        npz_payload: dict[str, np.ndarray] = {"actions": action_array}
+        npz_payload: dict[str, np.ndarray] = {}
         npz_payload.update(_build_low_dim_npz_payload(low_dim_observations))
         np.savez_compressed(demo_npz_path, **npz_payload)
         with open(demo_json_path, "w", encoding="utf-8") as f:
@@ -339,11 +320,7 @@ def main(cfg: DictConfig) -> None:
                     "num_frames_per_env": [
                         len(env_frames) for env_frames in frames_by_env
                     ],
-                    "num_actions": int(action_array.shape[0]),
                     "batch_size": batch_size,
-                    "action_dim": int(action_array.shape[2])
-                    if action_array.ndim == 3
-                    else 0,
                     "reset_update": _to_jsonable(asdict(reset_update)),
                     "step_updates": update_trace,
                     "low_dim_observations": low_dim_observations,
@@ -355,8 +332,7 @@ def main(cfg: DictConfig) -> None:
                 indent=2,
             )
         print(
-            f"Saved demo data ({len(low_dim_observations)} observations, "
-            f"{len(action_trace)} actions): {demo_npz_path}"
+            f"Saved demo data ({len(low_dim_observations)} observations): {demo_npz_path}"
         )
         print(f"Saved demo metadata: {demo_json_path}")
 

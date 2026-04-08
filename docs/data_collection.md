@@ -47,7 +47,7 @@ python examples/record_demo.py --config-name pick_and_place \
 
 # Use a different camera and higher FPS
 python examples/record_demo.py --config-name cup_on_coaster \
-    +recorder.camera=env2_cam +recorder.fps=30
+    +recorder.camera=env0_cam +recorder.fps=30
 
 # Wider GIF output
 python examples/record_demo.py --config-name stack_color_blocks \
@@ -109,7 +109,7 @@ python examples/replay_demo.py --config-name open_hinge_door \
 
 # Replay from another camera
 python examples/replay_demo.py --config-name cup_on_coaster \
-    +replay.camera=env2_cam
+    +replay.camera=env0_cam
 ```
 
 ## Compare GS Render

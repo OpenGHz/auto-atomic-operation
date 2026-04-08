@@ -63,7 +63,7 @@
     <!-- Camera matching background GS coordinate frame (table30_06_put_cup_on_coaster) -->
     <camera name="env1_cam" pos="1.15 0.022 0.7"
             xyaxes="-0.029 1.000 0.000 -0.488 -0.014 0.872" fovy="43.365"/>
-    <camera name="env2_cam" pos="0.488 1.0 0.6"
+    <camera name="env0_cam" pos="0.488 1.0 0.6"
           xyaxes="-0.9994 0.0338 0.0000 -0.0107 -0.3168 0.9484" fovy="43.365"/>
   </worldbody>
 

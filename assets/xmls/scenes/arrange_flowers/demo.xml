@@ -334,7 +334,7 @@
     <!-- Front camera -->
     <camera name="env1_cam" pos="0 -0.8 0.5" xyaxes="1 0 0 0 0.447 0.894" fovy="45"/>
     <!-- Side camera -->
-    <camera name="env2_cam" pos="0.9 0 0.5" xyaxes="0 1 0 -0.406 0 0.914" fovy="45"/>
+    <camera name="env0_cam" pos="0.9 0 0.5" xyaxes="0 1 0 -0.406 0 0.914" fovy="45"/>
   </worldbody>
 
   <keyframe>

@@ -4,20 +4,27 @@ defaults:
 
 env:
   cameras:
-    - name: front_right
+    - name: env0_cam
       width: 640
       height: 480
       enable_color: true
       enable_depth: true
       enable_mask: false
       enable_heat_map: false
-    - name: front_left
+    - name: env1_cam
       width: 640
       height: 480
       enable_color: true
       enable_depth: true
       enable_mask: false
       enable_heat_map: false
+    # - name: env0_cam
+    #   width: 640
+    #   height: 480
+    #   enable_color: true
+    #   enable_depth: true
+    #   enable_mask: false
+    #   enable_heat_map: false
   viewer:
     lookat: [0.45, 0.0, 0.08]
     distance: 0.8

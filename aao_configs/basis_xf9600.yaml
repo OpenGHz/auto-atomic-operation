@@ -39,7 +39,7 @@ env:
       enable_mask: ${enable_mask}
       enable_heat_map: ${enable_heat_map}
       is_static: true
-    - name: env2_cam
+    - name: env0_cam
       width: ${cam_width}
       height: ${cam_height}
       enable_color: ${enable_color}
