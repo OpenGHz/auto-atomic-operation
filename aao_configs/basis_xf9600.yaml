@@ -4,7 +4,25 @@ defaults:
 
 env:
   cameras:
-    - name: xfg_left_cam
+    # - name: xfg_left_cam
+    #   width: ${cam_width}
+    #   height: ${cam_height}
+    #   enable_color: ${enable_color}
+    #   enable_depth: ${enable_depth}
+    #   enable_mask: ${enable_mask}
+    #   enable_heat_map: ${enable_heat_map}
+    #   parent_frame: eef_pose
+    #   is_static: false
+    # - name: xfg_right_cam
+    #   width: ${cam_width}
+    #   height: ${cam_height}
+    #   enable_color: ${enable_color}
+    #   enable_depth: ${enable_depth}
+    #   enable_mask: ${enable_mask}
+    #   enable_heat_map: ${enable_heat_map}
+    #   parent_frame: eef_pose
+    #   is_static: false
+    - name: xfg_wrist_cam
       width: ${cam_width}
       height: ${cam_height}
       enable_color: ${enable_color}
@@ -13,16 +31,7 @@ env:
       enable_heat_map: ${enable_heat_map}
       parent_frame: eef_pose
       is_static: false
-    - name: xfg_right_cam
-      width: ${cam_width}
-      height: ${cam_height}
-      enable_color: ${enable_color}
-      enable_depth: ${enable_depth}
-      enable_mask: ${enable_mask}
-      enable_heat_map: ${enable_heat_map}
-      parent_frame: eef_pose
-      is_static: false
-    - name: front_cam
+    - name: env1_cam
       width: ${cam_width}
       height: ${cam_height}
       enable_color: ${enable_color}
@@ -30,7 +39,7 @@ env:
       enable_mask: ${enable_mask}
       enable_heat_map: ${enable_heat_map}
       is_static: true
-    - name: side_cam
+    - name: env2_cam
       width: ${cam_width}
       height: ${cam_height}
       enable_color: ${enable_color}

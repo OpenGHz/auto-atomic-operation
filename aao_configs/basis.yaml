@@ -19,7 +19,7 @@ env:
   sim_freq: 600
   update_freq: 30
   cameras:
-    - name: hand_cam
+    - name: wrist_cam
       width: ${cam_width}
       height: ${cam_height}
       enable_color: ${enable_color}
@@ -28,7 +28,7 @@ env:
       enable_heat_map: ${enable_heat_map}
       parent_frame: eef_pose
       is_static: false
-    - name: front_cam
+    - name: env1_cam
       width: ${cam_width}
       height: ${cam_height}
       enable_color: ${enable_color}
@@ -36,7 +36,7 @@ env:
       enable_mask: ${enable_mask}
       enable_heat_map: ${enable_heat_map}
       is_static: true
-    - name: side_cam
+    - name: env2_cam
       width: ${cam_width}
       height: ${cam_height}
       enable_color: ${enable_color}

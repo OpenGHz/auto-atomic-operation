@@ -837,8 +837,8 @@ class UnifiedMujocoEnv(MujocoBasis):
                     for limb, qidx, vidx, aidx in joint_components:
                         if qidx.size == 0 and vidx.size == 0 and aidx.size == 0:
                             continue
-                        for prefix in ("enc", "action"):
-                            obs[f"{prefix}/{limb}/joint_state"] = {
+                        for prefix in ("", "action/"):
+                            obs[f"{prefix}{limb}/joint_state"] = {
                                 "data": {
                                     "position": self.data.qpos[qidx].tolist(),
                                     "velocity": self.data.qvel[vidx].tolist(),
@@ -1025,6 +1025,11 @@ class UnifiedMujocoEnv(MujocoBasis):
         if DataType.CAMERA in self.config.enabled_sensors:
             if structured:
                 info = self.get_info()["cameras"]
+                color_suffix = "video_encoded"
+                depth_suffix = "depth/image_raw"
+            else:
+                color_suffix = "color/image_raw"
+                depth_suffix = "aligned_depth_to_color/image_raw"
             for cam_name, renderer in self._renderers.items():
                 obs_keys = set(obs.keys())
                 cam_id = self._camera_ids[cam_name]
@@ -1036,11 +1041,13 @@ class UnifiedMujocoEnv(MujocoBasis):
                 )
                 renderer.disable_depth_rendering()
                 renderer.disable_segmentation_rendering()
-                obs_cam_name = (
-                    "camera/" + cam_name.rsplit("_", 1)[0] if structured else cam_name
-                )
+                if structured:
+                    # prefix_pos_cam or pos_cam
+                    obs_cam_name = "camera/" + cam_name.split("_")[-2]
+                else:
+                    obs_cam_name = cam_name
                 if spec.enable_color:
-                    obs[f"{obs_cam_name}/color/image_raw"] = {
+                    obs[f"{obs_cam_name}/{color_suffix}"] = {
                         "data": np.asarray(renderer.render(), dtype=np.uint8),
                         "t": t,
                     }
@@ -1049,7 +1056,7 @@ class UnifiedMujocoEnv(MujocoBasis):
                     depth = np.asarray(renderer.render())
                     renderer.disable_depth_rendering()
                     depth[depth > spec.depth_max] = 0.0
-                    obs[f"{obs_cam_name}/aligned_depth_to_color/image_raw"] = {
+                    obs[f"{obs_cam_name}/{depth_suffix}"] = {
                         "data": depth,
                         "t": t,
                     }

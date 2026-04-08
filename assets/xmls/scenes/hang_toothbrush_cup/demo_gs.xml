@@ -195,8 +195,8 @@
     </body>
 
     <!-- Camera matching background GS coordinate frame (table30_04_hang_toothbrush_cup) -->
-    <camera name="front_cam" pos="1.0372 0.0372 0.6834" xyaxes="-0.109 0.993 0.038 -0.6451 -0.1089 0.7563" fovy="43.36"/>
-    <camera name="side_cam" pos="0.488 1.0 0.6" xyaxes="-0.9994 0.0338 0.0000 -0.0107 -0.3168 0.9484" fovy="43.36"/>
+    <camera name="env1_cam" pos="1.0372 0.0372 0.6834" xyaxes="-0.109 0.993 0.038 -0.6451 -0.1089 0.7563" fovy="43.36"/>
+    <camera name="env2_cam" pos="0.488 1.0 0.6" xyaxes="-0.9994 0.0338 0.0000 -0.0107 -0.3168 0.9484" fovy="43.36"/>
   </worldbody>
 
   <keyframe>

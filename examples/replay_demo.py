@@ -27,7 +27,7 @@ from auto_atom.runtime import TaskRunner
 class ReplayConfig(BaseModel):
     demo_name: str | None = Field(default=None)
     mode: str = Field(default="ctrl")
-    camera: str = Field(default="front_cam")
+    camera: str = Field(default="env1_cam")
     fps: int = Field(default=25)
     gif_width: int = Field(default=320)
     save_gif: bool = Field(default=True)

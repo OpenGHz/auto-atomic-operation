@@ -242,11 +242,11 @@
                     <body name="robotiq_base" childclass="2f85" quat="1 0 0 -1" pos="0 0 0.11" gravcomp="1">
                       <inertial mass="0.777441" pos="0 -2.70394e-05 0.0354675" quat="1 -0.00152849 0 0"
                         diaginertia="0.000260285 0.000225381 0.000152708"/>
-                      <body name="hand_cam_body"
+                      <body name="wrist_cam_body"
                         pos="0.0003378 0.068369519 0.055"
                         euler="-2.7 0 3.1416">
-                        <camera name="hand_cam" mode="fixed" fovy="48" resolution="640 480"/>
-                        <site name="hand_cam" pos="0 0 0" euler="3.14159 0 0"/>
+                        <camera name="wrist_cam" mode="fixed" fovy="48" resolution="640 480"/>
+                        <site name="wrist_cam" pos="0 0 0" euler="3.14159 0 0"/>
                       </body>
                       <geom class="visual_gripper" pos="0 0 0.0108" quat="0 0 0 1" mesh="robotiq_base"/>
                       <geom class="visual_gripper" pos="0 0 0.004" quat="0.707107 -0.707107 0 0"   mesh="base_coupling"/>

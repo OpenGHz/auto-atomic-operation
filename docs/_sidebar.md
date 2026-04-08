@@ -41,3 +41,5 @@
 
 - **Migration Notes**
   - [XML / Mesh / GS Migration](skills/xml_mesh_gs_migration_notes.md)
+  - [Docsify / Pages GIF Notes](skills/docsify_github_pages_media_notes.md)
+  - [Docsify Cover Color Notes](skills/docsify_cover_color_notes.md)

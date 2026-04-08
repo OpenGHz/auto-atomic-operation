@@ -25,8 +25,8 @@
       <site name="target_pedestal_site" pos="0 0 0" size="0.004" rgba="1 0 0 0"/>
     </body>
 
-    <camera name="front_cam" pos="0 -0.8 0.5" xyaxes="1 0 0 0 0.447 0.894" fovy="45"/>
-    <camera name="side_cam" pos="0.9 0 0.5" xyaxes="0 1 0 -0.406 0 0.914" fovy="45"/>
+    <camera name="env1_cam" pos="0 -0.8 0.5" xyaxes="1 0 0 0 0.447 0.894" fovy="45"/>
+    <camera name="env2_cam" pos="0.9 0 0.5" xyaxes="0 1 0 -0.406 0 0.914" fovy="45"/>
 
     <body name="source_block" pos="-0.04 0 0.078">
       <freejoint name="source_block_joint"/>

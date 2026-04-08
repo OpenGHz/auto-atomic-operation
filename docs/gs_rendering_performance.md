@@ -58,7 +58,7 @@ obs_per_env = [env.capture_observation() for env in self.envs]
 
 **预估提升**: 取决于静态物体占比，少量物体时收益有限
 
-### 9. 修正 hand_cam 背景缓存
-`_bg_cache` 的 key 是 `(cam_id, width, height)`，但 `hand_cam` 挂载在末端执行器上，每步位置变化。当前实现对移动相机返回过期的背景渲染结果。可将 static camera（`front_cam`、`side_cam`）和 dynamic camera（`hand_cam`）分开处理。
+### 9. 修正 wrist_cam 背景缓存
+`_bg_cache` 的 key 是 `(cam_id, width, height)`，但 `wrist_cam` 挂载在末端执行器上，每步位置变化。当前实现对移动相机返回过期的背景渲染结果。可将 static camera（`env1_cam`、`env2_cam`）和 dynamic camera（`wrist_cam`）分开处理。
 
-**性质**: 正确性修复 + 对 hand_cam 的性能权衡
+**性质**: 正确性修复 + 对 wrist_cam 的性能权衡

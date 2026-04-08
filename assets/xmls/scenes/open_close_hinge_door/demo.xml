@@ -11,9 +11,9 @@
     <geom name="floor" type="plane" size="3 3 0.1" rgba="0.85 0.85 0.85 1"/>
 
     <!-- Front camera: looking from -X toward the cabinet doors -->
-    <camera name="front_cam" pos="-1.2 0 0.9" xyaxes="0 -1 0 0.164 0 0.986" fovy="60"/>
+    <camera name="env1_cam" pos="-1.2 0 0.9" xyaxes="0 -1 0 0.164 0 0.986" fovy="60"/>
     <!-- Side camera: looking from +Y toward the cabinet -->
-    <camera name="side_cam" pos="-0.3 1.5 1.0" xyaxes="-0.998 -0.067 0 0.019 -0.286 0.958" fovy="50"/>
+    <camera name="env2_cam" pos="-0.3 1.5 1.0" xyaxes="-0.998 -0.067 0 0.019 -0.286 0.958" fovy="50"/>
 
     <!-- ===== Cabinet (from DISCOVERSE cabinet_drawers.xml) ===== -->
     <!-- Original position in DISCOVERSE: (0.915, 0.58, 0.01) -->

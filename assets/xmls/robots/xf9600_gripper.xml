@@ -782,6 +782,11 @@
         </body>
       </body>
 
+      <body name="wrist_cam" pos="-0.0675 0 0.0325" euler="1.5708 1.5708 0" gravcomp="1">
+        <camera name="wrist_cam" mode="fixed" fovy="42" resolution="640 352" pos="0 0 0" euler="-0.052359876 0 0"/>
+        <site name="wrist_cam_site" size="0.005" rgba="1 0 0 1" pos="0 0 0" euler="-0.052359876 0 0"/>
+      </body>
+
       <body name="left_cam" pos="0 0 0" quat="1 0 0 0" gravcomp="1">
         <inertial pos="-0.0686069459106828 -0.0250212456995469 0.0329716390391645" quat="1 0 0 0" mass="0.00178859726016835" diaginertia="5.04924129889974e-08 4.18636772588613e-08 4.22336158041563e-08"/>
         <geom name="left_cam_visual" pos="0 0 0" quat="1 0 0 0" type="mesh" mesh="left_cam.STL" material="default_material" class="visual"/>

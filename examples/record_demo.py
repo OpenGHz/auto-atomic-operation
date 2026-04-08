@@ -16,7 +16,7 @@ multiple envs in parallel. Replay data is written to
 
 Extra Hydra overrides:
 
-    python examples/record_demo.py +recorder.camera=side_cam
+    python examples/record_demo.py +recorder.camera=env2_cam
     python examples/record_demo.py +recorder.fps=15
     python examples/record_demo.py +recorder.gif_width=480
     python examples/record_demo.py +recorder.max_updates=200
@@ -38,7 +38,7 @@ from auto_atom.runtime import TaskRunner
 
 
 class RecorderConfig(BaseModel):
-    camera: str = Field(default="front_cam")
+    camera: str = Field(default="env1_cam")
     fps: int = Field(default=25)
     gif_width: int = Field(default=320)
     max_updates: int | None = Field(default=None, ge=0)
