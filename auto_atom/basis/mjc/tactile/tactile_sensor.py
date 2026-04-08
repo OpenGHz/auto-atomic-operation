@@ -252,18 +252,17 @@ class TactileSensorManager:
 
     def _parse_panel_meta(self, prefix):
         tokens = prefix.strip("_").split("_")
-        if len(tokens) >= 2 and tokens[-1] in ("left", "right"):
+        if len(tokens) >= 2:
             arm = "_".join(tokens[:-1])
             finger = tokens[-1]
         else:
             arm = prefix.strip("_")
-            finger = "left"
+            finger = "0"
         return {"arm": arm, "finger": finger}
 
     def _panel_sort_key(self, prefix):
         meta = self.panel_meta[prefix]
-        finger_order = 0 if meta["finger"] == "left" else 1
-        return (meta["arm"], finger_order, prefix)
+        return (meta["arm"], meta["finger"], prefix)
 
     def _build_layout(self):
         self.panel_order = sorted(
@@ -275,9 +274,8 @@ class TactileSensorManager:
             arm = meta["arm"]
             finger = meta["finger"]
             if arm not in rows:
-                rows[arm] = {"left": None, "right": None}
-            if finger in ("left", "right"):
-                rows[arm][finger] = prefix
+                rows[arm] = {}
+            rows[arm][finger] = prefix
 
         self.row_order = sorted(rows.keys())
         self.row_to_panels = rows

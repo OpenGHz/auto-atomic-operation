@@ -1015,13 +1015,12 @@ class UnifiedMujocoEnv(MujocoBasis):
                 for component, data in self._group_tactile_by_component(
                     tactile_data
                 ).items():
-                    key_component = (
-                        component.replace("_", "/", 1) if structured else component
-                    )
-                    obs[f"{key_component}/tactile/point_cloud2"] = {
-                        "data": data,
-                        "t": t,
-                    }
+                    if structured:
+                        key_component = component.replace("_", "/", 1)
+                        key = f"tactile/{key_component}/points"
+                    else:
+                        key = f"{component}/tactile/point_cloud2"
+                    obs[key] = {"data": data, "t": t}
 
         if DataType.CAMERA in self.config.enabled_sensors:
             if structured:
@@ -1174,7 +1173,12 @@ class UnifiedMujocoEnv(MujocoBasis):
                 for idx, name in enumerate(feats)
             ]
 
-            panel_label = panel_prefix.rstrip("_")
+            # Extract panel label
+            panel_label_spl = panel_prefix.rstrip("_").split("_", 1)
+            if len(panel_label_spl) == 2:
+                panel_label = panel_label_spl[1]
+            else:
+                panel_label = panel_prefix
             key = f"{eef_name}_{panel_label}" if panel_label else eef_name
 
             sim_time = self.data.time

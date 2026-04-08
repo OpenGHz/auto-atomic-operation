@@ -11,6 +11,8 @@
   - [Backend Conditions](mujoco_backend_conditions.md)
   - [Custom Backend](custom-backend.md)
   - [Mesh Density & Gravity](mesh_density_gravity_issue.md)
+  - [Gripper Joint Semantics](gripper_joint_semantics.md)
+  - [Tactile Prefix Binding](tactile_prefix_binding.md)
 
 - **IK & Motion Control**
   - [IK Control](ik_control.md)

@@ -728,7 +728,7 @@
 
             <body name="right_tactile" pos="-0.019701 -0.014499 0" quat="0.4999981633974483 0.49999999999662686 -0.49999999999662686 0.5000018366025516" gravcomp="1">
               <inertial pos="7.44670002401661E-05 0.00784747372261869 0.00195692056024735" quat="1 0 0 0" mass="0.000814180541801484" diaginertia="1.77999294668352e-08 8.5777623786915e-09 2.12505762180111e-08"/>
-              <attach model="tactile_sensor" prefix="right_"/>
+              <attach model="tactile_sensor" prefix="finger2_"/>
               <geom name="right_tactile_visual" pos="0 0 0" quat="1 0 0 0" type="mesh" mesh="right_tactile.STL" material="default_material" class="visual"/>
             </body>
           </body>
@@ -775,7 +775,7 @@
 
             <body name="left_tactile" pos="-0.019701 0.014499 0" quat="0.4999981633974483 -0.49999999999662686 0.49999999999662686 0.5000018366025516" gravcomp="1">
               <inertial pos="7.44670002401705E-05 0.00784747372261869 0.00195692056024735" quat="1 0 0 0" mass="0.000814180541801481" diaginertia="1.77999294668351e-08 8.57776237869146e-09 2.1250576218011e-08"/>
-              <attach model="tactile_sensor" prefix="left_"/>
+              <attach model="tactile_sensor" prefix="finger1_"/>
               <geom name="left_tactile_visual" pos="0 0 0" quat="1 0 0 0" type="mesh" mesh="left_tactile.STL" material="default_material" class="visual"/>
             </body>
           </body>

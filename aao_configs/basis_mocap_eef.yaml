@@ -13,4 +13,3 @@ env:
       imu_quat: imu_quat
       pose_sensor_pos: global_gripper_pos
       pose_sensor_quat: global_gripper_quat
-      tactile_prefixes: ["left_", "right_"]
