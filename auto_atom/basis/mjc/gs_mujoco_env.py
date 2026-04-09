@@ -447,7 +447,11 @@ class GSUnifiedMujocoEnv(UnifiedMujocoEnv):
         height: int,
         scene_depth_t: torch.Tensor,
     ) -> tuple[np.ndarray, np.ndarray]:
-        """Render GS masks with occlusion culling, following press_one_button logic."""
+        """Render GS masks with occlusion culling.
+
+        All heavy computation stays on GPU; only the final uint8 masks are
+        transferred to CPU.
+        """
         cam_pos, cam_xmat, fovy = self._compute_camera_batch_inputs(cam_id)
         body_pos, body_quat = self._compute_body_batch_inputs()
         if scene_depth_t.ndim == 5:
@@ -461,13 +465,20 @@ class GSUnifiedMujocoEnv(UnifiedMujocoEnv):
                 "scene_depth_t must be (1,1,H,W,1), (H,W,1), or (H,W), "
                 f"got shape {tuple(scene_depth_t.shape)}"
             )
-        scene_depth_np = scene_depth.detach().cpu().numpy()
-        scene_depth_np = np.nan_to_num(scene_depth_np, nan=0.0, posinf=0.0, neginf=0.0)
-
-        binary_mask = np.zeros((height, width), dtype=np.uint8)
-        heat_map = np.zeros(
-            (height, width, len(self.config.heatmap_operations)), dtype=np.uint8
+        scene_depth = torch.nan_to_num(
+            scene_depth.detach(), nan=0.0, posinf=0.0, neginf=0.0
         )
+
+        dev = scene_depth.device
+        n_heatmap_ops = len(self.config.heatmap_operations)
+        binary_mask_t = torch.zeros((height, width), dtype=torch.bool, device=dev)
+        heat_map_t = torch.zeros(
+            (height, width, n_heatmap_ops), dtype=torch.bool, device=dev
+        )
+
+        heatmap_ops_index = {
+            op: i for i, op in enumerate(self.config.heatmap_operations)
+        }
 
         for object_name, renderer in self._gs_mask_renderers.items():
             gsb = renderer.batch_update_gaussians(body_pos, body_quat)
@@ -475,25 +486,29 @@ class GSUnifiedMujocoEnv(UnifiedMujocoEnv):
                 gsb, cam_pos, cam_xmat, height, width, fovy
             )
 
-            alpha_np = alpha_t[0, 0].detach().cpu().numpy().max(axis=-1)
-            obj_depth_np = obj_depth_t[0, 0, :, :, 0].detach().cpu().numpy()
-            obj_depth_np = np.nan_to_num(obj_depth_np, nan=0.0, posinf=0.0, neginf=0.0)
-            visible_np = alpha_np > self._GS_MASK_ALPHA_THRESHOLD
-            depth_valid_np = (scene_depth_np > 0.0) & (obj_depth_np > 0.0)
-            occluded_np = depth_valid_np & (
-                obj_depth_np > scene_depth_np + self._GS_MASK_DEPTH_EPS
-            )
-            visible_np[occluded_np] = False
-            binary_mask[visible_np] = 1
+            # Stay on GPU: max over channels, clean NaN
+            alpha_max = alpha_t[0, 0].detach().max(dim=-1).values  # (H, W)
+            obj_depth = torch.nan_to_num(
+                obj_depth_t[0, 0, :, :, 0].detach(), nan=0.0, posinf=0.0, neginf=0.0
+            )  # (H, W)
+
+            visible = alpha_max > self._GS_MASK_ALPHA_THRESHOLD
+            depth_valid = (scene_depth > 0.0) & (obj_depth > 0.0)
+            occluded = depth_valid & (obj_depth > scene_depth + self._GS_MASK_DEPTH_EPS)
+            visible = visible & ~occluded
+            binary_mask_t |= visible
 
             operation_name = self._interest_object_operations.get(object_name)
             if operation_name is None:
                 continue
-            if operation_name not in self.config.heatmap_operations:
+            channel_idx = heatmap_ops_index.get(operation_name)
+            if channel_idx is None:
                 continue
-            channel_idx = self.config.heatmap_operations.index(operation_name)
-            heat_map[visible_np, channel_idx] = 1
+            heat_map_t[..., channel_idx] |= visible
 
+        # Single GPU→CPU transfer
+        binary_mask = binary_mask_t.to(torch.uint8).cpu().numpy()
+        heat_map = heat_map_t.to(torch.uint8).cpu().numpy()
         return binary_mask, heat_map
 
     def close(self) -> None:
@@ -707,25 +722,33 @@ class BatchedGSUnifiedMujocoEnv(BatchedUnifiedMujocoEnv):
                 )
                 # fg_rgb: (Nenv, Ncam, H, W, 3)
 
-            # ---- Distribute per-camera outputs ----
+            # ---- Batch-convert color/depth on GPU, then single .cpu() ----
+            # Convert full tensors once on GPU before slicing per camera,
+            # to avoid repeated per-camera GPU→CPU transfers.
+            color_src = full_rgb if full_rgb is not None else fg_rgb
+            color_np = None
+            if color_src is not None and self.config.to_numpy:
+                color_np = (
+                    torch.clamp(color_src, 0.0, 1.0)
+                    .mul(255)
+                    .to(torch.uint8)
+                    .cpu()
+                    .numpy()
+                )  # (Nenv, Ncam, H, W, 3)
+            depth_np = None
+            if full_depth is not None and self.config.to_numpy:
+                depth_np = full_depth[..., 0].cpu().numpy()  # (Nenv, Ncam, H, W)
+
             kc = self._key_creator
             for cam_idx, cam_name in enumerate(cam_names):
                 spec = self._camera_specs[cam_name]
                 # color
-                has_color = True
-                if cam_name in gs_color_set and full_rgb is not None:
-                    rgb = full_rgb[:, cam_idx]  # (Nenv, H, W, 3)
-                    rgb = torch.clamp(rgb, 0.0, 1.0).mul(255).to(torch.uint8)
-                    if self.config.to_numpy:
-                        rgb = rgb.cpu().numpy()
-                elif cam_name in gs_color_set and fg_rgb is not None:
-                    rgb = fg_rgb[:, cam_idx]
-                    rgb = torch.clamp(rgb, 0.0, 1.0).mul(255).to(torch.uint8)
-                    if self.config.to_numpy:
-                        rgb = rgb.cpu().numpy()
-                else:
-                    has_color = False
-                if has_color:
+                if cam_name in gs_color_set and color_src is not None:
+                    if color_np is not None:
+                        rgb = color_np[:, cam_idx]
+                    else:
+                        rgb = color_src[:, cam_idx]
+                        rgb = torch.clamp(rgb, 0.0, 1.0).mul(255).to(torch.uint8)
                     obs[kc.create_color_key(cam_name)] = {
                         "data": rgb,
                         "t": timestamps,
@@ -733,11 +756,11 @@ class BatchedGSUnifiedMujocoEnv(BatchedUnifiedMujocoEnv):
 
                 # depth
                 if cam_name in gs_depth_set and full_depth is not None:
-                    depth = full_depth[:, cam_idx, :, :, 0]  # (Nenv, H, W)
-                    if self.config.to_numpy:
-                        depth = depth.cpu().numpy()
+                    if depth_np is not None:
+                        depth = depth_np[:, cam_idx]
                         depth[depth > spec.depth_max] = 0.0
                     else:
+                        depth = full_depth[:, cam_idx, :, :, 0]
                         depth = torch.where(
                             depth > spec.depth_max,
                             torch.zeros_like(depth),
@@ -940,6 +963,9 @@ class BatchedGSUnifiedMujocoEnv(BatchedUnifiedMujocoEnv):
     ) -> tuple[np.ndarray, np.ndarray]:
         """Render GS masks for all envs × all cameras with occlusion culling.
 
+        All heavy computation (max, nan_to_num, comparisons) stays on GPU;
+        only the final uint8 masks are transferred to CPU.
+
         Parameters
         ----------
         scene_depth_t : (Nenv, Ncam, H, W, 1)
@@ -961,14 +987,23 @@ class BatchedGSUnifiedMujocoEnv(BatchedUnifiedMujocoEnv):
                 f"got shape {tuple(scene_depth_t.shape)}"
             )
         Ncam = scene_depth.shape[1]
-        scene_depth_np = scene_depth.detach().cpu().numpy()
-        scene_depth_np = np.nan_to_num(scene_depth_np, nan=0.0, posinf=0.0, neginf=0.0)
-
-        binary_mask = np.zeros((B, Ncam, height, width), dtype=np.uint8)
-        heat_map = np.zeros(
-            (B, Ncam, height, width, len(self.config.heatmap_operations)),
-            dtype=np.uint8,
+        scene_depth = torch.nan_to_num(
+            scene_depth.detach(), nan=0.0, posinf=0.0, neginf=0.0
         )
+
+        n_heatmap_ops = len(self.config.heatmap_operations)
+        dev = scene_depth.device
+        binary_mask_t = torch.zeros(
+            (B, Ncam, height, width), dtype=torch.bool, device=dev
+        )
+        heat_map_t = torch.zeros(
+            (B, Ncam, height, width, n_heatmap_ops), dtype=torch.bool, device=dev
+        )
+
+        # Pre-build per-object → (env_idx, channel_idx) mapping to avoid
+        # per-env Python loops inside the hot path.
+        heatmap_ops_list = self.config.heatmap_operations
+        heatmap_ops_index = {op: i for i, op in enumerate(heatmap_ops_list)}
 
         for object_name, renderer in self._gs_mask_renderers.items():
             gsb = renderer.batch_update_gaussians(body_pos, body_quat)
@@ -976,28 +1011,31 @@ class BatchedGSUnifiedMujocoEnv(BatchedUnifiedMujocoEnv):
                 gsb, cam_pos, cam_xmat, height, width, fovy
             )
             # alpha_t: (B, Ncam, H, W, 3), obj_depth_t: (B, Ncam, H, W, 1)
-            alpha_np = alpha_t.detach().cpu().numpy().max(axis=-1)  # (B, Ncam, H, W)
-            obj_depth_np = obj_depth_t[..., 0].detach().cpu().numpy()  # (B, Ncam, H, W)
-            obj_depth_np = np.nan_to_num(obj_depth_np, nan=0.0, posinf=0.0, neginf=0.0)
+            # max over channels, stay on GPU
+            alpha_max = alpha_t.detach().max(dim=-1).values  # (B, Ncam, H, W)
+            obj_depth = torch.nan_to_num(
+                obj_depth_t[..., 0].detach(), nan=0.0, posinf=0.0, neginf=0.0
+            )  # (B, Ncam, H, W)
 
-            visible_np = alpha_np > self._GS_MASK_ALPHA_THRESHOLD
-            depth_valid_np = (scene_depth_np > 0.0) & (obj_depth_np > 0.0)
-            occluded_np = depth_valid_np & (
-                obj_depth_np > scene_depth_np + self._GS_MASK_DEPTH_EPS
-            )
-            visible_np[occluded_np] = False
-            binary_mask[visible_np] = 1
+            visible = alpha_max > self._GS_MASK_ALPHA_THRESHOLD
+            depth_valid = (scene_depth > 0.0) & (obj_depth > 0.0)
+            occluded = depth_valid & (obj_depth > scene_depth + self._GS_MASK_DEPTH_EPS)
+            visible = visible & ~occluded
+            binary_mask_t |= visible
 
+            # Heat-map: gather which (env_idx, channel_idx) pairs need this object
             for env_idx, env in enumerate(self.envs):
                 operation_name = env._interest_object_operations.get(object_name)
                 if operation_name is None:
                     continue
-                if operation_name not in self.config.heatmap_operations:
+                channel_idx = heatmap_ops_index.get(operation_name)
+                if channel_idx is None:
                     continue
-                channel_idx = self.config.heatmap_operations.index(operation_name)
-                # visible_np[env_idx]: (Ncam, H, W) bool
-                heat_map[env_idx, ..., channel_idx][visible_np[env_idx]] = 1
+                heat_map_t[env_idx, ..., channel_idx] |= visible[env_idx]
 
+        # Single GPU→CPU transfer of final compact results
+        binary_mask = binary_mask_t.to(torch.uint8).cpu().numpy()
+        heat_map = heat_map_t.to(torch.uint8).cpu().numpy()
         return binary_mask, heat_map
 
     # ------------------------------------------------------------------
