@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import threading
+import time
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
@@ -245,6 +247,10 @@ class PolicyEvaluator:
         self._env_states: List[_EnvRuntimeState] = []
         self._policy_states: List[Optional[_PolicyStageState]] = []
         self._has_reset: np.ndarray = np.zeros(0, dtype=bool)
+        self._sim_lock: threading.Lock = threading.Lock()
+        self._sim_thread: Optional[threading.Thread] = None
+        self._sim_stop_event: Optional[threading.Event] = None
+        self._pending_sim_loop_freq: float = 0.0
 
     @property
     def records(self) -> List[ExecutionRecord]:
@@ -258,10 +264,14 @@ class PolicyEvaluator:
     def stage_plans(self) -> List[StageExecutionPlan]:
         return list(self._plan)
 
-    def from_yaml(self, path: str | Path) -> "PolicyEvaluator":
-        return self.from_config(load_task_file(path))
+    def from_yaml(
+        self, path: str | Path, sim_loop_frequency: float = 0.0
+    ) -> "PolicyEvaluator":
+        return self.from_config(load_task_file(path), sim_loop_frequency)
 
-    def from_config(self, config: TaskFileConfig) -> "PolicyEvaluator":
+    def from_config(
+        self, config: TaskFileConfig, sim_loop_frequency: float = 0.0
+    ) -> "PolicyEvaluator":
         backend = config.backend(config.task, config.task_operators)
         if not isinstance(backend, SceneBackend):
             raise TypeError(
@@ -280,12 +290,14 @@ class PolicyEvaluator:
         self._policy_states = [None for _ in range(backend.batch_size)]
         self._has_reset = np.zeros(backend.batch_size, dtype=bool)
         self._records = []
+        self._pending_sim_loop_freq = float(sim_loop_frequency)
         return self
 
     def reset(self, env_mask: Optional[np.ndarray] = None) -> TaskUpdate:
         context = self._require_context()
         mask = self._normalize_mask(env_mask)
-        context.backend.reset(mask)
+        with self._sim_lock:
+            context.backend.reset(mask)
         for env_index, enabled in enumerate(mask):
             if enabled:
                 self._env_states[env_index] = _EnvRuntimeState()
@@ -295,16 +307,19 @@ class PolicyEvaluator:
                 self._policy_states[env_index] = None
         self._has_reset[mask] = True
         # self._set_interest_focus()
+        if self._pending_sim_loop_freq > 0 and not self.sim_loop_running:
+            self.start_sim_loop(frequency=self._pending_sim_loop_freq)
         return self._build_task_update()
 
     def get_observation(self) -> Any:
         context = self._require_context()
-        if self.observation_getter is not None:
-            return self.observation_getter(context)
-        backend = context.backend
-        env = getattr(backend, "env", None)
-        if env is not None and hasattr(env, "capture_observation"):
-            return env.capture_observation()
+        with self._sim_lock:
+            if self.observation_getter is not None:
+                return self.observation_getter(context)
+            backend = context.backend
+            env = getattr(backend, "env", None)
+            if env is not None and hasattr(env, "capture_observation"):
+                return env.capture_observation()
         raise RuntimeError(
             "No observation_getter was provided and backend.env does not expose "
             "capture_observation()."
@@ -314,20 +329,22 @@ class PolicyEvaluator:
         context = self._require_context()
         mask = self._normalize_mask(env_mask)
         self._validate_update_mask(mask)
-        feedback = self.action_applier(context, action, mask)
-        for env_index, enabled in enumerate(mask):
-            if not enabled or self._env_states[env_index].done:
-                continue
-            self._update_env(
-                env_index,
-                self._env_states[env_index],
-                context,
-                action_feedback=feedback,
-            )
+        with self._sim_lock:
+            feedback = self.action_applier(context, action, mask)
+            for env_index, enabled in enumerate(mask):
+                if not enabled or self._env_states[env_index].done:
+                    continue
+                self._update_env(
+                    env_index,
+                    self._env_states[env_index],
+                    context,
+                    action_feedback=feedback,
+                )
         # self._set_interest_focus()
         return self._build_task_update()
 
     def close(self) -> None:
+        self.stop_sim_loop()
         if self._context is None:
             return
         self._context.backend.teardown()
@@ -337,6 +354,76 @@ class PolicyEvaluator:
         self._env_states = []
         self._policy_states = []
         self._has_reset = np.zeros(0, dtype=bool)
+
+    # ------------------------------------------------------------------
+    # Background simulation loop
+    # ------------------------------------------------------------------
+
+    @property
+    def sim_lock(self) -> threading.Lock:
+        """Lock held by the background sim loop during each physics step.
+
+        Acquire this when reading/writing simulation state from the main
+        thread while the loop is running.
+        """
+        return self._sim_lock
+
+    def start_sim_loop(self, frequency: float = 60.0) -> None:
+        """Start a background thread that advances physics at *frequency* Hz.
+
+        Each iteration calls ``backend.env.update()`` which steps MuJoCo
+        physics using whatever control values (``data.ctrl``) were last set,
+        so the simulation keeps running without explicit ``update()`` calls.
+
+        Parameters
+        ----------
+        frequency:
+            Target update rate in Hz (default 60).
+        """
+        if self._sim_thread is not None:
+            raise RuntimeError("Simulation loop is already running.")
+        context = self._require_context()
+        env = context.backend.env
+        if not hasattr(env, "update"):
+            raise RuntimeError(
+                "Backend env does not expose an update() method. "
+                "Background simulation loop is not supported for this backend."
+            )
+        self._sim_stop_event = threading.Event()
+        self._sim_thread = threading.Thread(
+            target=self._sim_loop_fn,
+            args=(env, frequency),
+            daemon=True,
+        )
+        self._sim_thread.start()
+
+    def stop_sim_loop(self) -> None:
+        """Stop the background simulation loop (no-op if not running)."""
+        if self._sim_thread is None:
+            return
+        assert self._sim_stop_event is not None
+        self._sim_stop_event.set()
+        self._sim_thread.join()
+        self._sim_thread = None
+        self._sim_stop_event = None
+
+    @property
+    def sim_loop_running(self) -> bool:
+        """Return whether the background simulation loop is active."""
+        return self._sim_thread is not None and self._sim_thread.is_alive()
+
+    def _sim_loop_fn(self, env: Any, frequency: float) -> None:
+        """Background thread target: step physics at the requested rate."""
+        assert self._sim_stop_event is not None
+        dt = 1.0 / frequency
+        while not self._sim_stop_event.is_set():
+            t0 = time.monotonic()
+            with self._sim_lock:
+                env.update()
+            elapsed = time.monotonic() - t0
+            remaining = dt - elapsed
+            if remaining > 0:
+                self._sim_stop_event.wait(remaining)
 
     def summarize(
         self,

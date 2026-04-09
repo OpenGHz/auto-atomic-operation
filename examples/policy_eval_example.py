@@ -146,7 +146,7 @@ def main() -> None:
     evaluator = PolicyEvaluator(
         action_applier=action_applier,
         observation_getter=observation_getter,
-    ).from_config(task_file)
+    ).from_config(task_file, 10)
 
     max_updates = len(demo["position"]) + 50
     try:
