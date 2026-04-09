@@ -40,7 +40,7 @@ def _parse_args(argv: list[str]) -> tuple[str, int, bool, list[str]]:
     if do_profile:
         args.remove("--profile")
 
-    config_name = "press_three_buttons_gs"
+    config_name = "cup_on_coaster_gs"
     iterations = 10
     overrides: list[str] = []
 
@@ -63,7 +63,7 @@ CONFIG_NAME, N, do_profile, overrides = _parse_args(sys.argv[1:])
 # User overrides can still override these (last wins in Hydra).
 bench_defaults = [
     "+env.viewer.disable=true",
-    "+env.to_numpy=false",
+    "+env.to_numpy=true",
 ]
 overrides = bench_defaults + overrides
 
