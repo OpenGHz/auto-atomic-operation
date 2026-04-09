@@ -207,6 +207,15 @@ class SceneBackend(ABC):
     def is_operator_grasping(self, operator_name: str) -> np.ndarray:
         """Return whether the operator is currently grasping any object."""
 
+    @property
+    def dt_per_update(self) -> float:
+        """Simulation time advanced per update() call, in seconds.
+
+        Backends that track physics time should override this.
+        Returns 0.0 by default (unknown).
+        """
+        return 0.0
+
     def is_object_displaced(
         self,
         object_name: str,
@@ -324,8 +333,10 @@ class ExecutionSummary:
     final_done: np.ndarray
     final_success: np.ndarray
     elapsed_time_sec: float = 0.0
+    sim_time_sec: float = 0.0
     env_completion_steps: Optional[np.ndarray] = None
     env_completion_time_sec: Optional[np.ndarray] = None
+    env_completion_sim_time_sec: Optional[np.ndarray] = None
     completed_stage_info: Dict[str, List[Optional[str]]] = field(default_factory=dict)
     records: List[ExecutionRecord] = field(default_factory=list)
 
@@ -587,6 +598,7 @@ class TaskRunner:
         updates_used: int = 0,
         elapsed_time_sec: float = 0.0,
     ) -> ExecutionSummary:
+        dt = self._context.backend.dt_per_update if self._context else 0.0
         return _build_execution_summary(
             update=update or self._build_task_update(),
             records=self._records,
@@ -594,6 +606,7 @@ class TaskRunner:
             max_updates=max_updates,
             updates_used=updates_used,
             elapsed_time_sec=elapsed_time_sec,
+            sim_time_sec=updates_used * dt,
         )
 
     def from_yaml(self, path: str | Path) -> "TaskRunner":
@@ -1507,6 +1520,7 @@ def _build_execution_summary(
     max_updates: Optional[int],
     updates_used: int,
     elapsed_time_sec: float = 0.0,
+    sim_time_sec: float = 0.0,
 ) -> ExecutionSummary:
     batch_size = len(update.stage_name)
     completed_stage_count = np.zeros(batch_size, dtype=np.int64)
@@ -1518,6 +1532,7 @@ def _build_execution_summary(
         max_updates=max_updates,
         updates_used=updates_used,
         elapsed_time_sec=elapsed_time_sec,
+        sim_time_sec=sim_time_sec,
         completed_stage_count=completed_stage_count,
         final_stage_index=np.asarray(update.stage_index, dtype=np.int64),
         final_stage_name=list(update.stage_name),

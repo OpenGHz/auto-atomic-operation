@@ -636,6 +636,11 @@ class MujocoTaskBackend(SceneBackend):
     def batch_size(self) -> int:
         return self.env.batch_size
 
+    @property
+    def dt_per_update(self) -> float:
+        e = self.env.envs[0]
+        return e.model.opt.timestep * e._n_substeps
+
     def setup(self, config: AutoAtomConfig) -> None:
         for operator in self.operator_handlers.values():
             operator.home()

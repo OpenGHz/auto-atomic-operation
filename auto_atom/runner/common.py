@@ -112,6 +112,14 @@ def run_example_rounds(
         )
         summary.env_completion_steps = env_completion_steps
         summary.env_completion_time_sec = env_completion_time_sec
+        if summary.sim_time_sec > 0 and summary.updates_used > 0:
+            dt = summary.sim_time_sec / summary.updates_used
+            sim_times = np.where(
+                env_completion_steps >= 0,
+                env_completion_steps.astype(np.float64) * dt,
+                np.nan,
+            )
+            summary.env_completion_sim_time_sec = sim_times
         summary.completed_stage_info = _group_completed_stage_info(summary)
 
         print()
@@ -161,6 +169,10 @@ def print_final_summary(round_summaries: Sequence[ExecutionSummary]) -> None:
             "completion_time": _format_optional_time_list(
                 summary.env_completion_time_sec
             ),
+            "completion_sim_time": _format_optional_time_list(
+                summary.env_completion_sim_time_sec
+            ),
+            "sim_time": _format_sim_time_stats(summary.env_completion_sim_time_sec),
             "completed_stages": summary.completed_stage_count.tolist(),
             "final_stage": summary.final_stage_name,
             "final_success": summary.final_success.tolist(),
@@ -259,6 +271,18 @@ def _format_optional_time_list(values: Optional[np.ndarray]) -> List[Optional[st
         else:
             result.append(f"{float(value):.3f}s")
     return result
+
+
+def _format_sim_time_stats(values: Optional[np.ndarray]) -> str:
+    if values is None:
+        return "N/A"
+    valid = np.asarray(values, dtype=np.float64)
+    valid = valid[~np.isnan(valid)]
+    if len(valid) == 0:
+        return "N/A"
+    if len(valid) == 1:
+        return f"{valid[0]:.3f}s"
+    return f"min={np.min(valid):.3f}s, max={np.max(valid):.3f}s, mean={np.mean(valid):.3f}s"
 
 
 def _extract_failure_reason(details: object) -> Optional[str]:
