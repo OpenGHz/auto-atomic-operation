@@ -14,15 +14,12 @@ Usage::
 """
 
 from __future__ import annotations
-
-import argparse
 from pathlib import Path
 from typing import Any
-
-import numpy as np
-
 from auto_atom import TaskUpdate
 from auto_atom.ipc import RemotePolicyEvaluator
+import argparse
+import numpy as np
 
 
 def load_demo(path: Path) -> dict:
@@ -42,50 +39,26 @@ def load_demo(path: Path) -> dict:
     }
 
 
-def _reshape_series(
-    values: np.ndarray, item_width: int, batch_size: int, name: str
-) -> np.ndarray:
-    if values.ndim != 2:
-        raise ValueError(
-            f"Expected {name} demo array with shape (T, N), got {values.shape}."
-        )
-    total_width = values.shape[1]
-    if total_width % item_width != 0:
-        raise ValueError(
-            f"{name} width {total_width} is not divisible by item width {item_width}."
-        )
+def normalize_demo_for_batch(
+    demo: dict[str, np.ndarray], batch_size: int
+) -> dict[str, np.ndarray]:
+    """Slice a (T, B_rec, dim) demo to match the evaluator batch_size.
 
-    recorded_batch_size = total_width // item_width
+    Returns (T, B, dim) arrays, or (T, dim) when batch_size == 1.
+    """
+    position = demo["position"]  # (T, B_rec, 3)
+    orientation = demo["orientation"]  # (T, B_rec, 4)
+    gripper = demo["gripper"]  # (T, B_rec, grip_dof)
+
+    recorded_batch_size = position.shape[1]
     if batch_size > recorded_batch_size:
         raise ValueError(
             f"Demo recorded with batch_size={recorded_batch_size}, "
             f"but evaluator requires batch_size={batch_size}."
         )
 
-    reshaped = values.reshape(values.shape[0], recorded_batch_size, item_width)
-    return reshaped[:, :batch_size, :]
-
-
-def normalize_demo_for_batch(
-    demo: dict[str, np.ndarray], batch_size: int
-) -> dict[str, np.ndarray]:
-    position = _reshape_series(demo["position"], 3, batch_size, "position")
-    orientation = _reshape_series(demo["orientation"], 4, batch_size, "orientation")
-
-    gripper = demo["gripper"]
-    if gripper.ndim != 2:
-        raise ValueError(
-            f"Expected gripper demo array with shape (T, N), got {gripper.shape}."
-        )
-    recorded_batch_size = position.shape[1]
-    full_recorded_batch_size = demo["position"].shape[1] // 3
-    if gripper.shape[1] % full_recorded_batch_size != 0:
-        raise ValueError(
-            f"gripper width {gripper.shape[1]} is incompatible with "
-            f"recorded batch_size={full_recorded_batch_size}."
-        )
-    gripper_dof = gripper.shape[1] // full_recorded_batch_size
-    gripper = gripper.reshape(gripper.shape[0], full_recorded_batch_size, gripper_dof)
+    position = position[:, :batch_size, :]
+    orientation = orientation[:, :batch_size, :]
     gripper = gripper[:, :batch_size, :]
 
     if batch_size == 1:
@@ -125,7 +98,7 @@ class RecordedDemoPolicy:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Remote policy evaluation client")
-    parser.add_argument("--config-name", default="press_three_buttons")
+    parser.add_argument("--config-name", default="press_three_buttons_gs")
     parser.add_argument(
         "--demo-path",
         type=Path,
@@ -149,7 +122,9 @@ def main() -> None:
         )
 
     evaluator = RemotePolicyEvaluator(host=args.host, port=args.port)
-    evaluator.from_config(config_name, overrides=["env.batch_size=1"])
+    evaluator.from_config(
+        config_name, overrides=["env.batch_size=1"], sim_loop_frequency=10.0
+    )
     demo = normalize_demo_for_batch(load_demo(demo_path), evaluator.batch_size)
     print(f"Loaded {len(demo['position'])} steps from {demo_path}")
 

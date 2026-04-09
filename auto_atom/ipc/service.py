@@ -97,16 +97,17 @@ def create_service(
         def exposed_ping(self) -> Dict[str, Any]:
             return {"status": "ok", "initialized": self._evaluator is not None}
 
-        def exposed_from_yaml(self, path: str) -> None:
+        def exposed_from_yaml(self, path: str, sim_loop_frequency: float = 0.0) -> None:
             self._evaluator = PolicyEvaluator(
                 action_applier=_action_applier,
                 observation_getter=_observation_getter,
-            ).from_yaml(path)
+            ).from_yaml(path, sim_loop_frequency)
 
         def exposed_from_config(
             self,
             config_name: str,
             overrides: Optional[List[str]] = None,
+            sim_loop_frequency: float = 0.0,
         ) -> None:
             task_file = load_task_file_hydra(
                 config_name, overrides=list(overrides or [])
@@ -114,7 +115,7 @@ def create_service(
             self._evaluator = PolicyEvaluator(
                 action_applier=_action_applier,
                 observation_getter=_observation_getter,
-            ).from_config(task_file)
+            ).from_config(task_file, sim_loop_frequency)
 
         def exposed_close(self) -> None:
             if self._evaluator is not None:

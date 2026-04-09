@@ -13,7 +13,6 @@ Examples:
 
 from __future__ import annotations
 
-import json
 import os
 from typing import Any, Optional
 
@@ -87,91 +86,37 @@ def _load_ctrl_demo(demo_data: np.lib.npyio.NpzFile) -> dict[str, np.ndarray]:
     return {"ctrl": ctrl}
 
 
-def _reshape_series(
-    values: np.ndarray, item_width: int, batch_size: int, name: str
-) -> np.ndarray:
-    if values.ndim == 3:
-        # Already (T, B_rec, dim) from new recording format.
-        if values.shape[2] != item_width:
-            raise ValueError(
-                f"{name} has dim={values.shape[2]}, expected {item_width}."
-            )
-        recorded_batch_size = values.shape[1]
-    elif values.ndim == 2:
-        # Legacy flat (T, B_rec * dim) format.
-        total_width = values.shape[1]
-        if total_width % item_width != 0:
-            raise ValueError(
-                f"{name} width {total_width} is not divisible by item width {item_width}."
-            )
-        recorded_batch_size = total_width // item_width
-        values = values.reshape(values.shape[0], recorded_batch_size, item_width)
-    else:
-        raise ValueError(
-            f"Expected {name} demo array with 2 or 3 dims, got {values.shape}."
-        )
-
-    if batch_size > recorded_batch_size:
-        raise ValueError(
-            f"Demo recorded with batch_size={recorded_batch_size}, "
-            f"but replay requires batch_size={batch_size}."
-        )
-    return values[:, :batch_size, :]
-
-
 def normalize_demo_for_batch(
     demo: dict[str, np.ndarray],
     batch_size: int,
     mode: str,
-    recorded_batch_size: int | None = None,
 ) -> dict[str, np.ndarray]:
+    """Slice a (T, B_rec, dim) demo to match the replay batch_size.
+
+    Returns (T, B, dim) arrays, or (T, dim) when batch_size == 1.
+    """
     if mode == "pose":
-        position = _reshape_series(demo["position"], 3, batch_size, "position")
-        orientation = _reshape_series(demo["orientation"], 4, batch_size, "orientation")
+        position = demo["position"]  # (T, B_rec, 3)
+        orientation = demo["orientation"]  # (T, B_rec, 4)
+        rec_bs = position.shape[1]
+        if batch_size > rec_bs:
+            raise ValueError(
+                f"Demo recorded with batch_size={rec_bs}, "
+                f"but replay requires batch_size={batch_size}."
+            )
+        position = position[:, :batch_size, :]
+        orientation = orientation[:, :batch_size, :]
         result: dict[str, np.ndarray] = {
             "position": position[:, 0, :] if batch_size == 1 else position,
             "orientation": orientation[:, 0, :] if batch_size == 1 else orientation,
         }
         if "gripper" in demo:
-            gripper = np.asarray(demo["gripper"], dtype=np.float32)
-            if gripper.ndim == 3:
-                gripper_dof = gripper.shape[2]
-            elif gripper.ndim == 2:
-                # Infer recorded_batch_size from the already-reshaped position.
-                rec_bs = position.shape[1]
-                if gripper.shape[1] % rec_bs != 0:
-                    raise ValueError(
-                        f"gripper width {gripper.shape[1]} is incompatible with "
-                        f"recorded batch_size={rec_bs}."
-                    )
-                gripper_dof = gripper.shape[1] // rec_bs
-                gripper = gripper.reshape(gripper.shape[0], rec_bs, gripper_dof)
-            else:
-                raise ValueError(
-                    f"Expected gripper demo array with 2 or 3 dims, got {gripper.shape}."
-                )
-            gripper = gripper[:, :batch_size, :]
+            gripper = demo["gripper"][:, :batch_size, :]
             result["gripper"] = gripper[:, 0, :] if batch_size == 1 else gripper
         return result
 
-    ctrl = np.asarray(demo["ctrl"], dtype=np.float32)
-    if ctrl.ndim == 3:
-        rec_bs = ctrl.shape[1]
-    elif ctrl.ndim == 2:
-        if recorded_batch_size is None:
-            recorded_batch_size = batch_size
-        rec_bs = recorded_batch_size
-        if ctrl.shape[1] % rec_bs != 0:
-            raise ValueError(
-                f"ctrl width {ctrl.shape[1]} is incompatible with recorded batch_size="
-                f"{rec_bs}."
-            )
-        ctrl_width = ctrl.shape[1] // rec_bs
-        ctrl = ctrl.reshape(ctrl.shape[0], rec_bs, ctrl_width)
-    else:
-        raise ValueError(
-            f"Expected ctrl demo array with 2 or 3 dims, got {ctrl.shape}."
-        )
+    ctrl = demo["ctrl"]  # (T, B_rec, ctrl_dim)
+    rec_bs = ctrl.shape[1]
     if batch_size > rec_bs:
         raise ValueError(
             f"Demo recorded with batch_size={rec_bs}, "
@@ -365,17 +310,10 @@ def main(cfg: DictConfig) -> None:
         action_applier=action_applier,
         observation_getter=observation_getter,
     ).from_config(task_file)
-    recorded_batch_size = None
-    if os.path.exists(demo_json_path):
-        with open(demo_json_path, "r", encoding="utf-8") as f:
-            recorded_batch_size = json.load(f).get("batch_size")
-        if recorded_batch_size is not None:
-            recorded_batch_size = int(recorded_batch_size)
     demo = normalize_demo_for_batch(
         demo,
         batch_size=evaluator.batch_size,
         mode=replay_cfg.mode,
-        recorded_batch_size=recorded_batch_size,
     )
 
     policy = ReplayPolicy(demo, replay_cfg.mode)

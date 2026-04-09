@@ -55,7 +55,7 @@ def load_demo(path: Path) -> dict:
     ori = arrays["action/arm/pose/orientation"]  # (T, B, 4)
     grip = arrays["action/gripper/joint_state/position"]  # (T, B, 1)
 
-    batch_size = pos.shape[1] if pos.ndim == 3 else 1
+    batch_size = pos.shape[1]
     return {
         "position": pos,  # (T, B, 3)
         "orientation": ori,  # (T, B, 4)

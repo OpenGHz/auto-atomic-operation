@@ -56,9 +56,11 @@ class RemotePolicyEvaluator:
 
     # ── lifecycle ────────────────────────────────────────────────────
 
-    def from_yaml(self, path: str) -> "RemotePolicyEvaluator":
+    def from_yaml(
+        self, path: str, sim_loop_frequency: float = 0.0
+    ) -> "RemotePolicyEvaluator":
         t0 = time.perf_counter()
-        self._conn.root.from_yaml(str(path))
+        self._conn.root.from_yaml(str(path), sim_loop_frequency)
         logger.info("from_yaml(%s) done in %.3fs", path, time.perf_counter() - t0)
         return self
 
@@ -66,9 +68,10 @@ class RemotePolicyEvaluator:
         self,
         config_name: str,
         overrides: Optional[List[str]] = None,
+        sim_loop_frequency: float = 0.0,
     ) -> "RemotePolicyEvaluator":
         t0 = time.perf_counter()
-        self._conn.root.from_config(config_name, overrides or [])
+        self._conn.root.from_config(config_name, overrides or [], sim_loop_frequency)
         logger.info(
             "from_config(%s, %s) done in %.3fs",
             config_name,
