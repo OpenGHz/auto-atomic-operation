@@ -159,18 +159,46 @@ def write_analysis(
     lines.append(f"- config_name: `{manifest['config_name']}`")
     lines.append(f"- batch_sizes: `{manifest['batch_sizes']}`")
     lines.append("")
+    lines.append(
+        "> 说明：task-level `loop_frequency_hz` 是整个 batch 的循环频率，"
+        "不是单个 env 的观测延迟。"
+    )
+    lines.append(
+        "> 对于这个 GS 任务，`batch_size=1` 和 `batch_size=2` 都走同一个 "
+        "`BatchedGSUnifiedMujocoEnv` 观测实现；差别在于 batched renderer 的输入规模不同，"
+        "因此 `batch_size=2` 的 batch loop Hz 高于 `batch_size=1` 仍然可能成立。"
+    )
+    lines.append("")
 
-    lines.append("## Task-Level Loop Frequency")
+    lines.append("## Task-Level Batch Loop Frequency")
     for only_item, obs_item in zip(task_only, task_obs, strict=True):
         slowdown = percentage_delta(
             obs_item["loop_frequency_hz"], only_item["loop_frequency_hz"]
+        )
+        only_step_ms = (
+            1000.0 / only_item["loop_frequency_hz"]
+            if only_item["loop_frequency_hz"] > 0
+            else 0.0
+        )
+        obs_step_ms = (
+            1000.0 / obs_item["loop_frequency_hz"]
+            if obs_item["loop_frequency_hz"] > 0
+            else 0.0
         )
         lines.append(
             "- "
             f"batch_size={only_item['batch_size']}: "
             f"task update={only_item['loop_frequency_hz']} Hz, "
             f"task update + obs={obs_item['loop_frequency_hz']} Hz, "
+            f"with-obs batch_step={obs_step_ms:.1f} ms, "
+            f"with-obs env_throughput≈{obs_item['loop_frequency_hz'] * obs_item['batch_size']:.1f} env-step/s, "
             f"obs impact={slowdown:.1f}%"
+        )
+        lines.append(
+            "- "
+            f"batch_size={only_item['batch_size']} detail: "
+            f"task-only batch_step={only_step_ms:.1f} ms, "
+            f"with-obs batch_step={obs_step_ms:.1f} ms"
         )
 
     lines.append("")

@@ -80,12 +80,23 @@ def run_example_rounds(
         print(hooks.start_label)
         print()
 
-        steps_used = 0
-        start_time = perf_counter()
         batch_size = len(update.stage_name)
         env_completion_steps = np.full(batch_size, -1, dtype=np.int64)
         env_completion_time_sec = np.full(batch_size, np.nan, dtype=np.float64)
-        for step in range(hooks.max_updates or 10**18):
+
+        # Warmup step 0: may trigger JIT compilation; exclude from timing.
+        update = hooks.step_fn(0, update)
+        steps_used = 1
+        print("Step 0 (warmup):" + "=" * 40)
+        pprint(update, sort_dicts=False)
+        if bool(np.all(update.done)):
+            env_completion_steps[np.asarray(update.done, dtype=bool)] = 1
+            env_completion_time_sec[np.asarray(update.done, dtype=bool)] = 0.0
+
+        start_time = perf_counter()
+        for step in range(1, hooks.max_updates or 10**18):
+            if bool(np.all(update.done)):
+                break
             if use_input:
                 input("Press Enter to continue...")
 
@@ -98,11 +109,10 @@ def run_example_rounds(
             env_completion_time_sec[newly_done] = elapsed_now
             print(f"Step {step}:" + "=" * 40)
             pprint(update, sort_dicts=False)
-            if bool(np.all(update.done)):
-                break
         else:
-            assert hooks.max_updates is not None
-            print(f"Reached max_updates={hooks.max_updates}, stopping rollout.")
+            if not bool(np.all(update.done)):
+                assert hooks.max_updates is not None
+                print(f"Reached max_updates={hooks.max_updates}, stopping rollout.")
 
         elapsed_time_sec = perf_counter() - start_time
         summary = hooks.summarize_fn(
