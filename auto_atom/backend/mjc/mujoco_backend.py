@@ -754,13 +754,13 @@ class MujocoTaskBackend(SceneBackend):
                             env_mask=env_mask,
                         )
                 else:
-                    default_base_pose = self._default_operator_base_poses.get(
-                        name, handler.get_base_pose()
+                    default_eef_pose = self._default_operator_eef_poses.get(
+                        name, handler.get_end_effector_pose()
                     )
-                    sampled_base = self._sample_random_pose(
-                        default_base_pose, rand_range, env_mask
+                    sampled_eef = self._sample_random_pose(
+                        default_eef_pose, rand_range, env_mask
                     )
-                    handler.set_pose(sampled_base, env_mask=env_mask)
+                    handler.set_home_end_effector_pose(sampled_eef, env_mask=env_mask)
 
     def _sample_random_pose(
         self, base_pose: PoseState, rand_range: PoseRandomRange, env_mask: np.ndarray

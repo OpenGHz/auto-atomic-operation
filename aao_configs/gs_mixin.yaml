@@ -27,7 +27,7 @@ env:
       background_0: [1.176, -0.0027, -0.01] # the heatmap is not good, which can be solved by lowering the table's height, but the object will appear to float.
       background_1: [0.0, 0.0, 0.0]
       discover-lab2: [0.2839, 0.0888, 0.0745]
-      example: [1.3098, -0.0081, -0.0023]
+      example: [0.0, 0.0, 0.0]
       hospital_table_25_5: [0.5158, -0.6083, 0.0755] # the bg itself looks not so good
       simple_room: [-0.0248, 0.1106, 0.0736]
       table: [-0.1354, -0.3838, 0.0709]
