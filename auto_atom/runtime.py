@@ -27,6 +27,7 @@ from .framework import (
     Position,
     PoseControlConfig,
     PoseReference,
+    RandomizationReference,
     StageConfig,
     StageControlConfig,
     TaskFileConfig,
@@ -930,7 +931,19 @@ class TaskRunner:
         actions: List[PrimitiveAction],
         context: ExecutionContext,
     ) -> None:
-        """Apply per-waypoint randomization to pose actions in-place."""
+        """Apply per-waypoint randomization to pose actions in-place.
+
+        Supports both ``relative`` mode (sampled values are added to the
+        waypoint's existing position/orientation — the default) and
+        ``absolute`` mode (sampled values replace the waypoint's
+        position/orientation entirely). A ``None`` axis is skipped and
+        keeps the waypoint's original value in either mode.
+
+        The waypoint's reference frame (``PoseControlConfig.reference``,
+        e.g. ``OBJECT_WORLD``) is not affected by absolute-mode
+        randomization — the sampled numbers are still interpreted in the
+        waypoint's own frame by the pose controller.
+        """
         rng = getattr(context.backend, "_rng", None)
         if rng is None:
             rng = np.random.default_rng()
@@ -940,26 +953,60 @@ class TaskRunner:
             rand = action.pose.randomization
             if rand is None:
                 continue
+            is_absolute = rand.reference == RandomizationReference.ABSOLUTE
+            pos_ranges = (rand.x, rand.y, rand.z)
+            rot_ranges = (rand.roll, rand.pitch, rand.yaw)
             pos = list(action.pose.position)
-            pos[0] += float(rng.uniform(*rand.x))
-            pos[1] += float(rng.uniform(*rand.y))
-            pos[2] += float(rng.uniform(*rand.z))
+            for axis, rng_pair in enumerate(pos_ranges):
+                if rng_pair is None:
+                    continue
+                sampled = float(rng.uniform(*rng_pair))
+                if is_absolute:
+                    pos[axis] = sampled
+                else:
+                    pos[axis] += sampled
             action.pose = action.pose.model_copy(
                 update={"position": tuple(pos), "randomization": None}
             )
-            if any(r != (0.0, 0.0) for r in (rand.roll, rand.pitch, rand.yaw)):
+            if any(r is not None for r in rot_ranges):
                 ori = action.pose.orientation
                 if ori and len(ori) == 4:
-                    from .utils.pose import (
-                        euler_to_quaternion,
-                        quaternion_to_rpy,
-                    )
+                    from .utils.pose import quaternion_to_rpy
 
-                    r, p, y = quaternion_to_rpy(np.asarray(ori))
-                    r += float(rng.uniform(*rand.roll))
-                    p += float(rng.uniform(*rand.pitch))
-                    y += float(rng.uniform(*rand.yaw))
-                    new_ori = euler_to_quaternion((r, p, y))
+                    r0, p0, y0 = quaternion_to_rpy(np.asarray(ori))
+                    if is_absolute:
+                        r_val = (
+                            r0
+                            if rot_ranges[0] is None
+                            else float(rng.uniform(*rot_ranges[0]))
+                        )
+                        p_val = (
+                            p0
+                            if rot_ranges[1] is None
+                            else float(rng.uniform(*rot_ranges[1]))
+                        )
+                        y_val = (
+                            y0
+                            if rot_ranges[2] is None
+                            else float(rng.uniform(*rot_ranges[2]))
+                        )
+                    else:
+                        r_val = r0 + (
+                            0.0
+                            if rot_ranges[0] is None
+                            else float(rng.uniform(*rot_ranges[0]))
+                        )
+                        p_val = p0 + (
+                            0.0
+                            if rot_ranges[1] is None
+                            else float(rng.uniform(*rot_ranges[1]))
+                        )
+                        y_val = y0 + (
+                            0.0
+                            if rot_ranges[2] is None
+                            else float(rng.uniform(*rot_ranges[2]))
+                        )
+                    new_ori = euler_to_quaternion((r_val, p_val, y_val))
                     action.pose = action.pose.model_copy(
                         update={"orientation": tuple(float(v) for v in new_ori)}
                     )

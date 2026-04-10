@@ -19,6 +19,7 @@ from ...framework import (
     PoseControlConfig,
     PoseRandomRange,
     PoseReference,
+    RandomizationReference,
 )
 from ...runtime import (
     ComponentRegistry,
@@ -767,20 +768,56 @@ class MujocoTaskBackend(SceneBackend):
         base_pose = base_pose.broadcast_to(self.batch_size)
         position = base_pose.position.copy()
         orientation = base_pose.orientation.copy()
+        is_absolute = rand_range.reference == RandomizationReference.ABSOLUTE
+        pos_ranges = (rand_range.x, rand_range.y, rand_range.z)
+        rot_ranges = (rand_range.roll, rand_range.pitch, rand_range.yaw)
+        rot_any = any(r is not None for r in rot_ranges)
         for env_index, enabled in enumerate(env_mask):
             if not enabled:
                 continue
-            position[env_index, 0] += float(self._rng.uniform(*rand_range.x))
-            position[env_index, 1] += float(self._rng.uniform(*rand_range.y))
-            position[env_index, 2] += float(self._rng.uniform(*rand_range.z))
-            r, p, y = quaternion_to_rpy(orientation[env_index])
-            orientation[env_index] = euler_to_quaternion(
-                (
-                    r + float(self._rng.uniform(*rand_range.roll)),
-                    p + float(self._rng.uniform(*rand_range.pitch)),
-                    y + float(self._rng.uniform(*rand_range.yaw)),
-                )
-            )
+            for axis, rng_pair in enumerate(pos_ranges):
+                if rng_pair is None:
+                    continue
+                sampled = float(self._rng.uniform(*rng_pair))
+                if is_absolute:
+                    position[env_index, axis] = sampled
+                else:
+                    position[env_index, axis] += sampled
+            if rot_any:
+                r0, p0, y0 = quaternion_to_rpy(orientation[env_index])
+                if is_absolute:
+                    r_val = (
+                        r0
+                        if rot_ranges[0] is None
+                        else float(self._rng.uniform(*rot_ranges[0]))
+                    )
+                    p_val = (
+                        p0
+                        if rot_ranges[1] is None
+                        else float(self._rng.uniform(*rot_ranges[1]))
+                    )
+                    y_val = (
+                        y0
+                        if rot_ranges[2] is None
+                        else float(self._rng.uniform(*rot_ranges[2]))
+                    )
+                else:
+                    r_val = r0 + (
+                        0.0
+                        if rot_ranges[0] is None
+                        else float(self._rng.uniform(*rot_ranges[0]))
+                    )
+                    p_val = p0 + (
+                        0.0
+                        if rot_ranges[1] is None
+                        else float(self._rng.uniform(*rot_ranges[1]))
+                    )
+                    y_val = y0 + (
+                        0.0
+                        if rot_ranges[2] is None
+                        else float(self._rng.uniform(*rot_ranges[2]))
+                    )
+                orientation[env_index] = euler_to_quaternion((r_val, p_val, y_val))
         return PoseState(position=position, orientation=orientation)
 
     def get_element_pose(self, name: str, env_index: int = 0) -> PoseState:

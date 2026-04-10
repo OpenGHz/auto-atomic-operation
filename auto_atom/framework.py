@@ -94,6 +94,22 @@ OPERATION_CONDITIONS = {
 }
 
 
+class RandomizationReference(str, Enum):
+    """Reference mode for a :class:`PoseRandomRange`.
+
+    Controls how the per-axis ``[min, max]`` ranges are interpreted when
+    sampling a randomized pose.
+    """
+
+    RELATIVE = "relative"
+    """Ranges are additive offsets from the entity's default/initial pose
+    (current default behavior)."""
+    ABSOLUTE = "absolute"
+    """Ranges are absolute world-frame values — metres for position axes,
+    radians for Euler orientation axes. The entity's default pose is ignored
+    for any axis that has an explicit range."""
+
+
 class PoseReference(str, Enum):
     """Enumeration of possible pose references for the pose control."""
 
@@ -169,36 +185,65 @@ class PlacedToleranceConfig(BaseModel, extra="forbid"):
 
 
 class PoseRandomRange(BaseModel):
-    """Per-entity pose randomization bounds relative to its default pose.
+    """Per-entity pose randomization bounds.
 
-    Each translation axis specifies a ``[min_offset, max_offset]`` range in
-    world-frame metres.  Each rotation axis specifies a ``[min_offset,
-    max_offset]`` range in radians applied as an additive RPY increment.
+    When ``reference`` is ``"relative"`` (default), each per-axis
+    ``[min, max]`` range is an additive offset applied to the entity's
+    default pose — the existing behavior. When ``reference`` is
+    ``"absolute"``, each range is interpreted as absolute world-frame
+    values: metres for position, radians for Euler orientation. In that
+    mode the default pose is ignored for any axis that has a range set.
 
-    Example YAML entry::
+    A ``None`` value on an axis (the default) means "do not randomize
+    this axis" — it keeps its value from the entity's default pose in
+    **both** modes. Axes are independent, so absolute-mode ``x``/``y``
+    with ``z``/``roll``/``pitch``/``yaw`` left as ``None`` produces the
+    natural "place anywhere on this rectangle, keep default height and
+    orientation" behavior.
 
+    Example YAML entries::
+
+        # Relative (default): sampled as default_pose + offset
         randomization:
           source_block:
             x: [-0.03, 0.03]
             y: [-0.03, 0.03]
             yaw: [-0.524, 0.524]
             collision_radius: 0.04
+
+        # Absolute: sampled as world-frame coordinates
+        randomization:
+          arm:
+            reference: absolute
+            x: [0.10, 0.45]
+            y: [-0.15, 0.15]
+            # z/roll/pitch/yaw omitted → kept at default pose values
     """
 
     model_config = ConfigDict(extra="forbid")
 
-    x: Tuple[float, float] = (0.0, 0.0)
-    """[min, max] displacement along the world X axis (metres)."""
-    y: Tuple[float, float] = (0.0, 0.0)
-    """[min, max] displacement along the world Y axis (metres)."""
-    z: Tuple[float, float] = (0.0, 0.0)
-    """[min, max] displacement along the world Z axis (metres)."""
-    roll: Tuple[float, float] = (0.0, 0.0)
-    """[min, max] roll offset added to the default roll (radians)."""
-    pitch: Tuple[float, float] = (0.0, 0.0)
-    """[min, max] pitch offset added to the default pitch (radians)."""
-    yaw: Tuple[float, float] = (0.0, 0.0)
-    """[min, max] yaw offset added to the default yaw (radians)."""
+    x: Optional[Tuple[float, float]] = None
+    """[min, max] range along the world X axis (metres), or ``None`` to
+    leave this axis at the default-pose value."""
+    y: Optional[Tuple[float, float]] = None
+    """[min, max] range along the world Y axis (metres), or ``None`` to
+    leave this axis at the default-pose value."""
+    z: Optional[Tuple[float, float]] = None
+    """[min, max] range along the world Z axis (metres), or ``None`` to
+    leave this axis at the default-pose value."""
+    roll: Optional[Tuple[float, float]] = None
+    """[min, max] range for the roll Euler angle (radians), or ``None`` to
+    leave this axis at the default-pose value."""
+    pitch: Optional[Tuple[float, float]] = None
+    """[min, max] range for the pitch Euler angle (radians), or ``None`` to
+    leave this axis at the default-pose value."""
+    yaw: Optional[Tuple[float, float]] = None
+    """[min, max] range for the yaw Euler angle (radians), or ``None`` to
+    leave this axis at the default-pose value."""
+    reference: RandomizationReference = RandomizationReference.RELATIVE
+    """Whether the per-axis ranges are interpreted as relative offsets from
+    the default pose (``relative``, default) or as absolute world-frame
+    values (``absolute``)."""
     collision_radius: float = 0.05
     """Approximate bounding radius used for pairwise collision rejection (metres)."""
 
