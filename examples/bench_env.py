@@ -128,7 +128,16 @@ obs_arr = np.array(obs_times) * 1000
 upd_arr = np.array(upd_times) * 1000
 total = obs_arr + upd_arr
 
-fmt = "{:<22s} mean={:>7.2f}ms  std={:>6.2f}ms  min={:>7.2f}ms  max={:>7.2f}ms"
+
+def _mean_hz(arr_ms: np.ndarray) -> float:
+    mean_ms = float(arr_ms.mean())
+    return 1000.0 / mean_ms if mean_ms > 0 else float("inf")
+
+
+fmt = (
+    "{:<22s} mean={:>7.2f}ms  std={:>6.2f}ms  "
+    "min={:>7.2f}ms  max={:>7.2f}ms  freq={:>8.2f}Hz"
+)
 print()
 print(
     fmt.format(
@@ -137,10 +146,29 @@ print(
         obs_arr.std(),
         obs_arr.min(),
         obs_arr.max(),
+        _mean_hz(obs_arr),
     )
 )
-print(fmt.format("update", upd_arr.mean(), upd_arr.std(), upd_arr.min(), upd_arr.max()))
-print(fmt.format("total", total.mean(), total.std(), total.min(), total.max()))
+print(
+    fmt.format(
+        "update",
+        upd_arr.mean(),
+        upd_arr.std(),
+        upd_arr.min(),
+        upd_arr.max(),
+        _mean_hz(upd_arr),
+    )
+)
+print(
+    fmt.format(
+        "total",
+        total.mean(),
+        total.std(),
+        total.min(),
+        total.max(),
+        _mean_hz(total),
+    )
+)
 
 _log_progress("tearing down backend")
 backend.teardown()
