@@ -42,7 +42,7 @@ task:
             # orientation: [0.0, 0.70710678, 0.0, 0.70710678]
             rotation: [0.0, 1.5708, 0.7853]
             reference: object
-          - position: [-0.03, -0.03, 0.04]
+          - position: [-0.03, -0.03, 0.035]
             reference: object_world
         post_move:
           - position: [0.0, 0.0, 0.25]

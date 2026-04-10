@@ -79,6 +79,32 @@ class MujocoObjectHandler(ObjectHandler):
     env: BatchedUnifiedMujocoEnv
     body_name: str
     freejoint_name: Optional[str] = None
+    _descendant_body_ids: Optional[Dict[int, frozenset]] = field(
+        init=False, repr=False, default=None
+    )
+
+    def get_descendant_body_ids(self, model: Any) -> frozenset:
+        """Return a frozenset of body IDs that are the target body or its
+        descendants. Cached per model (model topology is static)."""
+        model_id = id(model)
+        if (
+            self._descendant_body_ids is not None
+            and model_id in self._descendant_body_ids
+        ):
+            return self._descendant_body_ids[model_id]
+        target_bid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, self.body_name)
+        ids: set = set()
+        if target_bid >= 0:
+            ids.add(target_bid)
+            for bid in range(model.nbody):
+                parent = int(model.body_parentid[bid])
+                if parent in ids and bid != 0:
+                    ids.add(bid)
+        result = frozenset(ids)
+        if self._descendant_body_ids is None:
+            self._descendant_body_ids = {}
+        self._descendant_body_ids[model_id] = result
+        return result
 
     def get_pose(self) -> PoseState:
         pos, quat = self.env.get_body_pose(self.body_name)
@@ -165,6 +191,12 @@ class MujocoOperatorHandler(OperatorHandler):
     joint_interp_speed: float = 0.05
     max_joint_delta: float = 0.35
 
+    _operator_body_ids_cache: Optional[Dict[int, frozenset]] = field(
+        init=False, repr=False, default=None
+    )
+    _left_right_geom_cache: Optional[Dict[int, Dict[int, str]]] = field(
+        init=False, repr=False, default=None
+    )
     _last_move_key: List[str | None] = field(init=False, repr=False)
     _last_eef_key: List[str | None] = field(init=False, repr=False)
     _last_target: List[Optional[MujocoObjectHandler]] = field(init=False, repr=False)
@@ -179,6 +211,55 @@ class MujocoOperatorHandler(OperatorHandler):
     @property
     def name(self) -> str:
         return self.operator_name
+
+    def get_operator_body_ids(self, model: Any) -> frozenset:
+        """Return all body IDs belonging to this operator (root + descendants).
+        Cached per model (topology is static)."""
+        model_id = id(model)
+        if (
+            self._operator_body_ids_cache is not None
+            and model_id in self._operator_body_ids_cache
+        ):
+            return self._operator_body_ids_cache[model_id]
+        root_bid = mujoco.mj_name2id(
+            model, mujoco.mjtObj.mjOBJ_BODY, self.root_body_name
+        )
+        ids: set = set()
+        if root_bid >= 0:
+            ids.add(root_bid)
+            for bid in range(model.nbody):
+                parent = int(model.body_parentid[bid])
+                if parent in ids and bid != 0:
+                    ids.add(bid)
+        result = frozenset(ids)
+        if self._operator_body_ids_cache is None:
+            self._operator_body_ids_cache = {}
+        self._operator_body_ids_cache[model_id] = result
+        return result
+
+    def get_left_right_geom_ids(self, model: Any) -> Dict[int, str]:
+        """Return a dict mapping geom_id → 'left' or 'right' for gripper
+        finger geoms. Cached per model."""
+        model_id = id(model)
+        if (
+            self._left_right_geom_cache is not None
+            and model_id in self._left_right_geom_cache
+        ):
+            return self._left_right_geom_cache[model_id]
+        mapping: Dict[int, str] = {}
+        operator_bodies = self.get_operator_body_ids(model)
+        for gid in range(model.ngeom):
+            if int(model.geom_bodyid[gid]) not in operator_bodies:
+                continue
+            name = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_GEOM, gid) or ""
+            if name.startswith("left_"):
+                mapping[gid] = "left"
+            elif name.startswith("right_"):
+                mapping[gid] = "right"
+        if self._left_right_geom_cache is None:
+            self._left_right_geom_cache = {}
+        self._left_right_geom_cache[model_id] = mapping
+        return mapping
 
     def __post_init__(self) -> None:
         self._last_move_key = [None] * self.env.batch_size
@@ -587,26 +668,15 @@ class MujocoOperatorHandler(OperatorHandler):
             and grasp_check["lateral_ok"]
         )
 
-    @staticmethod
-    def _is_body_or_ancestor(model: Any, body_id: int, ancestor_id: int) -> bool:
-        """Return True if *body_id* equals *ancestor_id* or is a descendant."""
-        bid = body_id
-        while bid > 0:
-            if bid == ancestor_id:
-                return True
-            bid = int(model.body_parentid[bid])
-        return False
-
     def _check_grasp_conditions(
         self,
         env_index: int,
         target: "MujocoObjectHandler",
     ) -> Dict[str, Any]:
         single_env = self.env.envs[env_index]
-        target_body_id = mujoco.mj_name2id(
-            single_env.model, mujoco.mjtObj.mjOBJ_BODY, target.body_name
-        )
-        if target_body_id < 0:
+        model = single_env.model
+        target_bodies = target.get_descendant_body_ids(model)
+        if not target_bodies:
             return {
                 "left_contact": False,
                 "right_contact": False,
@@ -615,33 +685,29 @@ class MujocoOperatorHandler(OperatorHandler):
                 "lateral_threshold": 0.03,
             }
 
+        left_right_geoms = self.get_left_right_geom_ids(model)
         left_contact = False
         right_contact = False
-        for idx in range(single_env.data.ncon):
-            contact = single_env.data.contact[idx]
+        geom_bodyid = model.geom_bodyid
+        data = single_env.data
+        for idx in range(data.ncon):
+            contact = data.contact[idx]
             geom1 = int(contact.geom1)
             geom2 = int(contact.geom2)
-            body1 = int(single_env.model.geom_bodyid[geom1])
-            body2 = int(single_env.model.geom_bodyid[geom2])
-            b1_match = self._is_body_or_ancestor(
-                single_env.model, body1, target_body_id
-            )
-            b2_match = self._is_body_or_ancestor(
-                single_env.model, body2, target_body_id
-            )
+            body1 = int(geom_bodyid[geom1])
+            body2 = int(geom_bodyid[geom2])
+            b1_match = body1 in target_bodies
+            b2_match = body2 in target_bodies
             if not b1_match and not b2_match:
                 continue
             other_geom = geom2 if b1_match else geom1
-            other_name = (
-                mujoco.mj_id2name(
-                    single_env.model, mujoco.mjtObj.mjOBJ_GEOM, other_geom
-                )
-                or ""
-            )
-            if other_name.startswith("left_"):
+            side = left_right_geoms.get(other_geom)
+            if side == "left":
                 left_contact = True
-            if other_name.startswith("right_"):
+            elif side == "right":
                 right_contact = True
+            if left_contact and right_contact:
+                break
 
         target_pose = target.get_pose()
         eef_pose = self.get_end_effector_pose()
@@ -958,36 +1024,25 @@ class MujocoTaskBackend(SceneBackend):
             return np.zeros(self.batch_size, dtype=bool)
         result = np.zeros(self.batch_size, dtype=bool)
         for env_index, single_env in enumerate(self.env.envs):
-            target_body_id = mujoco.mj_name2id(
-                single_env.model, mujoco.mjtObj.mjOBJ_BODY, target.body_name
-            )
-            if target_body_id < 0:
+            model = single_env.model
+            target_bodies = target.get_descendant_body_ids(model)
+            if not target_bodies:
                 continue
-            root_body_id = mujoco.mj_name2id(
-                single_env.model, mujoco.mjtObj.mjOBJ_BODY, operator.root_body_name
-            )
-            operator_body_ids: set[int] = set()
-            for bid in range(single_env.model.nbody):
-                parent = int(single_env.model.body_parentid[bid])
-                if bid == root_body_id or (parent in operator_body_ids and bid != 0):
-                    operator_body_ids.add(bid)
-            for idx in range(single_env.data.ncon):
-                contact = single_env.data.contact[idx]
-                geom1 = int(contact.geom1)
-                geom2 = int(contact.geom2)
-                body1 = int(single_env.model.geom_bodyid[geom1])
-                body2 = int(single_env.model.geom_bodyid[geom2])
-                b1_match = self._is_body_or_ancestor(
-                    single_env.model, body1, target_body_id
-                )
-                b2_match = self._is_body_or_ancestor(
-                    single_env.model, body2, target_body_id
-                )
-                if b1_match or b2_match:
-                    other_body = body2 if b1_match else body1
-                    if other_body in operator_body_ids:
-                        result[env_index] = True
-                        break
+            operator_bodies = operator.get_operator_body_ids(model)
+            geom_bodyid = model.geom_bodyid
+            data = single_env.data
+            for idx in range(data.ncon):
+                contact = data.contact[idx]
+                body1 = int(geom_bodyid[int(contact.geom1)])
+                body2 = int(geom_bodyid[int(contact.geom2)])
+                b1_target = body1 in target_bodies
+                b2_target = body2 in target_bodies
+                if not b1_target and not b2_target:
+                    continue
+                other_body = body2 if b1_target else body1
+                if other_body in operator_bodies:
+                    result[env_index] = True
+                    break
         return result
 
     def set_interest_objects_and_operations(
