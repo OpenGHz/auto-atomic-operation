@@ -139,11 +139,17 @@ def run_example_rounds(
     return round_summaries
 
 
-def print_final_summary(round_summaries: Sequence[ExecutionSummary]) -> None:
+def print_final_summary(
+    round_summaries: Sequence[ExecutionSummary],
+    *,
+    init_time_sec: Optional[float] = None,
+) -> None:
     print()
     print("=" * 60)
     print("SUMMARY")
     print("=" * 60)
+    if init_time_sec is not None:
+        print(f"Sim init time: {init_time_sec:.3f}s")
     if not round_summaries:
         print("Success rate: 0/0")
         print("=" * 60)
@@ -159,9 +165,15 @@ def print_final_summary(round_summaries: Sequence[ExecutionSummary]) -> None:
         round_env_success = _count_env_successes(summary)
         batch_size = len(summary.final_success)
         failure_lines = _format_failure_lines(summary)
+        loop_freq = (
+            summary.updates_used / summary.elapsed_time_sec
+            if summary.elapsed_time_sec > 0
+            else float("inf")
+        )
         round_payload = {
             "status": tag,
             "success_rate": f"{round_env_success}/{batch_size}",
+            "loop_frequency": f"{loop_freq:.1f} Hz ({summary.updates_used} steps in {summary.elapsed_time_sec:.3f}s)",
             "completed_stage_info": _format_completed_stage_info(
                 summary.completed_stage_info
             ),
@@ -179,7 +191,7 @@ def print_final_summary(round_summaries: Sequence[ExecutionSummary]) -> None:
         }
         if failure_lines:
             round_payload["failure_reasons"] = failure_lines
-        print(f"  Round {i}: [{tag}]")
+        print(f"Round {i}")
         pprint(round_payload, sort_dicts=False)
     print("=" * 60)
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+from time import perf_counter
 
 import hydra
 from omegaconf import DictConfig
@@ -31,7 +32,9 @@ if "--list" in sys.argv:
 )
 def main(cfg: DictConfig) -> None:
     task_file = prepare_task_file(cfg)
+    t0 = perf_counter()
     runner = TaskRunner().from_config(task_file)
+    init_time = perf_counter() - t0
 
     rounds = int(cfg.get("rounds", 1))
     use_input = bool(cfg.get("use_input", False))
@@ -58,7 +61,7 @@ def main(cfg: DictConfig) -> None:
                 max_updates=max_updates,
             ),
         )
-        print_final_summary(round_summaries)
+        print_final_summary(round_summaries, init_time_sec=init_time)
     finally:
         runner.close()
 
