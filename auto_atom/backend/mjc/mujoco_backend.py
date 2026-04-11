@@ -6,7 +6,7 @@ import logging
 import mujoco
 import numpy as np
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Set, Union
 from pydantic import BaseModel
 from ...basis.mjc.mujoco_env import BatchedUnifiedMujocoEnv, EnvConfig
 from ...framework import (
@@ -818,13 +818,100 @@ class MujocoTaskBackend(SceneBackend):
             self._default_operator_base_poses[name] = handler.get_base_pose()
             self._default_operator_eef_poses[name] = handler.get_end_effector_pose()
 
+    # ------------------------------------------------------------------
+    #  Randomization: ordering, reference resolution, and application
+    # ------------------------------------------------------------------
+
+    def _randomization_order(self) -> List[str]:
+        """Return randomization keys in dependency order (referenced first).
+
+        An entry whose ``reference`` is another entity name depends on that
+        entity being sampled first. Cycles raise ``ValueError``.
+        """
+        deps: Dict[str, Set[str]] = {name: set() for name in self.randomization}
+        for name, rand in self.randomization.items():
+            sub_refs: list = []
+            if isinstance(rand, OperatorRandomizationConfig):
+                if rand.base is not None:
+                    sub_refs.append(rand.base.reference)
+                if rand.eef is not None:
+                    sub_refs.append(rand.eef.reference)
+            else:
+                sub_refs.append(rand.reference)
+            for ref in sub_refs:
+                if isinstance(ref, RandomizationReference):
+                    continue
+                if ref in self.randomization:
+                    deps[name].add(ref)
+        order: List[str] = []
+        visited: Set[str] = set()
+        visiting: Set[str] = set()
+
+        def _visit(n: str) -> None:
+            if n in visited:
+                return
+            if n in visiting:
+                raise ValueError(f"Circular randomization reference involving '{n}'")
+            visiting.add(n)
+            for dep in deps[n]:
+                _visit(dep)
+            visiting.remove(n)
+            visited.add(n)
+            order.append(n)
+
+        for name in self.randomization:
+            _visit(name)
+        return order
+
+    def _resolve_reference_base_pose(
+        self,
+        reference: Union[RandomizationReference, str],
+        sampled_poses: Dict[str, PoseState],
+        default_pose: PoseState,
+    ) -> PoseState:
+        """Resolve the base pose to feed ``_sample_random_pose``.
+
+        For enum modes the entity's own ``default_pose`` is returned.
+
+        For an entity-name reference, the delta-carry algorithm is applied:
+        ``delta = ref_sampled * ref_default⁻¹``, then ``delta * default_pose``
+        so the current entity moves with the referenced entity while
+        preserving their original spatial relationship.
+        """
+        if isinstance(reference, RandomizationReference):
+            return default_pose
+        # --- Entity-name reference: delta-carry ---
+        ref_sampled = sampled_poses.get(reference)
+        # Resolve the reference entity's default pose.
+        if reference in self._default_object_poses:
+            ref_default = self._default_object_poses[reference]
+        elif reference in self._default_operator_eef_poses:
+            ref_default = self._default_operator_eef_poses[reference]
+        elif reference in self.object_handlers:
+            ref_default = self.object_handlers[reference].get_pose()
+        elif reference in self.operator_handlers:
+            ref_default = self.operator_handlers[reference].get_end_effector_pose()
+        else:
+            raise ValueError(
+                f"Randomization reference '{reference}' is not a known mode "
+                "('relative', 'absolute_world', 'absolute_base') nor an "
+                "existing object/operator name."
+            )
+        if ref_sampled is None:
+            return default_pose  # entity not randomized → no delta
+        delta = compose_pose(ref_sampled, inverse_pose(ref_default))
+        return compose_pose(delta, default_pose)
+
     def _apply_randomization(self, env_mask: np.ndarray) -> None:
-        for name, rand_range in self.randomization.items():
+        sampled_poses: Dict[str, PoseState] = {}
+        for name in self._randomization_order():
+            rand_range = self.randomization[name]
             if name in self.object_handlers:
                 if isinstance(rand_range, OperatorRandomizationConfig):
                     raise TypeError(
-                        f"Object '{name}' randomization must be a PoseRandomRange, "
-                        "not an operator randomization config."
+                        f"Object '{name}' randomization must be a "
+                        "PoseRandomRange, not an operator randomization "
+                        "config."
                     )
                 if rand_range.reference == RandomizationReference.ABSOLUTE_BASE:
                     raise ValueError(
@@ -832,11 +919,15 @@ class MujocoTaskBackend(SceneBackend):
                         "'absolute_base' — only operator end-effector "
                         "randomization is defined in a base frame."
                     )
-                base_pose = self._default_object_poses.get(
+                default_pose = self._default_object_poses.get(
                     name, self.object_handlers[name].get_pose()
+                )
+                base_pose = self._resolve_reference_base_pose(
+                    rand_range.reference, sampled_poses, default_pose
                 )
                 sampled = self._sample_random_pose(base_pose, rand_range, env_mask)
                 self.object_handlers[name].set_pose(sampled, env_mask=env_mask)
+                sampled_poses[name] = sampled
             elif name in self.operator_handlers:
                 handler = self.operator_handlers[name]
                 if isinstance(rand_range, OperatorRandomizationConfig):
@@ -846,29 +937,46 @@ class MujocoTaskBackend(SceneBackend):
                             == RandomizationReference.ABSOLUTE_BASE
                         ):
                             raise ValueError(
-                                f"Operator '{name}' base randomization cannot "
-                                "use 'absolute_base' — the base IS the frame."
+                                f"Operator '{name}' base randomization "
+                                "cannot use 'absolute_base' — the base IS "
+                                "the frame."
                             )
-                        default_base_pose = self._default_operator_base_poses.get(
+                        default_base = self._default_operator_base_poses.get(
                             name, handler.get_base_pose()
                         )
+                        base_pose = self._resolve_reference_base_pose(
+                            rand_range.base.reference,
+                            sampled_poses,
+                            default_base,
+                        )
                         sampled_base = self._sample_random_pose(
-                            default_base_pose, rand_range.base, env_mask
+                            base_pose, rand_range.base, env_mask
                         )
                         handler.set_pose(sampled_base, env_mask=env_mask)
+                        sampled_poses[name] = sampled_base
                     if rand_range.eef is not None:
                         sampled_eef = self._sample_operator_eef_pose(
-                            handler, name, rand_range.eef, env_mask
+                            handler,
+                            name,
+                            rand_range.eef,
+                            env_mask,
+                            sampled_poses,
                         )
                         handler.set_home_end_effector_pose(
                             sampled_eef,
                             env_mask=env_mask,
                         )
+                        sampled_poses[name] = sampled_eef
                 else:
                     sampled_eef = self._sample_operator_eef_pose(
-                        handler, name, rand_range, env_mask
+                        handler,
+                        name,
+                        rand_range,
+                        env_mask,
+                        sampled_poses,
                     )
                     handler.set_home_end_effector_pose(sampled_eef, env_mask=env_mask)
+                    sampled_poses[name] = sampled_eef
 
     def _sample_operator_eef_pose(
         self,
@@ -876,23 +984,25 @@ class MujocoTaskBackend(SceneBackend):
         name: str,
         rand_range: PoseRandomRange,
         env_mask: np.ndarray,
+        sampled_poses: Dict[str, PoseState],
     ) -> PoseState:
-        """Sample a new home EEF world pose, handling ``absolute_base`` mode.
+        """Sample a new home EEF world pose.
 
-        In ``absolute_base`` mode the default EEF pose is first transformed
-        into the operator's base frame, sampled there, then transformed back
-        to world. In the other two modes (relative / absolute_world) we
-        sample directly against the world-frame default pose.
+        Handles entity-name references (delta-carry) and ``absolute_base``
+        mode (sample in operator base frame, transform back to world).
         """
         default_eef_world = self._default_operator_eef_poses.get(
             name, handler.get_end_effector_pose()
         )
+        base_pose_for_sampler = self._resolve_reference_base_pose(
+            rand_range.reference, sampled_poses, default_eef_world
+        )
         if rand_range.reference != RandomizationReference.ABSOLUTE_BASE:
-            return self._sample_random_pose(default_eef_world, rand_range, env_mask)
+            return self._sample_random_pose(base_pose_for_sampler, rand_range, env_mask)
         base_world = handler.get_base_pose()
-        default_eef_in_base = compose_pose(inverse_pose(base_world), default_eef_world)
+        default_in_base = compose_pose(inverse_pose(base_world), base_pose_for_sampler)
         sampled_in_base = self._sample_random_pose(
-            default_eef_in_base, rand_range, env_mask
+            default_in_base, rand_range, env_mask
         )
         return compose_pose(base_world, sampled_in_base)
 
@@ -1220,8 +1330,40 @@ def build_mujoco_backend(
             handler._home_ctrl[:, handler.eef_ctrl_index] = operator.initial_state.eef
 
     object_names = {stage.object for stage in config.stages if stage.object}
-    object_handlers: Dict[str, MujocoObjectHandler] = {}
+    # Also register objects mentioned in the randomization dict (they may not
+    # appear in any stage but still need handlers for pose get/set).
     model = env.envs[0].model
+
+    def _body_exists(name: str) -> bool:
+        """Check if a body (or its _gs variant) exists in the MuJoCo model."""
+        if mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, name) >= 0:
+            return True
+        if mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, f"{name}_gs") >= 0:
+            return True
+        return False
+
+    _rand_candidate_names: set = set()
+    for rand_name in config.randomization:
+        if rand_name not in operator_handlers:
+            _rand_candidate_names.add(rand_name)
+    for rand_range in config.randomization.values():
+        refs: list = []
+        if isinstance(rand_range, OperatorRandomizationConfig):
+            if rand_range.base is not None:
+                refs.append(rand_range.base.reference)
+            if rand_range.eef is not None:
+                refs.append(rand_range.eef.reference)
+        else:
+            refs.append(rand_range.reference)
+        for ref in refs:
+            if isinstance(ref, str) and not isinstance(ref, RandomizationReference):
+                if ref not in operator_handlers:
+                    _rand_candidate_names.add(ref)
+    for cand in _rand_candidate_names:
+        if _body_exists(cand):
+            object_names.add(cand)
+
+    object_handlers: Dict[str, MujocoObjectHandler] = {}
     for object_name in object_names:
         body_name = object_name
         if mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, f"{object_name}_gs") >= 0:

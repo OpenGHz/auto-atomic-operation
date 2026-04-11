@@ -1,6 +1,6 @@
 from enum import Enum
 from typing import Dict, List, Optional, Tuple, Union
-from pydantic import BaseModel, ConfigDict, ImportString, Field
+from pydantic import BaseModel, ConfigDict, ImportString, Field, field_validator
 
 
 Position = Tuple[float, float, float]
@@ -191,7 +191,8 @@ class PlacedToleranceConfig(BaseModel, extra="forbid"):
 class PoseRandomRange(BaseModel):
     """Per-entity pose randomization bounds.
 
-    The ``reference`` field selects one of three modes:
+    The ``reference`` field selects one of three modes, **or** names
+    another entity to track:
 
     - ``"relative"`` (default): each per-axis ``[min, max]`` range is an
       additive offset applied to the entity's default/initial pose.
@@ -202,6 +203,12 @@ class PoseRandomRange(BaseModel):
       operator's base frame. The sampled pose is then transformed into
       world frame before being applied. Only valid for operator
       end-effector randomization.
+    - **Entity name** (e.g. ``"vase1"``): the referenced entity is
+      randomized first; its displacement from its default pose is
+      computed (``delta = sampled * default⁻¹``) and applied to this
+      entity's default pose so they move together. Then the per-axis
+      ranges are applied as additive offsets on top, just like
+      ``relative`` mode.
 
     A ``None`` value on an axis (the default) means "do not randomize
     this axis" — it keeps its value from the default pose (in the
@@ -217,25 +224,25 @@ class PoseRandomRange(BaseModel):
           source_block:
             x: [-0.03, 0.03]
             y: [-0.03, 0.03]
-            yaw: [-0.524, 0.524]
             collision_radius: 0.04
 
         # Absolute world-frame: sampled as world-frame coordinates
         randomization:
-          arm:
+          vase1:
             reference: absolute_world
             x: [0.10, 0.45]
             y: [-0.15, 0.15]
-            # z/roll/pitch/yaw omitted → kept at default pose values
 
-        # Absolute base-frame: sampled in the operator's base frame,
-        # transformed to world before being applied (operator eef only)
+        # Entity reference: carry flower with vase1, then jitter ±5mm
         randomization:
-          arm:
-            reference: absolute_base
-            x: [0.20, 0.35]
-            y: [-0.10, 0.10]
-            z: [0.15, 0.25]
+          vase1:
+            reference: absolute_world
+            x: [0.22, 0.58]
+            y: [-0.32, 0.27]
+          flower:
+            reference: vase1
+            x: [-0.005, 0.005]
+            y: [-0.005, 0.005]
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -258,12 +265,24 @@ class PoseRandomRange(BaseModel):
     yaw: Optional[Tuple[float, float]] = None
     """[min, max] range for the yaw Euler angle (radians), or ``None`` to
     leave this axis at the default-pose value."""
-    reference: RandomizationReference = RandomizationReference.RELATIVE
-    """Whether the per-axis ranges are interpreted as relative offsets from
-    the default pose (``relative``, default) or as absolute world-frame
-    values (``absolute``)."""
+    reference: Union[RandomizationReference, str] = RandomizationReference.RELATIVE
+    """One of the :class:`RandomizationReference` modes (``"relative"``,
+    ``"absolute_world"``, ``"absolute_base"``) or the **name of another
+    entity**. An entity name causes this entry to track the referenced
+    entity's displacement (delta-carry) and then apply the per-axis
+    ranges as relative offsets on top."""
     collision_radius: float = 0.05
     """Approximate bounding radius used for pairwise collision rejection (metres)."""
+
+    @field_validator("reference", mode="before")
+    @classmethod
+    def _coerce_reference(cls, v: object) -> object:
+        if isinstance(v, str) and not isinstance(v, RandomizationReference):
+            try:
+                return RandomizationReference(v)
+            except ValueError:
+                return v  # entity name — validated at sample time
+        return v
 
 
 class PoseControlConfig(BaseModel):

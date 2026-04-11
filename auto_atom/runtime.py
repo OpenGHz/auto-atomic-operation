@@ -963,6 +963,13 @@ class TaskRunner:
                     "field (e.g. BASE) and use 'absolute_world' or "
                     "'relative' instead."
                 )
+            if not isinstance(rand.reference, RandomizationReference):
+                raise ValueError(
+                    f"Per-waypoint randomization does not support "
+                    f"entity-name references (got "
+                    f"reference={rand.reference!r}). Use 'relative' or "
+                    f"'absolute_world' instead."
+                )
             is_absolute = rand.reference == RandomizationReference.ABSOLUTE_WORLD
             pos_ranges = (rand.x, rand.y, rand.z)
             rot_ranges = (rand.roll, rand.pitch, rand.yaw)

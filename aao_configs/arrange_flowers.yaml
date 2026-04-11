@@ -19,10 +19,16 @@ env:
 
 task:
   randomization:
+    vase:
+      x: [0.22, 0.58]
+      y: [-0.32, 0.27]
+      collision_radius: 0.04
+      reference: absolute_world
     flower:
       x: [-0.005, 0.005]
       y: [-0.005, 0.005]
       collision_radius: 0.04
+      reference: vase
     vase2:
       x: [0.22, 0.58]
       y: [-0.32, 0.27]

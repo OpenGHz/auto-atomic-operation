@@ -63,6 +63,7 @@ interpreted:
 | `relative` (default) | Sampled values are **added** to the entity's default pose (the existing behavior). |
 | `absolute_world`  | Sampled values are **absolute world-frame** coordinates (metres) / Euler angles (rad). |
 | `absolute_base`   | Sampled values are absolute coordinates in the **operator's base frame**, then transformed to world before being applied. **Only valid for operator EEF randomization** (direct operator form or the nested `eef:` sub-entry). |
+| `<entity_name>`   | **Entity-reference mode.** The referenced entity is randomized first (dependency ordering via topological sort). Then a **delta-carry** is applied: `delta = ref_sampled * ref_default⁻¹` is computed and applied to this entity's default pose, preserving the original spatial relationship. After carrying, the per-axis ranges are applied as additive offsets (like `relative` mode). |
 
 Examples:
 
@@ -97,6 +98,33 @@ task:
         y: [-0.05, 0.05]
         z: [0.20, 0.30]
 ```
+
+Entity-reference example (arrange_flowers: flower tracks vase):
+
+```yaml
+task:
+  randomization:
+    vase:
+      reference: absolute_world
+      x: [0.22, 0.58]
+      y: [-0.32, 0.27]
+    flower:
+      reference: vase            # carry with vase, then jitter ±5mm
+      x: [-0.005, 0.005]
+      y: [-0.005, 0.005]
+    vase2:
+      reference: absolute_world
+      x: [0.22, 0.58]
+      y: [-0.32, 0.27]
+```
+
+When `vase` moves from its default to a new position, the flower is "carried"
+by the same rigid displacement (preserving the original spatial relationship),
+then receives its own small perturbation on top. This ensures the flower always
+stays inside the vase's opening regardless of where the vase is placed.
+
+The entries are automatically topologically sorted — `vase` is processed before
+`flower`. Circular references (A → B → A) raise a ``ValueError``.
 
 Restrictions on `absolute_base`:
 
