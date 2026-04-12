@@ -415,6 +415,28 @@ class AutoAtomConfig(BaseModel):
       randomization ranges.
     """
     randomization_debug: bool = False
+
+    @field_validator("randomization", mode="before")
+    @classmethod
+    def _strip_none_randomization_keys(cls, v: object) -> object:
+        """Remove ``None``-valued keys from each randomization entry.
+
+        Hydra/OmegaConf merges override ``key: null`` as ``key: None``
+        rather than deleting the key.  Stripping them here lets child
+        configs cleanly switch between direct and nested operator forms
+        without triggering Pydantic ``extra="forbid"`` errors.
+        """
+        if not isinstance(v, dict):
+            return v
+        return {
+            name: (
+                {k: val for k, val in entry.items() if val is not None}
+                if isinstance(entry, dict)
+                else entry
+            )
+            for name, entry in v.items()
+        }
+
     """When True the first N resets cycle through extreme poses (each axis at its min/max, then all-min and all-max) before switching to random sampling.  Use this to verify that configured ranges are not too large."""
 
 

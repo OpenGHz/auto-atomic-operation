@@ -30,6 +30,11 @@ env:
 task:
   # This task is sensitive to base placement, so keep base randomization tight.
   randomization:
+    arm:
+      base:
+        x: [-0.01, 0.01]
+        y: [-0.01, 0.01]
+        z: [-0.01, 0.01]
       eef:
         x: [0.05, 0.08]
         y: [-0.05, 0.05]
