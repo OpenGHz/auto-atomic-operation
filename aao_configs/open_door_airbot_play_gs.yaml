@@ -1,0 +1,14 @@
+defaults:
+  - open_door_airbot_play
+  - _self_
+
+model_name: demo_gs_airbot_play
+bg3dgs_name: door_bg
+
+env:
+  _target_: auto_atom.basis.mjc.gs_mujoco_env.BatchedGSUnifiedMujocoEnv
+  gaussian_render:
+    body_gaussians:
+      door_body: ${gs_dir}/door.ply
+      handle_gs_frame: ${gs_dir}/knob.ply
+      bg_gs_frame: ${assets_dir}/gs/backgrounds/${bg3dgs_name}.ply
