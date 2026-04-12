@@ -64,7 +64,7 @@ CONFIG_NAME, N, do_profile, overrides = _parse_args(sys.argv[1:])
 # User overrides can still override these (last wins in Hydra).
 bench_defaults = [
     "+env.viewer.disable=true",
-    "+env.to_numpy=true",
+    "+env.to_numpy=false",
     "+env.structured=true",
 ]
 overrides = bench_defaults + overrides

@@ -1,0 +1,22 @@
+<mujoco model="green_knob">
+  <worldbody>
+    <body name="green_knob">
+      <freejoint/>
+      <geom
+        name="green_knob_base"
+        type="cylinder"
+        pos="0 0 0.005"
+        size="0.020 0.005"
+        rgba="0.15 0.16 0.18 1"
+      />
+      <geom
+        name="green_knob_cap"
+        type="cylinder"
+        pos="0 0 0.016"
+        size="0.015 0.011"
+        rgba="0.24 0.72 0.32 1"
+      />
+      <site name="green_knob_tip" pos="0 0.012 0.016" size="0.002" rgba="1 1 1 1"/>
+    </body>
+  </worldbody>
+</mujoco>

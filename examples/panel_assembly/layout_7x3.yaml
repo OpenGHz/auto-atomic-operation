@@ -1,0 +1,38 @@
+panel:
+  xml: demo_panel_base.xml
+  attach_to_body: panel_mount
+
+output_xml: generated/demo_panel_with_objects.xml
+
+layout:
+  coordinate_scale: 0.001
+  face_axes: [x, z]
+  x_coords: [-349.80, -233.20, -116.60, 0.0, 116.60, 233.20, 349.80]
+  y_coords: [120.0, 0.0, -120.0]
+  base_pos: [0.0, 30.0, 0.0]
+  default_quat: [1.0, 0.0, 0.0, 0.0]
+  remove_root_joints: true
+
+placements:
+  - - xml: objects/red_switch.xml
+    - xml: objects/green_knob.xml
+    - xml: objects/amber_lamp.xml
+    - xml: objects/red_switch.xml
+      pos_offset: [0.0, 0.0, 5.0]
+    - xml: objects/green_knob.xml
+    - xml: objects/amber_lamp.xml
+    - xml: objects/red_switch.xml
+  - - xml: objects/green_knob.xml
+    - xml: objects/amber_lamp.xml
+    - xml: objects/red_switch.xml
+    - null
+    - xml: objects/red_switch.xml
+    - xml: objects/green_knob.xml
+    - xml: objects/amber_lamp.xml
+  - - xml: objects/amber_lamp.xml
+    - xml: objects/red_switch.xml
+    - xml: objects/green_knob.xml
+    - xml: objects/amber_lamp.xml
+    - xml: objects/red_switch.xml
+    - xml: objects/green_knob.xml
+    - xml: objects/amber_lamp.xml

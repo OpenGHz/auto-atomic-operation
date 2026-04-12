@@ -33,6 +33,7 @@
 - **Tools**
   - [Data Collection](data_collection.md)
   - [Policy Evaluation](policy_evaluation.md)
+  - [Panel XML Assembly](panel_xml_assembly.md)
   - [Tune Initial State](tune_initial_state.md)
   - [Tune Randomization Extremes](tune_randomization_extremes.md)
   - [Save Rendering](save_rendering.md)

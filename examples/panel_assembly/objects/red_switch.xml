@@ -1,0 +1,25 @@
+<mujoco model="red_switch">
+  <asset>
+    <material name="red_switch_material" rgba="0.85 0.20 0.20 1"/>
+    <material name="switch_base_material" rgba="0.18 0.18 0.20 1"/>
+  </asset>
+
+  <worldbody>
+    <body name="red_switch">
+      <geom
+        name="red_switch_base"
+        type="box"
+        pos="0 0 0.012"
+        size="0.025 0.008 0.012"
+        material="switch_base_material"
+      />
+      <geom
+        name="red_switch_toggle"
+        type="box"
+        pos="0 0 0.032"
+        size="0.008 0.006 0.020"
+        material="red_switch_material"
+      />
+    </body>
+  </worldbody>
+</mujoco>

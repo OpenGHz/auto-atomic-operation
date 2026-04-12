@@ -1,0 +1,33 @@
+<mujoco model="amber_lamp">
+  <default>
+    <default class="amber_lamp_geom">
+      <geom contype="1" conaffinity="1"/>
+    </default>
+  </default>
+
+  <asset>
+    <material name="amber_lamp_shell" rgba="0.16 0.16 0.18 1"/>
+    <material name="amber_lamp_glow" rgba="0.98 0.72 0.18 0.95"/>
+  </asset>
+
+  <worldbody>
+    <body name="amber_lamp">
+      <geom
+        name="amber_lamp_base"
+        class="amber_lamp_geom"
+        type="box"
+        pos="0 0 0.006"
+        size="0.020 0.010 0.006"
+        material="amber_lamp_shell"
+      />
+      <geom
+        name="amber_lamp_cover"
+        class="amber_lamp_geom"
+        type="sphere"
+        pos="0 0 0.022"
+        size="0.014"
+        material="amber_lamp_glow"
+      />
+    </body>
+  </worldbody>
+</mujoco>
