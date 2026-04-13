@@ -24,7 +24,7 @@ from omegaconf import DictConfig, OmegaConf
 from PIL import Image
 from pydantic import BaseModel, Field
 
-from auto_atom import ExecutionContext, PolicyEvaluator, TaskUpdate
+from auto_atom import ExecutionContext, PolicyEvaluator
 from auto_atom.runner.common import get_config_dir, prepare_task_file
 
 
@@ -281,9 +281,6 @@ def main(cfg: DictConfig) -> None:
     project_root = hydra.utils.get_original_cwd()
     demo_npz_path = os.path.join(
         project_root, "outputs", "records", "demos", f"{demo_name}.npz"
-    )
-    demo_json_path = os.path.join(
-        project_root, "outputs", "records", "demos", f"{demo_name}.json"
     )
     video_dir = os.path.join(project_root, "outputs", "records", "videos")
     os.makedirs(video_dir, exist_ok=True)

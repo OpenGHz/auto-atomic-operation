@@ -20,6 +20,8 @@ Extra Hydra overrides:
     python examples/record_demo.py +recorder.fps=15
     python examples/record_demo.py +recorder.gif_width=480
     python examples/record_demo.py +recorder.max_updates=200
+    python examples/record_demo.py +recorder.frame_downsample=2
+    python examples/record_demo.py +recorder.frame_downsample=3 +recorder.downsample_sync_fps=false
 """
 
 import json
@@ -42,6 +44,8 @@ class RecorderConfig(BaseModel):
     fps: int = Field(default=25)
     gif_width: int = Field(default=320)
     max_updates: int | None = Field(default=None, ge=0)
+    frame_downsample: int = Field(default=1, ge=1)
+    downsample_sync_fps: bool = Field(default=True)
     save_gif: bool = Field(default=False)
     save_mp4: bool = Field(default=False)
     save_demo: bool = Field(default=True)
@@ -276,31 +280,38 @@ def main(cfg: DictConfig) -> None:
         suffix = "" if batch_size == 1 else f"_env{env_index}"
         return os.path.join(video_dir, f"{config_name}{suffix}.{ext}")
 
+    ds = rec_cfg.frame_downsample
+    video_fps = (
+        rec_cfg.fps / ds if ds > 1 and rec_cfg.downsample_sync_fps else rec_cfg.fps
+    )
+
     if rec_cfg.save_mp4:
         for env_index, env_frames in enumerate(frames_by_env):
+            out_frames = env_frames[::ds]
             mp4_path = build_video_path("mp4", env_index)
-            iio.imwrite(
-                mp4_path, env_frames, fps=rec_cfg.fps, codec="libx264", quality=8
-            )
+            iio.imwrite(mp4_path, out_frames, fps=video_fps, codec="libx264", quality=8)
             print(
                 f"\nSaved MP4 for env {env_index} "
-                f"({len(env_frames)} frames @ {rec_cfg.fps} fps): {mp4_path}"
+                f"({len(out_frames)} frames @ {video_fps} fps, "
+                f"downsample={ds}): {mp4_path}"
             )
 
     if rec_cfg.save_gif:
-        gif_fps = min(rec_cfg.fps, 15)
+        gif_fps = min(video_fps, 15)
         for env_index, env_frames in enumerate(frames_by_env):
-            h, w = env_frames[0].shape[:2]
+            sampled = env_frames[::ds]
+            h, w = sampled[0].shape[:2]
             gif_height = int(rec_cfg.gif_width * h / w)
             gif_frames = [
                 np.array(Image.fromarray(f).resize((rec_cfg.gif_width, gif_height)))
-                for f in env_frames
+                for f in sampled
             ]
             gif_path = build_video_path("gif", env_index)
             iio.imwrite(gif_path, gif_frames, fps=gif_fps, loop=0)
             print(
                 f"Saved GIF for env {env_index} "
-                f"({len(gif_frames)} frames @ {gif_fps} fps): {gif_path}"
+                f"({len(gif_frames)} frames @ {gif_fps} fps, "
+                f"downsample={ds}): {gif_path}"
             )
 
     if rec_cfg.save_demo:
