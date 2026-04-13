@@ -823,7 +823,7 @@ class BatchedGSUnifiedMujocoEnv(BatchedUnifiedMujocoEnv):
                 )
             elif any_color:
                 # Color-only group — still batch all cameras
-                bg_imgs = self._get_cached_bg_multicam(
+                cached = self._get_cached_bg_multicam(
                     cam_ids,
                     W,
                     H,
@@ -834,6 +834,7 @@ class BatchedGSUnifiedMujocoEnv(BatchedUnifiedMujocoEnv):
                     body_quat,
                     use_cache=is_static,
                 )
+                bg_imgs = cached[0] if cached is not None else None
                 fg_rgb, _ = self._fg_gs_renderer.batch_env_render(
                     fg_gsb, cam_pos, cam_xmat, H, W, fovy, bg_imgs=bg_imgs
                 )
