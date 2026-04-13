@@ -3,7 +3,60 @@
 auto_atom supports per-entity pose randomization applied at each `reset()`.
 This is used to evaluate task robustness under varying initial conditions.
 
-## YAML Configuration
+## Initial Pose Override
+
+Before randomization is applied, you can override any object's initial pose
+(the baseline that randomization offsets from) using `initial_pose` under
+`task`.  This lets you set object positions from YAML without editing the
+MuJoCo XML or keyframe.  Both **freejoint** and **static** (fixed) bodies
+are supported.
+
+```yaml
+task:
+  initial_pose:
+    source_block:
+      position: [0.1, 0.0, 0.078]
+      orientation: [0, 0, 0, 1]        # quaternion xyzw
+    cup:
+      position: [0.3, 0.1, 0.085]
+      # orientation omitted → keeps keyframe default
+    button_blue:
+      position: [-0.01, -0.04, 0.08]   # static body — also works
+```
+
+### Fields
+
+| Field          | Format                                  | Default |
+|----------------|-----------------------------------------|---------|
+| `position`     | `[x, y, z]` — world-frame metres       | `null` (keep keyframe) |
+| `orientation`  | 4 floats: quaternion `[x, y, z, w]` **or** 3 floats: Euler `[roll, pitch, yaw]` in radians | `null` (keep keyframe) |
+
+Both fields are optional.  Omitting a field keeps the value defined in the
+XML keyframe for that component.
+
+### Interaction with randomization
+
+`initial_pose` is applied **after** the keyframe reset and **before**
+`_record_default_poses()`.  This means:
+
+- The initial pose becomes the new **default/baseline** for randomization.
+- `reference: relative` adds offsets on top of the initial pose (not the
+  XML keyframe).
+- `reference: absolute_world` replaces sampled axes with absolute values
+  as usual; unsampled axes fall back to the initial pose.
+
+```yaml
+task:
+  initial_pose:
+    source_block:
+      position: [0.1, 0.0, 0.078]      # new baseline
+  randomization:
+    source_block:
+      x: [-0.03, 0.03]                  # jitters around x=0.1
+      y: [-0.03, 0.03]
+```
+
+## Randomization YAML Configuration
 
 Add a `randomization` block under `task` in your YAML config.
 Keys are object or operator names.

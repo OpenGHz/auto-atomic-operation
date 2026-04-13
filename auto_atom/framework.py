@@ -390,6 +390,31 @@ class OperatorRandomizationConfig(BaseModel):
     eef: Optional[PoseRandomRange] = None
 
 
+class InitialPoseConfig(BaseModel):
+    """Per-object initial pose override applied after keyframe reset, before randomization.
+
+    When ``position`` or ``orientation`` is omitted the keyframe default is kept
+    for that component.  Orientation accepts either 4 floats (quaternion xyzw)
+    or 3 floats (Euler roll, pitch, yaw in radians).
+
+    Example YAML::
+
+        initial_pose:
+          source_block:
+            position: [0.1, 0.0, 0.078]
+            orientation: [0, 0, 0, 1]
+          cup:
+            position: [0.3, 0.1, 0.085]
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    position: Optional[List[float]] = None
+    """[x, y, z] world-frame position override."""
+    orientation: Optional[List[float]] = None
+    """Quaternion (4 floats, xyzw) or Euler angles (3 floats, roll/pitch/yaw in radians)."""
+
+
 class AutoAtomConfig(BaseModel):
     """Configuration for the AutoAtom operator."""
 
@@ -401,6 +426,10 @@ class AutoAtomConfig(BaseModel):
     """The registered environment name used to resolve the basis environment instance for the selected scene."""
     seed: int = 0
     """The random seed for the AutoAtom operator. This is used to ensure reproducibility of the operator's behavior."""
+    initial_pose: Dict[str, InitialPoseConfig] = Field(default_factory=dict)
+    """Per-object initial pose overrides applied after keyframe reset, before
+    randomization.  Keys are object names matching the MuJoCo body (or stage
+    ``object`` field).  Supports both freejoint and static bodies."""
     randomization: Dict[str, Union[PoseRandomRange, OperatorRandomizationConfig]] = (
         Field(default_factory=dict)
     )
@@ -416,15 +445,15 @@ class AutoAtomConfig(BaseModel):
     """
     randomization_debug: bool = False
 
-    @field_validator("randomization", mode="before")
+    @field_validator("initial_pose", "randomization", mode="before")
     @classmethod
-    def _strip_none_randomization_keys(cls, v: object) -> object:
-        """Remove ``None``-valued keys from each randomization entry.
+    def _strip_none_keys(cls, v: object) -> object:
+        """Remove ``None``-valued keys from each entry.
 
         Hydra/OmegaConf merges override ``key: null`` as ``key: None``
         rather than deleting the key.  Stripping them here lets child
-        configs cleanly switch between direct and nested operator forms
-        without triggering Pydantic ``extra="forbid"`` errors.
+        configs cleanly switch between forms without triggering Pydantic
+        ``extra="forbid"`` errors.
         """
         if not isinstance(v, dict):
             return v

@@ -13,6 +13,7 @@ from ...framework import (
     ArmPoseConfig,
     AutoAtomConfig,
     EefControlConfig,
+    InitialPoseConfig,
     OperatorRandomizationConfig,
     OperatorConfig,
     PlacedToleranceConfig,
@@ -746,6 +747,7 @@ class MujocoTaskBackend(SceneBackend):
     randomization: Dict[str, PoseRandomRange | OperatorRandomizationConfig] = field(
         default_factory=dict
     )
+    initial_poses: Dict[str, InitialPoseConfig] = field(default_factory=dict)
     random_seed: Optional[int] = None
     randomization_debug: bool = False
     _rng: np.random.Generator = field(init=False, repr=False)
@@ -777,6 +779,8 @@ class MujocoTaskBackend(SceneBackend):
     def setup(self, config: AutoAtomConfig) -> None:
         for operator in self.operator_handlers.values():
             operator.home()
+        if self.initial_poses:
+            self._apply_initial_poses()
         self._record_default_poses()
 
     def reset(self, env_mask: Optional[np.ndarray] = None) -> None:
@@ -784,6 +788,8 @@ class MujocoTaskBackend(SceneBackend):
         self.env.reset(mask)
         for operator in self.operator_handlers.values():
             operator.home(mask)
+        if self.initial_poses:
+            self._apply_initial_poses(mask)
         if not (
             self._default_object_poses
             or self._default_operator_base_poses
@@ -821,6 +827,38 @@ class MujocoTaskBackend(SceneBackend):
         for name, handler in self.operator_handlers.items():
             self._default_operator_base_poses[name] = handler.get_base_pose()
             self._default_operator_eef_poses[name] = handler.get_end_effector_pose()
+
+    def _apply_initial_poses(self, env_mask: np.ndarray | None = None) -> None:
+        """Apply per-object initial pose overrides from config.
+
+        Called after keyframe reset and operator homing, before default-pose
+        recording and randomization.  Only the specified components (position
+        and/or orientation) are overridden; the rest keep their keyframe value.
+        """
+        for name, cfg in self.initial_poses.items():
+            handler = self.object_handlers.get(name)
+            if handler is None:
+                continue
+            current = handler.get_pose()
+            pos = current.position
+            ori = current.orientation
+            if cfg.position is not None and len(cfg.position) >= 3:
+                pos = np.array(cfg.position[:3], dtype=np.float64)
+            if cfg.orientation is not None:
+                if len(cfg.orientation) == 3:
+                    ori = euler_to_quaternion(
+                        (cfg.orientation[2], cfg.orientation[1], cfg.orientation[0])
+                    )
+                elif len(cfg.orientation) == 4:
+                    ori = np.array(cfg.orientation, dtype=np.float64)
+                else:
+                    raise ValueError(
+                        f"initial_pose[{name!r}].orientation must be 3 floats "
+                        f"(Euler) or 4 floats (quaternion), got {len(cfg.orientation)}"
+                    )
+            handler.set_pose(
+                PoseState(position=pos, orientation=ori), env_mask=env_mask
+            )
 
     # ------------------------------------------------------------------
     #  Randomization: ordering, reference resolution, and application
@@ -1369,6 +1407,10 @@ def build_mujoco_backend(
             if isinstance(ref, str) and not isinstance(ref, RandomizationReference):
                 if ref not in operator_handlers:
                     _rand_candidate_names.add(ref)
+    # Also register objects mentioned in initial_pose.
+    for ip_name in config.initial_pose:
+        if ip_name not in operator_handlers:
+            _rand_candidate_names.add(ip_name)
     for cand in _rand_candidate_names:
         if _body_exists(cand):
             object_names.add(cand)
@@ -1401,6 +1443,7 @@ def build_mujoco_backend(
         operator_handlers=operator_handlers,
         object_handlers=object_handlers,
         randomization=dict(config.randomization),
+        initial_poses=dict(config.initial_pose),
         random_seed=config.seed if config.seed != 0 else None,
         randomization_debug=config.randomization_debug,
     )
