@@ -834,6 +834,11 @@ class MujocoTaskBackend(SceneBackend):
         Called after keyframe reset and operator homing, before default-pose
         recording and randomization.  Only the specified components (position
         and/or orientation) are overridden; the rest keep their keyframe value.
+
+        After setting each object's pose the recorded default is updated so
+        that subsequent randomization uses the new pose as its baseline.  This
+        allows callers to mutate ``self.initial_poses`` between resets for
+        per-episode initial conditions.
         """
         for name, cfg in self.initial_poses.items():
             handler = self.object_handlers.get(name)
@@ -859,6 +864,9 @@ class MujocoTaskBackend(SceneBackend):
             handler.set_pose(
                 PoseState(position=pos, orientation=ori), env_mask=env_mask
             )
+            # Keep recorded defaults in sync so randomization offsets from
+            # the (possibly dynamic) initial pose, not the stale keyframe.
+            self._default_object_poses[name] = handler.get_pose()
 
     # ------------------------------------------------------------------
     #  Randomization: ordering, reference resolution, and application
