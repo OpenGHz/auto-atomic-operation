@@ -747,6 +747,7 @@ class MujocoTaskBackend(SceneBackend):
     randomization: Dict[str, PoseRandomRange | OperatorRandomizationConfig] = field(
         default_factory=dict
     )
+    camera_randomization: Dict[str, PoseRandomRange] = field(default_factory=dict)
     initial_poses: Dict[str, InitialPoseConfig] = field(default_factory=dict)
     random_seed: Optional[int] = None
     randomization_debug: bool = False
@@ -758,6 +759,9 @@ class MujocoTaskBackend(SceneBackend):
         init=False, repr=False, default_factory=dict
     )
     _default_operator_eef_poses: Dict[str, PoseState] = field(
+        init=False, repr=False, default_factory=dict
+    )
+    _default_camera_poses: Dict[str, PoseState] = field(
         init=False, repr=False, default_factory=dict
     )
 
@@ -798,6 +802,8 @@ class MujocoTaskBackend(SceneBackend):
             self._record_default_poses()
         if self.randomization:
             self._apply_randomization(mask)
+        if self.camera_randomization:
+            self._apply_camera_randomization(mask)
         self.env.refresh_viewer()
 
     def teardown(self) -> None:
@@ -827,6 +833,8 @@ class MujocoTaskBackend(SceneBackend):
         for name, handler in self.operator_handlers.items():
             self._default_operator_base_poses[name] = handler.get_base_pose()
             self._default_operator_eef_poses[name] = handler.get_end_effector_pose()
+        for cam_name in self.camera_randomization:
+            self._default_camera_poses[cam_name] = self._get_camera_pose(cam_name)
 
     def _apply_initial_poses(self, env_mask: np.ndarray | None = None) -> None:
         """Apply per-object initial pose overrides from config.
@@ -1122,6 +1130,74 @@ class MujocoTaskBackend(SceneBackend):
                     )
                 orientation[env_index] = euler_to_quaternion((r_val, p_val, y_val))
         return PoseState(position=position, orientation=orientation)
+
+    # ------------------------------------------------------------------
+    #  Camera randomization
+    # ------------------------------------------------------------------
+
+    def _get_camera_pose(self, cam_name: str) -> PoseState:
+        """Read the current camera pose from ``model.cam_pos`` / ``model.cam_quat``
+        across all envs and return as a batched ``PoseState`` (xyzw quaternion)."""
+        positions = np.zeros((self.batch_size, 3), dtype=np.float64)
+        orientations = np.zeros((self.batch_size, 4), dtype=np.float64)
+        for env_index, single_env in enumerate(self.env.envs):
+            cam_id = mujoco.mj_name2id(
+                single_env.model, mujoco.mjtObj.mjOBJ_CAMERA, cam_name
+            )
+            if cam_id < 0:
+                raise KeyError(f"Camera '{cam_name}' not found in the MuJoCo model.")
+            positions[env_index] = single_env.model.cam_pos[cam_id]
+            qw, qx, qy, qz = single_env.model.cam_quat[cam_id]
+            orientations[env_index] = [qx, qy, qz, qw]  # wxyz → xyzw
+        return PoseState(position=positions, orientation=orientations)
+
+    def _set_camera_pose(
+        self,
+        cam_name: str,
+        pose: PoseState,
+        env_mask: np.ndarray,
+    ) -> None:
+        """Write a sampled camera pose back to ``model.cam_pos`` / ``model.cam_quat``."""
+        pose = pose.broadcast_to(self.batch_size)
+        for env_index, single_env in enumerate(self.env.envs):
+            if not env_mask[env_index]:
+                continue
+            cam_id = mujoco.mj_name2id(
+                single_env.model, mujoco.mjtObj.mjOBJ_CAMERA, cam_name
+            )
+            if cam_id < 0:
+                continue
+            x, y, z = pose.position[env_index]
+            qx, qy, qz, qw = pose.orientation[env_index]
+            single_env.model.cam_pos[cam_id] = [x, y, z]
+            single_env.model.cam_quat[cam_id] = [qw, qx, qy, qz]  # xyzw → wxyz
+            mujoco.mj_forward(single_env.model, single_env.data)
+
+    def _apply_camera_randomization(self, env_mask: np.ndarray) -> None:
+        """Sample and apply pose randomization for configured cameras."""
+        for cam_name, rand_range in self.camera_randomization.items():
+            ref = rand_range.reference
+            if ref == RandomizationReference.ABSOLUTE_BASE:
+                raise ValueError(
+                    f"Camera '{cam_name}' randomization cannot use "
+                    "'absolute_base' — cameras have no operator base frame."
+                )
+            if isinstance(ref, str) and not isinstance(ref, RandomizationReference):
+                raise ValueError(
+                    f"Camera '{cam_name}' randomization cannot use entity "
+                    f"reference '{ref}' — cameras do not participate in "
+                    "entity dependency ordering."
+                )
+            default_pose = self._default_camera_poses.get(cam_name)
+            if default_pose is None:
+                logging.getLogger(MujocoTaskBackend.__name__).warning(
+                    "Camera '%s' has no recorded default pose — skipping "
+                    "randomization.",
+                    cam_name,
+                )
+                continue
+            sampled = self._sample_random_pose(default_pose, rand_range, env_mask)
+            self._set_camera_pose(cam_name, sampled, env_mask)
 
     def get_element_pose(self, name: str, env_index: int = 0) -> PoseState:
         single_env = self.env.envs[env_index]
@@ -1451,6 +1527,7 @@ def build_mujoco_backend(
         operator_handlers=operator_handlers,
         object_handlers=object_handlers,
         randomization=dict(config.randomization),
+        camera_randomization=dict(config.camera_randomization),
         initial_poses=dict(config.initial_pose),
         random_seed=config.seed if config.seed != 0 else None,
         randomization_debug=config.randomization_debug,

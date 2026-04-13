@@ -443,9 +443,35 @@ class AutoAtomConfig(BaseModel):
     - ``OperatorRandomizationConfig`` with independent ``base`` and ``eef``
       randomization ranges.
     """
+    camera_randomization: Dict[str, PoseRandomRange] = Field(default_factory=dict)
+    """Per-camera pose randomization applied at each reset.
+
+    Keys are camera names as defined in the MuJoCo XML model.  Each entry
+    is a ``PoseRandomRange`` controlling which axes are randomized and how.
+
+    Only ``relative`` (default) and ``absolute_world`` reference modes are
+    supported.  ``absolute_base`` and entity-name references are rejected
+    because cameras have no operator base frame and do not participate in
+    entity dependency ordering.
+
+    Example YAML::
+
+        camera_randomization:
+          env1_cam:
+            x: [-0.05, 0.05]
+            y: [-0.05, 0.05]
+            pitch: [-0.1, 0.1]
+          env0_cam:
+            reference: absolute_world
+            x: [0.8, 1.0]
+            y: [-0.1, 0.1]
+            z: [0.4, 0.6]
+    """
     randomization_debug: bool = False
 
-    @field_validator("initial_pose", "randomization", mode="before")
+    @field_validator(
+        "initial_pose", "randomization", "camera_randomization", mode="before"
+    )
     @classmethod
     def _strip_none_keys(cls, v: object) -> object:
         """Remove ``None``-valued keys from each entry.

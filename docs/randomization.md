@@ -297,6 +297,61 @@ Semantics:
   the resulting motion stays reachable.
 - Debug mode (`randomization_debug: true`) also cycles per-waypoint extremes.
 
+## Camera Pose Randomization
+
+Camera viewpoint randomization is configured under `task.camera_randomization`.
+Keys are camera names as defined in the MuJoCo XML model. Each entry is a
+`PoseRandomRange` with the same axis fields as entity randomization.
+
+```yaml
+task:
+  camera_randomization:
+    env1_cam:
+      x: [-0.05, 0.05]       # metres, jitter around default position
+      y: [-0.05, 0.05]
+      z: [-0.02, 0.02]
+      pitch: [-0.1, 0.1]     # radians
+      yaw: [-0.1, 0.1]
+    env0_cam:
+      reference: absolute_world
+      x: [0.8, 1.0]
+      y: [-0.1, 0.1]
+      z: [0.4, 0.6]
+```
+
+### Reference modes
+
+Only `relative` (default) and `absolute_world` are supported for cameras:
+
+| `reference`       | Meaning                                                          |
+|-------------------|------------------------------------------------------------------|
+| `relative`        | Sampled values are **added** to the camera's default XML pose.   |
+| `absolute_world`  | Sampled values are **absolute world-frame** coordinates/angles.  |
+
+`absolute_base` and entity-name references are **rejected** because cameras have
+no operator base frame and do not participate in entity dependency ordering.
+
+### Semantics
+
+- Camera randomization is applied at each `reset()` **after** object and operator
+  randomization.
+- The default camera pose (the baseline for `relative` mode) is the pose defined
+  in the MuJoCo XML, snapshotted during `setup()`.
+- Cameras do **not** participate in `collision_radius` rejection — they have no
+  physical presence.
+- Camera randomization uses the same `task.seed` RNG as entity randomization for
+  full reproducibility.
+- Sampled camera poses are included in the `initial_poses` details returned by
+  `TaskRunner.reset()` under a `"_cameras"` key.
+
+### Interaction with GS rendering
+
+If a camera has `is_static: true` in the `env.cameras` config, its GS background
+is cached at the first render. Randomizing such a camera will change its
+viewpoint each episode while the cached background remains from the original
+pose. For cameras that should re-render the GS background after randomization,
+set `is_static: false`.
+
 ## How It Works
 
 The randomization logic lives in `SceneBackend` (the mixin used by `MujocoTaskBackend`).
@@ -325,6 +380,9 @@ The randomization logic lives in `SceneBackend` (the mixin used by `MujocoTaskBa
           axes there, then transforms the result back to world.
      4. Applies object poses, operator base poses, and operator home EEF
         poses through their respective APIs.
+   - Calls `_apply_camera_randomization()` (if `camera_randomization`
+     is configured) which samples camera poses and writes them to
+     `model.cam_pos` / `model.cam_quat` per environment.
    - Refreshes the viewer.
 
 3. **`TaskRunner.reset()`** — after the backend reset, collects the realized

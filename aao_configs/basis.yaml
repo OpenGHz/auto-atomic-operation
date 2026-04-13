@@ -59,6 +59,15 @@ task:
         y: [-0.32, 0.10]
         z: [-0.1, 0.1]
         collision_radius: 0.15
-
+  # camera_randomization:
+  #   env0_cam:
+  #     reference: absolute_world
+  #     x: [0.8, 1.0]
+  #     y: [-0.1, 0.1]
+  #     z: [0.4, 0.6]
+  #   env1_cam:
+  #     x: [-0.05, 0.05]
+  #     y: [-0.05, 0.05]
+  #     pitch: [-0.1, 0.1]
 task_operators:
   - name: arm

@@ -159,7 +159,11 @@ class EnvProtocol(Protocol):
     def capture_observation(self) -> Dict[str, Dict[str, Any]]: ...
 
     def apply_joint_action(
-        self, operator: str, action: Any, env_mask: Optional[np.ndarray] = None
+        self,
+        operator: str,
+        action: Any,
+        env_mask: Optional[np.ndarray] = None,
+        kinematic: bool = False,
     ) -> None: ...
 
     def apply_pose_action(
@@ -169,6 +173,7 @@ class EnvProtocol(Protocol):
         orientation: Any,
         gripper: Any = None,
         env_mask: Optional[np.ndarray] = None,
+        kinematic: bool = False,
     ) -> None: ...
 
 
@@ -1420,6 +1425,22 @@ class TaskRunner:
                 ),
             }
             initial_poses[name] = entry_details
+
+        # Collect camera poses if camera randomization is configured.
+        cam_rand = getattr(context.backend, "camera_randomization", {})
+        if cam_rand:
+            camera_poses: Dict[str, Any] = {}
+            get_cam_pose = getattr(context.backend, "_get_camera_pose", None)
+            if get_cam_pose is not None:
+                for cam_name in cam_rand:
+                    try:
+                        pose = get_cam_pose(cam_name).select(env_index)
+                        camera_poses[cam_name] = self._serialize_pose(pose)
+                    except (KeyError, AttributeError):
+                        continue
+            if camera_poses:
+                initial_poses["_cameras"] = camera_poses
+
         if not initial_poses:
             return {}
         return {"initial_poses": initial_poses}
