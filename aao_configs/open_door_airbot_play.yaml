@@ -112,3 +112,7 @@ task_operators:
       eef_type: none
       joint_control_mode: per_step_ik
     max_joint_delta: 0.35
+    initial_state:
+      base_pose:
+        position: [-0.25, -0.06, 0.0]  # should match the XML `link0` pose
+        orientation: [0, 0, 0, 1]

@@ -72,13 +72,14 @@ def load_demo(path: Path) -> dict:
 def action_applier(
     context: ExecutionContext, action: Any, env_mask: Optional[np.ndarray] = None
 ) -> None:
-    """One-liner: apply pose + gripper to the env."""
+    """Apply pose + gripper to the env (kinematic replay, no physics step)."""
     if action is not None:
         context.backend.env.apply_pose_action(
             "arm",
             action["position"],
             action["orientation"],
             action["gripper"],
+            kinematic=False,
         )
 
 

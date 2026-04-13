@@ -859,8 +859,10 @@ class UnifiedMujocoEnv(MujocoBasis):
             self.data.ctrl[:n] = ctrl[:n]
         self.update()
 
-    def apply_joint_action(self, operator: str, action) -> None:
-        """Apply joint angles (arm + gripper) for an operator and step.
+    def apply_joint_action(
+        self, operator: str, action, kinematic: bool = False
+    ) -> None:
+        """Apply joint angles (arm + gripper) for an operator.
 
         Parameters
         ----------
@@ -870,20 +872,49 @@ class UnifiedMujocoEnv(MujocoBasis):
             Target joint positions in radians.  The first ``n_arm`` elements
             map to ``arm_actuators`` and the remaining to ``eef_actuators``
             as declared in the YAML config.
+        kinematic : bool, optional
+            When True, directly set ``data.qpos`` and call ``mj_forward``
+            instead of writing to ``data.ctrl`` and running ``mj_step``.
+            This guarantees the exact joint positions are reached
+            regardless of physics.
         """
         action = np.asarray(action, dtype=np.float64).reshape(-1)
         arm_aidx = self._op_arm_aidx[operator]
         eef_aidx = self._op_eef_aidx[operator]
-        all_aidx = np.concatenate([arm_aidx, eef_aidx])
-        n = min(len(action), len(all_aidx))
-        ctrl = np.asarray(self.data.ctrl, dtype=np.float64).copy()
-        ctrl[all_aidx[:n]] = action[:n]
-        self.step(ctrl)
+        if kinematic:
+            arm_qidx = self._op_arm_qidx[operator]
+            eef_qidx = self._op_eef_qidx[operator]
+            arm_vidx = self._op_arm_vidx[operator]
+            eef_vidx = self._op_eef_vidx[operator]
+            all_qidx = np.concatenate([arm_qidx, eef_qidx])
+            all_vidx = np.concatenate([arm_vidx, eef_vidx])
+            n = min(len(action), len(all_qidx))
+            self.data.qpos[all_qidx[:n]] = action[:n]
+            if len(all_vidx) > 0:
+                self.data.qvel[all_vidx[: min(n, len(all_vidx))]] = 0.0
+            # Also update ctrl so that switching back to physics mode
+            # does not cause a sudden jump.
+            all_aidx = np.concatenate([arm_aidx, eef_aidx])
+            self.data.ctrl[all_aidx[:n]] = action[:n]
+            mujoco.mj_forward(self.model, self.data)
+            if self._viewer_running():
+                self._sync_viewer()
+        else:
+            all_aidx = np.concatenate([arm_aidx, eef_aidx])
+            n = min(len(action), len(all_aidx))
+            ctrl = np.asarray(self.data.ctrl, dtype=np.float64).copy()
+            ctrl[all_aidx[:n]] = action[:n]
+            self.step(ctrl)
 
     def apply_pose_action(
-        self, operator: str, position, orientation, gripper=None
+        self,
+        operator: str,
+        position,
+        orientation,
+        gripper=None,
+        kinematic: bool = False,
     ) -> None:
-        """Apply an EEF target pose (base frame) and optional gripper, then step.
+        """Apply an EEF target pose (base frame) and optional gripper.
 
         Internally uses IK (joint-mode) or mocap write (mocap-mode).
 
@@ -898,6 +929,12 @@ class UnifiedMujocoEnv(MujocoBasis):
         gripper : array-like, shape ``(n_eef,)``, optional
             Gripper actuator target(s).  Written to ``eef_actuators`` ctrl
             before stepping.  ``None`` keeps the current gripper ctrl.
+        kinematic : bool, optional
+            When True, the operator is teleported to the target pose
+            directly (``mj_forward`` only, no ``mj_step``).  This
+            guarantees the exact pose is reached regardless of physics.
+            When False (default), the pose is reached through the normal
+            physics simulation step.
         """
         pos = np.asarray(position).reshape(3)
         ori = np.asarray(orientation).reshape(4)
@@ -908,7 +945,53 @@ class UnifiedMujocoEnv(MujocoBasis):
             low = self.model.actuator_ctrlrange[eef_aidx[:n], 0]
             high = self.model.actuator_ctrlrange[eef_aidx[:n], 1]
             self.data.ctrl[eef_aidx[:n]] = np.clip(g[:n], low, high)
-        self.step_operator_toward_target(operator, pos, ori)
+        if kinematic:
+            self._teleport_operator_in_base(operator, pos, ori)
+        else:
+            self.step_operator_toward_target(operator, pos, ori)
+
+    def _teleport_operator_in_base(
+        self, op_name: str, pos_b: np.ndarray, quat_b: np.ndarray
+    ) -> None:
+        """Kinematic hard-set of operator EEF pose in base frame.
+
+        Like ``teleport_operator`` but accepts base-frame coordinates
+        (matching ``apply_pose_action``).  Only calls ``mj_forward``.
+        """
+        s = self._get_op(op_name)
+        if s.joint_mode:
+            eef_in_base = PoseState(
+                position=tuple(float(v) for v in pos_b),
+                orientation=tuple(float(v) for v in quat_b),
+            )
+            arm_qidx = self._op_arm_qidx[op_name]
+            arm_vidx = self._op_arm_vidx[op_name]
+            current_arm_qpos = self.data.qpos[arm_qidx].copy()
+            joint_targets = s.ik_solver.solve(eef_in_base, current_arm_qpos)
+            if joint_targets is not None:
+                self.data.qpos[arm_qidx] = joint_targets
+                s.planned_joint_start_qpos = np.asarray(
+                    joint_targets, dtype=np.float64
+                ).copy()
+                s.planned_joint_target_qpos = np.asarray(
+                    joint_targets, dtype=np.float64
+                ).copy()
+                s.planned_joint_progress = 1
+                s.planned_joint_steps_total = 1
+            if len(arm_vidx) > 0:
+                self.data.qvel[arm_vidx] = 0.0
+        else:
+            base_body_pos, base_body_quat = self._eef_in_base_to_base_body_world(
+                s, pos_b, quat_b
+            )
+            self._write_mocap_pose(
+                s, base_body_pos, base_body_quat, sync_freejoint=True
+            )
+        mujoco.mj_forward(self.model, self.data)
+        if self._viewer_running():
+            self._sync_viewer()
+        s.target_pos_in_base = pos_b.copy()
+        s.target_quat_in_base = quat_b.copy()
 
     def capture_observation(self) -> dict[str, dict[str, Any]]:
         return self._collect_obs(self.config.structured)
@@ -1556,6 +1639,7 @@ class BatchedUnifiedMujocoEnv:
         operator: str,
         action,
         env_mask: np.ndarray | None = None,
+        kinematic: bool = False,
     ) -> None:
         """Apply joint angles (arm + gripper) for an operator across envs.
 
@@ -1567,6 +1651,9 @@ class BatchedUnifiedMujocoEnv:
             If 1-D, broadcast to all envs.
         env_mask : array-like, optional
             Bool mask selecting which envs to step.
+        kinematic : bool, optional
+            When True, directly set qpos (no physics step).
+            See ``UnifiedMujocoEnv.apply_joint_action``.
         """
         action = np.asarray(action, dtype=np.float64)
         if action.ndim == 1:
@@ -1578,7 +1665,7 @@ class BatchedUnifiedMujocoEnv:
         )
         for i, env in enumerate(self.envs):
             if mask[i]:
-                env.apply_joint_action(operator, action[i])
+                env.apply_joint_action(operator, action[i], kinematic=kinematic)
 
     def apply_pose_action(
         self,
@@ -1587,6 +1674,7 @@ class BatchedUnifiedMujocoEnv:
         orientation,
         gripper=None,
         env_mask: np.ndarray | None = None,
+        kinematic: bool = False,
     ) -> None:
         """Apply an EEF pose target (base frame) + optional gripper across envs.
 
@@ -1598,6 +1686,9 @@ class BatchedUnifiedMujocoEnv:
         orientation : array-like, shape ``(4,)`` or ``(B, 4)``
         gripper : array-like, shape ``(n_eef,)`` or ``(B, n_eef)``, optional
         env_mask : array-like, optional
+        kinematic : bool, optional
+            When True, teleport the operator to the target pose directly
+            (no physics step).  See ``UnifiedMujocoEnv.apply_pose_action``.
         """
         pos = np.asarray(position)
         ori = np.asarray(orientation)
@@ -1618,7 +1709,11 @@ class BatchedUnifiedMujocoEnv:
         for i, env in enumerate(self.envs):
             if mask[i]:
                 env.apply_pose_action(
-                    operator, pos[i], ori[i], g[i] if g is not None else None
+                    operator,
+                    pos[i],
+                    ori[i],
+                    g[i] if g is not None else None,
+                    kinematic=kinematic,
                 )
 
     def update(self, env_mask: np.ndarray | None = None) -> None:
