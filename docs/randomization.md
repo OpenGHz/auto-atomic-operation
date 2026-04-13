@@ -24,6 +24,44 @@ task:
       position: [-0.01, -0.04, 0.08]   # static body — also works
 ```
 
+### Operator baseline via `task_operators`
+
+`task.initial_pose` only applies to scene objects. To change the baseline pose
+used for operator randomization, configure the operator under
+`task_operators[].initial_state`:
+
+```yaml
+task_operators:
+  - name: arm
+    initial_state:
+      base_pose:
+        position: [-0.45, -0.06, 0.0]  # should match the XML `link0` pose
+        orientation: [0, 0, 0, 1]
+
+task:
+  randomization:
+    arm:
+      base:
+        x: [-0.015, 0.015]
+        y: [-0.015, 0.015]
+```
+
+These initial-state overrides are applied before operator randomization
+defaults are recorded, so:
+
+- `task.randomization.arm.base` uses `initial_state.base_pose` as its baseline.
+- Direct `task.randomization.arm` and nested `task.randomization.arm.eef`
+  use `initial_state.arm` as their home EEF baseline.
+- `initial_state.eef` only sets the gripper/open-close control value; it does
+  not change the pose randomization baseline.
+- If an operator `initial_state` field is omitted, the baseline falls back to
+  the pose from the loaded scene / XML / operator registration state.
+
+For fixed-base arms such as Franka, keep `initial_state.base_pose` aligned with
+the robot root body pose in XML unless you intentionally want to shift the
+whole robot base from YAML. See [Tune Initial State](tune_initial_state.md) for
+a full breakdown of `base_pose`, `arm`, and `eef`.
+
 ### Fields
 
 | Field          | Format                                  | Default |
