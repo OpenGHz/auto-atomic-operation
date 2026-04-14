@@ -31,6 +31,7 @@ from auto_atom.basis.mjc.mujoco_basis import (
     MujocoBasis,
 )
 from numpy.typing import NDArray
+from auto_atom.runtime import ComponentRegistry
 
 
 if TYPE_CHECKING:
@@ -1472,8 +1473,6 @@ class BatchedUnifiedMujocoEnv:
             env_cfg = config.model_copy(update={"batch_size": 1, "viewer": viewer})
             self.envs.append(UnifiedMujocoEnv(env_cfg))
         if config.name:
-            from auto_atom.runtime import ComponentRegistry
-
             ComponentRegistry.register_env(config.name, self)
         self._key_creator = KeyCreator(self.config.structured)
 
