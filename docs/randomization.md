@@ -1,7 +1,56 @@
-# Pose Randomization
+# Scene Initialization & Randomization
 
-auto_atom supports per-entity pose randomization applied at each `reset()`.
-This is used to evaluate task robustness under varying initial conditions.
+auto_atom supports flexible scene initialization via YAML configuration:
+per-entity pose overrides, per-joint position overrides, and pose
+randomization applied at each `reset()`.  Together these let you set up
+initial conditions and evaluate task robustness without editing MuJoCo XML
+files.
+
+## Initial Joint Positions
+
+`initial_joint_positions` under `env` lets you override individual joint
+positions (qpos) after the keyframe reset.  This is useful for setting a
+specific arm configuration or gripper opening at startup.
+
+```yaml
+env:
+  initial_joint_positions:
+    joint1: 0.276
+    joint2: -1.651
+    joint3: 0.775
+    joint4: 1.981
+    joint5: 1.110
+    joint6: 0.408
+    xfg_claw_joint: 0.01        # gripper partially closed
+```
+
+### Semantics
+
+- Values are written directly to `data.qpos` after keyframe reset, before
+  `mj_forward`.
+- Joint names must match the names defined in the MuJoCo XML (including any
+  prefix added by `<attach … prefix="…"/>`).
+- For **parallel-linkage grippers** (e.g. xf9600, robotiq): the driven joint
+  and passive linkage joints are connected by equality constraints, which are
+  only resolved during `mj_step`.  The framework automatically runs a short
+  physics settle after setting initial joint positions when the model has
+  equality constraints, so passive joints converge to a constraint-consistent
+  state.
+- When `eef_mapper` is configured for the operator, `initial_joint_positions`
+  expects **raw joint values** (not finger distance), since it writes directly
+  to qpos.  For replay from mcap data where values are in finger-distance
+  space, the replay pipeline excludes eef joints from `initial_joint_positions`
+  and applies them through the mapper instead.
+- These overrides are applied **before** `_record_default_poses()`, so they
+  become the new baseline for any subsequent randomization.
+
+### Interaction with eef_mapper
+
+If the operator has an `eef_mapper` configured (see
+[eef_mapper](eef_mapper.md) or inline below), `capture_observation` reports
+finger distance and `apply_joint_action` accepts finger distance.  But
+`initial_joint_positions` bypasses the mapper — it sets raw qpos.  Keep this
+distinction in mind when mixing the two.
 
 ## Initial Pose Override
 
