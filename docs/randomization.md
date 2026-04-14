@@ -46,8 +46,8 @@ env:
 
 ### Interaction with eef_mapper
 
-If the operator has an `eef_mapper` configured (see
-[eef_mapper](eef_mapper.md) or inline below), `capture_observation` reports
+If the operator has an [`eef_mapper`](eef_mapper.md) configured,
+`capture_observation` reports
 finger distance and `apply_joint_action` accepts finger distance.  But
 `initial_joint_positions` bypasses the mapper — it sets raw qpos.  Keep this
 distinction in mind when mixing the two.

@@ -13,6 +13,7 @@
   - [Custom Backend](custom-backend.md)
   - [Mesh Density & Gravity](mesh_density_gravity_issue.md)
   - [Gripper Joint Semantics](gripper_joint_semantics.md)
+  - [EEF Mapper (Finger Distance)](eef_mapper.md)
   - [Joint State Observation](joint_state_observation.md)
   - [Pose Observation](pose_observation.md)
   - [Tactile Prefix Binding](tactile_prefix_binding.md)
@@ -32,6 +33,7 @@
 
 - **Tools**
   - [Data Collection](data_collection.md)
+  - [Data Replay](mcap_data_replay.md)
   - [Policy Evaluation](policy_evaluation.md)
   - [Panel XML Assembly](panel_xml_assembly.md)
   - [Tune Initial State](tune_initial_state.md)
