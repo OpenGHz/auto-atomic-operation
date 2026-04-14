@@ -430,9 +430,7 @@ class AutoAtomConfig(BaseModel):
     """Per-object initial pose overrides applied after keyframe reset, before
     randomization.  Keys are object names matching the MuJoCo body (or stage
     ``object`` field).  Supports both freejoint and static bodies."""
-    randomization: Dict[str, Union[PoseRandomRange, OperatorRandomizationConfig]] = (
-        Field(default_factory=dict)
-    )
+    randomization: Dict[str, Union[PoseRandomRange, OperatorRandomizationConfig]] = {}
     """Per-entity pose randomization applied at each reset.
 
     Objects accept a direct ``PoseRandomRange``.

@@ -3,16 +3,14 @@
 from __future__ import annotations
 
 import json
+import numpy as np
 from dataclasses import dataclass
 from pathlib import Path
 from pprint import pprint
 from time import perf_counter
 from typing import Any, Callable, Dict, List, Optional, Sequence
-
-import numpy as np
 from hydra.utils import instantiate
-from omegaconf import DictConfig, OmegaConf
-
+from omegaconf import DictConfig
 from auto_atom import (
     ComponentRegistry,
     ExecutionRecord,
@@ -20,6 +18,7 @@ from auto_atom import (
     TaskFileConfig,
     TaskUpdate,
 )
+from pydantic import BaseModel
 
 
 @dataclass
@@ -46,16 +45,14 @@ def list_demos(base_dir: Optional[Path] = None) -> None:
         print(f"  {name}")
 
 
-def prepare_task_file(cfg: DictConfig) -> TaskFileConfig:
+def prepare_task_file(
+    cfg: DictConfig, config_cls: BaseModel = TaskFileConfig
+) -> TaskFileConfig:
     ComponentRegistry.clear()
-    if "env" in cfg and cfg.env is not None:
-        instantiate(cfg.env)
-
-    raw = OmegaConf.to_container(cfg, resolve=True)
-    if not isinstance(raw, dict):
-        raise TypeError("Config root must be a mapping.")
-
-    return TaskFileConfig.model_validate(raw)
+    raw = instantiate(cfg)
+    # if not isinstance(raw, dict):
+    #     raise TypeError("Config root must be a mapping.")
+    return config_cls.model_validate(raw)
 
 
 def run_example_rounds(

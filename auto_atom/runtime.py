@@ -1832,8 +1832,7 @@ def load_task_file(path: str | Path) -> TaskFileConfig:
     if not isinstance(config, DictConfig):
         raise TypeError(f"YAML root must be a mapping: {config_path}")
 
-    if "env" in config and config.env is not None:
-        instantiate(config.env)
+    instantiate(config)
     raw = OmegaConf.to_container(config, resolve=True)
     if not isinstance(raw, dict):
         raise TypeError(f"YAML root must be a mapping: {config_path}")
@@ -1868,9 +1867,7 @@ def load_task_file_hydra(
     with initialize_config_dir(config_dir=resolved_dir, version_base=None):
         cfg = compose(config_name=config_name, overrides=overrides or [])
 
-    if "env" in cfg and cfg.env is not None:
-        hydra_instantiate(cfg.env)
-
+    hydra_instantiate(cfg)
     raw = OmegaConf.to_container(cfg, resolve=True)
     if not isinstance(raw, dict):
         raise TypeError("Config root must be a mapping.")

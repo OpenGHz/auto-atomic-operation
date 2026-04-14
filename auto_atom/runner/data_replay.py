@@ -12,7 +12,7 @@ import os
 from typing import Any, Dict, List, Optional
 
 import numpy as np
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from auto_atom.framework import TaskFileConfig
 from auto_atom.policy_eval import PolicyEvaluator
@@ -42,8 +42,6 @@ class DataReplayConfig(BaseModel):
     arm_topic: str = Field(default="/robot/right_arm/joint_state")
     gripper_topic: str = Field(default="/robot/right_gripper/joint_state")
     joint_name_mapping: Dict[str, str] = {"gripper": "xfg_claw_joint"}
-    gripper_range: List[float] = Field(default=[0.0, 0.09])
-    """Real gripper distance range [closed, open] in metres from mcap data."""
     kinematic: bool = Field(default=False)
     """If ``True`` the replay sets joint positions directly (no physics);
     if ``False`` the replay drives actuators through the physics engine."""
@@ -52,36 +50,20 @@ class DataReplayConfig(BaseModel):
 
 
 class DataReplayTaskFileConfig(TaskFileConfig):
-    """TaskFileConfig with an embedded :class:`DataReplayConfig`."""
+    """TaskFileConfig with an embedded :class:`DataReplayConfig`.
+
+    Object/operator randomization is automatically disabled for exact
+    trajectory reproduction.  Camera randomization is preserved.
+    """
 
     replay: DataReplayConfig = DataReplayConfig()
 
-
-# ---------------------------------------------------------------------------
-# Gripper rescaling
-# ---------------------------------------------------------------------------
-
-
-def _rescale_gripper_distance_to_ctrl(
-    values: np.ndarray,
-    src_range: list[float],
-    ctrl_range: tuple[float, float] | list[float],
-) -> np.ndarray:
-    """Map finger distance [closed, open] to actuator ctrl [open, closed]."""
-    src_closed, src_open = float(src_range[0]), float(src_range[1])
-    if abs(src_open - src_closed) < 1e-12:
-        return np.asarray(values, dtype=np.float32).copy()
-
-    ctrl_open = float(ctrl_range[0])
-    ctrl_closed = float(ctrl_range[1])
-    ctrl_min = min(ctrl_open, ctrl_closed)
-    ctrl_max = max(ctrl_open, ctrl_closed)
-
-    arr = np.asarray(values, dtype=np.float32)
-    scaled = ctrl_closed + (arr - src_closed) / (src_open - src_closed) * (
-        ctrl_open - ctrl_closed
-    )
-    return np.clip(scaled, ctrl_min, ctrl_max)
+    @model_validator(mode="after")
+    def _disable_object_randomization(self):
+        # Clear object/operator randomization for exact trajectory reproduction.
+        # camera_randomization is a separate AutoAtomConfig field and is preserved.
+        self.task.randomization.clear()
+        return self
 
 
 # ---------------------------------------------------------------------------
@@ -166,62 +148,6 @@ class McapDemo:
             reorder.append(mapped_names.index(act_name))
         self.joint = self.joint[:, reorder]
         self.joint_names = [actuator_names[i] for i in range(len(actuator_names))]
-
-    def rescale_gripper(
-        self,
-        eef_actuator_names: list[str],
-        src_range: list[float],
-        env_cfg: Any,
-        base_dir: str | None = None,
-    ) -> None:
-        """Rescale real gripper distance to MuJoCo actuator ctrl.
-
-        .. note::
-
-           When the operator has an ``eef_mapper`` configured (in
-           ``OperatorBinding``), the env's ``apply_joint_action`` already
-           converts user-space values (e.g. finger distance) to raw ctrl
-           values.  In that case calling this method is **not needed** —
-           the mcap data can stay in its original finger-distance space.
-           The caller should check for ``eef_mapper`` and skip this call.
-        """
-        import mujoco as mj
-        from omegaconf import OmegaConf
-
-        env_raw = (
-            OmegaConf.to_container(env_cfg, resolve=True)
-            if hasattr(env_cfg, "_metadata")
-            else env_cfg
-        )
-        model_path = env_raw.get("model_path")
-        if model_path is None:
-            model_path = env_raw.get("config", {}).get("model_path")
-        if model_path is None:
-            print("Warning: cannot resolve model_path; skipping gripper rescale.")
-            return
-        model_path = str(model_path)
-        if not os.path.isabs(model_path):
-            model_path = os.path.join(base_dir or os.getcwd(), model_path)
-        model = mj.MjModel.from_xml_path(str(model_path))
-
-        src_lo, src_hi = float(src_range[0]), float(src_range[1])
-        if abs(src_hi - src_lo) < 1e-12:
-            return
-
-        for act_name in eef_actuator_names:
-            if act_name not in self.joint_names:
-                continue
-            col = self.joint_names.index(act_name)
-            aid = mj.mj_name2id(model, mj.mjtObj.mjOBJ_ACTUATOR, act_name)
-            if aid < 0:
-                continue
-            dst_lo = float(model.actuator_ctrlrange[aid, 0])
-            dst_hi = float(model.actuator_ctrlrange[aid, 1])
-            self.joint[:, col] = _rescale_gripper_distance_to_ctrl(
-                self.joint[:, col],
-                src_range=[src_lo, src_hi],
-                ctrl_range=[dst_lo, dst_hi],
-            )
 
 
 def _load_mcap_demo(mcap_path: str, arm_topic: str, gripper_topic: str) -> McapDemo:
@@ -418,6 +344,8 @@ def _apply_reset_action(context: ExecutionContext, action: Any) -> None:
 def _make_replay_action_applier(kinematic: bool = False):
     """Return an action applier closure with the configured *kinematic* flag."""
 
+    print(f"Replay action applier created with kinematic={kinematic}")
+
     def replay_action_applier(
         context: ExecutionContext, action: Any, env_mask: Optional[np.ndarray] = None
     ) -> None:
@@ -471,25 +399,14 @@ def _apply_first_frame_reset(
 def preprocess_replay_dictconfig(
     cfg: Any,
     replay_cfg: DataReplayConfig,
-    project_root: Optional[str] = None,
 ) -> None:
     """Pre-process a Hydra DictConfig for mcap replay **before** ``prepare_task_file``.
 
     This injects ``initial_joint_positions`` into ``cfg.env`` so the backend
-    resets the robot at the recorded starting configuration.  It also disables
-    task randomization for exact trajectory reproduction.
+    resets the robot at the recorded starting configuration.
 
     Call this *before* ``prepare_task_file(cfg)`` when ``replay_cfg.mcap_path``
     is set.  For npz demos no pre-processing is needed.
-
-    Parameters
-    ----------
-    cfg:
-        A Hydra ``DictConfig`` (with ``open_dict`` support).
-    replay_cfg:
-        The replay settings – ``mcap_path`` must be non-``None``.
-    project_root:
-        Base directory for resolving relative paths.  Defaults to ``os.getcwd()``.
     """
     from omegaconf import open_dict
 
@@ -497,9 +414,8 @@ def preprocess_replay_dictconfig(
     if mcap_path is None:
         return
 
-    root = project_root or os.getcwd()
     if not os.path.isabs(mcap_path):
-        mcap_path = os.path.join(root, mcap_path)
+        mcap_path = os.path.join(os.getcwd(), mcap_path)
     if not os.path.exists(mcap_path):
         raise FileNotFoundError(f"MCAP file not found: {mcap_path}")
 
@@ -512,22 +428,12 @@ def preprocess_replay_dictconfig(
     actuator_names = list(op_cfg.arm_actuators) + list(op_cfg.eef_actuators)
     mcap_demo.align_to_actuators(actuator_names, replay_cfg.joint_name_mapping or None)
 
-    # When eef_mapper is configured, apply_joint_action already converts
-    # finger-distance values to ctrl — no manual rescaling needed.
-    has_eef_mapper = getattr(op_cfg, "eef_mapper", None) is not None
-    if not has_eef_mapper:
-        mcap_demo.rescale_gripper(
-            eef_actuator_names=list(op_cfg.eef_actuators),
-            src_range=replay_cfg.gripper_range,
-            env_cfg=cfg.env,
-            base_dir=root,
-        )
-
     init_jpos = mcap_demo.first_frame_joint_positions()
     # When eef_mapper is configured, the mcap eef values are in user-space
     # (e.g. finger distance), not raw joint values.  Exclude them from
     # initial_joint_positions (which writes directly to qpos) — the reset
     # action path will apply them through the mapper instead.
+    has_eef_mapper = getattr(op_cfg, "eef_mapper", None) is not None
     if has_eef_mapper:
         eef_names = set(op_cfg.eef_actuators)
         init_jpos = {k: v for k, v in init_jpos.items() if k not in eef_names}
@@ -536,11 +442,6 @@ def preprocess_replay_dictconfig(
             cfg.env.initial_joint_positions = {}
         cfg.env.initial_joint_positions.update(init_jpos)
     print(f"Injected initial_joint_positions: {init_jpos}")
-
-    # Disable randomization for exact trajectory reproduction.
-    with open_dict(cfg):
-        if "task" in cfg and "randomization" in cfg.task:
-            cfg.task.randomization = {}
 
 
 class DataReplayRunner(RunnerBase):
@@ -563,9 +464,23 @@ class DataReplayRunner(RunnerBase):
         self._current_action: Optional[Dict[str, Any]] = None
         self._action_step: int = 0
 
-    def from_config(self, config: DataReplayTaskFileConfig) -> DataReplayRunner:
-        # config may come from TaskFileConfig.model_validate() which keeps
-        # extra fields as plain dicts; coerce to DataReplayConfig if needed.
+    def from_config(self, cfg) -> DataReplayRunner:
+        from omegaconf import DictConfig
+
+        if isinstance(cfg, DictConfig):
+            from omegaconf import OmegaConf, open_dict
+
+            from .common import prepare_task_file
+
+            replay_raw = OmegaConf.to_container(cfg.get("replay", {}), resolve=True)
+            replay_cfg = DataReplayConfig.model_validate(replay_raw or {})
+            preprocess_replay_dictconfig(cfg, replay_cfg)
+            with open_dict(cfg):
+                cfg.replay = OmegaConf.create(replay_cfg.model_dump())
+            config = prepare_task_file(cfg, config_cls=DataReplayTaskFileConfig)
+        else:
+            config = cfg
+
         replay_raw = config.replay
         if isinstance(replay_raw, DataReplayConfig):
             self._replay_cfg = replay_raw
@@ -698,29 +613,18 @@ class DataReplayRunner(RunnerBase):
             rcfg.mode = "joint"
 
             # Align mcap column order to the YAML actuator declaration order.
-            task_file_raw = (
-                config.model_dump()
-                if config is not None and hasattr(config, "model_dump")
-                else {}
-            )
-            env_cfg = task_file_raw.get("env", {})
-            op_cfg = env_cfg.get("operators", {}).get("arm", {})
-            if op_cfg:
-                actuator_names = list(op_cfg.get("arm_actuators", [])) + list(
-                    op_cfg.get("eef_actuators", [])
+            from auto_atom import ComponentRegistry
+
+            env = ComponentRegistry.get_env(config.task.env_name)
+            op_binding = env.config.operators.get("arm")
+            if op_binding is not None:
+                actuator_names = list(op_binding.arm_actuators) + list(
+                    op_binding.eef_actuators
                 )
                 if actuator_names:
                     mcap_demo.align_to_actuators(
                         actuator_names, rcfg.joint_name_mapping or None
                     )
-                    eef_actuator_names = list(op_cfg.get("eef_actuators", []))
-                    has_eef_mapper = op_cfg.get("eef_mapper") is not None
-                    if eef_actuator_names and not has_eef_mapper:
-                        mcap_demo.rescale_gripper(
-                            eef_actuator_names=eef_actuator_names,
-                            src_range=rcfg.gripper_range,
-                            env_cfg=env_cfg,
-                        )
 
             demo: Dict[str, np.ndarray] = {"joint": mcap_demo.joint}
         else:

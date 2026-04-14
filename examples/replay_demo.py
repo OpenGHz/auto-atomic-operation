@@ -34,12 +34,8 @@ from PIL import Image
 from pydantic import Field
 
 from auto_atom import ExecutionContext
-from auto_atom.runner.common import get_config_dir, prepare_task_file
-from auto_atom.runner.data_replay import (
-    DataReplayConfig,
-    DataReplayRunner,
-    preprocess_replay_dictconfig,
-)
+from auto_atom.runner.common import get_config_dir
+from auto_atom.runner.data_replay import DataReplayConfig, DataReplayRunner
 
 
 # ---------------------------------------------------------------------------
@@ -147,22 +143,12 @@ def main(cfg: DictConfig) -> None:
     mp4_path = os.path.join(video_dir, f"{demo_name}_replay.mp4")
     gif_path = os.path.join(video_dir, f"{demo_name}_replay.gif")
 
-    # --- Mcap / randomization pre-processing (before prepare_task_file) ---
-    preprocess_replay_dictconfig(cfg, script_cfg, project_root=project_root)
-
-    # For npz demos, also disable randomization explicitly.
-    if script_cfg.mcap_path is None:
-        with open_dict(cfg):
-            if "task" in cfg and "randomization" in cfg.task:
-                cfg.task.randomization = {}
-
-    # --- Build TaskFileConfig with replay settings ---
-    script_cfg.demo_name = demo_name
-    script_cfg.demo_dir = os.path.join(project_root, "outputs", "records", "demos")
+    # --- Set replay overrides on DictConfig ---
     with open_dict(cfg):
-        cfg.replay = OmegaConf.create(script_cfg.model_dump())
-
-    task_file = prepare_task_file(cfg)
+        if "replay" not in cfg:
+            cfg.replay = {}
+        cfg.replay.demo_name = demo_name
+        cfg.replay.demo_dir = os.path.join(project_root, "outputs", "records", "demos")
 
     # --- Camera frame capture ---
     frames: list[np.ndarray] = []
@@ -171,7 +157,7 @@ def main(cfg: DictConfig) -> None:
     # --- Run replay via DataReplayRunner ---
     runner = DataReplayRunner(
         observation_getter=observation_getter,
-    ).from_config(task_file)
+    ).from_config(cfg)
 
     try:
         runner.reset()
