@@ -21,8 +21,8 @@ Notes
    constraints that create internal forces, so qpos will NOT converge exactly
    to ctrl. The tests therefore check *monotonic tracking* and *bounded error*
    rather than exact equality.
-*  The xf9600 actuator (kp=5000) requires timestep ≤ 0.001 s for stability;
-   the test overrides ``model.opt.timestep`` to 0.001 before stepping.
+*  The xf9600 actuator uses a high-gain position loop, so the test overrides
+   ``model.opt.timestep`` to 0.001 before stepping for stable settling.
 *  Gravity is disabled so the robot doesn't fall; only the gripper actuator
    is exercised.
 """
@@ -73,7 +73,7 @@ def _load_model(cfg: dict) -> tuple[mujoco.MjModel, mujoco.MjData]:
     if not scene.exists():
         pytest.skip(f"Scene XML not found: {scene}")
     model = mujoco.MjModel.from_xml_path(str(scene))
-    model.opt.timestep = 0.001  # xf9600 kp=5000 needs ≤0.001 for stability
+    model.opt.timestep = 0.001  # keep the high-gain xf9600 gripper stable
     model.opt.gravity[:] = 0  # prevent robot from falling
     data = mujoco.MjData(model)
     return model, data

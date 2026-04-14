@@ -14,11 +14,11 @@ from hydra.utils import instantiate
 from omegaconf import DictConfig
 from pydantic import BaseModel
 
-from auto_atom import (
+from auto_atom.framework import TaskFileConfig
+from auto_atom.runtime import (
     ComponentRegistry,
     ExecutionRecord,
     ExecutionSummary,
-    TaskFileConfig,
     TaskUpdate,
 )
 

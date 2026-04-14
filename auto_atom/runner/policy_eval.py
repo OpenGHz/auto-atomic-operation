@@ -11,7 +11,7 @@ import numpy as np
 from hydra.utils import instantiate
 from omegaconf import DictConfig
 
-from auto_atom import ConfigDrivenDemoPolicy, PolicyEvaluator
+from auto_atom.policy_eval import ConfigDrivenDemoPolicy, PolicyEvaluator
 
 from .common import (
     ExampleLoopHooks,

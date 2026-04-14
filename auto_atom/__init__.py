@@ -16,7 +16,7 @@ from .framework import (
 from .mock import MockOperatorHandler, MockSceneBackend
 from .policy_eval import ConfigDrivenDemoPolicy, PolicyEvaluator
 
-# Deferred runner imports (after all other modules are loaded).
+# Runner imports last – runner subpackage depends on the modules above.
 from .runner.base import RunnerBase
 from .runner.data_replay import (
     DataReplayConfig,
