@@ -21,8 +21,8 @@
       </default>
 
       <default class="claw_joint">
-        <joint type="slide" axis="0 0 -1" range=".0 0.02" damping="5" frictionloss="20" armature="0.1" actuatorfrcrange="-50 50" />
-        <position kp="5000" kv="140" ctrlrange=".0 0.02" forcerange="-50 50" />
+        <joint type="slide" axis="0 0 -1" range=".0 0.02" damping="2" frictionloss="2" armature="0.02" actuatorfrcrange="-120 120" />
+        <position kp="9000" kv="220" ctrlrange=".0 0.02" forcerange="-120 120" />
       </default>
       <default class="l11j">
         <joint range="-1.28 1.28" />
