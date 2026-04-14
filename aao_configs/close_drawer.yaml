@@ -31,11 +31,11 @@ task:
       param:
         pre_move:
           # Step 1: align with handle height, stay 10 cm in front
-          - position: [0.0, -0.10, 0.0]
+          - position: [0.0, -0.10, 0.01]
             orientation: [0.5, 0.5, 0.5, 0.5]
             reference: object_world
           # Step 2: advance to grasp position — EEF at handle center in Y
-          - position: [0.0, 0.0, 0.0]
+          - position: [0.0, 0.0, 0.01]
             reference: object_world
         eef:
           close: true
