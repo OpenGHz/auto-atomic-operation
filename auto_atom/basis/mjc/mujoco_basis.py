@@ -844,6 +844,36 @@ class MujocoBasis:
             jid = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, joint_name)
             if jid >= 0:
                 self.data.qpos[int(self.model.jnt_qposadr[jid])] = qpos_val
+        if self.config.initial_joint_positions and self.model.neq > 0:
+            # Equality constraints (parallel linkage grippers, etc.) are only
+            # resolved during mj_step.  Pin the configured joints and step so
+            # passive joints settle to a constraint-consistent state.
+            pin_addrs = []
+            for jn in self.config.initial_joint_positions:
+                jid = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, jn)
+                if jid >= 0:
+                    pin_addrs.append(int(self.model.jnt_qposadr[jid]))
+            if pin_addrs:
+                # Also sync ctrl so the actuator doesn't fight the qpos.
+                for op in self._operators.values():
+                    for aidx in [
+                        self._op_arm_aidx[op.name],
+                        self._op_eef_aidx[op.name],
+                    ]:
+                        for ai in aidx:
+                            ji = self.model.actuator_trnid[ai, 0]
+                            if ji >= 0:
+                                self.data.ctrl[ai] = self.data.qpos[
+                                    self.model.jnt_qposadr[ji]
+                                ]
+                saved_gravity = self.model.opt.gravity.copy()
+                self.model.opt.gravity[:] = 0
+                target = self.data.qpos[pin_addrs].copy()
+                for _ in range(500):
+                    mujoco.mj_step(self.model, self.data)
+                    self.data.qpos[pin_addrs] = target
+                self.data.qvel[:] = 0.0
+                self.model.opt.gravity[:] = saved_gravity
         mujoco.mj_forward(self.model, self.data)
         self._sync_mocap_to_freejoint()
         self._prev_ctrl = None
