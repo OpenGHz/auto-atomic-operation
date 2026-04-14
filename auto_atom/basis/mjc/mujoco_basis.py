@@ -149,6 +149,21 @@ class OperatorBinding(BaseModel, frozen=True):
     freejoint: str = ""
     """Freejoint name for mocap operators."""
 
+    eef_mapper: Optional[Any] = None
+    """Optional mapper that remaps EEF observation and control values.
+
+    Instantiate via Hydra ``_target_``.  Must provide:
+
+    - ``bind(model, data)`` — called once after model load to resolve
+      geom/joint indices, build lookup tables, etc.
+    - ``obs_map(model, data, raw: np.ndarray) -> np.ndarray`` — forward
+      map from raw joint qpos / ctrl to user space (e.g. finger distance).
+    - ``ctrl_map(model, data, user: np.ndarray) -> np.ndarray`` — inverse
+      map from user space back to actuator ctrl values.
+
+    When ``None`` (default), raw qpos / ctrl values are used as-is.
+    """
+
     ik_factory: Optional[ImportString] = None
     """Import path to IK solver class/callable.  Called as
     ``ik_factory(model=model, arm_joint_names=names, **ik_params)``."""
@@ -332,6 +347,7 @@ class MujocoBasis:
         self._op_arm_vidx: dict[str, np.ndarray] = {}
         self._op_eef_vidx: dict[str, np.ndarray] = {}
         self._op_output_names: dict[str, tuple[str, str]] = {}
+        self._op_eef_mapper: dict[str, Any] = {}
         for op in self._operators.values():
             arm_aidx = self._resolve_actuator_indices(op.arm_actuators)
             eef_aidx = self._resolve_actuator_indices(op.eef_actuators)
@@ -347,6 +363,10 @@ class MujocoBasis:
                 op.arm_output_name or op.name,
                 op.eef_output_name,
             )
+            mapper = copy.deepcopy(op.eef_mapper) if op.eef_mapper is not None else None
+            if mapper is not None and hasattr(mapper, "bind"):
+                mapper.bind(self.model, self.data)
+            self._op_eef_mapper[op.name] = mapper
 
         self._camera_specs = {c.name: c for c in config.cameras}
         self._renderers: Dict[str, mujoco.Renderer] = {}

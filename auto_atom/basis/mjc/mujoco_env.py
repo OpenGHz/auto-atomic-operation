@@ -881,6 +881,19 @@ class UnifiedMujocoEnv(MujocoBasis):
         action = np.asarray(action, dtype=np.float64).reshape(-1)
         arm_aidx = self._op_arm_aidx[operator]
         eef_aidx = self._op_eef_aidx[operator]
+
+        # If an eef_mapper is configured, the caller provides eef values in
+        # user-space (e.g. finger distance).  Convert them back to raw ctrl
+        # values before writing to the simulation.
+        n_arm = len(arm_aidx)
+        eef_mapper = self._op_eef_mapper.get(operator)
+        if eef_mapper is not None and len(action) > n_arm and eef_aidx.size > 0:
+            action = action.copy()
+            eef_slice = slice(n_arm, n_arm + len(eef_aidx))
+            action[eef_slice] = eef_mapper.ctrl_map(
+                self.model, self.data, action[eef_slice]
+            )
+
         if kinematic:
             arm_qidx = self._op_arm_qidx[operator]
             eef_qidx = self._op_eef_qidx[operator]
@@ -896,6 +909,18 @@ class UnifiedMujocoEnv(MujocoBasis):
             # does not cause a sudden jump.
             all_aidx = np.concatenate([arm_aidx, eef_aidx])
             self.data.ctrl[all_aidx[:n]] = action[:n]
+            if self.model.neq > 0:
+                # Equality constraints (e.g. parallel-linkage grippers) are
+                # only resolved during mj_step, not mj_forward.  Run physics
+                # steps so passive joints settle while pinning the actuated
+                # joints at their targets, then zero velocities to restore a
+                # quiescent state.
+                target_qpos = self.data.qpos[all_qidx[:n]].copy()
+                for _ in range(1000):
+                    mujoco.mj_step(self.model, self.data)
+                    # Re-pin actuated joints so only passive joints drift.
+                    self.data.qpos[all_qidx[:n]] = target_qpos
+                self.data.qvel[:] = 0.0
             mujoco.mj_forward(self.model, self.data)
             if self._viewer_running():
                 self._sync_viewer()
@@ -941,6 +966,12 @@ class UnifiedMujocoEnv(MujocoBasis):
         if gripper is not None:
             eef_aidx = self._op_eef_aidx[operator]
             g = np.asarray(gripper, dtype=np.float64).reshape(-1)
+            eef_mapper = self._op_eef_mapper.get(operator)
+            if eef_mapper is not None:
+                g = np.asarray(
+                    eef_mapper.ctrl_map(self.model, self.data, g),
+                    dtype=np.float64,
+                )
             n = min(len(g), len(eef_aidx))
             low = self.model.actuator_ctrlrange[eef_aidx[:n], 0]
             high = self.model.actuator_ctrlrange[eef_aidx[:n], 1]
@@ -1015,15 +1046,24 @@ class UnifiedMujocoEnv(MujocoBasis):
                 (eef_name, eef_qidx, eef_vidx, eef_aidx),
             ]
 
+            eef_mapper = self._op_eef_mapper.get(op.name)
+
             if DataType.JOINT_POSITION in self.config.enabled_sensors:
                 if structured:
                     for limb, qidx, vidx, aidx in joint_components:
                         if qidx.size == 0 and vidx.size == 0 and aidx.size == 0:
                             continue
+                        raw_pos = self.data.qpos[qidx]
+                        raw_ctrl = self.data.ctrl[aidx]
+                        if limb == eef_name and eef_mapper is not None:
+                            raw_pos = eef_mapper.obs_map(self.model, self.data, raw_pos)
+                            raw_ctrl = eef_mapper.obs_map(
+                                self.model, self.data, raw_ctrl
+                            )
                         # Measurement side: real per-joint sensor values.
                         obs[kc.apply_prefix(f"{limb}/joint_state")] = {
                             "data": {
-                                "position": self.data.qpos[qidx].tolist(),
+                                "position": np.asarray(raw_pos).tolist(),
                                 "velocity": self.data.qvel[vidx].tolist(),
                                 "effort": self.data.actuator_force[aidx].tolist(),
                             },
@@ -1033,7 +1073,7 @@ class UnifiedMujocoEnv(MujocoBasis):
                         # fields that are not being commanded stay empty.
                         obs[kc.apply_prefix(f"action/{limb}/joint_state")] = {
                             "data": {
-                                "position": self.data.ctrl[aidx].tolist(),
+                                "position": np.asarray(raw_ctrl).tolist(),
                                 "velocity": [],
                                 "effort": [],
                             },
@@ -1042,15 +1082,25 @@ class UnifiedMujocoEnv(MujocoBasis):
                 else:
                     for limb, qidx, _, aidx in joint_components:
                         if qidx.size > 0:
+                            raw_pos = self.data.qpos[qidx]
+                            if limb == eef_name and eef_mapper is not None:
+                                raw_pos = eef_mapper.obs_map(
+                                    self.model, self.data, raw_pos
+                                )
                             obs[kc.apply_prefix(f"{limb}/joint_state/position")] = {
-                                "data": np.asarray(self.data.qpos[qidx]),
+                                "data": np.asarray(raw_pos),
                                 "t": t,
                             }
                         if aidx.size > 0:
+                            raw_ctrl = self.data.ctrl[aidx]
+                            if limb == eef_name and eef_mapper is not None:
+                                raw_ctrl = eef_mapper.obs_map(
+                                    self.model, self.data, raw_ctrl
+                                )
                             obs[
                                 kc.apply_prefix(f"action/{limb}/joint_state/position")
                             ] = {
-                                "data": np.asarray(self.data.ctrl[aidx]),
+                                "data": np.asarray(raw_ctrl),
                                 "t": t,
                             }
 

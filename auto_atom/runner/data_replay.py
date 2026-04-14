@@ -12,7 +12,7 @@ import os
 from typing import Any, Dict, List, Optional
 
 import numpy as np
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from auto_atom.framework import TaskFileConfig
 from auto_atom.policy_eval import PolicyEvaluator
@@ -28,6 +28,8 @@ from .base import RunnerBase
 
 class DataReplayConfig(BaseModel):
     """Replay-specific settings (subset of the original ``ReplayConfig``)."""
+
+    model_config = ConfigDict(validate_assignment=True)
 
     demo_name: str | None = Field(default=None)
     mode: str = Field(default="pose")
@@ -172,7 +174,17 @@ class McapDemo:
         env_cfg: Any,
         base_dir: str | None = None,
     ) -> None:
-        """Rescale real gripper distance to MuJoCo actuator ctrl."""
+        """Rescale real gripper distance to MuJoCo actuator ctrl.
+
+        .. note::
+
+           When the operator has an ``eef_mapper`` configured (in
+           ``OperatorBinding``), the env's ``apply_joint_action`` already
+           converts user-space values (e.g. finger distance) to raw ctrl
+           values.  In that case calling this method is **not needed** —
+           the mcap data can stay in its original finger-distance space.
+           The caller should check for ``eef_mapper`` and skip this call.
+        """
         import mujoco as mj
         from omegaconf import OmegaConf
 
@@ -446,6 +458,7 @@ def _apply_first_frame_reset(
     if context is None:
         raise RuntimeError("PolicyEvaluator must be initialized before applying reset.")
     with evaluator.sim_lock:
+        # print(f"{reset_action=}")
         _apply_reset_action(context, reset_action)
     return reset_action
 
@@ -498,14 +511,26 @@ def preprocess_replay_dictconfig(
     op_cfg = cfg.env.operators.arm
     actuator_names = list(op_cfg.arm_actuators) + list(op_cfg.eef_actuators)
     mcap_demo.align_to_actuators(actuator_names, replay_cfg.joint_name_mapping or None)
-    mcap_demo.rescale_gripper(
-        eef_actuator_names=list(op_cfg.eef_actuators),
-        src_range=replay_cfg.gripper_range,
-        env_cfg=cfg.env,
-        base_dir=root,
-    )
+
+    # When eef_mapper is configured, apply_joint_action already converts
+    # finger-distance values to ctrl — no manual rescaling needed.
+    has_eef_mapper = getattr(op_cfg, "eef_mapper", None) is not None
+    if not has_eef_mapper:
+        mcap_demo.rescale_gripper(
+            eef_actuator_names=list(op_cfg.eef_actuators),
+            src_range=replay_cfg.gripper_range,
+            env_cfg=cfg.env,
+            base_dir=root,
+        )
 
     init_jpos = mcap_demo.first_frame_joint_positions()
+    # When eef_mapper is configured, the mcap eef values are in user-space
+    # (e.g. finger distance), not raw joint values.  Exclude them from
+    # initial_joint_positions (which writes directly to qpos) — the reset
+    # action path will apply them through the mapper instead.
+    if has_eef_mapper:
+        eef_names = set(op_cfg.eef_actuators)
+        init_jpos = {k: v for k, v in init_jpos.items() if k not in eef_names}
     with open_dict(cfg):
         if "initial_joint_positions" not in cfg.env:
             cfg.env.initial_joint_positions = {}
@@ -613,6 +638,8 @@ class DataReplayRunner(RunnerBase):
             self._action_step = 0
 
         self._action_step += 1
+        # print(f"action={self._current_action}")
+        # input("Press Enter to continue to the next step...")
         return evaluator.update(self._current_action, env_mask)
 
     def close(self) -> None:
@@ -687,7 +714,8 @@ class DataReplayRunner(RunnerBase):
                         actuator_names, rcfg.joint_name_mapping or None
                     )
                     eef_actuator_names = list(op_cfg.get("eef_actuators", []))
-                    if eef_actuator_names:
+                    has_eef_mapper = op_cfg.get("eef_mapper") is not None
+                    if eef_actuator_names and not has_eef_mapper:
                         mcap_demo.rescale_gripper(
                             eef_actuator_names=eef_actuator_names,
                             src_range=rcfg.gripper_range,

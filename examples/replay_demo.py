@@ -186,7 +186,6 @@ def main(cfg: DictConfig) -> None:
 
         updates_used = 0
         for step in range(max_updates):
-            input("Press Enter to continue to the next step...")
             update = runner.update()
             updates_used += 1
             print(f"Replay step {step}: {update.stage_name}")

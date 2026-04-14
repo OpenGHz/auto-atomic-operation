@@ -16,6 +16,11 @@ env:
         - joint6
       eef_actuators: [xfg_claw_joint]
       eef_output_name: gripper
+      eef_mapper:
+        _target_: auto_atom.mappers.finger_distance.FingerDistanceMapper
+        left_pad_geom: xfg_left_finger_pad_upper
+        right_pad_geom: xfg_right_finger_pad_upper
+        actuator_name: xfg_claw_joint
       pose_site: eef_pose
       root_body: arm_base
       ik_factory: auto_atom.backend.mjc.ik.airbot_kdl_ik_solver.AirbotKdlIKSolver
