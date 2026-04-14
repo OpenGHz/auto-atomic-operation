@@ -534,6 +534,7 @@ class DataReplayRunner(RunnerBase):
         self._evaluator: Optional[PolicyEvaluator] = None
         self._policy: Optional[ReplayPolicy] = None
         self._replay_cfg: Optional[DataReplayConfig] = None
+        self._config: Optional[DataReplayTaskFileConfig] = None
         self._current_action: Optional[Dict[str, Any]] = None
         self._action_step: int = 0
 
@@ -545,74 +546,49 @@ class DataReplayRunner(RunnerBase):
             self._replay_cfg = replay_raw
         else:
             self._replay_cfg = DataReplayConfig.model_validate(replay_raw)
-        rcfg = self._replay_cfg
-
-        # --- Load demo data ---
-        if rcfg.mcap_path is not None:
-            mcap_path = rcfg.mcap_path
-            if not os.path.isabs(mcap_path):
-                mcap_path = os.path.join(os.getcwd(), mcap_path)
-            if not os.path.exists(mcap_path):
-                raise FileNotFoundError(f"MCAP file not found: {mcap_path}")
-            mcap_demo = _load_mcap_demo(mcap_path, rcfg.arm_topic, rcfg.gripper_topic)
-            rcfg.mode = "joint"
-
-            # Align mcap column order to the YAML actuator declaration order
-            # when task_file contains the env operator config.
-            task_file_raw = config.model_dump() if hasattr(config, "model_dump") else {}
-            env_cfg = task_file_raw.get("env", {})
-            op_cfg = env_cfg.get("operators", {}).get("arm", {})
-            if op_cfg:
-                actuator_names = list(op_cfg.get("arm_actuators", [])) + list(
-                    op_cfg.get("eef_actuators", [])
-                )
-                if actuator_names:
-                    mcap_demo.align_to_actuators(
-                        actuator_names, rcfg.joint_name_mapping or None
-                    )
-                    eef_actuator_names = list(op_cfg.get("eef_actuators", []))
-                    if eef_actuator_names:
-                        mcap_demo.rescale_gripper(
-                            eef_actuator_names=eef_actuator_names,
-                            src_range=rcfg.gripper_range,
-                            env_cfg=env_cfg,
-                        )
-
-            demo: Dict[str, np.ndarray] = {"joint": mcap_demo.joint}
-        else:
-            demo_name = rcfg.demo_name or "demo"
-            demo_dir = rcfg.demo_dir or os.path.join(
-                os.getcwd(), "outputs", "records", "demos"
-            )
-            demo_npz_path = os.path.join(demo_dir, f"{demo_name}.npz")
-            if not os.path.exists(demo_npz_path):
-                raise FileNotFoundError(f"Demo file not found: {demo_npz_path}")
-            demo_data = np.load(demo_npz_path)
-            if rcfg.mode == "pose":
-                demo = _load_pose_demo(demo_data)
-            elif rcfg.mode == "ctrl":
-                demo = _load_ctrl_demo(demo_data)
-            else:
-                raise ValueError(
-                    f"Unknown replay mode: {rcfg.mode!r} "
-                    f"(expected 'pose', 'ctrl', or set mcap_path)"
-                )
+        self._config = config
 
         # --- Build evaluator ---
         self._evaluator = PolicyEvaluator(
-            action_applier=_make_replay_action_applier(rcfg.kinematic),
+            action_applier=_make_replay_action_applier(self._replay_cfg.kinematic),
             observation_getter=self._observation_getter,
         ).from_config(config)
 
-        # --- Normalise demo for batch size ---
-        demo = normalize_demo_for_batch(
-            demo, batch_size=self._evaluator.batch_size, mode=rcfg.mode
-        )
-        self._policy = ReplayPolicy(demo, rcfg.mode)
+        # --- Load initial demo data ---
+        self._load_demo()
         return self
+
+    def set_demo_path(
+        self,
+        *,
+        demo_name: Optional[str] = None,
+        demo_dir: Optional[str] = None,
+        mcap_path: Optional[str] = None,
+        mode: Optional[str] = None,
+    ) -> None:
+        """Change the demo data source.  Takes effect on the next ``reset()``.
+
+        Pass *mcap_path* for mcap replay, or *demo_name* / *demo_dir* for npz
+        replay.  Only the provided arguments are updated; the rest keep their
+        current values.
+        """
+        rcfg = self._require_replay_cfg()
+        if mcap_path is not None:
+            rcfg.mcap_path = mcap_path
+        if demo_name is not None:
+            rcfg.demo_name = demo_name
+        if demo_dir is not None:
+            rcfg.demo_dir = demo_dir
+        if mode is not None:
+            rcfg.mode = mode
+        # Mark policy as stale so _load_demo() runs on next reset().
+        self._policy = None
 
     def reset(self, env_mask: Optional[np.ndarray] = None) -> TaskUpdate:
         evaluator = self._require_evaluator()
+        # Reload demo data if set_demo_path() invalidated the policy.
+        if self._policy is None:
+            self._load_demo()
         policy = self._require_policy()
         policy.reset()
         self._current_action = None
@@ -679,6 +655,76 @@ class DataReplayRunner(RunnerBase):
     # Internal helpers
     # ------------------------------------------------------------------
 
+    def _load_demo(self) -> None:
+        """(Re)load demo data from the current replay config and build a new
+        :class:`ReplayPolicy`."""
+        rcfg = self._require_replay_cfg()
+        config = self._config
+
+        if rcfg.mcap_path is not None:
+            mcap_path = rcfg.mcap_path
+            if not os.path.isabs(mcap_path):
+                mcap_path = os.path.join(os.getcwd(), mcap_path)
+            if not os.path.exists(mcap_path):
+                raise FileNotFoundError(f"MCAP file not found: {mcap_path}")
+            mcap_demo = _load_mcap_demo(mcap_path, rcfg.arm_topic, rcfg.gripper_topic)
+            rcfg.mode = "joint"
+
+            # Align mcap column order to the YAML actuator declaration order.
+            task_file_raw = (
+                config.model_dump()
+                if config is not None and hasattr(config, "model_dump")
+                else {}
+            )
+            env_cfg = task_file_raw.get("env", {})
+            op_cfg = env_cfg.get("operators", {}).get("arm", {})
+            if op_cfg:
+                actuator_names = list(op_cfg.get("arm_actuators", [])) + list(
+                    op_cfg.get("eef_actuators", [])
+                )
+                if actuator_names:
+                    mcap_demo.align_to_actuators(
+                        actuator_names, rcfg.joint_name_mapping or None
+                    )
+                    eef_actuator_names = list(op_cfg.get("eef_actuators", []))
+                    if eef_actuator_names:
+                        mcap_demo.rescale_gripper(
+                            eef_actuator_names=eef_actuator_names,
+                            src_range=rcfg.gripper_range,
+                            env_cfg=env_cfg,
+                        )
+
+            demo: Dict[str, np.ndarray] = {"joint": mcap_demo.joint}
+        else:
+            demo_name = rcfg.demo_name or "demo"
+            demo_dir = rcfg.demo_dir or os.path.join(
+                os.getcwd(), "outputs", "records", "demos"
+            )
+            demo_npz_path = os.path.join(demo_dir, f"{demo_name}.npz")
+            if not os.path.exists(demo_npz_path):
+                raise FileNotFoundError(f"Demo file not found: {demo_npz_path}")
+            demo_data = np.load(demo_npz_path)
+            if rcfg.mode == "pose":
+                demo = _load_pose_demo(demo_data)
+            elif rcfg.mode == "ctrl":
+                demo = _load_ctrl_demo(demo_data)
+            else:
+                raise ValueError(
+                    f"Unknown replay mode: {rcfg.mode!r} "
+                    f"(expected 'pose', 'ctrl', or set mcap_path)"
+                )
+
+        batch_size = self._require_evaluator().batch_size
+        demo = normalize_demo_for_batch(demo, batch_size=batch_size, mode=rcfg.mode)
+        self._policy = ReplayPolicy(demo, rcfg.mode)
+
+    def _require_replay_cfg(self) -> DataReplayConfig:
+        if self._replay_cfg is None:
+            raise RuntimeError(
+                "DataReplayRunner is not initialized. Call from_config() first."
+            )
+        return self._replay_cfg
+
     def _require_evaluator(self) -> PolicyEvaluator:
         if self._evaluator is None:
             raise RuntimeError(
@@ -689,6 +735,7 @@ class DataReplayRunner(RunnerBase):
     def _require_policy(self) -> ReplayPolicy:
         if self._policy is None:
             raise RuntimeError(
-                "DataReplayRunner is not initialized. Call from_config() first."
+                "DataReplayRunner has no demo loaded. "
+                "Call from_config() or set_demo_path() + reset() first."
             )
         return self._policy
