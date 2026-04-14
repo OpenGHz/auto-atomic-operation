@@ -13,18 +13,18 @@ Usage::
 
 from __future__ import annotations
 
+import sys
+import tkinter as tk
 from dataclasses import dataclass
+from tkinter import ttk
 from typing import Callable, Dict, List, Optional
 
 import hydra
 import numpy as np
-import sys
-import tkinter as tk
 from hydra import compose, initialize_config_dir
-from hydra.core.hydra_config import HydraConfig
 from hydra.core.global_hydra import GlobalHydra
+from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, OmegaConf
-from tkinter import ttk
 
 from auto_atom.backend.mjc.mujoco_backend import MujocoTaskBackend
 from auto_atom.framework import (

@@ -14,12 +14,15 @@ Usage::
 """
 
 from __future__ import annotations
+
+import argparse
 from pathlib import Path
 from typing import Any
+
+import numpy as np
+
 from auto_atom import TaskUpdate
 from auto_atom.ipc import RemotePolicyEvaluator
-import argparse
-import numpy as np
 
 
 def load_demo(path: Path) -> dict:

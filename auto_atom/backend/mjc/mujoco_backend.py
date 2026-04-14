@@ -3,19 +3,21 @@
 from __future__ import annotations
 
 import logging
-import mujoco
-import numpy as np
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set, Union
+
+import mujoco
+import numpy as np
 from pydantic import BaseModel
+
 from ...basis.mjc.mujoco_env import BatchedUnifiedMujocoEnv, EnvConfig
 from ...framework import (
     ArmPoseConfig,
     AutoAtomConfig,
     EefControlConfig,
     InitialPoseConfig,
-    OperatorRandomizationConfig,
     OperatorConfig,
+    OperatorRandomizationConfig,
     PlacedToleranceConfig,
     PoseControlConfig,
     PoseRandomRange,
@@ -40,8 +42,8 @@ from ...utils.pose import (
     position_within_tolerance,
     position_within_tolerance_nullable,
     quaternion_angular_distance,
-    quaternion_to_rpy,
     quaternion_to_rotation_matrix,
+    quaternion_to_rpy,
 )
 from ...utils.transformations import quaternion_slerp
 

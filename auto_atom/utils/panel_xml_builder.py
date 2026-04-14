@@ -1,14 +1,13 @@
 from __future__ import annotations
 
+import os
+import xml.etree.ElementTree as ET
 from copy import deepcopy
 from dataclasses import dataclass
-import os
 from pathlib import Path
 from typing import Any
-import xml.etree.ElementTree as ET
 
 from omegaconf import OmegaConf
-
 
 ROOT_SINGLETON_SECTIONS = (
     "compiler",

@@ -3,14 +3,17 @@
 from __future__ import annotations
 
 import json
-import numpy as np
 from dataclasses import dataclass
 from pathlib import Path
 from pprint import pprint
 from time import perf_counter
 from typing import Any, Callable, Dict, List, Optional, Sequence
+
+import numpy as np
 from hydra.utils import instantiate
 from omegaconf import DictConfig
+from pydantic import BaseModel
+
 from auto_atom import (
     ComponentRegistry,
     ExecutionRecord,
@@ -18,7 +21,6 @@ from auto_atom import (
     TaskFileConfig,
     TaskUpdate,
 )
-from pydantic import BaseModel
 
 
 @dataclass

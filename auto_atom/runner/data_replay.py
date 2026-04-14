@@ -20,7 +20,6 @@ from auto_atom.runtime import ExecutionContext, TaskUpdate
 
 from .base import RunnerBase
 
-
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------

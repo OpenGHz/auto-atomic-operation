@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from abc import ABC, abstractmethod
 from copy import deepcopy
 from dataclasses import dataclass, field
@@ -9,24 +10,23 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, ClassVar, Dict, List, Optional, Protocol, runtime_checkable
 
-import math
 import numpy as np
 from hydra.utils import instantiate
 from omegaconf import DictConfig, OmegaConf
 
 from .framework import (
+    OPERATION_CONDITIONS,
     ArcControlConfig,
     AutoAtomConfig,
     EefControlConfig,
-    OPERATION_CONDITIONS,
     Operation,
     OperationConditionType,
     OperationConstraint,
     Orientation,
     PlacedToleranceConfig,
-    Position,
     PoseControlConfig,
     PoseReference,
+    Position,
     RandomizationReference,
     StageConfig,
     StageControlConfig,

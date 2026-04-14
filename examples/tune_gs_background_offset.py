@@ -26,7 +26,6 @@ from omegaconf import DictConfig, OmegaConf
 from auto_atom.runner.common import get_config_dir, prepare_task_file
 from auto_atom.runtime import ComponentRegistry
 
-
 HELP_TEXT = [
     "Controls:",
     "  a/d : x -/+",

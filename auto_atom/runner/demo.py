@@ -22,7 +22,6 @@ from .common import (
     save_final_summary,
 )
 
-
 if "--list" in sys.argv:
     list_demos(get_config_dir())
     sys.exit(0)

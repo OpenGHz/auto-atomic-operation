@@ -19,10 +19,9 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
+import mink
 import mujoco
 import numpy as np
-
-import mink
 
 from auto_atom.utils.pose import PoseState, quaternion_to_rotation_matrix
 from auto_atom.utils.transformations import quaternion_multiply
@@ -241,10 +240,10 @@ def build_franka_backend(
               posture_cost: 1e-4
               max_joint_delta: 0.8
     """
-    from auto_atom.framework import AutoAtomConfig, OperatorConfig
-    from auto_atom.runtime import ComponentRegistry
     from auto_atom.backend.mjc.mujoco_backend import build_mujoco_backend
     from auto_atom.basis.mjc.mujoco_env import BatchedUnifiedMujocoEnv
+    from auto_atom.framework import AutoAtomConfig, OperatorConfig
+    from auto_atom.runtime import ComponentRegistry
 
     config = (
         task

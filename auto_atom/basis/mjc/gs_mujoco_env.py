@@ -39,13 +39,15 @@ When ``gaussian_render`` is set:
 from __future__ import annotations
 
 import hashlib
-import numpy as np
-import torch
 from pathlib import Path
 from typing import Any, Dict, Optional, Set
-from pydantic import BaseModel, ConfigDict, Field, model_validator
-from gaussian_renderer import BatchSplatConfig, MjxBatchSplatRenderer, GSRendererMuJoCo
+
+import numpy as np
+import torch
+from gaussian_renderer import BatchSplatConfig, GSRendererMuJoCo, MjxBatchSplatRenderer
 from gaussian_renderer.core.util_gau import load_ply, save_ply
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
 from auto_atom.basis.mjc.mujoco_env import (
     BatchedUnifiedMujocoEnv,
     EnvConfig,

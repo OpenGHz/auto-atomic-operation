@@ -7,24 +7,26 @@ stepping.  It deliberately does **not** provide ``step(action)`` or
 ``UnifiedMujocoEnv`` subclass defined in ``mujoco_env.py``.
 """
 
-from enum import Enum
-from math import tan, pi
-from pathlib import Path
 import copy
-from typing import Any, Callable, Dict, List, Set, Optional, Tuple
+import logging
+import time
+from enum import Enum
+from math import pi, tan
+from pathlib import Path
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
+
+import mujoco
+import numpy as np
 from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
     ImportString,
-    model_validator,
     field_validator,
+    model_validator,
 )
+
 from auto_atom.basis.mjc.tactile.tactile_sensor import TactileSensorManager
-import time
-import numpy as np
-import mujoco
-import logging
 
 
 class DataType(str, Enum):

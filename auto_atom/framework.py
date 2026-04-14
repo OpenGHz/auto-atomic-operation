@@ -1,7 +1,7 @@
 from enum import Enum
 from typing import Dict, List, Optional, Tuple, Union
-from pydantic import BaseModel, ConfigDict, ImportString, Field, field_validator
 
+from pydantic import BaseModel, ConfigDict, Field, ImportString, field_validator
 
 Position = Tuple[float, float, float]
 """A 3D position represented as a tuple of three floats (x, y, z)."""

@@ -23,15 +23,17 @@ Usage::
 
 from __future__ import annotations
 
+from datetime import datetime
+from pathlib import Path
+
 import hydra
 import imageio.v3 as iio
 import matplotlib.pyplot as plt
 import numpy as np
-from datetime import datetime
-from pathlib import Path
 from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, OmegaConf
 from pydantic import BaseModel, Field
+
 from auto_atom.runner.common import get_config_dir, prepare_task_file
 from auto_atom.runtime import ComponentRegistry, TaskRunner
 

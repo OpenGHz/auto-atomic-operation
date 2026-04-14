@@ -37,7 +37,6 @@ from auto_atom import ExecutionContext
 from auto_atom.runner.common import get_config_dir
 from auto_atom.runner.data_replay import DataReplayConfig, DataReplayRunner
 
-
 # ---------------------------------------------------------------------------
 # Script-level config (extends DataReplayConfig with video options)
 # ---------------------------------------------------------------------------

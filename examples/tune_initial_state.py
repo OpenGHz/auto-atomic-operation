@@ -13,8 +13,6 @@ Usage::
 
 from __future__ import annotations
 
-import mujoco
-import numpy as np
 import re
 import sys
 import tkinter as tk
@@ -22,6 +20,8 @@ from tkinter import ttk
 from typing import List, Optional, Tuple
 
 import hydra
+import mujoco
+import numpy as np
 from omegaconf import DictConfig
 
 from auto_atom.backend.mjc.mujoco_backend import (
@@ -37,7 +37,6 @@ from auto_atom.utils.pose import (
     quaternion_to_rotation_matrix,
     quaternion_to_rpy,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers

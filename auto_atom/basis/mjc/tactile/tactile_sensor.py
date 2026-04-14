@@ -2,9 +2,10 @@ import os
 
 os.environ["QT_QPA_PLATFORM_PLUGIN_PATH"] = ""
 
-import numpy as np
-import mujoco
 import logging
+
+import mujoco
+import numpy as np
 
 try:
     import cv2

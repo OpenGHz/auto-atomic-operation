@@ -27,6 +27,7 @@ Extra Hydra overrides:
 import json
 import os
 from dataclasses import asdict
+
 import hydra
 import imageio.v3 as iio
 import numpy as np
@@ -34,6 +35,7 @@ from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, OmegaConf
 from PIL import Image
 from pydantic import BaseModel, Field
+
 from auto_atom.backend.mjc.mujoco_backend import MujocoTaskBackend
 from auto_atom.runner.common import get_config_dir, prepare_task_file
 from auto_atom.runtime import TaskRunner

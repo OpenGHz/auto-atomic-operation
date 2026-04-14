@@ -27,7 +27,6 @@ from .serialize import (
     serialize_value,
 )
 
-
 # ── default callbacks ────────────────────────────────────────────────────
 
 

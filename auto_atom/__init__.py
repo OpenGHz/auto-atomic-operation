@@ -15,6 +15,14 @@ from .framework import (
 )
 from .mock import MockOperatorHandler, MockSceneBackend
 from .policy_eval import ConfigDrivenDemoPolicy, PolicyEvaluator
+
+# Deferred runner imports (after all other modules are loaded).
+from .runner.base import RunnerBase
+from .runner.data_replay import (
+    DataReplayConfig,
+    DataReplayRunner,
+    DataReplayTaskFileConfig,
+)
 from .runtime import (
     ComponentRegistry,
     ControlResult,
@@ -36,14 +44,6 @@ from .runtime import (
     load_task_file_hydra,
 )
 from .utils.pose import PoseState
-
-# Deferred runner imports (after all other modules are loaded).
-from .runner.base import RunnerBase
-from .runner.data_replay import (
-    DataReplayConfig,
-    DataReplayRunner,
-    DataReplayTaskFileConfig,
-)
 
 __all__ = [
     "AutoAtomConfig",

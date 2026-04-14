@@ -34,7 +34,6 @@ from pathlib import Path
 import numpy as np
 from gaussian_renderer.core.util_gau import load_ply
 
-
 DEFAULT_INPUT = Path("assets/gs/backgrounds")
 
 
