@@ -37,12 +37,23 @@ from .runtime import (
 )
 from .utils.pose import PoseState
 
+# Deferred runner imports (after all other modules are loaded).
+from .runner.base import RunnerBase
+from .runner.data_replay import (
+    DataReplayConfig,
+    DataReplayRunner,
+    DataReplayTaskFileConfig,
+)
+
 __all__ = [
     "AutoAtomConfig",
     "ComponentRegistry",
     "ControlResult",
     "ControlSignal",
     "ConfigDrivenDemoPolicy",
+    "DataReplayConfig",
+    "DataReplayRunner",
+    "DataReplayTaskFileConfig",
     "ExecutionContext",
     "ExecutionRecord",
     "ExecutionSummary",
@@ -62,6 +73,7 @@ __all__ = [
     "PoseState",
     "RandomizationReference",
     "PrimitiveAction",
+    "RunnerBase",
     "StageConfig",
     "StageControlConfig",
     "StageExecutionStatus",
