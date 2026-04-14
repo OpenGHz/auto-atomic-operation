@@ -42,7 +42,7 @@ This covers all corners of the randomization space. If any case pushes an object
 
 ## Workflow
 
-1. Configure `task.randomization` in your YAML config (see [Pose Randomization](randomization.md))
+1. Configure `task.randomization` in your YAML config (see [Pose Randomization](../task-configuration/randomization.md))
 2. Run this inspector to visually verify the extremes
 3. Use `all-min` and `all-max` to check the worst-case simultaneous offsets
 4. Step through per-axis cases to identify which specific axis causes problems

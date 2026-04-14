@@ -76,7 +76,7 @@ Both use `np.interp` for fast piecewise-linear interpolation.
 
 `initial_joint_positions` writes directly to `qpos` and bypasses the mapper.
 Values must be in **raw joint space**, not finger distance.  See
-[Scene Initialization & Randomization](randomization.md#initial-joint-positions).
+[Scene Initialization & Randomization](../task-configuration/randomization.md#initial-joint-positions).
 
 ### MCAP replay
 
@@ -88,10 +88,10 @@ When replaying MCAP data with `eef_mapper` configured:
   (mcap values are in finger-distance space, not raw qpos) and applied
   through the reset action instead
 
-See [Data Replay](mcap_data_replay.md#2-gripper-rescaling) for details.
+See [Data Replay](../tools/mcap_data_replay.md#2-gripper-rescaling) for details.
 
 ## Related
 
-- [Scene Initialization & Randomization](randomization.md) -- `initial_joint_positions` interaction
-- [Data Replay](mcap_data_replay.md) -- MCAP replay with eef_mapper
+- [Scene Initialization & Randomization](../task-configuration/randomization.md) -- `initial_joint_positions` interaction
+- [Data Replay](../tools/mcap_data_replay.md) -- MCAP replay with eef_mapper
 - [Gripper Joint Semantics](gripper_joint_semantics.md) -- gripper joint structure

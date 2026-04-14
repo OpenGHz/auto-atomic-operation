@@ -67,7 +67,7 @@ policy:
   checkpoint: /path/to/model.pt
 ```
 
-When `policy` is omitted, `aao_eval` defaults to `auto_atom.ConfigDrivenDemoPolicy`, which replays the same primitive actions that `aao_demo` uses. See [Policy Evaluation](policy_evaluation.md) for the full API reference.
+When `policy` is omitted, `aao_eval` defaults to `auto_atom.ConfigDrivenDemoPolicy`, which replays the same primitive actions that `aao_demo` uses. See [Policy Evaluation](../tools/policy_evaluation.md) for the full API reference.
 
 ## Config resolution
 

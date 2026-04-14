@@ -85,7 +85,7 @@ Real gripper data is typically in finger-distance space (metres), while
 MuJoCo actuators use raw ctrl ranges.  The pipeline rescales gripper values
 from `gripper_range` to the actuator's `ctrlrange`.
 
-**Exception:** When the operator has an [`eef_mapper`](eef_mapper.md)
+**Exception:** When the operator has an [`eef_mapper`](../mujoco-backend/eef_mapper.md)
 configured, rescaling is skipped because `apply_joint_action` already
 converts finger-distance values to ctrl internally.
 
@@ -97,7 +97,7 @@ is configured, EEF joint values are excluded from `initial_joint_positions`
 (since they are in user-space, not raw qpos) and are applied through the
 mapper via the reset action instead.
 
-See [Scene Initialization & Randomization](randomization.md) for details on
+See [Scene Initialization & Randomization](../task-configuration/randomization.md) for details on
 `initial_joint_positions`.
 
 ### 4. Randomization disabled
@@ -151,6 +151,6 @@ NPZ files produced by `record_demo.py` contain:
 
 ## Related
 
-- [Scene Initialization & Randomization](randomization.md) — `initial_joint_positions` and `initial_pose`
-- [EEF Mapper](eef_mapper.md) — finger-distance mapping for parallel-linkage grippers
+- [Scene Initialization & Randomization](../task-configuration/randomization.md) — `initial_joint_positions` and `initial_pose`
+- [EEF Mapper](../mujoco-backend/eef_mapper.md) — finger-distance mapping for parallel-linkage grippers
 - [Data Collection](data_collection.md) — recording demos with `record_demo.py`

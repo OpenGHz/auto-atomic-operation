@@ -46,7 +46,7 @@ env:
 
 ### Interaction with eef_mapper
 
-If the operator has an [`eef_mapper`](eef_mapper.md) configured,
+If the operator has an [`eef_mapper`](../mujoco-backend/eef_mapper.md) configured,
 `capture_observation` reports
 finger distance and `apply_joint_action` accepts finger distance.  But
 `initial_joint_positions` bypasses the mapper — it sets raw qpos.  Keep this
@@ -108,7 +108,7 @@ defaults are recorded, so:
 
 For fixed-base arms such as Franka, keep `initial_state.base_pose` aligned with
 the robot root body pose in XML unless you intentionally want to shift the
-whole robot base from YAML. See [Tune Initial State](tune_initial_state.md) for
+whole robot base from YAML. See [Tune Initial State](../tools/tune_initial_state.md) for
 a full breakdown of `base_pose`, `arm`, and `eef`.
 
 ### Fields
