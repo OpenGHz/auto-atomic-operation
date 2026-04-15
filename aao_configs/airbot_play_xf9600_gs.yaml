@@ -3,6 +3,7 @@
 
 assets_dir: assets
 robot_gs_dir: ${assets_dir}/gs/robots/airbot_play
+eef_gs_dir: ${assets_dir}/gs/robots/airbot_g2p
 model_name: demo_gs_airbot_play
 
 env:
@@ -15,6 +16,24 @@ env:
       link4: ${robot_gs_dir}/link4.ply
       link5: ${robot_gs_dir}/link5.ply
       link6: ${robot_gs_dir}/link6.ply
-      # TODO: need to replace with the actual gripper GS
-      xfg_l53: ${robot_gs_dir}/left.ply
-      xfg_l23: ${robot_gs_dir}/right.ply
+      # XF9600 gripper (assets/gs/robots/airbot_g2p)
+      xfg_base_link: ${eef_gs_dir}/base_link.ply
+      xfg_claw: ${eef_gs_dir}/claw.ply
+      xfg_l11: ${eef_gs_dir}/l11.ply
+      xfg_l12: ${eef_gs_dir}/l12.ply
+      xfg_l21: ${eef_gs_dir}/l21.ply
+      xfg_l22: ${eef_gs_dir}/l22.ply
+      xfg_l23: ${eef_gs_dir}/l23.ply
+      xfg_l31: ${eef_gs_dir}/l31.ply
+      xfg_l32: ${eef_gs_dir}/l32.ply
+      xfg_l41: ${eef_gs_dir}/l41.ply
+      xfg_l42: ${eef_gs_dir}/l42.ply
+      xfg_l51: ${eef_gs_dir}/l51.ply
+      xfg_l52: ${eef_gs_dir}/l52.ply
+      xfg_l53: ${eef_gs_dir}/l53.ply
+      xfg_l61: ${eef_gs_dir}/l61.ply
+      xfg_l62: ${eef_gs_dir}/l62.ply
+      xfg_left_tactile: ${eef_gs_dir}/left_tactile.ply
+      xfg_right_tactile: ${eef_gs_dir}/right_tactile.ply
+      xfg_left_cam: ${eef_gs_dir}/left_cam.ply
+      xfg_right_cam: ${eef_gs_dir}/right_cam.ply
