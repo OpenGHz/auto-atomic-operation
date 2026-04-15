@@ -22,6 +22,7 @@ from pydantic import (
     ConfigDict,
     Field,
     ImportString,
+    field_serializer,
     field_validator,
     model_validator,
 )
@@ -165,6 +166,13 @@ class OperatorBinding(BaseModel, frozen=True):
 
     When ``None`` (default), raw qpos / ctrl values are used as-is.
     """
+
+    @field_serializer("eef_mapper")
+    @classmethod
+    def _serialize_eef_mapper(cls, v: Any, _info: Any) -> Optional[str]:
+        if v is None:
+            return None
+        return f"{type(v).__module__}.{type(v).__qualname__}"
 
     ik_factory: Optional[ImportString] = None
     """Import path to IK solver class/callable.  Called as
