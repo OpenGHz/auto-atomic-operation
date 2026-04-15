@@ -296,6 +296,11 @@ Euclidean distances are checked: if any two entities are closer than the sum of
 their radii, the sample is rejected and redrawn. After 100 failed attempts the
 last sample is applied with a warning.
 
+Entities linked by an entity-name reference chain are excluded from rejection
+against each other. This allows carried assemblies such as `flower -> vase` to
+move together while still rejecting overlap against unrelated randomized
+entities (for example `vase2`).
+
 ## Per-Waypoint Randomization
 
 In addition to entity-level randomization under `task.randomization`, individual

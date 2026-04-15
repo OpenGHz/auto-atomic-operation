@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Set, Union
+from typing import Any, Callable, Dict, List, Optional, Set, Union
 
 import mujoco
 import numpy as np
@@ -79,6 +79,18 @@ class MujocoControlConfig(BaseModel):
     """When True, automatically reduce step scale on stall and recover on progress.
     Set to False for contact-heavy tasks (e.g. door pushing) where stall detection
     causes unnecessary slowdown."""
+
+
+_MAX_COLLISION_REJECTION_ATTEMPTS = 100
+
+
+@dataclass
+class _CollisionParticipant:
+    owner: str
+    label: str
+    pose: PoseState
+    radius: float
+    ancestors: Set[str] = field(default_factory=set)
 
 
 @dataclass
@@ -882,27 +894,31 @@ class MujocoTaskBackend(SceneBackend):
     #  Randomization: ordering, reference resolution, and application
     # ------------------------------------------------------------------
 
+    def _randomization_dependencies(self) -> Dict[str, Set[str]]:
+        deps: Dict[str, Set[str]] = {name: set() for name in self.randomization}
+        for name, rand in self.randomization.items():
+            refs: List[Union[RandomizationReference, str]] = []
+            if isinstance(rand, OperatorRandomizationConfig):
+                if rand.base is not None:
+                    refs.append(rand.base.reference)
+                if rand.eef is not None:
+                    refs.append(rand.eef.reference)
+            else:
+                refs.append(rand.reference)
+            for ref in refs:
+                if isinstance(ref, RandomizationReference):
+                    continue
+                if ref in self.randomization:
+                    deps[name].add(ref)
+        return deps
+
     def _randomization_order(self) -> List[str]:
         """Return randomization keys in dependency order (referenced first).
 
         An entry whose ``reference`` is another entity name depends on that
         entity being sampled first. Cycles raise ``ValueError``.
         """
-        deps: Dict[str, Set[str]] = {name: set() for name in self.randomization}
-        for name, rand in self.randomization.items():
-            sub_refs: list = []
-            if isinstance(rand, OperatorRandomizationConfig):
-                if rand.base is not None:
-                    sub_refs.append(rand.base.reference)
-                if rand.eef is not None:
-                    sub_refs.append(rand.eef.reference)
-            else:
-                sub_refs.append(rand.reference)
-            for ref in sub_refs:
-                if isinstance(ref, RandomizationReference):
-                    continue
-                if ref in self.randomization:
-                    deps[name].add(ref)
+        deps = self._randomization_dependencies()
         order: List[str] = []
         visited: Set[str] = set()
         visiting: Set[str] = set()
@@ -922,6 +938,23 @@ class MujocoTaskBackend(SceneBackend):
         for name in self.randomization:
             _visit(name)
         return order
+
+    def _reference_ancestors(
+        self,
+        reference: Union[RandomizationReference, str],
+        deps: Dict[str, Set[str]],
+    ) -> Set[str]:
+        if isinstance(reference, RandomizationReference):
+            return set()
+        ancestors: Set[str] = set()
+        pending = [reference]
+        while pending:
+            current = pending.pop()
+            if current in ancestors:
+                continue
+            ancestors.add(current)
+            pending.extend(deps.get(current, ()))
+        return ancestors
 
     def _resolve_reference_base_pose(
         self,
@@ -964,6 +997,8 @@ class MujocoTaskBackend(SceneBackend):
 
     def _apply_randomization(self, env_mask: np.ndarray) -> None:
         sampled_poses: Dict[str, PoseState] = {}
+        deps = self._randomization_dependencies()
+        collision_participants: List[_CollisionParticipant] = []
         for name in self._randomization_order():
             rand_range = self.randomization[name]
             if name in self.object_handlers:
@@ -985,9 +1020,35 @@ class MujocoTaskBackend(SceneBackend):
                 base_pose = self._resolve_reference_base_pose(
                     rand_range.reference, sampled_poses, default_pose
                 )
-                sampled = self._sample_random_pose(base_pose, rand_range, env_mask)
+                sampled = self._sample_pose_with_collision_rejection(
+                    owner_name=name,
+                    label=name,
+                    reference=rand_range.reference,
+                    collision_radius=rand_range.collision_radius,
+                    base_pose=base_pose,
+                    env_mask=env_mask,
+                    collision_participants=collision_participants,
+                    dependency_map=deps,
+                    sampler=lambda env_index,
+                    base_pose=base_pose,
+                    rand_range=rand_range: self._sample_random_pose_single(
+                        base_pose, rand_range, env_index
+                    ),
+                )
                 self.object_handlers[name].set_pose(sampled, env_mask=env_mask)
                 sampled_poses[name] = sampled
+                collision_participants.append(
+                    _CollisionParticipant(
+                        owner=name,
+                        label=name,
+                        pose=sampled,
+                        radius=float(rand_range.collision_radius),
+                        ancestors=self._reference_ancestors(
+                            rand_range.reference,
+                            deps,
+                        ),
+                    )
+                )
             elif name in self.operator_handlers:
                 handler = self.operator_handlers[name]
                 if isinstance(rand_range, OperatorRandomizationConfig):
@@ -1009,11 +1070,35 @@ class MujocoTaskBackend(SceneBackend):
                             sampled_poses,
                             default_base,
                         )
-                        sampled_base = self._sample_random_pose(
-                            base_pose, rand_range.base, env_mask
+                        sampled_base = self._sample_pose_with_collision_rejection(
+                            owner_name=name,
+                            label=f"{name}.base",
+                            reference=rand_range.base.reference,
+                            collision_radius=rand_range.base.collision_radius,
+                            base_pose=base_pose,
+                            env_mask=env_mask,
+                            collision_participants=collision_participants,
+                            dependency_map=deps,
+                            sampler=lambda env_index,
+                            base_pose=base_pose,
+                            rand_range=rand_range.base: self._sample_random_pose_single(
+                                base_pose, rand_range, env_index
+                            ),
                         )
                         handler.set_pose(sampled_base, env_mask=env_mask)
                         sampled_poses[name] = sampled_base
+                        collision_participants.append(
+                            _CollisionParticipant(
+                                owner=name,
+                                label=f"{name}.base",
+                                pose=sampled_base,
+                                radius=float(rand_range.base.collision_radius),
+                                ancestors=self._reference_ancestors(
+                                    rand_range.base.reference,
+                                    deps,
+                                ),
+                            )
+                        )
                     if rand_range.eef is not None:
                         sampled_eef = self._sample_operator_eef_pose(
                             handler,
@@ -1021,12 +1106,27 @@ class MujocoTaskBackend(SceneBackend):
                             rand_range.eef,
                             env_mask,
                             sampled_poses,
+                            collision_participants=collision_participants,
+                            dependency_map=deps,
+                            participant_label=f"{name}.eef",
                         )
                         handler.set_home_end_effector_pose(
                             sampled_eef,
                             env_mask=env_mask,
                         )
                         sampled_poses[name] = sampled_eef
+                        collision_participants.append(
+                            _CollisionParticipant(
+                                owner=name,
+                                label=f"{name}.eef",
+                                pose=sampled_eef,
+                                radius=float(rand_range.eef.collision_radius),
+                                ancestors=self._reference_ancestors(
+                                    rand_range.eef.reference,
+                                    deps,
+                                ),
+                            )
+                        )
                 else:
                     sampled_eef = self._sample_operator_eef_pose(
                         handler,
@@ -1034,9 +1134,24 @@ class MujocoTaskBackend(SceneBackend):
                         rand_range,
                         env_mask,
                         sampled_poses,
+                        collision_participants=collision_participants,
+                        dependency_map=deps,
+                        participant_label=f"{name}.eef",
                     )
                     handler.set_home_end_effector_pose(sampled_eef, env_mask=env_mask)
                     sampled_poses[name] = sampled_eef
+                    collision_participants.append(
+                        _CollisionParticipant(
+                            owner=name,
+                            label=f"{name}.eef",
+                            pose=sampled_eef,
+                            radius=float(rand_range.collision_radius),
+                            ancestors=self._reference_ancestors(
+                                rand_range.reference,
+                                deps,
+                            ),
+                        )
+                    )
             else:
                 logging.getLogger(MujocoTaskBackend.__name__).warning(
                     "Randomization key '%s' does not match any object or "
@@ -1051,6 +1166,9 @@ class MujocoTaskBackend(SceneBackend):
         rand_range: PoseRandomRange,
         env_mask: np.ndarray,
         sampled_poses: Dict[str, PoseState],
+        collision_participants: Optional[List[_CollisionParticipant]] = None,
+        dependency_map: Optional[Dict[str, Set[str]]] = None,
+        participant_label: Optional[str] = None,
     ) -> PoseState:
         """Sample a new home EEF world pose.
 
@@ -1063,21 +1181,179 @@ class MujocoTaskBackend(SceneBackend):
         base_pose_for_sampler = self._resolve_reference_base_pose(
             rand_range.reference, sampled_poses, default_eef_world
         )
-        if rand_range.reference != RandomizationReference.ABSOLUTE_BASE:
-            return self._sample_random_pose(base_pose_for_sampler, rand_range, env_mask)
-        base_world = handler.get_base_pose()
-        default_in_base = compose_pose(inverse_pose(base_world), base_pose_for_sampler)
-        sampled_in_base = self._sample_random_pose(
-            default_in_base, rand_range, env_mask
+        if rand_range.reference == RandomizationReference.ABSOLUTE_BASE:
+            base_world = handler.get_base_pose()
+            default_in_base = compose_pose(
+                inverse_pose(base_world), base_pose_for_sampler
+            )
+
+            def sampler(env_index: int) -> PoseState:
+                return compose_pose(
+                    base_world.select(env_index),
+                    self._sample_random_pose_single(
+                        default_in_base,
+                        rand_range,
+                        env_index,
+                    ),
+                )
+
+        else:
+
+            def sampler(env_index: int) -> PoseState:
+                return self._sample_random_pose_single(
+                    base_pose_for_sampler,
+                    rand_range,
+                    env_index,
+                )
+
+        if (
+            collision_participants is not None
+            and dependency_map is not None
+            and participant_label is not None
+        ):
+            return self._sample_pose_with_collision_rejection(
+                owner_name=name,
+                label=participant_label,
+                reference=rand_range.reference,
+                collision_radius=rand_range.collision_radius,
+                base_pose=base_pose_for_sampler,
+                env_mask=env_mask,
+                collision_participants=collision_participants,
+                dependency_map=dependency_map,
+                sampler=sampler,
+            )
+        return self._sample_pose_batch(
+            base_pose=base_pose_for_sampler,
+            env_mask=env_mask,
+            sampler=sampler,
         )
-        return compose_pose(base_world, sampled_in_base)
 
     def _sample_random_pose(
         self, base_pose: PoseState, rand_range: PoseRandomRange, env_mask: np.ndarray
     ) -> PoseState:
+        return self._sample_pose_batch(
+            base_pose=base_pose,
+            env_mask=env_mask,
+            sampler=lambda env_index: self._sample_random_pose_single(
+                base_pose,
+                rand_range,
+                env_index,
+            ),
+        )
+
+    def _sample_pose_batch(
+        self,
+        base_pose: PoseState,
+        env_mask: np.ndarray,
+        sampler: Callable[[int], PoseState],
+    ) -> PoseState:
         base_pose = base_pose.broadcast_to(self.batch_size)
         position = base_pose.position.copy()
         orientation = base_pose.orientation.copy()
+        for env_index, enabled in enumerate(env_mask):
+            if not enabled:
+                continue
+            sampled = sampler(env_index)
+            position[env_index] = sampled.position[0]
+            orientation[env_index] = sampled.orientation[0]
+        return PoseState(position=position, orientation=orientation)
+
+    def _sample_pose_with_collision_rejection(
+        self,
+        *,
+        owner_name: str,
+        label: str,
+        reference: Union[RandomizationReference, str],
+        collision_radius: float,
+        base_pose: PoseState,
+        env_mask: np.ndarray,
+        collision_participants: List[_CollisionParticipant],
+        dependency_map: Dict[str, Set[str]],
+        sampler: Callable[[int], PoseState],
+    ) -> PoseState:
+        base_pose = base_pose.broadcast_to(self.batch_size)
+        position = base_pose.position.copy()
+        orientation = base_pose.orientation.copy()
+        if collision_radius <= 0.0 or not collision_participants:
+            return self._sample_pose_batch(base_pose, env_mask, sampler)
+        logger = logging.getLogger(MujocoTaskBackend.__name__)
+        ancestors = self._reference_ancestors(reference, dependency_map)
+        for env_index, enabled in enumerate(env_mask):
+            if not enabled:
+                continue
+            last_sample: Optional[PoseState] = None
+            blocking: Optional[_CollisionParticipant] = None
+            for _ in range(_MAX_COLLISION_REJECTION_ATTEMPTS):
+                candidate = sampler(env_index)
+                last_sample = candidate
+                blocking = self._find_collision_participant(
+                    owner_name=owner_name,
+                    env_index=env_index,
+                    candidate_pose=candidate,
+                    collision_radius=float(collision_radius),
+                    ancestors=ancestors,
+                    collision_participants=collision_participants,
+                )
+                if blocking is None:
+                    break
+            else:
+                other_label = blocking.label if blocking is not None else "<unknown>"
+                logger.warning(
+                    "Collision rejection exhausted for '%s' after %d attempts; "
+                    "keeping the last overlapping sample against '%s'.",
+                    label,
+                    _MAX_COLLISION_REJECTION_ATTEMPTS,
+                    other_label,
+                )
+            if last_sample is None:
+                continue
+            position[env_index] = last_sample.position[0]
+            orientation[env_index] = last_sample.orientation[0]
+        return PoseState(position=position, orientation=orientation)
+
+    def _find_collision_participant(
+        self,
+        *,
+        owner_name: str,
+        env_index: int,
+        candidate_pose: PoseState,
+        collision_radius: float,
+        ancestors: Set[str],
+        collision_participants: List[_CollisionParticipant],
+    ) -> Optional[_CollisionParticipant]:
+        if collision_radius <= 0.0:
+            return None
+        candidate_pos = np.asarray(candidate_pose.position[0], dtype=np.float64)
+        for participant in collision_participants:
+            if participant.radius <= 0.0:
+                continue
+            if participant.owner == owner_name:
+                continue
+            if participant.owner in ancestors or owner_name in participant.ancestors:
+                continue
+            other_pos = np.asarray(
+                participant.pose.position[env_index],
+                dtype=np.float64,
+            )
+            if (
+                np.linalg.norm(candidate_pos - other_pos)
+                < collision_radius + participant.radius
+            ):
+                return participant
+        return None
+
+    def _sample_random_pose_single(
+        self,
+        base_pose: PoseState,
+        rand_range: PoseRandomRange,
+        env_index: int,
+    ) -> PoseState:
+        base_pose = base_pose.broadcast_to(self.batch_size)
+        position = np.asarray(base_pose.position[env_index], dtype=np.float64).copy()
+        orientation = np.asarray(
+            base_pose.orientation[env_index],
+            dtype=np.float64,
+        ).copy()
         is_absolute = rand_range.reference in (
             RandomizationReference.ABSOLUTE_WORLD,
             RandomizationReference.ABSOLUTE_BASE,
@@ -1085,52 +1361,52 @@ class MujocoTaskBackend(SceneBackend):
         pos_ranges = (rand_range.x, rand_range.y, rand_range.z)
         rot_ranges = (rand_range.roll, rand_range.pitch, rand_range.yaw)
         rot_any = any(r is not None for r in rot_ranges)
-        for env_index, enabled in enumerate(env_mask):
-            if not enabled:
+        for axis, rng_pair in enumerate(pos_ranges):
+            if rng_pair is None:
                 continue
-            for axis, rng_pair in enumerate(pos_ranges):
-                if rng_pair is None:
-                    continue
-                sampled = float(self._rng.uniform(*rng_pair))
-                if is_absolute:
-                    position[env_index, axis] = sampled
-                else:
-                    position[env_index, axis] += sampled
-            if rot_any:
-                r0, p0, y0 = quaternion_to_rpy(orientation[env_index])
-                if is_absolute:
-                    r_val = (
-                        r0
-                        if rot_ranges[0] is None
-                        else float(self._rng.uniform(*rot_ranges[0]))
-                    )
-                    p_val = (
-                        p0
-                        if rot_ranges[1] is None
-                        else float(self._rng.uniform(*rot_ranges[1]))
-                    )
-                    y_val = (
-                        y0
-                        if rot_ranges[2] is None
-                        else float(self._rng.uniform(*rot_ranges[2]))
-                    )
-                else:
-                    r_val = r0 + (
-                        0.0
-                        if rot_ranges[0] is None
-                        else float(self._rng.uniform(*rot_ranges[0]))
-                    )
-                    p_val = p0 + (
-                        0.0
-                        if rot_ranges[1] is None
-                        else float(self._rng.uniform(*rot_ranges[1]))
-                    )
-                    y_val = y0 + (
-                        0.0
-                        if rot_ranges[2] is None
-                        else float(self._rng.uniform(*rot_ranges[2]))
-                    )
-                orientation[env_index] = euler_to_quaternion((r_val, p_val, y_val))
+            sampled = float(self._rng.uniform(*rng_pair))
+            if is_absolute:
+                position[axis] = sampled
+            else:
+                position[axis] += sampled
+        if rot_any:
+            r0, p0, y0 = quaternion_to_rpy(orientation)
+            if is_absolute:
+                r_val = (
+                    r0
+                    if rot_ranges[0] is None
+                    else float(self._rng.uniform(*rot_ranges[0]))
+                )
+                p_val = (
+                    p0
+                    if rot_ranges[1] is None
+                    else float(self._rng.uniform(*rot_ranges[1]))
+                )
+                y_val = (
+                    y0
+                    if rot_ranges[2] is None
+                    else float(self._rng.uniform(*rot_ranges[2]))
+                )
+            else:
+                r_val = r0 + (
+                    0.0
+                    if rot_ranges[0] is None
+                    else float(self._rng.uniform(*rot_ranges[0]))
+                )
+                p_val = p0 + (
+                    0.0
+                    if rot_ranges[1] is None
+                    else float(self._rng.uniform(*rot_ranges[1]))
+                )
+                y_val = y0 + (
+                    0.0
+                    if rot_ranges[2] is None
+                    else float(self._rng.uniform(*rot_ranges[2]))
+                )
+            orientation = np.asarray(
+                euler_to_quaternion((r_val, p_val, y_val)),
+                dtype=np.float64,
+            )
         return PoseState(position=position, orientation=orientation)
 
     # ------------------------------------------------------------------
