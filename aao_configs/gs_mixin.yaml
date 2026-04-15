@@ -1,9 +1,9 @@
 # defaults:
 #   - _self_
-#   - bg3dgs: example
+#   - bg3dgs: background_1
 
 model_name: demo_gs
-bg3dgs_name: example
+bg3dgs_name: background_1
 
 env:
   _target_: auto_atom.basis.mjc.gs_mujoco_env.BatchedGSUnifiedMujocoEnv
@@ -23,11 +23,13 @@ env:
     #    (table center ~= [0.45, 0.06], table top z ~= 0.0742).
     # These are intended as good starting points and may still need small
     # per-scene visual refinement with replay/compare tools.
-    background_offsets:
+    # Per-background pose transforms.
+    # Values: [x, y, z] (pure translation) or
+    # [x, y, z, qx, qy, qz, qw] (full rigid-body transform).
+    background_transforms:
       background_0: [1.176, -0.0027, -0.01] # the heatmap is not good, which can be solved by lowering the table's height, but the object will appear to float.
       background_1: [0.0, 0.0, 0.0]
       discover-lab2: [0.2839, 0.0888, 0.0745]
-      example: [0.0, 0.0, 0.0]
       hospital_table_25_5: [0.5158, -0.6083, 0.0755] # the bg itself looks not so good
       simple_room: [-0.0248, 0.1106, 0.0736]
       table: [-0.1354, -0.3838, 0.0709]

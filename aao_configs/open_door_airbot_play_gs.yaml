@@ -3,7 +3,7 @@ defaults:
   - _self_
 
 model_name: demo_gs_airbot_play
-bg3dgs_name: door_bg
+bg3dgs_name: bg0
 
 env:
   _target_: auto_atom.basis.mjc.gs_mujoco_env.BatchedGSUnifiedMujocoEnv
@@ -11,4 +11,8 @@ env:
     body_gaussians:
       door_body: ${gs_dir}/door.ply
       handle_gs_frame: ${gs_dir}/knob.ply
-      bg_gs_frame: ${assets_dir}/gs/backgrounds/${bg3dgs_name}.ply
+    background_ply: ${assets_dir}/gs/backgrounds/door_bg/${bg3dgs_name}.ply
+    # bg_gs_frame body pose from demo_gs_airbot_play.xml (wxyz→xyzw):
+    # pos=[-0.105, 0.491151190, -0.136037800]
+    # quat(wxyz)=[0.509794620, -0.516845570, 0.495912190, -0.476498890]
+    background_transform: [-0.105, 0.491151190, -0.136037800, -0.516845570, 0.495912190, -0.476498890, 0.509794620]

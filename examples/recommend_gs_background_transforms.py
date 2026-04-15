@@ -13,13 +13,13 @@ This reproduces the heuristic used earlier to populate
 
 Examples:
     /home/ghz/.mini_conda3/envs/airbot_play_data/bin/python \
-        examples/recommend_gs_background_offsets.py
+        examples/recommend_gs_background_transforms.py
 
     /home/ghz/.mini_conda3/envs/airbot_play_data/bin/python \
-        examples/recommend_gs_background_offsets.py assets/gs/backgrounds/table.ply
+        examples/recommend_gs_background_transforms.py assets/gs/backgrounds/table.ply
 
     /home/ghz/.mini_conda3/envs/airbot_play_data/bin/python \
-        examples/recommend_gs_background_offsets.py \
+        examples/recommend_gs_background_transforms.py \
         --target-center 0.45 0.06 \
         --target-z 0.0742 \
         --yaml
@@ -133,7 +133,7 @@ def _print_verbose(est: BackgroundOffsetEstimate) -> None:
 
 
 def _print_yaml(estimates: list[BackgroundOffsetEstimate]) -> None:
-    print("background_offsets:")
+    print("background_transforms:")
     for est in estimates:
         x, y, z = est.recommended_offset
         print(f"  {est.name}: [{x:.4f}, {y:.4f}, {z:.4f}]")
@@ -195,7 +195,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--yaml",
         action="store_true",
-        help="Print only a YAML-ready background_offsets block.",
+        help="Print only a YAML-ready background_transforms block.",
     )
     return parser
 

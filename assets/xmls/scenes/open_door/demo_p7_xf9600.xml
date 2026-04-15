@@ -230,9 +230,6 @@
             conaffinity="0"/>
     </body>
 
-    <body name="bg_gs_frame"
-          pos="-0.105000000 0.491151190 -0.136037800"
-          quat="0.509794620 -0.516845570 0.495912190 -0.476498890"/>
   </worldbody>
 
   <keyframe>

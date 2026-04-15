@@ -2,10 +2,10 @@
 
 Usage:
     /home/ghz/.mini_conda3/envs/airbot_play_data/bin/python \
-        examples/tune_gs_background_offset.py --config-name press_three_buttons_gs
+        examples/tune_gs_background_transform.py --config-name press_three_buttons_gs
 
     /home/ghz/.mini_conda3/envs/airbot_play_data/bin/python \
-        examples/tune_gs_background_offset.py --config-name wipe_the_table_gs \
+        examples/tune_gs_background_transform.py --config-name wipe_the_table_gs \
         --camera env1_cam --step 0.002
 
 Extra Hydra overrides can be appended after ``--``:
@@ -290,7 +290,7 @@ def _render_preview(
     step: float,
     scale: float,
 ):
-    env.set_background_offset(offset.tolist())
+    env.set_background_transform(offset.tolist())
     obs = env.capture_observation()
     kc = env._key_creator
     panels: list[np.ndarray] = []
@@ -316,13 +316,13 @@ def main() -> None:
 
     task_file = prepare_task_file(cfg)
     env = ComponentRegistry.get_env(task_file.task.env_name)
-    if not hasattr(env, "set_background_offset"):
+    if not hasattr(env, "set_background_transform"):
         raise TypeError(
-            f"Env '{type(env).__name__}' does not support live GS background offset tuning."
+            f"Env '{type(env).__name__}' does not support live GS background transform tuning."
         )
 
     initial = np.asarray(
-        env.config.gaussian_render.resolved_background_offset(),
+        env.config.gaussian_render.resolved_background_transform()[0],
         dtype=np.float64,
     )
     offset = initial.copy()

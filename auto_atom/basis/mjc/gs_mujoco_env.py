@@ -65,56 +65,121 @@ def create_image_data_batch(
     ]
 
 
-def _normalize_xyz_offset(offset: Any) -> tuple[float, float, float]:
-    arr = np.asarray(offset, dtype=np.float64)
-    if arr.shape != (3,):
-        raise ValueError(
-            f"background offset must be length-3 xyz, got shape {arr.shape}"
-        )
-    return tuple(float(v) for v in arr.tolist())
+BackgroundPose = tuple[tuple[float, float, float], tuple[float, float, float, float]]
+"""(position_xyz, orientation_xyzw) pair describing a background transform."""
+
+_IDENTITY_QUAT: tuple[float, float, float, float] = (0.0, 0.0, 0.0, 1.0)
 
 
-def _resolve_background_offset(
+def _normalize_background_pose(value: Any) -> BackgroundPose:
+    """Normalize a 3-element (xyz) or 7-element (xyz + xyzw) sequence into a
+    ``BackgroundPose``.
+
+    Length 3 → pure translation with identity orientation.
+    Length 7 → ``[x, y, z, qx, qy, qz, qw]``.
+    A ``BackgroundPose`` tuple ``((x, y, z), (qx, qy, qz, qw))`` is passed
+    through unchanged.
+    """
+    if (
+        isinstance(value, tuple)
+        and len(value) == 2
+        and isinstance(value[0], tuple)
+        and len(value[0]) == 3
+        and isinstance(value[1], tuple)
+        and len(value[1]) == 4
+    ):
+        return value  # already a BackgroundPose
+    arr = np.asarray(value, dtype=np.float64).ravel()
+    if arr.shape[0] == 3:
+        return tuple(float(v) for v in arr), _IDENTITY_QUAT
+    if arr.shape[0] == 7:
+        pos = tuple(float(v) for v in arr[:3])
+        quat = arr[3:]
+        norm = float(np.linalg.norm(quat))
+        if norm < 1e-12:
+            quat_t = _IDENTITY_QUAT
+        else:
+            quat_t = tuple(float(v) for v in (quat / norm))
+        return pos, quat_t
+    raise ValueError(
+        f"background transform must be length 3 (xyz) or 7 (xyz+xyzw), "
+        f"got {arr.shape[0]}"
+    )
+
+
+def _is_identity_pose(pose: BackgroundPose) -> bool:
+    pos, quat = pose
+    return np.allclose(pos, 0.0) and np.allclose(quat, _IDENTITY_QUAT)
+
+
+def _resolve_background_transform(
     background_ply: str | None,
-    background_offset: tuple[float, float, float] | None,
-    background_offsets: Dict[str, tuple[float, float, float]],
-) -> tuple[float, float, float]:
-    if background_offset is not None:
-        return _normalize_xyz_offset(background_offset)
+    background_transform: Any | None,
+    background_transforms: Dict[str, Any],
+) -> BackgroundPose:
+    if background_transform is not None:
+        return _normalize_background_pose(background_transform)
     if not background_ply:
-        return (0.0, 0.0, 0.0)
+        return (0.0, 0.0, 0.0), _IDENTITY_QUAT
 
     bg_path = Path(background_ply)
     for key in (background_ply, str(bg_path), bg_path.name, bg_path.stem):
-        if key in background_offsets:
-            return _normalize_xyz_offset(background_offsets[key])
-    return (0.0, 0.0, 0.0)
+        if key in background_transforms:
+            return _normalize_background_pose(background_transforms[key])
+    return (0.0, 0.0, 0.0), _IDENTITY_QUAT
 
 
-def _materialize_shifted_background_ply(
+def _materialize_transformed_background_ply(
     background_ply: str | None,
-    offset_xyz: tuple[float, float, float],
+    pose: BackgroundPose,
 ) -> str | None:
+    """Return a path to a (possibly cached) PLY with *pose* baked in.
+
+    *pose* is ``((x, y, z), (qx, qy, qz, qw))``.  When the orientation is
+    identity only a translation is applied; otherwise the full rigid-body
+    transform (position, rotation, SH rotation) is applied via
+    ``gaussian_renderer.transform_gs_model.transform_gaussian``.
+    """
     if background_ply is None:
         return None
 
-    offset_xyz = _normalize_xyz_offset(offset_xyz)
-    if np.allclose(offset_xyz, 0.0):
+    pose = _normalize_background_pose(pose)
+    if _is_identity_pose(pose):
         return background_ply
 
+    pos, quat = pose
     src_path = Path(background_ply).expanduser().resolve()
     cache_key = hashlib.sha1(
-        f"{src_path}|{offset_xyz[0]:.6f},{offset_xyz[1]:.6f},{offset_xyz[2]:.6f}".encode(
-            "utf-8"
-        )
+        (
+            f"{src_path}"
+            f"|{pos[0]:.6f},{pos[1]:.6f},{pos[2]:.6f}"
+            f"|{quat[0]:.6f},{quat[1]:.6f},{quat[2]:.6f},{quat[3]:.6f}"
+        ).encode("utf-8")
     ).hexdigest()[:12]
-    cache_dir = Path(".cache/gs_background_offsets")
-    cache_path = cache_dir / f"{src_path.stem}__bg_offset_{cache_key}.ply"
+    cache_dir = Path(".cache/gs_background_transforms")
+    cache_path = cache_dir / f"{src_path.stem}__bg_xform_{cache_key}.ply"
     if cache_path.exists():
         return str(cache_path)
 
     gaussians = load_ply(str(src_path))
-    gaussians.xyz = gaussians.xyz + np.asarray(offset_xyz, dtype=np.float32)
+
+    is_identity_rot = np.allclose(quat, _IDENTITY_QUAT)
+    if is_identity_rot:
+        # Pure translation — fast path, no rotation needed.
+        gaussians.xyz = gaussians.xyz + np.asarray(pos, dtype=np.float32)
+    else:
+        # Full rigid-body transform via gaussian_renderer.
+        from scipy.spatial.transform import Rotation
+
+        R = Rotation.from_quat(quat).as_matrix()  # xyzw convention
+        T = np.eye(4, dtype=np.float64)
+        T[:3, :3] = R
+        T[:3, 3] = pos
+
+        from gaussian_renderer.transform_gs_model import transform_gaussian
+
+        transform_gaussian(gaussians, T, silent=True)
+
     save_ply(gaussians, cache_path)
     return str(cache_path)
 
@@ -126,24 +191,25 @@ class GaussianRenderConfig(BaseModel):
     """Mapping from MuJoCo body name to PLY file path."""
     background_ply: str | None = None
     """Optional background PLY (loaded under the reserved key ``'background'``)."""
-    background_offset: tuple[float, float, float] | None = None
-    """Optional xyz translation applied to the configured background PLY."""
-    background_offsets: Dict[str, tuple[float, float, float]] = Field(
-        default_factory=dict
-    )
-    """Per-background xyz offsets keyed by full path, file name, or file stem."""
+    background_transform: list | tuple | None = None
+    """Explicit pose transform for the background PLY.
+    Length 3 → ``[x, y, z]`` (pure translation).
+    Length 7 → ``[x, y, z, qx, qy, qz, qw]`` (full rigid-body transform)."""
+    background_transforms: Dict[str, list] = Field(default_factory=dict)
+    """Per-background pose transforms keyed by full path, file name, or stem.
+    Values: ``[x, y, z]`` or ``[x, y, z, qx, qy, qz, qw]``."""
 
-    def resolved_background_offset(self) -> tuple[float, float, float]:
-        return _resolve_background_offset(
+    def resolved_background_transform(self) -> BackgroundPose:
+        return _resolve_background_transform(
             self.background_ply,
-            self.background_offset,
-            self.background_offsets,
+            self.background_transform,
+            self.background_transforms,
         )
 
     def resolved_background_ply(self) -> str | None:
-        return _materialize_shifted_background_ply(
+        return _materialize_transformed_background_ply(
             self.background_ply,
-            self.resolved_background_offset(),
+            self.resolved_background_transform(),
         )
 
 
@@ -243,7 +309,7 @@ class GSUnifiedMujocoEnv(UnifiedMujocoEnv):
         )
         self._fg_gs_renderer = MjxBatchSplatRenderer(fg_cfg, self.model)
         self._bg_gs_renderer: MjxBatchSplatRenderer | None = None
-        self.set_background_offset(gs_cfg.resolved_background_offset())
+        self.set_background_transform(gs_cfg.resolved_background_transform())
         background_ply = gs_cfg.resolved_background_ply()
         if background_ply:
             self.get_logger().debug(
@@ -257,13 +323,13 @@ class GSUnifiedMujocoEnv(UnifiedMujocoEnv):
             dict(gs_cfg.body_gaussians)
         )
 
-    def set_background_offset(
-        self, offset_xyz: tuple[float, float, float] | list[float]
-    ) -> tuple[float, float, float]:
-        offset_xyz = _normalize_xyz_offset(offset_xyz)
-        background_ply = _materialize_shifted_background_ply(
+    def set_background_transform(
+        self, pose: BackgroundPose | list[float]
+    ) -> BackgroundPose:
+        pose = _normalize_background_pose(pose)
+        background_ply = _materialize_transformed_background_ply(
             self._gs_background_source_ply,
-            offset_xyz,
+            pose,
         )
         combined_models = dict(self.config.gaussian_render.body_gaussians)
         if background_ply:
@@ -281,8 +347,8 @@ class GSUnifiedMujocoEnv(UnifiedMujocoEnv):
             if background_ply
             else None
         )
-        object.__setattr__(self.config.gaussian_render, "background_offset", offset_xyz)
-        return offset_xyz
+        object.__setattr__(self.config.gaussian_render, "background_transform", pose)
+        return pose
 
     def capture_observation(self) -> dict[str, dict[str, Any]]:
         obs = super().capture_observation()
@@ -671,7 +737,7 @@ class BatchedGSUnifiedMujocoEnv(BatchedUnifiedMujocoEnv):
             tuple[tuple[int, ...], int, int], tuple[torch.Tensor, torch.Tensor]
         ] = {}
 
-        self.set_background_offset(gs_cfg.resolved_background_offset())
+        self.set_background_transform(gs_cfg.resolved_background_transform())
         background_ply = gs_cfg.resolved_background_ply()
 
         n_bodies = len(gs_cfg.body_gaussians)
@@ -680,13 +746,13 @@ class BatchedGSUnifiedMujocoEnv(BatchedUnifiedMujocoEnv):
             f"Batched GS renderer initialised with {n_bodies} body gaussian(s){bg_str}"
         )
 
-    def set_background_offset(
-        self, offset_xyz: tuple[float, float, float] | list[float]
-    ) -> tuple[float, float, float]:
-        offset_xyz = _normalize_xyz_offset(offset_xyz)
-        background_ply = _materialize_shifted_background_ply(
+    def set_background_transform(
+        self, pose: BackgroundPose | list[float]
+    ) -> BackgroundPose:
+        pose = _normalize_background_pose(pose)
+        background_ply = _materialize_transformed_background_ply(
             self._gs_background_source_ply,
-            offset_xyz,
+            pose,
         )
         self._bg_gs_renderer = (
             MjxBatchSplatRenderer(
@@ -701,8 +767,8 @@ class BatchedGSUnifiedMujocoEnv(BatchedUnifiedMujocoEnv):
             else None
         )
         self._bg_cache.clear()
-        object.__setattr__(self.config.gaussian_render, "background_offset", offset_xyz)
-        return offset_xyz
+        object.__setattr__(self.config.gaussian_render, "background_transform", pose)
+        return pose
 
     # ------------------------------------------------------------------
     # observation capture

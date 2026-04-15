@@ -8,7 +8,7 @@ These offsets are used by [`aao_configs/gs_mixin.yaml`](../aao_configs/gs_mixin.
 env:
   gaussian_render:
     background_ply: ${assets_dir}/gs/backgrounds/${bg3dgs_name}.ply
-    background_offsets:
+    background_transforms:
       discover-lab2: [0.2839, 0.0888, 0.0745]
 ```
 
@@ -23,12 +23,12 @@ The goal is to shift each background PLY so that:
 Recommended workflow:
 
 1. Run the automatic estimator to get an initial offset.
-2. Paste the result into `background_offsets`.
+2. Paste the result into `background_transforms`.
 3. Launch the interactive tuner and refine the offset while watching RGB, mask, and overlay across one or more cameras.
 
 ## 1. Automatic Offset Recommendation
 
-Use [`examples/recommend_gs_background_offsets.py`](../examples/recommend_gs_background_offsets.py) to estimate an initial xyz offset from the background PLY geometry.
+Use [`examples/recommend_gs_background_transforms.py`](../examples/recommend_gs_background_transforms.py) to estimate an initial xyz offset from the background PLY geometry.
 
 ### What the script does
 
@@ -54,14 +54,14 @@ Estimate offsets for every background in `assets/gs/backgrounds/`:
 
 ```bash
 /home/ghz/.mini_conda3/envs/airbot_play_data/bin/python \
-    examples/recommend_gs_background_offsets.py
+    examples/recommend_gs_background_transforms.py
 ```
 
 Estimate a single background:
 
 ```bash
 /home/ghz/.mini_conda3/envs/airbot_play_data/bin/python \
-    examples/recommend_gs_background_offsets.py \
+    examples/recommend_gs_background_transforms.py \
     assets/gs/backgrounds/discover-lab2.ply
 ```
 
@@ -69,14 +69,14 @@ Print only a YAML-ready block:
 
 ```bash
 /home/ghz/.mini_conda3/envs/airbot_play_data/bin/python \
-    examples/recommend_gs_background_offsets.py \
+    examples/recommend_gs_background_transforms.py \
     --yaml
 ```
 
 Example output:
 
 ```yaml
-background_offsets:
+background_transforms:
   background_0: [1.3098, -0.0081, -0.0023]
   discover-lab2: [0.2839, 0.0888, 0.0745]
   simple_room: [-0.0248, 0.1106, 0.0736]
@@ -100,7 +100,7 @@ Example with a different target reference:
 
 ```bash
 /home/ghz/.mini_conda3/envs/airbot_play_data/bin/python \
-    examples/recommend_gs_background_offsets.py \
+    examples/recommend_gs_background_transforms.py \
     --target-center 0.45 0.06 \
     --target-z 0.0742 \
     --yaml
@@ -108,7 +108,7 @@ Example with a different target reference:
 
 ## 2. Interactive Offset Tuning
 
-Use [`examples/tune_gs_background_offset.py`](../examples/tune_gs_background_offset.py) to interactively refine a background offset with live preview.
+Use [`examples/tune_gs_background_transform.py`](../examples/tune_gs_background_transform.py) to interactively refine a background offset with live preview.
 
 The script updates the GS background offset at runtime and refreshes the rendered preview immediately.
 
@@ -128,7 +128,7 @@ Launch the tuner on one camera:
 
 ```bash
 /home/ghz/.mini_conda3/envs/airbot_play_data/bin/python \
-    examples/tune_gs_background_offset.py \
+    examples/tune_gs_background_transform.py \
     --config-name press_three_buttons_gs
 ```
 
@@ -136,7 +136,7 @@ Select a specific background:
 
 ```bash
 /home/ghz/.mini_conda3/envs/airbot_play_data/bin/python \
-    examples/tune_gs_background_offset.py \
+    examples/tune_gs_background_transform.py \
     --config-name press_three_buttons_gs \
     -- --bg3dgs_name=discover-lab2
 ```
@@ -145,7 +145,7 @@ Tune with a specific camera and smaller step:
 
 ```bash
 /home/ghz/.mini_conda3/envs/airbot_play_data/bin/python \
-    examples/tune_gs_background_offset.py \
+    examples/tune_gs_background_transform.py \
     --config-name wipe_the_table_gs \
     --camera env1_cam \
     --step 0.002
@@ -157,7 +157,7 @@ You can preview multiple cameras at once:
 
 ```bash
 /home/ghz/.mini_conda3/envs/airbot_play_data/bin/python \
-    examples/tune_gs_background_offset.py \
+    examples/tune_gs_background_transform.py \
     --config-name press_three_buttons_gs \
     --camera env1_cam \
     --camera wrist_cam
@@ -193,7 +193,7 @@ When you press `p`, the script prints a line like:
 YAML: discover-lab2: [0.2839, 0.0888, 0.0745]
 ```
 
-You can paste that line back into `background_offsets` in [`aao_configs/gs_mixin.yaml`](../aao_configs/gs_mixin.yaml).
+You can paste that line back into `background_transforms` in [`aao_configs/gs_mixin.yaml`](../aao_configs/gs_mixin.yaml).
 
 ### Optional arguments
 
