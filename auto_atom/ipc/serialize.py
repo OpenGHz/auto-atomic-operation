@@ -93,7 +93,7 @@ def deserialize_task_update(data: Dict[str, Any]) -> TaskUpdate:
             [StageExecutionStatus(s) for s in data["status"]], dtype=object
         ),
         done=_to_ndarray(data["done"], "bool"),
-        success=np.asarray(data["success"], dtype=object),
+        success=np.asarray(data["success"], dtype=bool),
         details=deserialize_value(data["details"]),
         phase=data["phase"],
         phase_step=_to_ndarray(data["phase_step"], "int64"),
@@ -175,7 +175,7 @@ def deserialize_execution_summary(data: Dict[str, Any]) -> ExecutionSummary:
             [StageExecutionStatus(s) for s in data["final_status"]], dtype=object
         ),
         final_done=_to_ndarray(data["final_done"], "bool"),
-        final_success=np.asarray(data["final_success"], dtype=object),
+        final_success=np.asarray(data["final_success"], dtype=bool),
         elapsed_time_sec=data["elapsed_time_sec"],
         env_completion_steps=_to_ndarray(data.get("env_completion_steps"), "int64"),
         env_completion_time_sec=_to_ndarray(

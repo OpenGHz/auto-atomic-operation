@@ -46,6 +46,10 @@ class DataReplayConfig(BaseModel):
     if ``False`` the replay drives actuators through the physics engine."""
     demo_dir: str | None = Field(default=None)
     """Directory containing npz demo files. Defaults to ``outputs/records/demos``."""
+    done_on_success: bool = Field(default=False)
+    """If ``True``, report ``done=True`` as soon as all stages succeed.
+    If ``False`` (default), defer ``done=True`` until all replay data has
+    been played back, even if stages already succeeded."""
 
 
 class DataReplayTaskFileConfig(TaskFileConfig):
@@ -554,7 +558,14 @@ class DataReplayRunner(RunnerBase):
         self._action_step += 1
         # print(f"action={self._current_action}")
         # input("Press Enter to continue to the next step...")
-        return evaluator.update(self._current_action, env_mask)
+        task_update = evaluator.update(self._current_action, env_mask)
+
+        # Defer done for successful envs until replay data is exhausted.
+        done_on_success = self._replay_cfg.done_on_success if self._replay_cfg else True
+        if not done_on_success and policy.remaining_steps > 0:
+            task_update.done[task_update.success] = False
+
+        return task_update
 
     def close(self) -> None:
         if self._evaluator is not None:

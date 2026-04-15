@@ -558,7 +558,7 @@ class PolicyEvaluator:
                 state.done = True
                 state.success = True
             else:
-                state.success = None
+                state.success = False
             return
 
         if (
@@ -659,7 +659,7 @@ class PolicyEvaluator:
         stage_name: List[str] = []
         status: List[StageExecutionStatus] = []
         done: List[bool] = []
-        success: List[Optional[bool]] = []
+        success: List[bool] = []
         details: List[Dict[str, Any]] = []
         phase: List[Optional[str]] = []
         phase_step: List[int] = []
@@ -685,7 +685,7 @@ class PolicyEvaluator:
             stage_name=stage_name,
             status=np.asarray(status, dtype=object),
             done=np.asarray(done, dtype=bool),
-            success=np.asarray(success, dtype=object),
+            success=np.asarray(success, dtype=bool),
             details=details,
             phase=phase,
             phase_step=np.asarray(phase_step, dtype=np.int64),

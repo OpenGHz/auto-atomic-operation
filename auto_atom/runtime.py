@@ -366,7 +366,7 @@ class _EnvRuntimeState:
     stage_cursor: int = 0
     active: Optional[ActiveStageState] = None
     done: bool = False
-    success: Optional[bool] = None
+    success: bool = False
     phase: Optional[str] = None
     phase_step: Optional[int] = None
     latest_status: StageExecutionStatus = StageExecutionStatus.PENDING
@@ -858,7 +858,7 @@ class TaskRunner:
                 state.done = True
                 state.success = True
             else:
-                state.success = None
+                state.success = False
             return
 
         failure = self._build_action_failure_details(active.plan, details, signal)
@@ -1348,7 +1348,7 @@ class TaskRunner:
         stage_name: List[str] = []
         status: List[StageExecutionStatus] = []
         done: List[bool] = []
-        success: List[Optional[bool]] = []
+        success: List[bool] = []
         details: List[Dict[str, Any]] = []
         phase: List[Optional[str]] = []
         phase_step: List[int] = []
@@ -1373,7 +1373,7 @@ class TaskRunner:
             stage_name=stage_name,
             status=np.asarray(status, dtype=object),
             done=np.asarray(done, dtype=bool),
-            success=np.asarray(success, dtype=object),
+            success=np.asarray(success, dtype=bool),
             details=details,
             phase=phase,
             phase_step=np.asarray(phase_step, dtype=np.int64),
@@ -1788,7 +1788,7 @@ def _build_execution_summary(
         final_stage_name=list(update.stage_name),
         final_status=np.asarray(update.status, dtype=object),
         final_done=np.asarray(update.done, dtype=bool),
-        final_success=np.asarray(update.success, dtype=object),
+        final_success=np.asarray(update.success, dtype=bool),
         records=list(records),
     )
 
