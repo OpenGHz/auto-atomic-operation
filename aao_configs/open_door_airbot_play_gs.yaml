@@ -1,16 +1,17 @@
 defaults:
   - open_door_airbot_play
+  - airbot_play_xf9600_gs
   - _self_
 
-model_name: demo_gs_airbot_play
+door_name: door0
 bg3dgs_name: bg0
 
 env:
   _target_: auto_atom.basis.mjc.gs_mujoco_env.BatchedGSUnifiedMujocoEnv
   gaussian_render:
     body_gaussians:
-      door_body: ${gs_dir}/door.ply
-      handle_gs_frame: ${gs_dir}/knob.ply
+      door_body: ${gs_dir}/${door_name}.ply
+      handle_gs_frame: ${gs_dir}/${door_name}_knob.ply
     background_ply: ${assets_dir}/gs/backgrounds/door_bg/${bg3dgs_name}.ply
     # bg_gs_frame body pose from demo_gs_airbot_play.xml (wxyz→xyzw):
     # pos=[-0.105, 0.491151190, -0.136037800]
