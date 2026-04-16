@@ -81,4 +81,4 @@ task:
 task_operators:
   - name: arm
     initial_state:
-      eef: 0.82 # closed gripper for pressing buttons
+      eef: 0.7 # partially closed to avoid preloading an empty gripper before press

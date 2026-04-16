@@ -49,7 +49,7 @@ task:
           - position: [0.0, 0.0, 0.12]
             orientation: [0.0, 0.70710678, 0.0, 0.70710678]
             reference: object_world
-          - position: [0.0, 0.0, 0.035]
+          - position: [0.0, 0.0, 0.05]
             reference: object_world
         post_move:
           - position: [0.0, 0.0, 0.12]
@@ -58,4 +58,4 @@ task:
 task_operators:
   - name: arm
     initial_state:
-      eef: 0.82 # closed gripper for pressing buttons
+      eef: 0.7 # partially closed to avoid preloading an empty gripper before press
