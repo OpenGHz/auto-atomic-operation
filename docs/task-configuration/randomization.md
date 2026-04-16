@@ -301,6 +301,26 @@ against each other. This allows carried assemblies such as `flower -> vase` to
 move together while still rejecting overlap against unrelated randomized
 entities (for example `vase2`).
 
+When a referenced child collides with an unrelated randomized entity, the whole
+reference-connected component is re-sampled together. In the `flower -> vase`
+example, a child collision triggers a fresh sample for both `vase` and
+`flower`, rather than retrying only the flower's local jitter.
+
+Practical implications:
+
+- Collision rejection is not strictly "per YAML key". It operates on
+  **reference-connected components** formed by entity-name references.
+- A component is accepted only when **all of its members** are collision-free
+  against already accepted components and earlier accepted entities in the same
+  reset.
+- This matters most when a child has only a small local jitter. If `flower`
+  carries with `vase` and ends up too close to `arm.eef`, retrying only the
+  flower's `±5 mm` offset would usually not help; the sampler therefore retries
+  the whole `vase + flower` component.
+- Direct collisions inside the same reference chain are still ignored, so a
+  carried child is allowed to remain inside/on its referenced parent as
+  intended.
+
 ## Per-Waypoint Randomization
 
 In addition to entity-level randomization under `task.randomization`, individual
@@ -418,10 +438,13 @@ The randomization logic lives in `SceneBackend` (the mixin used by `MujocoTaskBa
 2. **`reset()`** — after restoring the scene to its canonical state:
    - Calls `_record_default_poses()` if not already recorded.
    - Calls `_apply_randomization()` which:
-     1. Resolves each key to an object handler or operator handler.
-     2. For each axis with a `[min, max]` tuple (axes set to `None` are
+     1. Topologically sorts the randomization keys by entity-reference
+        dependency, then groups reference-connected keys into components
+        (for example `vase` + `flower`).
+     2. Resolves each key to an object handler or operator handler.
+     3. For each axis with a `[min, max]` tuple (axes set to `None` are
         skipped), samples a uniform random value.
-     3. Combines the sampled values with the default pose according to
+     4. Combines the sampled values with the default pose according to
         `reference`:
         - `relative` — adds the sampled values to the default pose
           (translation additive; rotation additive in RPY then converted
@@ -432,7 +455,10 @@ The randomization logic lives in `SceneBackend` (the mixin used by `MujocoTaskBa
         - `absolute_base` (operator EEF only) — transforms the default
           EEF world pose into the operator's base frame, replaces sampled
           axes there, then transforms the result back to world.
-     4. Applies object poses, operator base poses, and operator home EEF
+     5. Runs collision rejection on the sampled component. If any member of the
+        component overlaps an unrelated accepted participant, the **entire
+        component** is re-sampled up to 100 times.
+     6. Applies object poses, operator base poses, and operator home EEF
         poses through their respective APIs.
    - Calls `_apply_camera_randomization()` (if `camera_randomization`
      is configured) which samples camera poses and writes them to

@@ -1,5 +1,6 @@
 defaults:
   - _self_
+  # use 3dgs by default
   - press_three_buttons_gs_mixin
 
 scene_name: press_three_buttons

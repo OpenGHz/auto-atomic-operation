@@ -185,6 +185,69 @@ def test_reference_chain_skips_collision_rejection_with_ancestor() -> None:
     assert np.allclose(flower_pos[:2], [0.0, 0.0])
 
 
+def test_child_collision_resamples_reference_component() -> None:
+    handler = DummyOperatorHandler(
+        operator_name="arm",
+        base_pose=PoseState(
+            position=np.asarray([[0.0, 0.0, 0.0]], dtype=np.float64),
+            orientation=np.asarray([[0.0, 0.0, 0.0, 1.0]], dtype=np.float64),
+        ),
+        eef_pose=PoseState(
+            position=np.asarray([[0.0, 0.0, 0.0]], dtype=np.float64),
+            orientation=np.asarray([[0.0, 0.0, 0.0, 1.0]], dtype=np.float64),
+        ),
+    )
+    backend = _make_backend(
+        randomization={
+            "arm": PoseRandomRange(
+                x=(0.0, 0.0),
+                y=(0.0, 0.0),
+                collision_radius=0.10,
+            ),
+            "vase": PoseRandomRange(
+                reference=RandomizationReference.ABSOLUTE_WORLD,
+                x=(0.0, 0.3),
+                y=(0.0, 0.0),
+                collision_radius=0.05,
+            ),
+            "flower": PoseRandomRange(
+                reference="vase",
+                x=(0.0, 0.0),
+                y=(0.0, 0.0),
+                collision_radius=0.05,
+            ),
+        },
+        object_positions={
+            "vase": (0.0, 0.0, 0.0),
+            "flower": (0.0, 0.0, 0.0),
+        },
+    )
+    backend.operator_handlers = {"arm": handler}
+    backend._default_operator_base_poses = {"arm": handler.get_base_pose()}
+    backend._default_operator_eef_poses = {"arm": handler.get_end_effector_pose()}
+    backend._rng = SequenceRNG(
+        [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.3,
+            0.0,
+            0.0,
+            0.0,
+        ]
+    )
+
+    backend._apply_randomization(np.asarray([True], dtype=bool))
+
+    vase_pos = backend.object_handlers["vase"].get_pose().position[0]
+    flower_pos = backend.object_handlers["flower"].get_pose().position[0]
+    assert np.allclose(vase_pos[:2], [0.3, 0.0])
+    assert np.allclose(flower_pos[:2], [0.3, 0.0])
+
+
 def test_direct_operator_randomization_updates_home_eef_pose() -> None:
     handler = DummyOperatorHandler(
         operator_name="arm",

@@ -94,6 +94,16 @@ class _CollisionParticipant:
 
 
 @dataclass
+class _PendingRandomizationAction:
+    kind: str
+    owner: str
+    label: str
+    pose: PoseState
+    radius: float
+    ancestors: Set[str] = field(default_factory=set)
+
+
+@dataclass
 class MujocoObjectHandler(ObjectHandler):
     env: BatchedUnifiedMujocoEnv
     body_name: str
@@ -996,237 +1006,448 @@ class MujocoTaskBackend(SceneBackend):
         return compose_pose(delta, default_pose)
 
     def _apply_randomization(self, env_mask: np.ndarray) -> None:
-        sampled_poses: Dict[str, PoseState] = {}
         deps = self._randomization_dependencies()
+        order = self._randomization_order()
+        components = self._randomization_components(order, deps)
+        sampled_poses: Dict[str, PoseState] = {}
         collision_participants: List[_CollisionParticipant] = []
-        for name in self._randomization_order():
-            rand_range = self.randomization[name]
-            if name in self.object_handlers:
-                if isinstance(rand_range, OperatorRandomizationConfig):
-                    raise TypeError(
-                        f"Object '{name}' randomization must be a "
-                        "PoseRandomRange, not an operator randomization "
-                        "config."
+        for component in components:
+            component_poses, component_actions = self._sample_randomization_component(
+                component,
+                env_mask,
+                sampled_poses,
+                collision_participants,
+                deps,
+            )
+            for action in component_actions:
+                if action.kind == "object":
+                    self.object_handlers[action.owner].set_pose(action.pose, env_mask)
+                elif action.kind == "operator_base":
+                    self.operator_handlers[action.owner].set_pose(action.pose, env_mask)
+                elif action.kind == "operator_eef":
+                    self.operator_handlers[action.owner].set_home_end_effector_pose(
+                        action.pose,
+                        env_mask=env_mask,
                     )
-                if rand_range.reference == RandomizationReference.ABSOLUTE_BASE:
+                else:
                     raise ValueError(
-                        f"Object '{name}' randomization cannot use "
-                        "'absolute_base' — only operator end-effector "
-                        "randomization is defined in a base frame."
+                        f"Unknown randomization action kind: {action.kind}"
                     )
-                default_pose = self._default_object_poses.get(
-                    name, self.object_handlers[name].get_pose()
-                )
-                base_pose = self._resolve_reference_base_pose(
-                    rand_range.reference, sampled_poses, default_pose
-                )
-                sampled = self._sample_pose_with_collision_rejection(
-                    owner_name=name,
-                    label=name,
-                    reference=rand_range.reference,
-                    collision_radius=rand_range.collision_radius,
-                    base_pose=base_pose,
-                    env_mask=env_mask,
-                    collision_participants=collision_participants,
-                    dependency_map=deps,
-                    sampler=lambda env_index,
-                    base_pose=base_pose,
-                    rand_range=rand_range: self._sample_random_pose_single(
-                        base_pose, rand_range, env_index
-                    ),
-                )
-                self.object_handlers[name].set_pose(sampled, env_mask=env_mask)
-                sampled_poses[name] = sampled
                 collision_participants.append(
                     _CollisionParticipant(
+                        owner=action.owner,
+                        label=action.label,
+                        pose=action.pose,
+                        radius=action.radius,
+                        ancestors=set(action.ancestors),
+                    )
+                )
+            sampled_poses.update(component_poses)
+
+    def _randomization_components(
+        self,
+        order: List[str],
+        deps: Dict[str, Set[str]],
+    ) -> List[List[str]]:
+        adjacency: Dict[str, Set[str]] = {name: set() for name in self.randomization}
+        for name, parents in deps.items():
+            for parent in parents:
+                adjacency[name].add(parent)
+                adjacency[parent].add(name)
+        order_index = {name: index for index, name in enumerate(order)}
+        visited: Set[str] = set()
+        components: List[List[str]] = []
+        for name in order:
+            if name in visited:
+                continue
+            stack = [name]
+            component: Set[str] = set()
+            while stack:
+                current = stack.pop()
+                if current in visited:
+                    continue
+                visited.add(current)
+                component.add(current)
+                stack.extend(adjacency[current] - visited)
+            components.append(sorted(component, key=order_index.__getitem__))
+        return components
+
+    def _sample_randomization_component(
+        self,
+        component: List[str],
+        env_mask: np.ndarray,
+        accepted_sampled_poses: Dict[str, PoseState],
+        accepted_participants: List[_CollisionParticipant],
+        dependency_map: Dict[str, Set[str]],
+    ) -> tuple[Dict[str, PoseState], List[_PendingRandomizationAction]]:
+        key_buffers = {
+            name: self._current_pose_for_randomization_key(name) for name in component
+        }
+        action_buffers: Dict[str, _PendingRandomizationAction] = {}
+        action_order: List[str] = []
+
+        for env_index, enabled in enumerate(env_mask):
+            if not enabled:
+                continue
+            env_sampled_poses, env_actions, failure = self._sample_component_for_env(
+                component,
+                env_index,
+                accepted_sampled_poses,
+                accepted_participants,
+                dependency_map,
+            )
+            if failure is not None:
+                logger = logging.getLogger(MujocoTaskBackend.__name__)
+                failed_label, blocking_label = failure
+                logger.warning(
+                    "Collision rejection exhausted for '%s' after %d attempts; "
+                    "keeping the last overlapping sample against '%s'.",
+                    failed_label,
+                    _MAX_COLLISION_REJECTION_ATTEMPTS,
+                    blocking_label,
+                )
+
+            for name, pose in env_sampled_poses.items():
+                key_buffers[name].position[env_index] = pose.position[0]
+                key_buffers[name].orientation[env_index] = pose.orientation[0]
+            for action in env_actions:
+                if action.label not in action_buffers:
+                    template = self._current_pose_for_action(action.kind, action.owner)
+                    action_buffers[action.label] = _PendingRandomizationAction(
+                        kind=action.kind,
+                        owner=action.owner,
+                        label=action.label,
+                        pose=template,
+                        radius=action.radius,
+                        ancestors=set(action.ancestors),
+                    )
+                    action_order.append(action.label)
+                action_buffers[action.label].pose.position[env_index] = (
+                    action.pose.position[0]
+                )
+                action_buffers[action.label].pose.orientation[env_index] = (
+                    action.pose.orientation[0]
+                )
+
+        component_actions = [action_buffers[label] for label in action_order]
+        return key_buffers, component_actions
+
+    def _sample_component_for_env(
+        self,
+        component: List[str],
+        env_index: int,
+        accepted_sampled_poses: Dict[str, PoseState],
+        accepted_participants: List[_CollisionParticipant],
+        dependency_map: Dict[str, Set[str]],
+    ) -> tuple[
+        Dict[str, PoseState],
+        List[_PendingRandomizationAction],
+        Optional[tuple[str, str]],
+    ]:
+        accepted_env_poses = {
+            name: pose.select(env_index)
+            for name, pose in accepted_sampled_poses.items()
+        }
+        last_sampled_poses: Dict[str, PoseState] = {}
+        last_actions: List[_PendingRandomizationAction] = []
+        last_failure: Optional[tuple[str, str]] = None
+
+        for _ in range(_MAX_COLLISION_REJECTION_ATTEMPTS):
+            working_poses = dict(accepted_env_poses)
+            env_sampled_poses: Dict[str, PoseState] = {}
+            env_actions: List[_PendingRandomizationAction] = []
+            env_participants: List[_CollisionParticipant] = []
+            failure: Optional[tuple[str, str]] = None
+            for name in component:
+                rand_range = self.randomization[name]
+                sampled_poses, actions = self._sample_randomization_target_for_env(
+                    name,
+                    rand_range,
+                    env_index,
+                    working_poses,
+                    dependency_map,
+                )
+                for key, pose in sampled_poses.items():
+                    working_poses[key] = pose
+                    env_sampled_poses[key] = pose
+                for action in actions:
+                    blocking = self._find_collision_participant(
+                        owner_name=action.owner,
+                        env_index=env_index,
+                        candidate_pose=action.pose,
+                        collision_radius=action.radius,
+                        ancestors=action.ancestors,
+                        collision_participants=accepted_participants + env_participants,
+                    )
+                    env_actions.append(action)
+                    env_participants.append(
+                        _CollisionParticipant(
+                            owner=action.owner,
+                            label=action.label,
+                            pose=action.pose,
+                            radius=action.radius,
+                            ancestors=set(action.ancestors),
+                        )
+                    )
+                    if failure is None and blocking is not None:
+                        failure = (action.label, blocking.label)
+            last_sampled_poses = env_sampled_poses
+            last_actions = env_actions
+            last_failure = failure
+            if failure is None:
+                return env_sampled_poses, env_actions, None
+
+        return last_sampled_poses, last_actions, last_failure
+
+    def _sample_randomization_target_for_env(
+        self,
+        name: str,
+        rand_range: PoseRandomRange | OperatorRandomizationConfig,
+        env_index: int,
+        working_poses: Dict[str, PoseState],
+        dependency_map: Dict[str, Set[str]],
+    ) -> tuple[Dict[str, PoseState], List[_PendingRandomizationAction]]:
+        if name in self.object_handlers:
+            if isinstance(rand_range, OperatorRandomizationConfig):
+                raise TypeError(
+                    f"Object '{name}' randomization must be a "
+                    "PoseRandomRange, not an operator randomization config."
+                )
+            if rand_range.reference == RandomizationReference.ABSOLUTE_BASE:
+                raise ValueError(
+                    f"Object '{name}' randomization cannot use 'absolute_base' — "
+                    "only operator end-effector randomization is defined in a "
+                    "base frame."
+                )
+            sampled = self._sample_object_pose_for_env(
+                name,
+                rand_range,
+                env_index,
+                working_poses,
+            )
+            return {name: sampled}, [
+                _PendingRandomizationAction(
+                    kind="object",
+                    owner=name,
+                    label=name,
+                    pose=sampled,
+                    radius=float(rand_range.collision_radius),
+                    ancestors=self._reference_ancestors(
+                        rand_range.reference,
+                        dependency_map,
+                    ),
+                )
+            ]
+
+        if name not in self.operator_handlers:
+            logging.getLogger(MujocoTaskBackend.__name__).warning(
+                "Randomization key '%s' does not match any object or operator "
+                "handler — skipping.",
+                name,
+            )
+            return {}, []
+
+        handler = self.operator_handlers[name]
+        sampled_poses: Dict[str, PoseState] = {}
+        actions: List[_PendingRandomizationAction] = []
+        if isinstance(rand_range, OperatorRandomizationConfig):
+            if rand_range.base is not None:
+                if rand_range.base.reference == RandomizationReference.ABSOLUTE_BASE:
+                    raise ValueError(
+                        f"Operator '{name}' base randomization cannot use "
+                        "'absolute_base' — the base IS the frame."
+                    )
+                sampled_base = self._sample_operator_base_pose_for_env(
+                    name,
+                    handler,
+                    rand_range.base,
+                    env_index,
+                    working_poses,
+                )
+                sampled_poses[name] = sampled_base
+                working_poses[name] = sampled_base
+                actions.append(
+                    _PendingRandomizationAction(
+                        kind="operator_base",
                         owner=name,
-                        label=name,
-                        pose=sampled,
-                        radius=float(rand_range.collision_radius),
+                        label=f"{name}.base",
+                        pose=sampled_base,
+                        radius=float(rand_range.base.collision_radius),
                         ancestors=self._reference_ancestors(
-                            rand_range.reference,
-                            deps,
+                            rand_range.base.reference,
+                            dependency_map,
                         ),
                     )
                 )
-            elif name in self.operator_handlers:
-                handler = self.operator_handlers[name]
-                if isinstance(rand_range, OperatorRandomizationConfig):
-                    if rand_range.base is not None:
-                        if (
-                            rand_range.base.reference
-                            == RandomizationReference.ABSOLUTE_BASE
-                        ):
-                            raise ValueError(
-                                f"Operator '{name}' base randomization "
-                                "cannot use 'absolute_base' — the base IS "
-                                "the frame."
-                            )
-                        default_base = self._default_operator_base_poses.get(
-                            name, handler.get_base_pose()
-                        )
-                        base_pose = self._resolve_reference_base_pose(
-                            rand_range.base.reference,
-                            sampled_poses,
-                            default_base,
-                        )
-                        sampled_base = self._sample_pose_with_collision_rejection(
-                            owner_name=name,
-                            label=f"{name}.base",
-                            reference=rand_range.base.reference,
-                            collision_radius=rand_range.base.collision_radius,
-                            base_pose=base_pose,
-                            env_mask=env_mask,
-                            collision_participants=collision_participants,
-                            dependency_map=deps,
-                            sampler=lambda env_index,
-                            base_pose=base_pose,
-                            rand_range=rand_range.base: self._sample_random_pose_single(
-                                base_pose, rand_range, env_index
-                            ),
-                        )
-                        handler.set_pose(sampled_base, env_mask=env_mask)
-                        sampled_poses[name] = sampled_base
-                        collision_participants.append(
-                            _CollisionParticipant(
-                                owner=name,
-                                label=f"{name}.base",
-                                pose=sampled_base,
-                                radius=float(rand_range.base.collision_radius),
-                                ancestors=self._reference_ancestors(
-                                    rand_range.base.reference,
-                                    deps,
-                                ),
-                            )
-                        )
-                    if rand_range.eef is not None:
-                        sampled_eef = self._sample_operator_eef_pose(
-                            handler,
-                            name,
-                            rand_range.eef,
-                            env_mask,
-                            sampled_poses,
-                            collision_participants=collision_participants,
-                            dependency_map=deps,
-                            participant_label=f"{name}.eef",
-                        )
-                        handler.set_home_end_effector_pose(
-                            sampled_eef,
-                            env_mask=env_mask,
-                        )
-                        sampled_poses[name] = sampled_eef
-                        collision_participants.append(
-                            _CollisionParticipant(
-                                owner=name,
-                                label=f"{name}.eef",
-                                pose=sampled_eef,
-                                radius=float(rand_range.eef.collision_radius),
-                                ancestors=self._reference_ancestors(
-                                    rand_range.eef.reference,
-                                    deps,
-                                ),
-                            )
-                        )
-                else:
-                    sampled_eef = self._sample_operator_eef_pose(
-                        handler,
-                        name,
-                        rand_range,
-                        env_mask,
-                        sampled_poses,
-                        collision_participants=collision_participants,
-                        dependency_map=deps,
-                        participant_label=f"{name}.eef",
-                    )
-                    handler.set_home_end_effector_pose(sampled_eef, env_mask=env_mask)
-                    sampled_poses[name] = sampled_eef
-                    collision_participants.append(
-                        _CollisionParticipant(
-                            owner=name,
-                            label=f"{name}.eef",
-                            pose=sampled_eef,
-                            radius=float(rand_range.collision_radius),
-                            ancestors=self._reference_ancestors(
-                                rand_range.reference,
-                                deps,
-                            ),
-                        )
-                    )
-            else:
-                logging.getLogger(MujocoTaskBackend.__name__).warning(
-                    "Randomization key '%s' does not match any object or "
-                    "operator handler — skipping.",
+            if rand_range.eef is not None:
+                sampled_eef = self._sample_operator_eef_pose_for_env(
                     name,
+                    handler,
+                    rand_range.eef,
+                    env_index,
+                    working_poses,
                 )
+                sampled_poses[name] = sampled_eef
+                working_poses[name] = sampled_eef
+                actions.append(
+                    _PendingRandomizationAction(
+                        kind="operator_eef",
+                        owner=name,
+                        label=f"{name}.eef",
+                        pose=sampled_eef,
+                        radius=float(rand_range.eef.collision_radius),
+                        ancestors=self._reference_ancestors(
+                            rand_range.eef.reference,
+                            dependency_map,
+                        ),
+                    )
+                )
+            return sampled_poses, actions
 
-    def _sample_operator_eef_pose(
+        sampled_eef = self._sample_operator_eef_pose_for_env(
+            name,
+            handler,
+            rand_range,
+            env_index,
+            working_poses,
+        )
+        return {name: sampled_eef}, [
+            _PendingRandomizationAction(
+                kind="operator_eef",
+                owner=name,
+                label=f"{name}.eef",
+                pose=sampled_eef,
+                radius=float(rand_range.collision_radius),
+                ancestors=self._reference_ancestors(
+                    rand_range.reference,
+                    dependency_map,
+                ),
+            )
+        ]
+
+    def _sample_object_pose_for_env(
         self,
-        handler: MujocoOperatorHandler,
         name: str,
         rand_range: PoseRandomRange,
-        env_mask: np.ndarray,
+        env_index: int,
         sampled_poses: Dict[str, PoseState],
-        collision_participants: Optional[List[_CollisionParticipant]] = None,
-        dependency_map: Optional[Dict[str, Set[str]]] = None,
-        participant_label: Optional[str] = None,
     ) -> PoseState:
-        """Sample a new home EEF world pose.
+        default_pose = self._default_object_poses.get(
+            name,
+            self.object_handlers[name].get_pose(),
+        ).select(env_index)
+        base_pose = self._resolve_reference_base_pose_for_env(
+            rand_range.reference,
+            sampled_poses,
+            default_pose,
+            env_index,
+        )
+        return self._sample_random_pose_single(base_pose, rand_range, 0)
 
-        Handles entity-name references (delta-carry) and ``absolute_base``
-        mode (sample in operator base frame, transform back to world).
-        """
+    def _sample_operator_base_pose_for_env(
+        self,
+        name: str,
+        handler: MujocoOperatorHandler,
+        rand_range: PoseRandomRange,
+        env_index: int,
+        sampled_poses: Dict[str, PoseState],
+    ) -> PoseState:
+        default_base = self._default_operator_base_poses.get(
+            name,
+            handler.get_base_pose(),
+        ).select(env_index)
+        base_pose = self._resolve_reference_base_pose_for_env(
+            rand_range.reference,
+            sampled_poses,
+            default_base,
+            env_index,
+        )
+        return self._sample_random_pose_single(base_pose, rand_range, 0)
+
+    def _sample_operator_eef_pose_for_env(
+        self,
+        name: str,
+        handler: MujocoOperatorHandler,
+        rand_range: PoseRandomRange,
+        env_index: int,
+        sampled_poses: Dict[str, PoseState],
+    ) -> PoseState:
         default_eef_world = self._default_operator_eef_poses.get(
-            name, handler.get_end_effector_pose()
+            name,
+            handler.get_end_effector_pose(),
+        ).select(env_index)
+        base_pose_for_sampler = self._resolve_reference_base_pose_for_env(
+            rand_range.reference,
+            sampled_poses,
+            default_eef_world,
+            env_index,
         )
-        base_pose_for_sampler = self._resolve_reference_base_pose(
-            rand_range.reference, sampled_poses, default_eef_world
+        if rand_range.reference != RandomizationReference.ABSOLUTE_BASE:
+            return self._sample_random_pose_single(base_pose_for_sampler, rand_range, 0)
+        base_world = sampled_poses.get(name)
+        if base_world is None:
+            base_world = handler.get_base_pose().select(env_index)
+        default_in_base = compose_pose(inverse_pose(base_world), base_pose_for_sampler)
+        sampled_in_base = self._sample_random_pose_single(
+            default_in_base, rand_range, 0
         )
-        if rand_range.reference == RandomizationReference.ABSOLUTE_BASE:
-            base_world = handler.get_base_pose()
-            default_in_base = compose_pose(
-                inverse_pose(base_world), base_pose_for_sampler
+        return compose_pose(base_world, sampled_in_base)
+
+    def _resolve_reference_base_pose_for_env(
+        self,
+        reference: Union[RandomizationReference, str],
+        sampled_poses: Dict[str, PoseState],
+        default_pose: PoseState,
+        env_index: int,
+    ) -> PoseState:
+        if isinstance(reference, RandomizationReference):
+            return default_pose
+        ref_sampled = sampled_poses.get(reference)
+        if reference in self._default_object_poses:
+            ref_default = self._default_object_poses[reference].select(env_index)
+        elif reference in self._default_operator_eef_poses:
+            ref_default = self._default_operator_eef_poses[reference].select(env_index)
+        elif reference in self.object_handlers:
+            ref_default = self.object_handlers[reference].get_pose().select(env_index)
+        elif reference in self.operator_handlers:
+            ref_default = (
+                self.operator_handlers[reference]
+                .get_end_effector_pose()
+                .select(env_index)
             )
-
-            def sampler(env_index: int) -> PoseState:
-                return compose_pose(
-                    base_world.select(env_index),
-                    self._sample_random_pose_single(
-                        default_in_base,
-                        rand_range,
-                        env_index,
-                    ),
-                )
-
         else:
-
-            def sampler(env_index: int) -> PoseState:
-                return self._sample_random_pose_single(
-                    base_pose_for_sampler,
-                    rand_range,
-                    env_index,
-                )
-
-        if (
-            collision_participants is not None
-            and dependency_map is not None
-            and participant_label is not None
-        ):
-            return self._sample_pose_with_collision_rejection(
-                owner_name=name,
-                label=participant_label,
-                reference=rand_range.reference,
-                collision_radius=rand_range.collision_radius,
-                base_pose=base_pose_for_sampler,
-                env_mask=env_mask,
-                collision_participants=collision_participants,
-                dependency_map=dependency_map,
-                sampler=sampler,
+            raise ValueError(
+                f"Randomization reference '{reference}' is not a known mode "
+                "('relative', 'absolute_world', 'absolute_base') nor an existing "
+                "object/operator name."
             )
-        return self._sample_pose_batch(
-            base_pose=base_pose_for_sampler,
-            env_mask=env_mask,
-            sampler=sampler,
-        )
+        if ref_sampled is None:
+            return default_pose
+        delta = compose_pose(ref_sampled, inverse_pose(ref_default))
+        return compose_pose(delta, default_pose)
+
+    def _current_pose_for_randomization_key(self, name: str) -> PoseState:
+        rand_range = self.randomization[name]
+        if name in self.object_handlers:
+            return self.object_handlers[name].get_pose()
+        if name not in self.operator_handlers:
+            return PoseState().broadcast_to(self.batch_size)
+        handler = self.operator_handlers[name]
+        if isinstance(rand_range, OperatorRandomizationConfig):
+            if rand_range.eef is not None:
+                return handler.get_end_effector_pose()
+            if rand_range.base is not None:
+                return handler.get_base_pose()
+        return handler.get_end_effector_pose()
+
+    def _current_pose_for_action(self, kind: str, owner: str) -> PoseState:
+        if kind == "object":
+            return self.object_handlers[owner].get_pose()
+        if kind == "operator_base":
+            return self.operator_handlers[owner].get_base_pose()
+        if kind == "operator_eef":
+            return self.operator_handlers[owner].get_end_effector_pose()
+        raise ValueError(f"Unknown randomization action kind: {kind}")
 
     def _sample_random_pose(
         self, base_pose: PoseState, rand_range: PoseRandomRange, env_mask: np.ndarray
@@ -1258,59 +1479,6 @@ class MujocoTaskBackend(SceneBackend):
             orientation[env_index] = sampled.orientation[0]
         return PoseState(position=position, orientation=orientation)
 
-    def _sample_pose_with_collision_rejection(
-        self,
-        *,
-        owner_name: str,
-        label: str,
-        reference: Union[RandomizationReference, str],
-        collision_radius: float,
-        base_pose: PoseState,
-        env_mask: np.ndarray,
-        collision_participants: List[_CollisionParticipant],
-        dependency_map: Dict[str, Set[str]],
-        sampler: Callable[[int], PoseState],
-    ) -> PoseState:
-        base_pose = base_pose.broadcast_to(self.batch_size)
-        position = base_pose.position.copy()
-        orientation = base_pose.orientation.copy()
-        if collision_radius <= 0.0 or not collision_participants:
-            return self._sample_pose_batch(base_pose, env_mask, sampler)
-        logger = logging.getLogger(MujocoTaskBackend.__name__)
-        ancestors = self._reference_ancestors(reference, dependency_map)
-        for env_index, enabled in enumerate(env_mask):
-            if not enabled:
-                continue
-            last_sample: Optional[PoseState] = None
-            blocking: Optional[_CollisionParticipant] = None
-            for _ in range(_MAX_COLLISION_REJECTION_ATTEMPTS):
-                candidate = sampler(env_index)
-                last_sample = candidate
-                blocking = self._find_collision_participant(
-                    owner_name=owner_name,
-                    env_index=env_index,
-                    candidate_pose=candidate,
-                    collision_radius=float(collision_radius),
-                    ancestors=ancestors,
-                    collision_participants=collision_participants,
-                )
-                if blocking is None:
-                    break
-            else:
-                other_label = blocking.label if blocking is not None else "<unknown>"
-                logger.warning(
-                    "Collision rejection exhausted for '%s' after %d attempts; "
-                    "keeping the last overlapping sample against '%s'.",
-                    label,
-                    _MAX_COLLISION_REJECTION_ATTEMPTS,
-                    other_label,
-                )
-            if last_sample is None:
-                continue
-            position[env_index] = last_sample.position[0]
-            orientation[env_index] = last_sample.orientation[0]
-        return PoseState(position=position, orientation=orientation)
-
     def _find_collision_participant(
         self,
         *,
@@ -1323,7 +1491,10 @@ class MujocoTaskBackend(SceneBackend):
     ) -> Optional[_CollisionParticipant]:
         if collision_radius <= 0.0:
             return None
-        candidate_pos = np.asarray(candidate_pose.position[0], dtype=np.float64)
+        candidate_row = 0 if candidate_pose.batch_size == 1 else env_index
+        candidate_pos = np.asarray(
+            candidate_pose.position[candidate_row], dtype=np.float64
+        )
         for participant in collision_participants:
             if participant.radius <= 0.0:
                 continue
@@ -1331,8 +1502,9 @@ class MujocoTaskBackend(SceneBackend):
                 continue
             if participant.owner in ancestors or owner_name in participant.ancestors:
                 continue
+            other_row = 0 if participant.pose.batch_size == 1 else env_index
             other_pos = np.asarray(
-                participant.pose.position[env_index],
+                participant.pose.position[other_row],
                 dtype=np.float64,
             )
             if (
