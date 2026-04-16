@@ -18,17 +18,26 @@ env:
 
 task:
   randomization:
+    arm:
+      eef:
+        x: [-0.2, 0.21]
+        y: [-0.2, 0.06]
+        z: [-0.1, 0.07]
+        collision_radius: 0.15
     button_blue:
-      x: [-0.01, 0.01]
-      y: [-0.01, 0.01]
+      x: [0.2, 0.7]
+      y: [-0.25, 0.15]
+      reference: absolute_world
       collision_radius: 0.05
     button_green:
-      x: [-0.01, 0.01]
-      y: [-0.01, 0.01]
+      x: [0.2, 0.7]
+      y: [-0.25, 0.15]
+      reference: absolute_world
       collision_radius: 0.05
     button_pink:
-      x: [-0.01, 0.01]
-      y: [-0.01, 0.01]
+      x: [0.2, 0.7]
+      y: [-0.25, 0.15]
+      reference: absolute_world
       collision_radius: 0.05
   stages:
     - name: press_${object_name}
