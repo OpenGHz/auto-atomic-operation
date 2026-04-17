@@ -6,6 +6,36 @@ scene_name: open_door
 model_name: demo_airbot_play
 task_name: open_door_airbot_play
 
+replay:
+  # Generic transform-driven scene reset: use the recorded
+  # base_link → handle_grasp_point transform to position the arm's
+  # operator base so the simulated handle matches its recorded relative
+  # pose.  Activated automatically when +replay.mcap_path is set.
+  #
+  # `offset` is a post-hoc calibration tweak: position is added in the
+  # world frame, orientation is right-multiplied (local-frame rotation).
+  # Use 3 floats for intrinsic XYZ euler (radians) or 4 floats for an
+  # xyzw quaternion.  Default identity → no adjustment.
+  transform_resets:
+    - topic: /robot/right_arm/base_handle/transform
+      parent: {kind: operator_base, name: arm}
+      child: {kind: site, name: handle_grasp_site}
+      move: parent
+      use_orientation: false
+      offset:
+        position: [-0.025, 0.0, 0.0]
+        orientation: [0.0, 0.0, 0.0, 1.0]
+
+  # Per-actuator clamp for the recorded trajectory.  In kinematic replay
+  # the gripper command is applied to qpos directly with no contact
+  # resolution, so a fully-closed recording (~0 mm) drives the simulated
+  # fingers through the handle.  The handle spindle is a cylinder of
+  # diameter 0.02 m, so we floor the finger distance at 0.02 m so the
+  # fingers stop on the handle surface.
+  joint_clip:
+    xfg_claw_joint:
+      min: 0.02
+
 env:
   sim_freq: 1000
   update_freq: 100
@@ -32,13 +62,13 @@ task:
   randomization:
     arm:
       base:
-        x: [-0.01, 0.01]
-        y: [-0.01, 0.01]
-        z: [-0.01, 0.01]
+        x: [0.01, 0.10]
+        y: [-0.10, 0.10]
+        z: [-0.10, 0.10]
       eef:
-        x: [0.05, 0.08]
-        y: [-0.05, 0.05]
-        z: [0.05, 0.08]
+        x: [0.05, 0.10]
+        y: [-0.10, 0.10]
+        z: [0.05, 0.15]
         # roll: [-0.005, 0.005]
         # pitch: [-0.005, 0.005]
         # yaw: [-0.005, 0.005]
@@ -112,7 +142,7 @@ task_operators:
       eef_type: none
       joint_control_mode: per_step_ik
     max_joint_delta: 0.35
-    # initial_state:
-    #   base_pose:
-    #     position: [-0.25, -0.06, 0.0]  # should match the XML `link0` pose
-    #     orientation: [0, 0, 0, 1]
+    initial_state:
+      base_pose:
+        position: [-0.25, -0.06, 0.0]  # should match the XML `link0` pose
+        orientation: [0, 0, 0, 1]

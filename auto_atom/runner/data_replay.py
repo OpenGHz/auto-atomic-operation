@@ -9,7 +9,7 @@ lifecycle.
 from __future__ import annotations
 
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 import numpy as np
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -23,6 +23,90 @@ from .base import RunnerBase
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
+
+
+class SimEntityRef(BaseModel):
+    """Reference to a simulation entity whose world pose can be queried
+    (and, for kinds that support it, updated).
+
+    Supported kinds:
+      - ``site``: MuJoCo site, queried via ``env.get_site_pose``.
+      - ``body``: MuJoCo body, queried via ``env.get_body_pose``.
+      - ``operator_base``: operator virtual base frame, queried via
+        ``env.get_operator_base_pose`` and updated via
+        ``env.override_operator_base_pose``.
+    """
+
+    model_config = ConfigDict(validate_assignment=True)
+
+    kind: Literal["site", "body", "operator_base"]
+    name: str
+    """site/body name in the MuJoCo model, or operator name when
+    ``kind == 'operator_base'``."""
+
+
+class PoseOffset(BaseModel):
+    """Small calibration tweak added to a computed pose.
+
+    ``position`` is an additive offset in the world frame. ``orientation``
+    is right-multiplied onto the computed rotation (i.e. applied in the
+    movable entity's local frame). Defaults are the identity transform,
+    so an unset offset is a no-op.
+    """
+
+    model_config = ConfigDict(validate_assignment=True)
+
+    position: List[float] = Field(default_factory=lambda: [0.0, 0.0, 0.0])
+    """World-frame translation added to the computed position (x, y, z)."""
+
+    orientation: List[float] = Field(default_factory=lambda: [0.0, 0.0, 0.0, 1.0])
+    """Rotation offset right-multiplied onto the computed quaternion.
+    Accepts either 4 floats (xyzw quaternion) or 3 floats (intrinsic XYZ
+    euler, radians).  Default is identity."""
+
+
+class TransformResetConfig(BaseModel):
+    """Generic scene-reset rule driven by a recorded ``TransformStamped``.
+
+    Reads the ``message_index``-th ``geometry_msgs/TransformStamped`` on
+    ``topic`` from the MCAP. The message is interpreted as
+    ``T_parent->child`` (translation of the child origin expressed in the
+    parent frame, plus child-in-parent rotation). At reset time the
+    runner queries the ``move``-side entity's current pose together with
+    the *other* (fixed) side's world pose, then repositions the
+    ``move``-side entity so that the simulated relative pose matches the
+    recording.  The optional ``offset`` is applied afterwards for fine
+    calibration.
+    """
+
+    model_config = ConfigDict(validate_assignment=True)
+
+    topic: str
+    parent: SimEntityRef
+    child: SimEntityRef
+    move: Literal["parent", "child"] = "parent"
+    """Which side to reposition. The other side is treated as fixed."""
+    message_index: int = 0
+    use_orientation: bool = False
+    """If False (default) keep the movable entity's current world
+    orientation and only adjust translation. If True, compose the full
+    transform (may rotate the movable entity)."""
+    offset: PoseOffset = Field(default_factory=PoseOffset)
+    """Post-hoc calibration offset applied to the computed movable-side
+    pose.  Default is identity (no adjustment)."""
+
+
+class JointClipBounds(BaseModel):
+    """Optional ``[min, max]`` clamp applied to one actuator's recorded
+    trajectory.  Either bound may be omitted to leave that side
+    unclipped.  Values are in the actuator's user-facing units (e.g.
+    finger distance in metres for an EEF behind a
+    :class:`FingerDistanceMapper`)."""
+
+    model_config = ConfigDict(validate_assignment=True)
+
+    min: Optional[float] = None
+    max: Optional[float] = None
 
 
 class DataReplayConfig(BaseModel):
@@ -50,6 +134,17 @@ class DataReplayConfig(BaseModel):
     """If ``True``, report ``done=True`` as soon as all stages succeed.
     If ``False`` (default), defer ``done=True`` until all replay data has
     been played back, even if stages already succeeded."""
+    transform_resets: List[TransformResetConfig] = Field(default_factory=list)
+    """Generic scene-reset rules driven by MCAP ``TransformStamped`` topics.
+    Applied after ``evaluator.reset()`` and before the first-frame action
+    reset.  Empty by default (no-op)."""
+    joint_clip: Dict[str, JointClipBounds] = Field(default_factory=dict)
+    """Per-actuator value clamping applied to the recorded joint trajectory
+    once at demo-load time, after column reordering.  Keyed by actuator
+    name (after ``joint_name_mapping``).  Useful in kinematic replay
+    where the recorded command can drive joints into geometry that
+    real-world contact would have stopped — e.g. a gripper closing
+    further than the grasped object's thickness."""
 
 
 class DataReplayTaskFileConfig(TaskFileConfig):
@@ -203,6 +298,77 @@ def _load_mcap_demo(mcap_path: str, arm_topic: str, gripper_topic: str) -> McapD
     joint = np.concatenate([arm, grip], axis=-1)
     joint_names = (arm_names or []) + (gripper_names or [])
     return McapDemo(joint=joint, joint_names=joint_names)
+
+
+def _load_mcap_transform_at(
+    mcap_path: str, topic: str, index: int = 0
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return ``(translation xyz, rotation xyzw)`` of the ``index``-th
+    ``geometry_msgs/TransformStamped`` message on ``topic`` in
+    ``mcap_path``."""
+    from mcap.reader import make_reader
+    from mcap_ros2idl_support import Ros2DecodeFactory
+
+    factory = Ros2DecodeFactory()
+    seen = 0
+    with open(mcap_path, "rb") as f:
+        reader = make_reader(f, decoder_factories=[factory])
+        for decoded in reader.iter_decoded_messages(topics=[topic]):
+            if seen < index:
+                seen += 1
+                continue
+            msg = decoded.decoded_message
+            t = msg["transform"]["translation"]
+            r = msg["transform"]["rotation"]
+            translation = np.array(
+                [float(t["x"]), float(t["y"]), float(t["z"])], dtype=np.float32
+            )
+            rotation = np.array(
+                [float(r["x"]), float(r["y"]), float(r["z"]), float(r["w"])],
+                dtype=np.float32,
+            )
+            return translation, rotation
+    raise ValueError(
+        f"Fewer than {index + 1} TransformStamped message(s) on topic "
+        f"'{topic}' in {mcap_path}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Quaternion / transform helpers (xyzw convention, batched)
+# ---------------------------------------------------------------------------
+
+
+def _quat_inv_xyzw(q: np.ndarray) -> np.ndarray:
+    """Inverse (conjugate for unit quaternions) of an xyzw quaternion."""
+    q = np.asarray(q, dtype=np.float64)
+    out = q.copy()
+    out[..., :3] *= -1.0
+    return out
+
+
+def _quat_mul_xyzw(a: np.ndarray, b: np.ndarray) -> np.ndarray:
+    """Hamilton product of two xyzw quaternions (supports batched inputs)."""
+    a = np.asarray(a, dtype=np.float64)
+    b = np.asarray(b, dtype=np.float64)
+    ax, ay, az, aw = a[..., 0], a[..., 1], a[..., 2], a[..., 3]
+    bx, by, bz, bw = b[..., 0], b[..., 1], b[..., 2], b[..., 3]
+    out = np.empty(np.broadcast_shapes(a.shape, b.shape), dtype=np.float64)
+    out[..., 0] = aw * bx + ax * bw + ay * bz - az * by
+    out[..., 1] = aw * by - ax * bz + ay * bw + az * bx
+    out[..., 2] = aw * bz + ax * by - ay * bx + az * bw
+    out[..., 3] = aw * bw - ax * bx - ay * by - az * bz
+    return out
+
+
+def _rotate_vec_xyzw(q: np.ndarray, v: np.ndarray) -> np.ndarray:
+    """Rotate vector ``v`` by quaternion ``q`` (xyzw). Supports batched inputs."""
+    q = np.asarray(q, dtype=np.float64)
+    v = np.asarray(v, dtype=np.float64)
+    qv = q[..., :3]
+    qw = q[..., 3:4]
+    t = 2.0 * np.cross(qv, v)
+    return v + qw * t + np.cross(qv, t)
 
 
 # ---------------------------------------------------------------------------
@@ -377,6 +543,193 @@ def _make_replay_action_applier(kinematic: bool = False):
     return replay_action_applier
 
 
+def _query_entity_world(env: Any, ref: SimEntityRef) -> tuple[np.ndarray, np.ndarray]:
+    """Return ``(B, 3), (B, 4)`` world pose of the referenced entity."""
+    if ref.kind == "site":
+        return env.get_site_pose(ref.name)
+    if ref.kind == "body":
+        return env.get_body_pose(ref.name)
+    if ref.kind == "operator_base":
+        return env.get_operator_base_pose(ref.name)
+    raise ValueError(f"Unsupported SimEntityRef.kind: {ref.kind!r}")
+
+
+def _apply_entity_world(
+    env: Any,
+    ref: SimEntityRef,
+    pos: np.ndarray,
+    quat: np.ndarray,
+    env_mask: Optional[np.ndarray],
+) -> None:
+    """Set the referenced entity's world pose (only kinds that support
+    relocation can be used as a ``move`` target)."""
+    if ref.kind == "operator_base":
+        env.override_operator_base_pose(ref.name, pos, quat, env_mask=env_mask)
+        return
+    raise ValueError(
+        f"SimEntityRef.kind={ref.kind!r} is not supported as a move target "
+        f"(currently supported: operator_base)."
+    )
+
+
+def _invert_transform_xyzw(
+    translation: np.ndarray, rotation_xyzw: np.ndarray
+) -> tuple[np.ndarray, np.ndarray]:
+    """Invert a rigid transform expressed as (translation, xyzw quat)."""
+    inv_q = _quat_inv_xyzw(rotation_xyzw)
+    inv_t = -_rotate_vec_xyzw(inv_q, translation)
+    return inv_t, inv_q
+
+
+def _apply_joint_clip_to_mcap_demo(
+    mcap_demo: McapDemo,
+    joint_clip: Dict[str, JointClipBounds],
+) -> None:
+    """Clamp ``mcap_demo.joint`` columns in-place per ``joint_clip`` rules.
+
+    Must be called *after* :meth:`McapDemo.align_to_actuators` so that
+    ``mcap_demo.joint_names`` already matches the actuator name order.
+    """
+    if not joint_clip:
+        return
+    for idx, name in enumerate(mcap_demo.joint_names):
+        bounds = joint_clip.get(name)
+        if bounds is None:
+            continue
+        col = mcap_demo.joint[:, idx]
+        before_min = float(np.min(col))
+        before_max = float(np.max(col))
+        if bounds.min is not None:
+            col = np.maximum(col, bounds.min)
+        if bounds.max is not None:
+            col = np.minimum(col, bounds.max)
+        mcap_demo.joint[:, idx] = col
+        print(
+            f"[joint_clip] '{name}': "
+            f"raw range=[{before_min:.4f}, {before_max:.4f}] -> "
+            f"clipped range=[{float(np.min(col)):.4f}, {float(np.max(col)):.4f}] "
+            f"(min={bounds.min}, max={bounds.max})"
+        )
+
+
+def _resolve_pose_offset(offset: "PoseOffset") -> tuple[np.ndarray, np.ndarray]:
+    """Convert a :class:`PoseOffset` into ``(position (3,), quat xyzw (4,))``.
+
+    Accepts either 4-element (xyzw quat) or 3-element (intrinsic XYZ
+    euler radians) ``orientation`` lists.
+    """
+    from auto_atom.utils.pose import euler_to_quaternion
+
+    pos = np.asarray(offset.position, dtype=np.float64)
+    if pos.shape != (3,):
+        raise ValueError(
+            f"PoseOffset.position must be 3 floats, got {offset.position!r}"
+        )
+    ori = list(offset.orientation)
+    if len(ori) == 4:
+        quat = np.asarray(ori, dtype=np.float64)
+    elif len(ori) == 3:
+        quat = np.asarray(
+            euler_to_quaternion((ori[0], ori[1], ori[2])), dtype=np.float64
+        )
+    else:
+        raise ValueError(
+            f"PoseOffset.orientation must be 3 (euler) or 4 (xyzw quat) floats, "
+            f"got {offset.orientation!r}"
+        )
+    return pos, quat
+
+
+def _apply_transform_resets(
+    evaluator: PolicyEvaluator,
+    replay_cfg: "DataReplayConfig",
+    env_mask: Optional[np.ndarray],
+) -> None:
+    """Apply every configured :class:`TransformResetConfig` to the scene.
+
+    Reads the referenced MCAP transform once per rule, queries the fixed
+    side's current world pose, then repositions the ``move``-side entity
+    so that the simulated relative pose matches the recording.
+    """
+    if replay_cfg.mcap_path is None or not replay_cfg.transform_resets:
+        return
+    mcap_path = replay_cfg.mcap_path
+    if not os.path.isabs(mcap_path):
+        mcap_path = os.path.join(os.getcwd(), mcap_path)
+    if not os.path.exists(mcap_path):
+        raise FileNotFoundError(f"MCAP file not found: {mcap_path}")
+
+    context = evaluator._context
+    if context is None:
+        raise RuntimeError(
+            "PolicyEvaluator must be initialized before applying transform resets."
+        )
+    env = context.backend.env
+
+    for tr in replay_cfg.transform_resets:
+        t_pc, q_pc = _load_mcap_transform_at(mcap_path, tr.topic, tr.message_index)
+        p_wp, q_wp = _query_entity_world(env, tr.parent)
+        p_wc, q_wc = _query_entity_world(env, tr.child)
+        # p_wp/q_wp and p_wc/q_wc are batched (B, 3) / (B, 4)
+
+        if tr.move == "parent":
+            move_ref = tr.parent
+            cur_pos, cur_quat = np.asarray(p_wp), np.asarray(q_wp)
+            fixed_pos, fixed_quat = np.asarray(p_wc), np.asarray(q_wc)
+            # Desired T_W_parent = T_W_child * T_parent_child^-1
+            inv_t, inv_q = _invert_transform_xyzw(t_pc, q_pc)
+            if tr.use_orientation:
+                new_quat = _quat_mul_xyzw(fixed_quat, inv_q).astype(np.float32)
+                new_pos = (fixed_pos + _rotate_vec_xyzw(fixed_quat, inv_t)).astype(
+                    np.float32
+                )
+            else:
+                new_quat = cur_quat.astype(np.float32)
+                # Keep current orientation → p_W_parent = p_W_child - R(q_W_parent) * t_pc
+                new_pos = (fixed_pos - _rotate_vec_xyzw(new_quat, t_pc)).astype(
+                    np.float32
+                )
+        elif tr.move == "child":
+            move_ref = tr.child
+            cur_pos, cur_quat = np.asarray(p_wc), np.asarray(q_wc)
+            fixed_pos, fixed_quat = np.asarray(p_wp), np.asarray(q_wp)
+            # Desired T_W_child = T_W_parent * T_parent_child
+            if tr.use_orientation:
+                new_quat = _quat_mul_xyzw(fixed_quat, q_pc).astype(np.float32)
+            else:
+                new_quat = cur_quat.astype(np.float32)
+            new_pos = (fixed_pos + _rotate_vec_xyzw(fixed_quat, t_pc)).astype(
+                np.float32
+            )
+        else:
+            raise ValueError(f"Unknown TransformResetConfig.move: {tr.move!r}")
+
+        # Apply the optional calibration offset.
+        #   position: additive in world frame
+        #   orientation: right-multiplied (movable entity's local frame)
+        off_pos, off_quat = _resolve_pose_offset(tr.offset)
+        off_identity = np.allclose(off_pos, 0.0) and np.allclose(
+            off_quat, np.array([0.0, 0.0, 0.0, 1.0])
+        )
+        if not off_identity:
+            new_pos = (new_pos + off_pos).astype(np.float32)
+            new_quat = _quat_mul_xyzw(new_quat, off_quat).astype(np.float32)
+
+        with evaluator.sim_lock:
+            _apply_entity_world(env, move_ref, new_pos, new_quat, env_mask)
+        offset_str = (
+            ""
+            if off_identity
+            else (f" (+offset pos={off_pos.tolist()} quat={off_quat.tolist()})")
+        )
+        print(
+            f"[transform_reset] topic={tr.topic!r} "
+            f"moved {move_ref.kind}:{move_ref.name} "
+            f"from pos={cur_pos[0].tolist()} to pos={new_pos[0].tolist()}"
+            f"{offset_str}"
+        )
+
+
 def _apply_first_frame_reset(
     evaluator: PolicyEvaluator,
     policy: ReplayPolicy,
@@ -537,8 +890,10 @@ class DataReplayRunner(RunnerBase):
         self._current_action = None
         self._action_step = 0
         update = evaluator.reset(env_mask)
-        if self._replay_cfg is not None and self._replay_cfg.reset_from_first_frame:
-            _apply_first_frame_reset(evaluator, policy)
+        if self._replay_cfg is not None:
+            _apply_transform_resets(evaluator, self._replay_cfg, env_mask)
+            if self._replay_cfg.reset_from_first_frame:
+                _apply_first_frame_reset(evaluator, policy)
         return update
 
     def update(self, env_mask: Optional[np.ndarray] = None) -> TaskUpdate:
@@ -556,8 +911,8 @@ class DataReplayRunner(RunnerBase):
             self._action_step = 0
 
         self._action_step += 1
-        # print(f"action={self._current_action}")
-        # input("Press Enter to continue to the next step...")
+        print(f"action={self._current_action}")
+        input("Press Enter to continue to the next step...")
         task_update = evaluator.update(self._current_action, env_mask)
 
         # Defer done for successful envs until replay data is exhausted.
@@ -635,6 +990,10 @@ class DataReplayRunner(RunnerBase):
                     mcap_demo.align_to_actuators(
                         actuator_names, rcfg.joint_name_mapping or None
                     )
+
+            # Per-actuator clamp (e.g. floor a kinematic gripper at the
+            # grasped object's thickness so it doesn't penetrate).
+            _apply_joint_clip_to_mcap_demo(mcap_demo, rcfg.joint_clip)
 
             demo: Dict[str, np.ndarray] = {"joint": mcap_demo.joint}
         else:
