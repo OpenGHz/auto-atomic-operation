@@ -48,7 +48,9 @@ All replay settings live under the `replay` key in Hydra overrides
 | `gripper_topic`       | `str`           | `/robot/right_gripper/joint_state`     | ROS2 topic for gripper joint states |
 | `joint_name_mapping`  | `dict`          | `{"gripper": "xfg_claw_joint"}`        | Maps mcap joint names to YAML actuator names |
 | `joint_axis_scale`    | `list[float]`   | `[]`                                   | Per-joint replay multipliers applied to the first `N` actuator columns after reordering; useful for mirroring by negating selected axes |
-| `gripper_range`       | `list[float]`   | `[0.0, 0.09]`                         | Real gripper distance `[closed, open]` in metres |
+| `joint_clip`          | `dict[str, {min, max}]` | `{}`                            | Per-actuator `[min, max]` clamp applied to the recorded trajectory once at demo-load time (after column reordering). Values are in the actuator's user-facing units (e.g. finger distance for an `eef_mapper`). Either bound can be omitted. |
+| `transform_resets`    | `list[TransformResetConfig]` | `[]`                      | Scene-reset rules driven by recorded `geometry_msgs/TransformStamped` MCAP topics; see "Transform Resets" below |
+| `done_on_success`     | `bool`          | `false`                                | `true`: report `done=True` as soon as all stages succeed; `false` (default): keep playing back until all replay data is consumed |
 | `reset_from_first_frame` | `bool`       | `true`                                 | Apply the first recorded action as the post-reset initial state |
 | `steps_per_action`    | `int`           | `1`                                    | Physics steps per recorded action (set >1 for sub-stepping) |
 | `kinematic`           | `bool`          | `false`                                | `true`: write qpos directly (exact positions); `false`: drive actuators through physics |
@@ -93,17 +95,73 @@ replay:
 
 Any trailing actuator columns not covered by the list keep a factor of `1.0`.
 
-### 3. Gripper rescaling
+### 3. Gripper finger-distance handling
 
-Real gripper data is typically in finger-distance space (metres), while
-MuJoCo actuators use raw ctrl ranges.  The pipeline rescales gripper values
-from `gripper_range` to the actuator's `ctrlrange`.
+Real gripper data is in finger-distance space (metres). The replay pipeline
+relies on the operator's [`eef_mapper`](../mujoco-backend/eef_mapper.md) to
+convert finger distance to raw ctrl — `apply_joint_action` does the
+conversion internally, so no separate rescaling step is performed in
+replay. Configure an `eef_mapper` on the EEF operator when replaying mcap
+data whose gripper values are finger distances.
 
-**Exception:** When the operator has an [`eef_mapper`](../mujoco-backend/eef_mapper.md)
-configured, rescaling is skipped because `apply_joint_action` already
-converts finger-distance values to ctrl internally.
+### 4. Optional joint clipping
 
-### 4. Initial joint position injection
+If `joint_clip` is set, the replay clamps the recorded trajectory per
+actuator at load time (after column reordering). Keys are actuator names
+(post-`joint_name_mapping`); each entry is a `{min, max}` pair, either
+side optional. This is primarily useful in kinematic replay where the
+recorded command would otherwise drive joints into geometry that
+real-world contact had stopped — e.g. a gripper closing further than the
+grasped object's thickness:
+
+```yaml
+replay:
+  joint_clip:
+    xfg_claw_joint:
+      min: 0.015        # finger distance in metres (with eef_mapper)
+```
+
+### 5. Transform resets
+
+`transform_resets` lets the replay reposition scene entities to match a
+recorded `geometry_msgs/TransformStamped` topic from the MCAP. Each entry
+reads the `message_index`-th transform on `topic` and interprets it as
+`T_parent->child`. At reset the runner queries the `move`-side entity's
+current pose, the other side's world pose, and repositions the movable
+side so the simulated relative pose matches the recording. Entries are
+applied after `evaluator.reset()` and before the first-frame action
+reset.
+
+```yaml
+replay:
+  transform_resets:
+    - topic: /tf_static
+      parent: { kind: site, name: door_frame_site }
+      child:  { kind: body, name: door }
+      move: child
+      use_orientation: true
+      offset:
+        position: [-0.025, 0, 0]    # local frame of the movable entity
+        # orientation accepts xyzw (4 floats) or euler rpy (3 floats)
+```
+
+Fields:
+
+| Field             | Type                                        | Default      | Description |
+|-------------------|---------------------------------------------|--------------|-------------|
+| `topic`           | `str`                                        | required     | MCAP topic carrying `geometry_msgs/TransformStamped` |
+| `parent`          | `{kind: site\|body\|operator_base, name: str}` | required | Parent side of the recorded transform |
+| `child`           | `{kind: site\|body\|operator_base, name: str}` | required | Child side of the recorded transform |
+| `move`            | `"parent" \| "child"`                       | `"parent"`   | Which side to reposition; the other side is treated as fixed |
+| `message_index`   | `int`                                        | `0`          | Which message on `topic` to read |
+| `use_orientation` | `bool`                                       | `false`      | `false`: keep movable entity's current world orientation, only adjust translation. `true`: compose the full transform |
+| `offset`          | `PoseOffset`                                 | identity     | Post-hoc calibration: `position` is in the movable entity's local frame; `orientation` right-multiplies the computed rotation (xyzw or euler rpy) |
+
+`operator_base` as a side refers to the operator's base frame and uses
+`override_operator_base_pose` under the hood so mocap and joint-mode
+operators behave consistently.
+
+### 6. Initial joint position injection
 
 The first frame's joint positions are injected into `env.initial_joint_positions`
 so the robot resets at the recorded starting configuration.  When `eef_mapper`
@@ -114,7 +172,7 @@ mapper via the reset action instead.
 See [Scene Initialization & Randomization](../task-configuration/randomization.md) for details on
 `initial_joint_positions`.
 
-### 5. Randomization disabled
+### 7. Randomization disabled
 
 Task randomization is automatically disabled (`task.randomization = {}`) to
 ensure exact trajectory reproduction.

@@ -80,15 +80,17 @@ Values must be in **raw joint space**, not finger distance.  See
 
 ### MCAP replay
 
-When replaying MCAP data with `eef_mapper` configured:
+When replaying MCAP data, the replay pipeline relies on the
+`eef_mapper` to convert recorded finger-distance gripper values to ctrl.
+`apply_joint_action` performs the conversion internally, so:
 
-- Gripper rescaling (`rescale_gripper`) is **skipped** because
-  `apply_joint_action` already handles the conversion
+- No separate gripper-rescaling step is needed (and there is no
+  `gripper_range` knob on the replay config).
 - EEF joints are **excluded** from `initial_joint_positions` injection
   (mcap values are in finger-distance space, not raw qpos) and applied
-  through the reset action instead
+  through the reset action instead.
 
-See [Data Replay](../tools/mcap_data_replay.md#2-gripper-rescaling) for details.
+See [Data Replay](../tools/mcap_data_replay.md#3-gripper-finger-distance-handling) for details.
 
 ## Related
 

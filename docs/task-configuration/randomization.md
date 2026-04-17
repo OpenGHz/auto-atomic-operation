@@ -371,6 +371,41 @@ Semantics:
   the resulting motion stays reachable.
 - Debug mode (`randomization_debug: true`) also cycles per-waypoint extremes.
 
+## Camera Initial Pose Overrides
+
+Before camera randomization records its baseline, `task.camera_initial_pose`
+lets you override the XML-defined camera pose from YAML. This is useful for
+moving a camera to a calibrated viewpoint without editing the scene XML, or
+for per-task camera overrides that should persist across randomization.
+
+```yaml
+task:
+  camera_initial_pose:
+    env1_cam:
+      position: [2.4, 0.6, -0.1]
+      orientation: [-0.5, 0.5, 0.5, 0.5]   # xyzw quaternion
+    topside:
+      position: [2.3, 0.15, 0.1]
+      # orientation omitted → keeps XML value
+```
+
+Fields match `initial_pose` for objects:
+
+| Field          | Format                                                              | Default |
+|----------------|---------------------------------------------------------------------|---------|
+| `position`     | `[x, y, z]` — world-frame metres                                    | `null` (keep XML) |
+| `orientation`  | 4 floats: quaternion `[x, y, z, w]` **or** 3 floats: Euler `[roll, pitch, yaw]` in radians | `null` (keep XML) |
+
+Semantics:
+
+- Overrides are applied at each `reset()` **before** camera randomization
+  records its defaults, so `camera_randomization` with `reference: relative`
+  jitters around the overridden pose rather than the XML pose.
+- For cameras marked `is_static: true` in `env.cameras`, the GS background
+  is cached at the first render. When overriding such a camera's pose,
+  make sure the override is applied before the first render — otherwise
+  the cached background reflects the XML pose.
+
 ## Camera Pose Randomization
 
 Camera viewpoint randomization is configured under `task.camera_randomization`.
