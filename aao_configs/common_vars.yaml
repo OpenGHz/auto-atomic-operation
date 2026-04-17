@@ -4,9 +4,9 @@ assets_dir: assets
 gs_dir: ${assets_dir}/gs/scenes/${scene_name}
 
 
-cam_width: 320
-cam_height: 240
+cam_width: 640
+cam_height: 352
 enable_color: true
-enable_depth: false
+enable_depth: true
 enable_mask: false
-enable_heat_map: false
+enable_heat_map: true
