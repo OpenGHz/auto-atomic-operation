@@ -19,11 +19,17 @@ replay:
   # xyzw quaternion.  Default identity → no adjustment.
   transform_resets:
     - topic: /robot/right_arm/base_handle/transform
-      parent: {kind: operator_base, name: arm}
-      child: {kind: site, name: handle_grasp_front_site}
+      parent:
+        kind: operator_base
+        name: arm
+      child:
+        kind: site
+        name: handle_grasp_${door_side}_site
       move: parent
       use_orientation: false
       offset:
+        # Expressed in the movable entity's (operator_base) local frame.
+        # -x means "pull back from the handle" regardless of which side.
         position: [-0.025, 0.0, 0.0]
         orientation: [0.0, 0.0, 0.0, 1.0]
 

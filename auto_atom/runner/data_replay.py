@@ -57,7 +57,12 @@ class PoseOffset(BaseModel):
     model_config = ConfigDict(validate_assignment=True)
 
     position: List[float] = Field(default_factory=lambda: [0.0, 0.0, 0.0])
-    """World-frame translation added to the computed position (x, y, z)."""
+    """Translation added to the computed position (x, y, z), expressed in
+    the movable entity's local frame (i.e. rotated by the movable
+    entity's current world orientation before being added). This matches
+    the local-frame semantic of ``orientation`` so that calibration
+    offsets like ``[-0.025, 0, 0]`` (pull back 2.5 cm) have a consistent
+    meaning regardless of the entity's world-frame orientation."""
 
     orientation: List[float] = Field(default_factory=lambda: [0.0, 0.0, 0.0, 1.0])
     """Rotation offset right-multiplied onto the computed quaternion.
@@ -785,14 +790,17 @@ def _apply_transform_resets(
             raise ValueError(f"Unknown TransformResetConfig.move: {tr.move!r}")
 
         # Apply the optional calibration offset.
-        #   position: additive in world frame
-        #   orientation: right-multiplied (movable entity's local frame)
+        # Both position and orientation are expressed in the movable
+        # entity's local frame: position is rotated by the movable
+        # entity's current quaternion before being added; orientation
+        # is right-multiplied onto that quaternion. This keeps offsets
+        # meaningful under frame mirroring (e.g. arm base rotated 180°).
         off_pos, off_quat = _resolve_pose_offset(tr.offset)
         off_identity = np.allclose(off_pos, 0.0) and np.allclose(
             off_quat, np.array([0.0, 0.0, 0.0, 1.0])
         )
         if not off_identity:
-            new_pos = (new_pos + off_pos).astype(np.float32)
+            new_pos = (new_pos + _rotate_vec_xyzw(new_quat, off_pos)).astype(np.float32)
             new_quat = _quat_mul_xyzw(new_quat, off_quat).astype(np.float32)
 
         with evaluator.sim_lock:
@@ -991,8 +999,8 @@ class DataReplayRunner(RunnerBase):
             self._action_step = 0
 
         self._action_step += 1
-        print(f"action={self._current_action}")
-        input("Press Enter to continue to the next step...")
+        # print(f"action={self._current_action}")
+        # input("Press Enter to continue to the next step...")
         task_update = evaluator.update(self._current_action, env_mask)
 
         # Defer done for successful envs until replay data is exhausted.
