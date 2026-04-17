@@ -609,6 +609,7 @@ class PolicyEvaluator:
                 target=target,
                 backend=context.backend,
                 action=completion_action,
+                reference_site=plan.stage.site,
             )
         return _PolicyStageState(
             plan=plan,
@@ -727,6 +728,7 @@ def _resolve_policy_completion_pose(
     target: Optional[ObjectHandler],
     backend: SceneBackend,
     action: Any,
+    reference_site: Optional[str] = None,
 ) -> Optional[PoseControlConfig]:
     if action.pose is None:
         return None
@@ -740,4 +742,5 @@ def _resolve_policy_completion_pose(
         target=target,
         backend=backend,
         action=completion_action,
+        reference_site=reference_site,
     )

@@ -363,6 +363,15 @@ class StageConfig(BaseModel):
     """The optional human-readable name of this stage."""
     object: str
     """The name of the object to be manipulated in this stage. The object should be defined in the environment and should have a unique name. An empty name means that the corresponding operation does not involve the target object; the target pose is obtained from the corresponding param."""
+    site: Optional[str] = None
+    """Optional site/body/geom/joint name used as the reference frame for
+    ``reference: object_world`` / ``reference: object`` waypoints in this
+    stage. When set, its world pose replaces ``object``'s pose as the
+    reference origin (and, for ``reference: object``, also as the
+    reference orientation). When ``None``, the ``object`` body's pose is
+    used as before. This field only affects pose reference resolution —
+    ``object`` is still used for contact detection, GS rendering mask,
+    ``set_pose``/randomization, and arc pivot fallback."""
     operation: Operation
     """The operation that the AutoAtom operator performs in this stage."""
     param: StageControlConfig

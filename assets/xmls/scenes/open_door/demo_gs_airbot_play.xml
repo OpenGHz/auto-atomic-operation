@@ -56,13 +56,18 @@
           <site name="handle_axis_site" pos="0 0 0" size="0.010" rgba="1 1 0 0.8"/>
 
           <body name="handle_lever_body" pos="0 0 -0.02">
-            <inertial pos="0.08 0 0" mass="0.10" diaginertia="0.0001 0.0001 0.0001"/>
-            <joint name="handle_hinge" type="hinge" pos="0 0 0" axis="0 1 0" limited="true" range="-0.20 0.80" damping="0.4" frictionloss="0.02" armature="0.0005" springref="0" stiffness="2.0"/>
+            <inertial pos="0.08 0 0" mass="0.05" diaginertia="0.0001 0.0001 0.0001"/>
+            <joint name="handle_hinge" type="hinge" pos="0 0 0" axis="0 1 0" limited="true" range="-0.20 0.80" damping="0.4" frictionloss="0.02" armature="0.0005" springref="0" stiffness="0.5"/>
             <geom name="handle_lever_front_geom" type="capsule" fromto="0.010 0.080 0 0.175 0.080 0" size="0.012" rgba="0.50 0.90 0.95 1" contype="1" conaffinity="1"/>
-            <geom name="handle_lever_back_geom" type="capsule" fromto="0.010 -0.080 0 0.135 -0.080 0" size="0.010" rgba="0.50 0.90 0.95 1" contype="1" conaffinity="1"/>
-            <site name="handle_front_tip_site" pos="0.175 0.080 0.000" size="0.010" rgba="1 0.4 0.2 1"/>
-            <site name="handle_grasp_site" pos="0.095000000 0.055000000 0.000000000" size="0.012" rgba="1 0.2 0.2 1"/>
-            <site name="handle_press_site" pos="0.095000000 0.080000000 0.000000000" size="0.012" rgba="0.2 1 0.2 1"/>
+            <geom name="handle_lever_back_geom" type="capsule" fromto="0.010 -0.080 0 0.175 -0.080 0" size="0.012" rgba="0.50 0.90 0.95 1" contype="1" conaffinity="1"/>
+            <!-- front sites: world-aligned (cancels parent door_frame_physics +90° z) -->
+            <!-- back sites: mirrored from front via 180° rotation about world z -->
+            <site name="handle_tip_front_site"   pos="0.175 0.080 0.000"          quat="0.707106781 0 0 -0.707106781" size="0.010" rgba="1 0.4 0.2 1"/>
+            <site name="handle_tip_back_site"    pos="0.175 -0.080 0.000"         quat="0.707106781 0 0  0.707106781" size="0.010" rgba="1 0.4 0.2 1"/>
+            <site name="handle_grasp_front_site" pos="0.095 0.055 0.000"          quat="0.707106781 0 0 -0.707106781" size="0.012" rgba="1 0.2 0.2 1"/>
+            <site name="handle_grasp_back_site"  pos="0.095 -0.055 0.000"         quat="0.707106781 0 0  0.707106781" size="0.012" rgba="1 0.2 0.2 1"/>
+            <site name="handle_press_front_site" pos="0.095 0.080 0.000"          quat="0.707106781 0 0 -0.707106781" size="0.012" rgba="0.2 1 0.2 1"/>
+            <site name="handle_press_back_site"  pos="0.095 -0.080 0.000"         quat="0.707106781 0 0  0.707106781" size="0.012" rgba="0.2 1 0.2 1"/>
 
             <!-- GS frame body for handle/knob PLY -->
             <body name="handle_gs_frame" pos="0.270651190 1.595000000 0.058962200" quat="0.023543636 -0.014802135 0.716127885 -0.697414831"/>

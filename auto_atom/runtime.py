@@ -724,6 +724,7 @@ class TaskRunner:
             target=active.target,
             backend=context.backend,
             env_mask=mask,
+            reference_site=active.plan.stage.site,
         )
         signal = result.signals[env_index]
         details = {
@@ -1118,6 +1119,7 @@ class TaskRunner:
         target: Optional[ObjectHandler],
         backend: SceneBackend,
         env_mask: np.ndarray,
+        reference_site: Optional[str] = None,
     ) -> ControlResult:
         if action.kind == "pose" and action.pose is not None:
             is_arc = action.pose.arc is not None
@@ -1135,6 +1137,7 @@ class TaskRunner:
                     target=target,
                     backend=backend,
                     action=action,
+                    reference_site=reference_site,
                 )
                 action.resolved_pose = resolved_pose
             return operator.move_to_pose(resolved_pose, target, env_mask=env_mask)
@@ -1150,6 +1153,7 @@ class TaskRunner:
         target: Optional[ObjectHandler],
         backend: SceneBackend,
         action: Optional[PrimitiveAction] = None,
+        reference_site: Optional[str] = None,
     ) -> PoseControlConfig:
         arc = pose.arc
         assert arc is not None
@@ -1173,6 +1177,7 @@ class TaskRunner:
                     pose=pose,
                     target=target,
                     backend=backend,
+                    reference_site=reference_site,
                 )
             if snapshot.start_eef_pose is None:
                 snapshot.start_eef_pose = operator.get_end_effector_pose().select(
@@ -1189,6 +1194,7 @@ class TaskRunner:
                 pose=pose,
                 target=target,
                 backend=backend,
+                reference_site=reference_site,
             )
             current_eef = operator.get_end_effector_pose().select(env_index)
         rotated = rotate_pose_around_axis(current_eef, pivot_world_pos, arc.axis, angle)
@@ -1210,16 +1216,19 @@ class TaskRunner:
         target: Optional[ObjectHandler],
         backend: SceneBackend,
         action: Optional[PrimitiveAction] = None,
+        reference_site: Optional[str] = None,
     ) -> PoseControlConfig:
         if pose.arc is not None:
             return TaskRunner._resolve_arc_command(
-                env_index, operator, pose, target, backend, action
+                env_index, operator, pose, target, backend, action, reference_site
             )
         reference_pose = TaskRunner._resolve_reference_pose(
             env_index=env_index,
             operator=operator,
             pose=pose,
             target=target,
+            reference_site=reference_site,
+            backend=backend,
         )
         current_pose = operator.get_end_effector_pose().select(env_index)
         local_pose = TaskRunner._pose_config_to_local_pose(pose)
@@ -1256,6 +1265,8 @@ class TaskRunner:
         operator: OperatorHandler,
         pose: PoseControlConfig,
         target: Optional[ObjectHandler],
+        reference_site: Optional[str] = None,
+        backend: Optional[SceneBackend] = None,
     ) -> PoseState:
         reference = pose.reference
         if reference == PoseReference.AUTO:
@@ -1269,6 +1280,9 @@ class TaskRunner:
         if reference == PoseReference.EEF:
             return operator.get_end_effector_pose().select(env_index)
         if reference == PoseReference.OBJECT_WORLD:
+            if reference_site is not None and backend is not None:
+                site_pose = backend.get_element_pose(reference_site, env_index)
+                return PoseState(position=site_pose.position[0])
             if target is None:
                 raise ValueError(
                     "Pose reference OBJECT_WORLD requires a target object."
@@ -1279,6 +1293,8 @@ class TaskRunner:
             eef_pose = operator.get_end_effector_pose().select(env_index)
             return PoseState(position=eef_pose.position[0])
         if reference == PoseReference.OBJECT:
+            if reference_site is not None and backend is not None:
+                return backend.get_element_pose(reference_site, env_index)
             if target is None:
                 raise ValueError("Pose reference OBJECT requires a target object.")
             return target.get_pose().select(env_index)
@@ -1291,6 +1307,7 @@ class TaskRunner:
         pose: PoseControlConfig,
         target: Optional[ObjectHandler],
         backend: SceneBackend,
+        reference_site: Optional[str] = None,
     ) -> Position:
         arc = pose.arc
         assert arc is not None
@@ -1304,6 +1321,8 @@ class TaskRunner:
             operator=operator,
             pose=pose,
             target=target,
+            reference_site=reference_site,
+            backend=backend,
         )
         pivot_local = PoseState(position=arc.pivot)
         composed = compose_pose(reference_pose, pivot_local)
@@ -1800,6 +1819,7 @@ def _resolve_policy_completion_pose(
     target: Optional[ObjectHandler],
     backend: SceneBackend,
     action: PrimitiveAction,
+    reference_site: Optional[str] = None,
 ) -> Optional[PoseControlConfig]:
     if action.pose is None:
         return None
@@ -1811,6 +1831,7 @@ def _resolve_policy_completion_pose(
         target=target,
         backend=backend,
         action=completion_action,
+        reference_site=reference_site,
     )
 
 
