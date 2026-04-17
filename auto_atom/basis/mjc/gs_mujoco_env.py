@@ -129,6 +129,133 @@ def _resolve_background_transform(
     return (0.0, 0.0, 0.0), _IDENTITY_QUAT
 
 
+class BodyMirrorSpec(BaseModel):
+    """Reflect a per-body Gaussian PLY across a plane at load time.
+
+    The reflection plane's normal is specified either directly in the PLY's
+    local (GS) coordinates via ``axis``, or derived from a MuJoCo body
+    quaternion plus a body-frame axis.  Useful when the PLY is pre-rotated
+    (body quat = identity) and you can reason about left/right directly in
+    the PLY frame.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    axis: list | None = None
+    """Unit vector in the PLY's local (GS) coords. Plane normal."""
+    body_quat: list | None = None
+    """MuJoCo-convention body quaternion (wxyz). Used with ``body_axis``
+    when ``axis`` is not given: ``gs_axis = R(body_quat)^T @ body_axis``."""
+    body_axis: list = Field(default_factory=lambda: [1.0, 0.0, 0.0])
+    """Body-frame direction to mirror along (only read when
+    ``body_quat`` is set)."""
+    center: list | None = None
+    """Explicit mirror-plane center in GS coords. When omitted, the PLY
+    centroid is used."""
+    share_center_with: str | None = None
+    """Name of another entry in ``body_gaussians``; reuse that PLY's centroid
+    as the mirror center.  Use this to keep paired objects (e.g. door + knob)
+    aligned after mirroring.  Ignored when ``center`` is given."""
+
+    def resolved_axis(self) -> np.ndarray:
+        if self.axis is not None:
+            a = np.asarray(self.axis, dtype=np.float64).ravel()
+            if a.shape != (3,):
+                raise ValueError(f"BodyMirrorSpec.axis must be length 3, got {a.shape}")
+        elif self.body_quat is not None:
+            from scipy.spatial.transform import Rotation
+
+            q = np.asarray(self.body_quat, dtype=np.float64).ravel()
+            if q.shape != (4,):
+                raise ValueError(
+                    f"BodyMirrorSpec.body_quat must be length 4 (wxyz), got {q.shape}"
+                )
+            quat_xyzw = q[[1, 2, 3, 0]]
+            R = Rotation.from_quat(quat_xyzw).as_matrix()
+            ba = np.asarray(self.body_axis, dtype=np.float64).ravel()
+            if ba.shape != (3,):
+                raise ValueError(
+                    f"BodyMirrorSpec.body_axis must be length 3, got {ba.shape}"
+                )
+            a = R.T @ ba
+        else:
+            raise ValueError(
+                "BodyMirrorSpec requires either 'axis' or 'body_quat' to be set"
+            )
+        n = float(np.linalg.norm(a))
+        if n < 1e-12:
+            raise ValueError("BodyMirrorSpec axis resolves to zero vector")
+        return a / n
+
+
+def _mirror_gaussians_inplace(gaussians, axis: np.ndarray, center: np.ndarray) -> None:
+    """Reflect positions, rotations, and SH band-1 across the plane through
+    ``center`` perpendicular to ``axis`` (unit, GS-local).
+
+    Mirrors ``third_party/mirror_door_plys.py``: positions flipped via
+    Householder projection; quaternions via ``M @ R @ M`` where
+    ``M = I - 2 a aᵀ``; SH DC invariant; SH band-1 reflected per channel.
+    Higher SH bands are left as-is (perturbation dominated by SH noise).
+    """
+    from scipy.spatial.transform import Rotation
+
+    ax = axis.astype(np.float64)
+    ctr = center.astype(np.float64)
+
+    dp = gaussians.xyz - ctr
+    proj = (dp @ ax)[:, None] * ax[None, :]
+    gaussians.xyz = (ctr + dp - 2.0 * proj).astype(gaussians.xyz.dtype)
+
+    M = np.eye(3) - 2.0 * np.outer(ax, ax)
+
+    rot_wxyz = gaussians.rot
+    rot_xyzw = rot_wxyz[:, [1, 2, 3, 0]]
+    R_orig = Rotation.from_quat(rot_xyzw).as_matrix()
+    R_mirror = np.einsum("ij,njk,kl->nil", M, R_orig, M)
+    rot_mirror_xyzw = Rotation.from_matrix(R_mirror).as_quat()
+    gaussians.rot = rot_mirror_xyzw[:, [3, 0, 1, 2]].astype(rot_wxyz.dtype)
+
+    sh = gaussians.sh
+    if sh.ndim == 3 and sh.shape[1] > 3:
+        band1 = sh[:, 1:4, :].copy()
+        for ch in range(3):
+            xyz = np.stack([band1[:, 2, ch], band1[:, 0, ch], band1[:, 1, ch]], axis=-1)
+            xyz_m = (M @ xyz.T).T
+            sh[:, 1, ch] = xyz_m[:, 1]
+            sh[:, 2, ch] = xyz_m[:, 2]
+            sh[:, 3, ch] = xyz_m[:, 0]
+        gaussians.sh = sh
+
+
+def _materialize_mirrored_body_ply(
+    src_ply: str,
+    axis: np.ndarray,
+    center: np.ndarray,
+) -> str:
+    """Return a path to a (possibly cached) mirrored PLY.
+
+    Follows the same cache pattern as
+    ``_materialize_transformed_background_ply``.
+    """
+    src_path = Path(src_ply).expanduser().resolve()
+    cache_key = hashlib.sha1(
+        (
+            f"{src_path}"
+            f"|{axis[0]:.9f},{axis[1]:.9f},{axis[2]:.9f}"
+            f"|{center[0]:.9f},{center[1]:.9f},{center[2]:.9f}"
+        ).encode("utf-8")
+    ).hexdigest()[:12]
+    cache_dir = Path(".cache/gs_body_mirrors")
+    cache_path = cache_dir / f"{src_path.stem}__mirror_{cache_key}.ply"
+    if cache_path.exists():
+        return str(cache_path)
+
+    gaussians = load_ply(str(src_path))
+    _mirror_gaussians_inplace(gaussians, axis, center)
+    save_ply(gaussians, cache_path)
+    return str(cache_path)
+
+
 def _materialize_transformed_background_ply(
     background_ply: str | None,
     pose: BackgroundPose,
@@ -198,6 +325,59 @@ class GaussianRenderConfig(BaseModel):
     background_transforms: Dict[str, list] = Field(default_factory=dict)
     """Per-background pose transforms keyed by full path, file name, or stem.
     Values: ``[x, y, z]`` or ``[x, y, z, qx, qy, qz, qw]``."""
+    body_mirrors: Dict[str, BodyMirrorSpec] = Field(default_factory=dict)
+    """Per-body reflections applied to ``body_gaussians`` PLYs at load time.
+    Keys must match entries in ``body_gaussians``. Mirrored PLYs are cached
+    under ``.cache/gs_body_mirrors/`` keyed by (path, axis, center)."""
+
+    def resolved_body_gaussians(self) -> Dict[str, str]:
+        """Return ``body_gaussians`` with any ``body_mirrors`` entries
+        substituted by the corresponding mirrored (cached) PLY path."""
+        if not self.body_mirrors:
+            return dict(self.body_gaussians)
+
+        unknown = set(self.body_mirrors) - set(self.body_gaussians)
+        if unknown:
+            raise ValueError(
+                f"body_mirrors references unknown body(s): {sorted(unknown)}. "
+                f"Keys must appear in body_gaussians: {sorted(self.body_gaussians)}"
+            )
+
+        centroids: Dict[str, np.ndarray] = {}
+
+        def _centroid(body_name: str) -> np.ndarray:
+            if body_name not in centroids:
+                centroids[body_name] = (
+                    load_ply(str(self.body_gaussians[body_name]))
+                    .xyz.mean(axis=0)
+                    .astype(np.float64)
+                )
+            return centroids[body_name]
+
+        resolved: Dict[str, str] = {}
+        for body_name, src_ply in self.body_gaussians.items():
+            spec = self.body_mirrors.get(body_name)
+            if spec is None:
+                resolved[body_name] = src_ply
+                continue
+            axis = spec.resolved_axis()
+            if spec.center is not None:
+                center = np.asarray(spec.center, dtype=np.float64).ravel()
+                if center.shape != (3,):
+                    raise ValueError(
+                        f"body_mirrors['{body_name}'].center must be length 3"
+                    )
+            elif spec.share_center_with is not None:
+                if spec.share_center_with not in self.body_gaussians:
+                    raise ValueError(
+                        f"body_mirrors['{body_name}'].share_center_with="
+                        f"'{spec.share_center_with}' is not in body_gaussians"
+                    )
+                center = _centroid(spec.share_center_with)
+            else:
+                center = _centroid(body_name)
+            resolved[body_name] = _materialize_mirrored_body_ply(src_ply, axis, center)
+        return resolved
 
     def resolved_background_transform(self) -> BackgroundPose:
         return _resolve_background_transform(
@@ -301,9 +481,10 @@ class GSUnifiedMujocoEnv(UnifiedMujocoEnv):
         self.config: GSEnvConfig
         gs_cfg = config.gaussian_render
         self._gs_background_source_ply = gs_cfg.background_ply
+        self._gs_body_gaussians = gs_cfg.resolved_body_gaussians()
         self._gs_renderer: GSRendererMuJoCo | None = None
         fg_cfg = BatchSplatConfig(
-            body_gaussians=dict(gs_cfg.body_gaussians),
+            body_gaussians=dict(self._gs_body_gaussians),
             background_ply=None,
             minibatch=512,
         )
@@ -313,14 +494,14 @@ class GSUnifiedMujocoEnv(UnifiedMujocoEnv):
         background_ply = gs_cfg.resolved_background_ply()
         if background_ply:
             self.get_logger().debug(
-                f"GS renderer initialised with {len(gs_cfg.body_gaussians)} body gaussian(s) + background"
+                f"GS renderer initialised with {len(self._gs_body_gaussians)} body gaussian(s) + background"
             )
         else:
             self.get_logger().debug(
-                f"GS renderer initialised with {len(gs_cfg.body_gaussians)} body gaussian(s)"
+                f"GS renderer initialised with {len(self._gs_body_gaussians)} body gaussian(s)"
             )
         self._gs_mask_renderers = self._build_gs_mask_renderers(
-            dict(gs_cfg.body_gaussians)
+            dict(self._gs_body_gaussians)
         )
 
     def set_background_transform(
@@ -331,7 +512,7 @@ class GSUnifiedMujocoEnv(UnifiedMujocoEnv):
             self._gs_background_source_ply,
             pose,
         )
-        combined_models = dict(self.config.gaussian_render.body_gaussians)
+        combined_models = dict(self._gs_body_gaussians)
         if background_ply:
             combined_models["background"] = background_ply
         self._gs_renderer = GSRendererMuJoCo(combined_models, self.model)
@@ -708,11 +889,12 @@ class BatchedGSUnifiedMujocoEnv(BatchedUnifiedMujocoEnv):
 
         gs_cfg = config.gaussian_render
         self._gs_background_source_ply = gs_cfg.background_ply
+        self._gs_body_gaussians = gs_cfg.resolved_body_gaussians()
 
         # Single shared foreground renderer
         self._fg_gs_renderer = MjxBatchSplatRenderer(
             BatchSplatConfig(
-                body_gaussians=dict(gs_cfg.body_gaussians),
+                body_gaussians=dict(self._gs_body_gaussians),
                 background_ply=None,
                 minibatch=512,
             ),
@@ -725,7 +907,7 @@ class BatchedGSUnifiedMujocoEnv(BatchedUnifiedMujocoEnv):
         # Per-object mask renderers (shared) — build via env[0] which has
         # .model, .get_logger(), and .config.mask_objects needed by the builder.
         self._gs_mask_renderers = self._build_shared_mask_renderers(
-            dict(gs_cfg.body_gaussians)
+            dict(self._gs_body_gaussians)
         )
 
         # Cache camera specs from env[0] (homogeneous)
@@ -740,7 +922,7 @@ class BatchedGSUnifiedMujocoEnv(BatchedUnifiedMujocoEnv):
         self.set_background_transform(gs_cfg.resolved_background_transform())
         background_ply = gs_cfg.resolved_background_ply()
 
-        n_bodies = len(gs_cfg.body_gaussians)
+        n_bodies = len(self._gs_body_gaussians)
         bg_str = " + background" if background_ply else ""
         self.envs[0].get_logger().debug(
             f"Batched GS renderer initialised with {n_bodies} body gaussian(s){bg_str}"

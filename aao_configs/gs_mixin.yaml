@@ -33,3 +33,23 @@ env:
       hospital_table_25_5: [0.5158, -0.6083, 0.0755] # the bg itself looks not so good
       simple_room: [-0.0248, 0.1106, 0.0736]
       table: [-0.1354, -0.3838, 0.0709]
+    # Optional: reflect individual per-body PLYs across a plane at load time.
+    # Keys must match entries in `body_gaussians` (defined in task-specific
+    # configs, not here). Mirrored PLYs are cached under
+    # `.cache/gs_body_mirrors/`. Two ways to specify the reflection-plane
+    # normal:
+    #   A) `axis`: unit vector in the PLY's local (GS) coords (simplest when
+    #      the PLY is pre-rotated so body quat = identity).
+    #   B) `body_quat` (wxyz) + `body_axis`: the code computes
+    #      `gs_axis = R(body_quat)^T @ body_axis`. Use when the body has a
+    #      non-identity MuJoCo quaternion and you want to mirror along a
+    #      body-frame direction.
+    # The mirror-plane center defaults to the PLY centroid. Use `center`
+    # (explicit [x, y, z] in GS coords) or `share_center_with` (another
+    # body key, to keep paired objects aligned — e.g. door + knob).
+    # body_mirrors:
+    #   door_gs:
+    #     axis: [1, 0, 0]
+    #   door_knob_gs:
+    #     axis: [1, 0, 0]
+    #     share_center_with: door_gs
