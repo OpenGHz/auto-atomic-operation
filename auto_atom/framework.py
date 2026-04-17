@@ -298,6 +298,19 @@ class PoseControlConfig(BaseModel):
     """The target rotation for the pose control. The rotation is represented as Euler angles in `rpy` order."""
     reference: PoseReference = PoseReference.AUTO
     """The reference frame for the pose control."""
+    static: bool = False
+    """Whether the reference frame should be snapshotted at action start.
+
+    By default, ``OBJECT`` / ``OBJECT_WORLD`` references are re-evaluated
+    on every control tick, so the target tracks the object as it moves.
+    That is the correct behavior when the object moves independently of
+    the gripper. However, when the gripper is *rigidly gripping* the
+    object, a tracking target is unreachable — the reference frame moves
+    with the gripper, so the residual never closes.
+
+    Set ``static: true`` to freeze the reference pose at the first tick
+    of this waypoint, giving a fixed world-frame target. ``EEF`` /
+    ``EEF_WORLD`` are always snapshotted and ignore this flag."""
     relative: bool = False
     """Whether the pose control is relative to the current pose. The current pose is determined by the reference frame. """
     use_slerp: bool = False

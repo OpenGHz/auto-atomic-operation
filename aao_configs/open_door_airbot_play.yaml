@@ -5,6 +5,7 @@ defaults:
 scene_name: open_door
 model_name: demo_gs_airbot_play
 task_name: open_door_airbot_play
+door_side: front
 
 replay:
   # Generic transform-driven scene reset: use the recorded
@@ -78,20 +79,25 @@ task:
       # `site` re-bases `reference: object_world` waypoints onto the grasp
       # point instead of the handle body origin. `object` is still used for
       # contact / GS mask / set_pose / randomization.
-      site: handle_grasp_front_site
+      site: handle_grasp_${door_side}_site
       operation: push
       operator: arm
       param:
         pre_move:
-          # 1. Approach: ~4.5cm in front of grasp site (world-axis-aligned)
+          # Use `reference: object` (full site pose) so that when
+          # `door_side` is switched to `back`, the site's 180°-z rotation
+          # mirrors both the local offsets and the grasp orientation
+          # automatically. For the front site the site frame is world-
+          # aligned, so behavior matches the previous object_world setup.
+          # 1. Approach: ~4.5cm in front of grasp site (site-local -x)
           - position: [-0.045, 0.0, 0.0]
-            reference: object_world
+            reference: object
             orientation: [0.71328438, -0.02933355, 0.00430715, 0.70024737]
             max_linear_step: 0.04
             max_angular_step: 0.25
           # 2. Grasp position: at the grasp site (0.5cm overshoot to ensure contact)
           - position: [0.005, 0.0, 0.0]
-            reference: object_world
+            reference: object
             max_linear_step: 0.04
             max_angular_step: 0.2
             randomization:
@@ -123,8 +129,14 @@ task:
           #     max_step: 0.15
           #   reference: world
           # NOTE: Because the robotic arm and the door handle interact, the robotic arm may not be able to accurately reach the given target pose due to the influence of elasticity. There are two methods: one is to adjust the target pose, for example, the handle has an upward elasticity, so the target z can be raised, which reduces the force and improves the control accuracy, but will affect the control trajectory; the other is to adjust the tolerance, for example, increase the tolerance in the z direction, so that the trajectory remains unchanged, but the control accuracy is sacrificed.
+          # Final push in site-local frame so the +x direction auto-mirrors
+          # with the 180°-z back site (pushes toward the door from either side).
+          # `static: true` snapshots the site pose at action start — required
+          # because the gripper rigidly holds the handle, so a tracking
+          # reference would move with the gripper and never close the gap.
           - position: [0.2, 0.0, 0.03]
-            reference: eef_world
+            reference: object
+            static: true
             # orientation: [-0.19902274, 0.68997457, -0.66492774, -0.20541703]
             max_linear_step: 0.02
             max_angular_step: 0.3

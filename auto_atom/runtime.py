@@ -1123,10 +1123,15 @@ class TaskRunner:
     ) -> ControlResult:
         if action.kind == "pose" and action.pose is not None:
             is_arc = action.pose.arc is not None
-            is_snapshot = action.pose.reference in {
-                PoseReference.EEF_WORLD,
-                PoseReference.EEF,
-            } or (is_arc and not action.pose.arc.absolute)
+            is_snapshot = (
+                action.pose.reference
+                in {
+                    PoseReference.EEF_WORLD,
+                    PoseReference.EEF,
+                }
+                or (is_arc and not action.pose.arc.absolute)
+                or action.pose.static
+            )
             if is_snapshot and action.resolved_pose is not None:
                 resolved_pose = action.resolved_pose
             else:
