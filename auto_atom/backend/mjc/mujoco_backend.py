@@ -773,6 +773,7 @@ class MujocoTaskBackend(SceneBackend):
     )
     camera_randomization: Dict[str, PoseRandomRange] = field(default_factory=dict)
     initial_poses: Dict[str, InitialPoseConfig] = field(default_factory=dict)
+    camera_initial_poses: Dict[str, InitialPoseConfig] = field(default_factory=dict)
     random_seed: Optional[int] = None
     randomization_debug: bool = False
     _rng: np.random.Generator = field(init=False, repr=False)
@@ -809,6 +810,8 @@ class MujocoTaskBackend(SceneBackend):
             operator.home()
         if self.initial_poses:
             self._apply_initial_poses()
+        if self.camera_initial_poses:
+            self._apply_camera_initial_poses()
         self._record_default_poses()
 
     def reset(self, env_mask: Optional[np.ndarray] = None) -> None:
@@ -818,6 +821,8 @@ class MujocoTaskBackend(SceneBackend):
             operator.home(mask)
         if self.initial_poses:
             self._apply_initial_poses(mask)
+        if self.camera_initial_poses:
+            self._apply_camera_initial_poses(mask)
         if not (
             self._default_object_poses
             or self._default_operator_base_poses
@@ -899,6 +904,48 @@ class MujocoTaskBackend(SceneBackend):
             # Keep recorded defaults in sync so randomization offsets from
             # the (possibly dynamic) initial pose, not the stale keyframe.
             self._default_object_poses[name] = handler.get_pose()
+
+    def _apply_camera_initial_poses(self, env_mask: np.ndarray | None = None) -> None:
+        """Apply per-camera initial pose overrides from config.
+
+        Runs after the model reset and before ``_record_default_poses``
+        so camera_randomization samples around the overridden pose. Only
+        specified components (position and/or orientation) are changed;
+        the rest keep their XML value.
+        """
+        mask = (
+            np.ones(self.batch_size, dtype=bool)
+            if env_mask is None
+            else np.asarray(env_mask, dtype=bool).reshape(-1)
+        )
+        for cam_name, cfg in self.camera_initial_poses.items():
+            current = self._get_camera_pose(cam_name)
+            pos = current.position
+            ori = current.orientation
+            if cfg.position is not None and len(cfg.position) >= 3:
+                pos = np.tile(
+                    np.array(cfg.position[:3], dtype=np.float64), (self.batch_size, 1)
+                )
+            if cfg.orientation is not None:
+                if len(cfg.orientation) == 3:
+                    q = euler_to_quaternion(
+                        (cfg.orientation[2], cfg.orientation[1], cfg.orientation[0])
+                    )
+                elif len(cfg.orientation) == 4:
+                    q = np.array(cfg.orientation, dtype=np.float64)
+                else:
+                    raise ValueError(
+                        f"camera_initial_pose[{cam_name!r}].orientation must be 3 "
+                        f"floats (Euler) or 4 floats (quaternion), got "
+                        f"{len(cfg.orientation)}"
+                    )
+                ori = np.tile(q, (self.batch_size, 1))
+            self._set_camera_pose(
+                cam_name, PoseState(position=pos, orientation=ori), mask
+            )
+            # Keep recorded default in sync so camera_randomization
+            # offsets from the overridden pose.
+            self._default_camera_poses[cam_name] = self._get_camera_pose(cam_name)
 
     # ------------------------------------------------------------------
     #  Randomization: ordering, reference resolution, and application
@@ -1974,6 +2021,7 @@ def build_mujoco_backend(
         randomization=dict(config.randomization),
         camera_randomization=dict(config.camera_randomization),
         initial_poses=dict(config.initial_pose),
+        camera_initial_poses=dict(config.camera_initial_pose),
         random_seed=config.seed if config.seed != 0 else None,
         randomization_debug=config.randomization_debug,
     )

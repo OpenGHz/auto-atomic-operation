@@ -463,6 +463,24 @@ class AutoAtomConfig(BaseModel):
     - ``OperatorRandomizationConfig`` with independent ``base`` and ``eef``
       randomization ranges.
     """
+    camera_initial_pose: Dict[str, InitialPoseConfig] = Field(default_factory=dict)
+    """Per-camera initial pose overrides applied at each reset, before
+    camera randomization records its defaults.
+
+    Keys are camera names as defined in the MuJoCo XML. Each entry may
+    set ``position`` and/or ``orientation`` (4-float quaternion xyzw or
+    3-float Euler roll/pitch/yaw in radians). Components omitted fall
+    back to the XML value.
+
+    Example YAML::
+
+        camera_initial_pose:
+          env1_cam:
+            position: [2.4, 0.6, -0.1]
+            orientation: [-0.5, 0.5, 0.5, 0.5]   # xyzw
+          topside:
+            position: [2.3, 0.15, 0.1]
+    """
     camera_randomization: Dict[str, PoseRandomRange] = Field(default_factory=dict)
     """Per-camera pose randomization applied at each reset.
 
@@ -490,7 +508,11 @@ class AutoAtomConfig(BaseModel):
     randomization_debug: bool = False
 
     @field_validator(
-        "initial_pose", "randomization", "camera_randomization", mode="before"
+        "initial_pose",
+        "randomization",
+        "camera_initial_pose",
+        "camera_randomization",
+        mode="before",
     )
     @classmethod
     def _strip_none_keys(cls, v: object) -> object:
