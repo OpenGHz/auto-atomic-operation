@@ -1,0 +1,31 @@
+# Back-side variant of open_door_airbot_play.
+#
+# How it works: the base config uses `site: handle_grasp_${door_side}_site`
+# together with `reference: object` on every waypoint. Because
+# `handle_grasp_back_site` is designed with a quaternion that rotates
+# the front site's world-aligned frame by 180° about z, all site-local
+# offsets and orientations are auto-mirrored to the back side — no
+# per-waypoint numerical changes are needed here.
+#
+# What does need to change:
+#   1. `door_side` → `back` (selects the back grasp site)
+#   2. `arm` initial_state.base_pose → mounted on the far side of the
+#      door (mirror of the XML default x=1.050 around the door at
+#      x≈1.54, rotated 180° about z so the arm faces the handle).
+#
+# The XML default arm_base pose is (1.050, 0.300, -0.480) with identity
+# orientation; mirroring around the door (world x≈1.54) gives
+# (2.030, 0.300, -0.480) with quat xyzw=(0,0,1,0). Tune if the arm
+# cannot reach the handle from this position.
+defaults:
+  - open_door_airbot_play
+  - _self_
+
+door_side: back
+
+task_operators:
+  arm:
+    initial_state:
+      base_pose:
+        position: [2.030, 0.300, -0.480]
+        orientation: [0.0, 0.0, 1.0, 0.0]  # 180° about z (xyzw)

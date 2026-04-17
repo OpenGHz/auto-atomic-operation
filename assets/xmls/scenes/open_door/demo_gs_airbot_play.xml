@@ -43,7 +43,7 @@
       <geom name="door_frame_physics_top_geom" type="box" pos="0.450000000 0.000000000 1.655000000" size="0.475000000 0.025000000 0.025000000" rgba="0.35 0.25 0.15 1" contype="1" conaffinity="1"/>
 
       <body name="door_body_phys" pos="0.840000000 0.000000000 0.000000000">
-        <joint name="door_hinge" type="hinge" pos="0 0 0" axis="0 0 -1" limited="true" range="-1.57 0" damping="0.15" frictionloss="0.01" armature="0.001"/>
+        <joint name="door_hinge" type="hinge" pos="0 0 0" axis="0 0 -1" limited="true" range="-1.57 1.57 " damping="0.15" frictionloss="0.01" armature="0.001"/>
         <inertial pos="-0.420000000 0.000000000 0.815000000" mass="6.0" diaginertia="0.2 0.2 0.2"/>
         <geom name="door_panel_geom" type="box" pos="-0.390000000 0.000000000 0.815000000" size="0.420000000 0.020000000 0.815000000" rgba="0.65 0.50 0.35 1" density="350" contype="1" conaffinity="1" friction="0.8 0.1 0.1"/>
         <site name="door_push_site" pos="-0.729500000 0.022000000 0.825000000" size="0.012" rgba="0.2 0.2 1 1"/>

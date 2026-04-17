@@ -68,7 +68,7 @@ task:
           close: false
 
 task_operators:
-  - name: arm
+  arm:
     ik:
       joint_control_mode: solve_once_interpolate
       joint_interp_speed: 0.9

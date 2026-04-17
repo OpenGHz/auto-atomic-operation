@@ -33,6 +33,11 @@ replay:
   # fingers through the handle.  The handle spindle is a cylinder of
   # diameter 0.02 m, so we floor the finger distance at 0.02 m so the
   # fingers stop on the handle surface.
+  #
+  # Optional per-joint replay multipliers for mirroring / axis flipping.
+  # Only the first N actuator columns are scaled; unspecified trailing
+  # joints keep a factor of 1.0.
+  # joint_axis_scale: [1, 1, -1, 1, 1, 1]
   joint_clip:
     xfg_claw_joint:
       min: 0.02
@@ -144,7 +149,7 @@ task:
               position: [0.01, 0.02, 0.02]
 
 task_operators:
-  - name: arm
+  arm:
     control:
       adaptive_step_scaling: false
       cartesian_max_linear_step: 0.025

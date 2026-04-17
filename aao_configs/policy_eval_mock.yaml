@@ -21,7 +21,7 @@ task:
             reference: world
 
 task_operators:
-  - name: arm
+  arm: {}
 
 policy:
   _target_: auto_atom.ConfigDrivenDemoPolicy

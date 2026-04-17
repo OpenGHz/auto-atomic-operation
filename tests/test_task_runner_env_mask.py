@@ -37,7 +37,7 @@ def test_task_runner_update_accepts_env_mask() -> None:
                         }
                     ],
                 },
-                "task_operators": [{"name": "arm"}],
+                "task_operators": {"arm": {}},
             }
         )
     )
@@ -93,7 +93,7 @@ def test_task_runner_update_requires_reset_for_selected_envs() -> None:
                         }
                     ],
                 },
-                "task_operators": [{"name": "arm"}],
+                "task_operators": {"arm": {}},
             }
         )
     )

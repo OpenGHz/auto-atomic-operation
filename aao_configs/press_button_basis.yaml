@@ -56,6 +56,6 @@ task:
             reference: object_world
 
 task_operators:
-  - name: arm
+  arm:
     initial_state:
       eef: 0.7 # partially closed to avoid preloading an empty gripper before press

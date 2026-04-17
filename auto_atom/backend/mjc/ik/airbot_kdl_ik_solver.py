@@ -206,7 +206,7 @@ def build_airbot_play_xf9600_backend(
     """Build a Mujoco backend with the AIRBOT Play analytical IK solver."""
     from auto_atom.backend.mjc.mujoco_backend import build_mujoco_backend
     from auto_atom.basis.mjc.mujoco_env import BatchedUnifiedMujocoEnv
-    from auto_atom.framework import AutoAtomConfig, OperatorConfig  # noqa: PLC0415
+    from auto_atom.framework import AutoAtomConfig  # noqa: PLC0415
     from auto_atom.runtime import ComponentRegistry  # noqa: PLC0415
 
     config = (
@@ -214,12 +214,7 @@ def build_airbot_play_xf9600_backend(
         if isinstance(task, AutoAtomConfig)
         else AutoAtomConfig.model_validate(task)
     )
-    operator_configs = [
-        item
-        if isinstance(item, OperatorConfig)
-        else OperatorConfig.model_validate(item)
-        for item in operators
-    ]
+    operator_configs = list(operators.values())
     env = ComponentRegistry.get_env(config.env_name)
     if not isinstance(env, BatchedUnifiedMujocoEnv):
         raise TypeError(

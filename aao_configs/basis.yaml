@@ -70,4 +70,4 @@ task:
   #     y: [-0.05, 0.05]
   #     pitch: [-0.1, 0.1]
 task_operators:
-  - name: arm
+  arm: {}

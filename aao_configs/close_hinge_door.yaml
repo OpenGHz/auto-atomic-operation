@@ -49,7 +49,7 @@ task:
             reference: world
 
 task_operators:
-  - name: arm
+  arm:
     initial_state:
       arm:
         position: [-0.7324714064598083, 0.16528670489788055, 0.5574991106987]

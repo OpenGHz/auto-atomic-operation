@@ -78,7 +78,7 @@ task:
           close: false
 
 task_operators:
-  - name: arm_a
+  arm_a: {}
 ```
 
 ### 2. Run the task

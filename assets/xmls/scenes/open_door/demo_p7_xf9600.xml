@@ -98,7 +98,7 @@
                pos="0 0 0"
                axis="0 0 -1"
                limited="true"
-               range="-1.57 0"
+               range="-1.57 1.57 "
                damping="0.15"
                frictionloss="0.01"
                armature="0.001"/>

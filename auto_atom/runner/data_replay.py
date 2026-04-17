@@ -125,6 +125,12 @@ class DataReplayConfig(BaseModel):
     arm_topic: str = Field(default="/robot/right_arm/joint_state")
     gripper_topic: str = Field(default="/robot/right_gripper/joint_state")
     joint_name_mapping: Dict[str, str] = {"gripper": "xfg_claw_joint"}
+    joint_axis_scale: List[float] = Field(default_factory=list)
+    """Per-joint multipliers applied to recorded joint/ctrl data after
+    column reordering. Only the first ``N`` columns are scaled, where
+    ``N = len(joint_axis_scale)``; trailing columns keep a factor of
+    ``1.0``. Useful for mirroring a replay by negating selected revolute
+    axes, e.g. ``[1, 1, -1, 1, 1, 1]``."""
     kinematic: bool = Field(default=False)
     """If ``True`` the replay sets joint positions directly (no physics);
     if ``False`` the replay drives actuators through the physics engine."""
@@ -209,6 +215,15 @@ def _load_ctrl_demo(demo_data: np.lib.npyio.NpzFile) -> Dict[str, np.ndarray]:
     else:
         ctrl = arm
     return {"ctrl": ctrl}
+
+
+def _get_operator_actuator_names(op_cfg: Any) -> list[str]:
+    """Return ``arm_actuators + eef_actuators`` from an operator config-like object."""
+    if op_cfg is None:
+        return []
+    arm_actuators = list(getattr(op_cfg, "arm_actuators", []) or [])
+    eef_actuators = list(getattr(op_cfg, "eef_actuators", []) or [])
+    return arm_actuators + eef_actuators
 
 
 # ---------------------------------------------------------------------------
@@ -581,6 +596,71 @@ def _invert_transform_xyzw(
     return inv_t, inv_q
 
 
+def _apply_joint_axis_scale(
+    joint_data: np.ndarray,
+    joint_axis_scale: List[float],
+    *,
+    joint_names: Optional[List[str]] = None,
+    label: str = "joint data",
+) -> np.ndarray:
+    """Return a copy of ``joint_data`` with per-column scale factors applied.
+
+    Scaling is applied along the last dimension. If fewer scale factors than
+    columns are provided, only the first ``N`` columns are modified and the
+    remainder keep a factor of ``1.0``.
+    """
+    if not joint_axis_scale:
+        return joint_data
+
+    data = np.asarray(joint_data)
+    if data.ndim == 0:
+        raise ValueError(f"{label} must have at least 1 dimension, got {data.shape}")
+
+    scale = np.asarray(joint_axis_scale, dtype=data.dtype)
+    num_scaled = int(scale.shape[0])
+    if data.shape[-1] < num_scaled:
+        raise ValueError(
+            f"joint_axis_scale has length {num_scaled}, but {label} only has "
+            f"{data.shape[-1]} column(s)."
+        )
+
+    scaled = data.copy()
+    scaled[..., :num_scaled] *= scale
+
+    name_parts = []
+    for idx, factor in enumerate(scale.tolist()):
+        if joint_names is not None and idx < len(joint_names):
+            name_parts.append(f"{joint_names[idx]} x {factor:g}")
+        else:
+            name_parts.append(f"col{idx} x {factor:g}")
+    trailing = ""
+    if num_scaled < data.shape[-1]:
+        trailing = (
+            f"; remaining {data.shape[-1] - num_scaled} trailing column(s) keep x 1.0"
+        )
+    print(f"[joint_axis_scale] {label}: " + ", ".join(name_parts) + trailing)
+    return scaled
+
+
+def _prepare_mcap_demo_for_replay(
+    mcap_demo: McapDemo,
+    actuator_names: list[str],
+    replay_cfg: DataReplayConfig,
+) -> None:
+    """Align and transform MCAP joint data into replay actuator order."""
+    if actuator_names:
+        mcap_demo.align_to_actuators(
+            actuator_names, replay_cfg.joint_name_mapping or None
+        )
+    mcap_demo.joint = _apply_joint_axis_scale(
+        mcap_demo.joint,
+        replay_cfg.joint_axis_scale,
+        joint_names=mcap_demo.joint_names,
+        label="mcap joint replay",
+    )
+    _apply_joint_clip_to_mcap_demo(mcap_demo, replay_cfg.joint_clip)
+
+
 def _apply_joint_clip_to_mcap_demo(
     mcap_demo: McapDemo,
     joint_clip: Dict[str, JointClipBounds],
@@ -781,8 +861,8 @@ def preprocess_replay_dictconfig(
     replay_cfg.mode = "joint"
 
     op_cfg = cfg.env.operators.arm
-    actuator_names = list(op_cfg.arm_actuators) + list(op_cfg.eef_actuators)
-    mcap_demo.align_to_actuators(actuator_names, replay_cfg.joint_name_mapping or None)
+    actuator_names = _get_operator_actuator_names(op_cfg)
+    _prepare_mcap_demo_for_replay(mcap_demo, actuator_names, replay_cfg)
 
     init_jpos = mcap_demo.first_frame_joint_positions()
     # When eef_mapper is configured, the mcap eef values are in user-space
@@ -983,17 +1063,10 @@ class DataReplayRunner(RunnerBase):
             env = ComponentRegistry.get_env(config.task.env_name)
             op_binding = env.config.operators.get("arm")
             if op_binding is not None:
-                actuator_names = list(op_binding.arm_actuators) + list(
-                    op_binding.eef_actuators
-                )
-                if actuator_names:
-                    mcap_demo.align_to_actuators(
-                        actuator_names, rcfg.joint_name_mapping or None
-                    )
-
-            # Per-actuator clamp (e.g. floor a kinematic gripper at the
-            # grasped object's thickness so it doesn't penetrate).
-            _apply_joint_clip_to_mcap_demo(mcap_demo, rcfg.joint_clip)
+                actuator_names = _get_operator_actuator_names(op_binding)
+            else:
+                actuator_names = []
+            _prepare_mcap_demo_for_replay(mcap_demo, actuator_names, rcfg)
 
             demo: Dict[str, np.ndarray] = {"joint": mcap_demo.joint}
         else:
@@ -1009,6 +1082,19 @@ class DataReplayRunner(RunnerBase):
                 demo = _load_pose_demo(demo_data)
             elif rcfg.mode == "ctrl":
                 demo = _load_ctrl_demo(demo_data)
+                actuator_names: list[str] = []
+                from auto_atom import ComponentRegistry
+
+                env = ComponentRegistry.get_env(config.task.env_name)
+                op_binding = env.config.operators.get("arm")
+                if op_binding is not None:
+                    actuator_names = _get_operator_actuator_names(op_binding)
+                demo["ctrl"] = _apply_joint_axis_scale(
+                    demo["ctrl"],
+                    rcfg.joint_axis_scale,
+                    joint_names=actuator_names or None,
+                    label="npz ctrl replay",
+                )
             else:
                 raise ValueError(
                     f"Unknown replay mode: {rcfg.mode!r} "

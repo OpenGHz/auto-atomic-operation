@@ -209,7 +209,7 @@ angle = 2 * arccos(|quat_diff.w|)
 | `position_tolerance` | `MujocoControlConfig.tolerance.position` | `0.01` m | Position error threshold |
 | `orientation_tolerance` | `MujocoControlConfig.tolerance.orientation` | `0.08` rad | Orientation error threshold |
 
-**Usage**: Set under `task_operators[].control.tolerance` in YAML.
+**Usage**: Set under `task_operators.<name>.control.tolerance` in YAML.
 
 ---
 
@@ -265,7 +265,7 @@ Parameters are now structured under `control` in the operator configuration:
 
 ```yaml
 task_operators:
-  - name: arm
+  arm:
     control:
       tolerance:
         position: 0.01      # meters

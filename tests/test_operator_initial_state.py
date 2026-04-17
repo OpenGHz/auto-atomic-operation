@@ -45,7 +45,7 @@ def _normalized(quat: np.ndarray) -> np.ndarray:
 
 def test_closed_initial_eef_keeps_press_button_home_pose() -> None:
     open_backend = _build_press_button_backend(
-        overrides=["task_operators.0.initial_state=null"]
+        overrides=["task_operators.arm.initial_state=null"]
     )
     try:
         open_pose, open_distance = _eef_pose_and_finger_distance(open_backend)

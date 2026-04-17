@@ -245,19 +245,14 @@ def create_mock_env(
 
 def build_mock_backend(
     task: AutoAtomConfig | Dict[str, Any],
-    operators: List[OperatorConfig] | List[Dict[str, Any]],
+    operators: Dict[str, OperatorConfig],
 ) -> MockSceneBackend:
     config = (
         task
         if isinstance(task, AutoAtomConfig)
         else AutoAtomConfig.model_validate(task)
     )
-    operator_configs = [
-        item
-        if isinstance(item, OperatorConfig)
-        else OperatorConfig.model_validate(item)
-        for item in operators
-    ]
+    operator_configs = list(operators.values())
     env_payload = ComponentRegistry.get_env(config.env_name)
     batch_size = (
         int(env_payload.get("batch_size", 1)) if isinstance(env_payload, dict) else 1

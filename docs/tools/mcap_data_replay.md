@@ -47,6 +47,7 @@ All replay settings live under the `replay` key in Hydra overrides
 | `arm_topic`           | `str`           | `/robot/right_arm/joint_state`         | ROS2 topic for arm joint states |
 | `gripper_topic`       | `str`           | `/robot/right_gripper/joint_state`     | ROS2 topic for gripper joint states |
 | `joint_name_mapping`  | `dict`          | `{"gripper": "xfg_claw_joint"}`        | Maps mcap joint names to YAML actuator names |
+| `joint_axis_scale`    | `list[float]`   | `[]`                                   | Per-joint replay multipliers applied to the first `N` actuator columns after reordering; useful for mirroring by negating selected axes |
 | `gripper_range`       | `list[float]`   | `[0.0, 0.09]`                         | Real gripper distance `[closed, open]` in metres |
 | `reset_from_first_frame` | `bool`       | `true`                                 | Apply the first recorded action as the post-reset initial state |
 | `steps_per_action`    | `int`           | `1`                                    | Physics steps per recorded action (set >1 for sub-stepping) |
@@ -79,7 +80,20 @@ The combined joint array is reordered to match the YAML actuator declaration
 order (`arm_actuators` + `eef_actuators`).  Use `joint_name_mapping` when the
 mcap joint names differ from the YAML actuator names.
 
-### 2. Gripper rescaling
+### 2. Optional joint-axis scaling
+
+If `joint_axis_scale` is provided, the replay multiplies the first `N`
+actuator columns by the configured factors after column reordering.  This is
+useful for replay mirroring or flipping specific revolute axes, for example:
+
+```yaml
+replay:
+  joint_axis_scale: [1, 1, -1, 1, 1, 1]
+```
+
+Any trailing actuator columns not covered by the list keep a factor of `1.0`.
+
+### 3. Gripper rescaling
 
 Real gripper data is typically in finger-distance space (metres), while
 MuJoCo actuators use raw ctrl ranges.  The pipeline rescales gripper values
@@ -89,7 +103,7 @@ from `gripper_range` to the actuator's `ctrlrange`.
 configured, rescaling is skipped because `apply_joint_action` already
 converts finger-distance values to ctrl internally.
 
-### 3. Initial joint position injection
+### 4. Initial joint position injection
 
 The first frame's joint positions are injected into `env.initial_joint_positions`
 so the robot resets at the recorded starting configuration.  When `eef_mapper`
@@ -100,7 +114,7 @@ mapper via the reset action instead.
 See [Scene Initialization & Randomization](../task-configuration/randomization.md) for details on
 `initial_joint_positions`.
 
-### 4. Randomization disabled
+### 5. Randomization disabled
 
 Task randomization is automatically disabled (`task.randomization = {}`) to
 ensure exact trajectory reproduction.

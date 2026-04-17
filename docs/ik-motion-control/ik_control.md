@@ -225,7 +225,7 @@ task:
             max_angular_step: 0.08
 
 task_operators:
-  - name: arm
+  arm:
     ik:
       joint_control_mode: solve_once_interpolate
       joint_interp_speed: 0.05
@@ -320,7 +320,7 @@ task_operators:
 
 ```yaml
 task_operators:
-  - name: arm
+  arm:
     initial_state:
       base_pose:
         position: [-0.45, -0.06, 0.0]  # 与 XML 中 link0 位置一致

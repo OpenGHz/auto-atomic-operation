@@ -561,8 +561,10 @@ class OperatorConfig(BaseModel):
 
     model_config = ConfigDict(extra="allow")
 
-    name: str
-    """The unique operator name referenced by task stages."""
+    name: str = ""
+    """The unique operator name referenced by task stages.
+    Defaults to empty; populated from the dict key in ``TaskFileConfig.task_operators``
+    during validation, so YAML entries do not need to repeat the name."""
 
     initial_state: Optional[OperatorInitialState] = None
     """Optional initial control state applied to this operator on every reset.
@@ -578,6 +580,23 @@ class TaskFileConfig(BaseModel):
     """The backend to execute this task file. The backend should be registered in the ComponentRegistry and should be compatible with the selected scene."""
     task: AutoAtomConfig
     """The task-level configuration describing stages, scene, and environment selection."""
-    task_operators: List[OperatorConfig] = []
-    """The operator definitions available to the selected backend for this task file.
+    task_operators: Dict[str, OperatorConfig] = {}
+    """The operator definitions available to the selected backend for this task file,
+    keyed by operator name. Using a mapping (rather than a list) lets Hydra overrides
+    target individual operators by key, e.g. ``task_operators.arm.control.tolerance.position=0.01``.
     Use ``task_operators`` in YAML; ``env.operators`` is reserved for environment-level operator bindings."""
+
+    @field_validator("task_operators", mode="after")
+    @classmethod
+    def _populate_operator_names(
+        cls, value: Dict[str, OperatorConfig]
+    ) -> Dict[str, OperatorConfig]:
+        for key, op in value.items():
+            if not op.name:
+                op.name = key
+            elif op.name != key:
+                raise ValueError(
+                    f"task_operators key '{key}' does not match operator name '{op.name}'. "
+                    "Either omit the name field or make it match the key."
+                )
+        return value

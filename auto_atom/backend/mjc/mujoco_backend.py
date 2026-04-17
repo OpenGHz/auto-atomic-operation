@@ -1806,7 +1806,7 @@ def _resolve_arm_pose(arm_config, fallback_pose: PoseState) -> PoseState:
 
 def build_mujoco_backend(
     task: AutoAtomConfig | Dict[str, Any],
-    operators: List[OperatorConfig] | List[Dict[str, Any]],
+    operators: Dict[str, OperatorConfig],
     ik_solver: Optional[IKSolver] = None,
     handler_kwargs: Optional[Dict[str, Any]] = None,
 ) -> MujocoTaskBackend:
@@ -1815,12 +1815,7 @@ def build_mujoco_backend(
         if isinstance(task, AutoAtomConfig)
         else AutoAtomConfig.model_validate(task)
     )
-    operator_configs = [
-        item
-        if isinstance(item, OperatorConfig)
-        else OperatorConfig.model_validate(item)
-        for item in operators
-    ]
+    operator_configs = list(operators.values())
     env = ComponentRegistry.get_env(config.env_name)
     if not isinstance(env, BatchedUnifiedMujocoEnv):
         raise TypeError(

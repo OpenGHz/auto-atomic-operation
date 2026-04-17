@@ -56,7 +56,7 @@ task:
 
 # --- Operator declarations ---
 task_operators:
-  - name: arm_a
+  arm_a: {}
 ```
 
 > [!NOTE]
@@ -334,18 +334,15 @@ from auto_atom.basis.my_env import MyEnv
 
 def build_my_backend(
     task: AutoAtomConfig | dict[str, Any],
-    operators: list[OperatorConfig] | list[dict[str, Any]],
+    operators: dict[str, OperatorConfig],
 ) -> MySceneBackend:
-    # Normalise inputs (Hydra may pass raw dicts).
+    # TaskFileConfig already validated `operators` (each value is an
+    # OperatorConfig with its `name` populated from the dict key).
     config = (
         task if isinstance(task, AutoAtomConfig)
         else AutoAtomConfig.model_validate(task)
     )
-    operator_configs = [
-        item if isinstance(item, OperatorConfig)
-        else OperatorConfig.model_validate(item)
-        for item in operators
-    ]
+    operator_configs = list(operators.values())
 
     # Retrieve the basis environment registered by the `env` YAML section.
     env: MyEnv = ComponentRegistry.get_env(config.env_name)
@@ -420,7 +417,7 @@ task:
           close: false
 
 task_operators:
-  - name: arm_a
+  arm_a: {}
 
 ```
 

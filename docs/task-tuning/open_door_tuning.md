@@ -50,7 +50,7 @@ elif (eef.close
 
 ```yaml
 task_operators:
-  - name: arm
+  arm:
     control:
       adaptive_step_scaling: false
 ```

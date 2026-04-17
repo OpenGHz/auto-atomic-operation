@@ -42,5 +42,5 @@ task:
             reference: base
 
 task_operators:
-  - name: arm_a
-  - name: observer
+  arm_a: {}
+  observer: {}

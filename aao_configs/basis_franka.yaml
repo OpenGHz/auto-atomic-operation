@@ -34,7 +34,7 @@ env:
 backend: auto_atom.backend.mjc.ik.mink_ik_solver.build_franka_backend
 
 task_operators:
-  - name: arm
+  arm:
     max_joint_delta: 1.8 # max per-joint displacement per control step (rad)
     ik:
       joint_control_mode: solve_once_interpolate # per_step_ik | solve_once_interpolate

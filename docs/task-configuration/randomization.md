@@ -77,11 +77,11 @@ task:
 
 `task.initial_pose` only applies to scene objects. To change the baseline pose
 used for operator randomization, configure the operator under
-`task_operators[].initial_state`:
+`task_operators.<name>.initial_state`:
 
 ```yaml
 task_operators:
-  - name: arm
+  arm:
     initial_state:
       base_pose:
         position: [-0.45, -0.06, 0.0]  # should match the XML `link0` pose

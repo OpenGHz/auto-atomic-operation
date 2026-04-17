@@ -52,7 +52,7 @@ Copy this snippet into the corresponding operator's `initial_state` field in the
 
 ## Default sources when YAML omits `initial_state`
 
-If a task YAML does not define `task_operators[].initial_state`, the backend does not apply any extra override during setup. The operator starts from the state already present in the loaded MuJoCo model and the operator registration snapshot.
+If a task YAML does not define `task_operators.<name>.initial_state`, the backend does not apply any extra override during setup. The operator starts from the state already present in the loaded MuJoCo model and the operator registration snapshot.
 
 This is easiest to understand by separating `base_pose`, `arm`, and `eef`.
 
