@@ -130,13 +130,20 @@ def _resolve_background_transform(
 
 
 class BodyMirrorSpec(BaseModel):
-    """Reflect a per-body Gaussian PLY across a plane at load time.
+    """Reflect a per-body Gaussian PLY across a plane at load time, with
+    an optional post-reflection rigid transform.
 
     The reflection plane's normal is specified either directly in the PLY's
     local (GS) coordinates via ``axis``, or derived from a MuJoCo body
     quaternion plus a body-frame axis.  Useful when the PLY is pre-rotated
     (body quat = identity) and you can reason about left/right directly in
     the PLY frame.
+
+    When ``position`` / ``orientation`` are set, a rigid transform is
+    applied *after* the reflection, giving a single entry that can express
+    rotoreflections (mirror ∘ rotate — which is not representable as a
+    single reflection in general).  The reflection center doubles as the
+    rotation pivot unless the body-wide ``center`` is otherwise specified.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -151,11 +158,58 @@ class BodyMirrorSpec(BaseModel):
     ``body_quat`` is set)."""
     center: list | None = None
     """Explicit mirror-plane center in GS coords. When omitted, the PLY
-    centroid is used."""
+    centroid is used. Also doubles as the rotation pivot for the
+    optional post-reflection transform."""
     share_center_with: str | None = None
-    """Name of another entry in ``body_gaussians``; reuse that PLY's centroid
-    as the mirror center.  Use this to keep paired objects (e.g. door + knob)
-    aligned after mirroring.  Ignored when ``center`` is given."""
+    """Name of another entry in ``body_gaussians``; reuse that body's center
+    as this body's mirror center.  The target's **explicit** ``center`` is
+    used when set; otherwise the target PLY's centroid.  Use this to keep
+    paired objects (e.g. door + knob) aligned after mirroring (and, with
+    ``position``/``orientation`` set, rotating around a shared pivot).
+    Ignored when ``center`` is given on this spec."""
+    position: list | None = None
+    """Optional post-reflection translation ``[x, y, z]`` in PLY-local
+    (GS) coords. Applied after the reflection."""
+    orientation: list | None = None
+    """Optional post-reflection rotation. Either a quaternion
+    ``[x, y, z, w]`` (length 4) or Euler ``[roll, pitch, yaw]`` radians
+    (length 3). Applied in PLY-local coords about the mirror's ``center``
+    (or PLY centroid when no center is given)."""
+
+    def resolved_post_pose(self) -> BackgroundPose:
+        """Resolve the optional post-reflection rigid transform to a
+        ``(position, quat_xyzw)`` tuple. Identity when neither
+        ``position`` nor ``orientation`` is set."""
+        pos = (0.0, 0.0, 0.0)
+        quat = _IDENTITY_QUAT
+        if self.position is not None:
+            arr = np.asarray(self.position, dtype=np.float64).ravel()
+            if arr.shape != (3,):
+                raise ValueError(
+                    f"BodyMirrorSpec.position must be length 3, got {arr.shape}"
+                )
+            pos = tuple(float(v) for v in arr)
+        if self.orientation is not None:
+            arr = np.asarray(self.orientation, dtype=np.float64).ravel()
+            if arr.shape == (3,):
+                from scipy.spatial.transform import Rotation
+
+                quat = tuple(
+                    float(v) for v in Rotation.from_euler("xyz", arr).as_quat()
+                )
+            elif arr.shape == (4,):
+                norm = float(np.linalg.norm(arr))
+                quat = (
+                    _IDENTITY_QUAT
+                    if norm < 1e-12
+                    else tuple(float(v) for v in (arr / norm))
+                )
+            else:
+                raise ValueError(
+                    "BodyMirrorSpec.orientation must be length 3 (Euler) "
+                    f"or 4 (quaternion), got {arr.shape}"
+                )
+        return pos, quat
 
     def resolved_axis(self) -> np.ndarray:
         if self.axis is not None:
@@ -200,7 +254,8 @@ class BodyTransformSpec(BaseModel):
     center: list | None = None
     """Optional pivot point [x, y, z] in the PLY's local GS coords."""
     share_center_with: str | None = None
-    """Reuse another body's centroid as the pivot point."""
+    """Reuse another body's pivot point.  The target's **explicit**
+    ``center`` is used when set; otherwise the target PLY's centroid."""
 
     def resolved_pose(self) -> BackgroundPose:
         pos = (0.0, 0.0, 0.0)
@@ -278,18 +333,36 @@ def _materialize_mirrored_body_ply(
     src_ply: str,
     axis: np.ndarray,
     center: np.ndarray,
+    post_pose: BackgroundPose | None = None,
 ) -> str:
-    """Return a path to a (possibly cached) mirrored PLY.
+    """Return a path to a (possibly cached) mirrored PLY, optionally with
+    a rigid transform baked in *after* the reflection.
+
+    When ``post_pose`` is non-identity, a rigid-body transform
+    ``p' = R @ (p - center) + center + t`` is applied in place once the
+    reflection is done, using the mirror's ``center`` as the rotation
+    pivot. This expresses rotoreflections (mirror ∘ rotate) in one step.
 
     Follows the same cache pattern as
     ``_materialize_transformed_background_ply``.
     """
     src_path = Path(src_ply).expanduser().resolve()
+    post_identity = post_pose is None or _is_identity_pose(
+        _normalize_background_pose(post_pose)
+    )
+    post_key = "none"
+    if not post_identity:
+        pos, quat = _normalize_background_pose(post_pose)
+        post_key = (
+            f"{pos[0]:.9f},{pos[1]:.9f},{pos[2]:.9f}"
+            f"|{quat[0]:.9f},{quat[1]:.9f},{quat[2]:.9f},{quat[3]:.9f}"
+        )
     cache_key = hashlib.sha1(
         (
             f"{src_path}"
             f"|{axis[0]:.9f},{axis[1]:.9f},{axis[2]:.9f}"
             f"|{center[0]:.9f},{center[1]:.9f},{center[2]:.9f}"
+            f"|{post_key}"
         ).encode("utf-8")
     ).hexdigest()[:12]
     cache_dir = Path(".cache/gs_body_mirrors")
@@ -299,6 +372,23 @@ def _materialize_mirrored_body_ply(
 
     gaussians = load_ply(str(src_path))
     _mirror_gaussians_inplace(gaussians, axis, center)
+    if not post_identity:
+        pos, quat = _normalize_background_pose(post_pose)
+        from scipy.spatial.transform import Rotation
+
+        R = Rotation.from_quat(quat).as_matrix()
+        T = np.eye(4, dtype=np.float64)
+        T[:3, :3] = R
+        T[:3, 3] = np.asarray(pos, dtype=np.float64)
+        Tc = np.eye(4, dtype=np.float64)
+        Tc[:3, 3] = center.astype(np.float64)
+        Tnc = np.eye(4, dtype=np.float64)
+        Tnc[:3, 3] = -center.astype(np.float64)
+        T = Tc @ T @ Tnc
+
+        from gaussian_renderer.transform_gs_model import transform_gaussian
+
+        transform_gaussian(gaussians, T, silent=True)
     save_ply(gaussians, cache_path)
     return str(cache_path)
 
@@ -466,6 +556,26 @@ class GaussianRenderConfig(BaseModel):
                 )
             return centroids[key]
 
+        def _explicit_center(spec, label: str, body_name: str) -> np.ndarray:
+            arr = np.asarray(spec.center, dtype=np.float64).ravel()
+            if arr.shape != (3,):
+                raise ValueError(f"{label}['{body_name}'].center must be length 3")
+            return arr
+
+        def _share_center(
+            target: str,
+            paths: Dict[str, str],
+            same_spec_dict: Dict[str, object],
+            label: str,
+        ) -> np.ndarray:
+            """Resolve a ``share_center_with`` reference. Prefer the target's
+            explicit ``center`` field (from the same spec dict as the caller),
+            falling back to the target PLY's centroid when not set."""
+            target_spec = same_spec_dict.get(target)
+            if target_spec is not None and target_spec.center is not None:
+                return _explicit_center(target_spec, label, target)
+            return _centroid(paths, target)
+
         transformed: Dict[str, str] = {}
         for body_name, src_ply in self.body_gaussians.items():
             spec = self.body_transforms.get(body_name)
@@ -475,18 +585,19 @@ class GaussianRenderConfig(BaseModel):
             pose = spec.resolved_pose()
             center = None
             if spec.center is not None:
-                center = np.asarray(spec.center, dtype=np.float64).ravel()
-                if center.shape != (3,):
-                    raise ValueError(
-                        f"body_transforms['{body_name}'].center must be length 3"
-                    )
+                center = _explicit_center(spec, "body_transforms", body_name)
             elif spec.share_center_with is not None:
                 if spec.share_center_with not in self.body_gaussians:
                     raise ValueError(
                         f"body_transforms['{body_name}'].share_center_with="
                         f"'{spec.share_center_with}' is not in body_gaussians"
                     )
-                center = _centroid(self.body_gaussians, spec.share_center_with)
+                center = _share_center(
+                    spec.share_center_with,
+                    self.body_gaussians,
+                    self.body_transforms,
+                    "body_transforms",
+                )
             transformed[body_name] = _materialize_transformed_body_ply(
                 src_ply, pose, center
             )
@@ -502,21 +613,25 @@ class GaussianRenderConfig(BaseModel):
                 continue
             axis = spec.resolved_axis()
             if spec.center is not None:
-                center = np.asarray(spec.center, dtype=np.float64).ravel()
-                if center.shape != (3,):
-                    raise ValueError(
-                        f"body_mirrors['{body_name}'].center must be length 3"
-                    )
+                center = _explicit_center(spec, "body_mirrors", body_name)
             elif spec.share_center_with is not None:
                 if spec.share_center_with not in self.body_gaussians:
                     raise ValueError(
                         f"body_mirrors['{body_name}'].share_center_with="
                         f"'{spec.share_center_with}' is not in body_gaussians"
                     )
-                center = _centroid(transformed, spec.share_center_with)
+                center = _share_center(
+                    spec.share_center_with,
+                    transformed,
+                    self.body_mirrors,
+                    "body_mirrors",
+                )
             else:
                 center = _centroid(transformed, body_name)
-            resolved[body_name] = _materialize_mirrored_body_ply(src_ply, axis, center)
+            post_pose = spec.resolved_post_pose()
+            resolved[body_name] = _materialize_mirrored_body_ply(
+                src_ply, axis, center, post_pose
+            )
         return resolved
 
     def resolved_background_transform(self) -> BackgroundPose:
