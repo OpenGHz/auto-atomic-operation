@@ -384,7 +384,7 @@ task:
     env1_cam:
       position: [2.4, 0.6, -0.1]
       orientation: [-0.5, 0.5, 0.5, 0.5]   # xyzw quaternion
-    topside:
+    env0_cam:
       position: [2.3, 0.15, 0.1]
       # orientation omitted → keeps XML value
 ```

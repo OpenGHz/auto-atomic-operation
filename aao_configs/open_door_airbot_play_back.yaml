@@ -23,10 +23,15 @@ defaults:
 
 door_side: back
 
-# Viewer and rendering cameras are mirrored around the door plane
-# (world x≈1.54) so the back-side variant gives a comparable framing
-# to the front-side default. Orientations are pre-rotated 180° about
-# world z to flip the view direction along with the position.
+# Viewer and rendering cameras for the back-side layout.
+# - Positions are mirrored around the door plane (world x≈1.54), so each
+#   camera is the same distance from the scene as its front counterpart.
+# - Orientations are recomputed by a look-at construction that points
+#   each camera at the handle anchor (≈ [1.54, 0.22, -0.18]) with
+#   world-up = +z. (A reflection cannot be expressed as a rotation —
+#   det = -1 — so naive 180°-z rotation of the front quaternion gives a
+#   camera pointing off into empty space. The look-at construction is
+#   the robust fix.)
 env:
   viewer:
     lookat: [ 1.83, 0.15, -0.2 ]     # mirror of [1.25, 0.15, -0.2]
@@ -36,13 +41,10 @@ task:
   camera_initial_pose:
     env1_cam:
       position: [ 2.266, -0.615, 0.495 ]
-      orientation: [ 0.1345, 0.4870, 0.8317, 0.2296 ]  # xyzw
+      orientation: [ 0.4585, 0.1714, 0.3054, 0.8168 ]  # xyzw
     env0_cam:
       position: [ 1.933, 2.181, -0.092 ]
-      orientation: [ -0.6899, -0.0321, -0.0336, -0.7225 ]
-    topside:
-      position: [ 2.340, 0.127, 0.060 ]
-      orientation: [ 0.4358, 0.5027, 0.5639, 0.4890 ]
+      orientation: [ 0.0683, 0.6880, 0.7190, 0.0713 ]
 
 task_operators:
   arm:

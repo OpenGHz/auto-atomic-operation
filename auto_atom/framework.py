@@ -478,8 +478,6 @@ class AutoAtomConfig(BaseModel):
           env1_cam:
             position: [2.4, 0.6, -0.1]
             orientation: [-0.5, 0.5, 0.5, 0.5]   # xyzw
-          topside:
-            position: [2.3, 0.15, 0.1]
     """
     camera_randomization: Dict[str, PoseRandomRange] = Field(default_factory=dict)
     """Per-camera pose randomization applied at each reset.

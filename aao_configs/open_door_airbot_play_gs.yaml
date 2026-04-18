@@ -12,7 +12,7 @@ env:
     body_gaussians:
       door_body: ${gs_dir}/${door_name}.ply
       handle_gs_frame: ${gs_dir}/${door_name}_knob.ply
-      bg_gs_frame: ${assets_dir}/gs/backgrounds/door_bg/${bg3dgs_name}.ply
+      # bg_gs_frame: ${assets_dir}/gs/backgrounds/door_bg/${bg3dgs_name}.ply
     # background_ply: ${assets_dir}/gs/backgrounds/door_bg/${bg3dgs_name}.ply
     # # bg_gs_frame body pose from demo_gs_airbot_play.xml (wxyz→xyzw):
     # # pos=[-0.105, 0.491151190, -0.136037800]
