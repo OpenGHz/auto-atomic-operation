@@ -8,7 +8,7 @@ enable_mask: false
 enable_heat_map: false
 
 env:
-  batch_size: 1
+  batch_size: 3
   cameras:
     - name: env2_cam
       width: ${cam_width}

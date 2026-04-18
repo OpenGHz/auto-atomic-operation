@@ -12,6 +12,9 @@ Saved files per camera:
 - ``<camera>_depth.png`` (when depth is available)
 - ``<camera>_heat_<operation>.png`` (when heat-map channels exist)
 
+When ``env.batch_size > 1``, files get an additional ``_env<index>`` suffix
+before the extension, for example ``<camera>_rgb_env2.png``.
+
 Usage::
 
     python examples/save_rendering.py
@@ -92,20 +95,37 @@ def _set_export_interest_focus(env, single_env) -> None:
         env.set_interest_objects_and_operations(object_names, operation_names)
 
 
-def _normalize_obs_image_shape(data: np.ndarray, expected_ndim: int) -> np.ndarray:
-    if data.ndim == expected_ndim + 1:
-        return data[0]
+def _split_obs_image_batch(
+    data: np.ndarray,
+    expected_ndim: int,
+    batch_size: int,
+) -> list[np.ndarray]:
     if data.ndim == expected_ndim:
-        return data
+        if batch_size != 1:
+            raise TypeError(
+                "Expected batched observation with leading env dimension for "
+                f"batch_size={batch_size}, got shape {data.shape}"
+            )
+        return [data]
+    if data.ndim == expected_ndim + 1:
+        if data.shape[0] != batch_size:
+            raise TypeError(
+                f"Expected leading batch dimension {batch_size}, got shape {data.shape}"
+            )
+        return [data[env_index] for env_index in range(batch_size)]
     raise TypeError(
         f"Expected observation with ndim {expected_ndim} or {expected_ndim + 1}, "
         f"got shape {data.shape}"
     )
 
 
-def _find_obs_image(
-    obs: dict, cam_name: str, suffix: str, expected_ndim: int
-) -> np.ndarray | None:
+def _find_obs_images(
+    obs: dict,
+    cam_name: str,
+    suffix: str,
+    expected_ndim: int,
+    batch_size: int,
+) -> list[np.ndarray] | None:
     candidates = [
         f"{cam_name}/{suffix}",
         f"camera/{cam_name}/" + suffix,
@@ -115,8 +135,12 @@ def _find_obs_image(
         if key not in obs:
             continue
         data = np.asarray(obs[key]["data"])
-        return _normalize_obs_image_shape(data, expected_ndim)
+        return _split_obs_image_batch(data, expected_ndim, batch_size)
     return None
+
+
+def _env_suffix(batch_size: int, env_index: int) -> str:
+    return "" if batch_size == 1 else f"_env{env_index}"
 
 
 def _save_rgb(path: Path, rgb: np.ndarray) -> None:
@@ -278,13 +302,15 @@ def main(cfg: DictConfig) -> None:
     )
 
     runner = TaskRunner().from_config(task_file)
+    batch_size = int(getattr(env, "batch_size", 1))
     config_name = HydraConfig.get().job.config_name
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     render_tag = "gs" if use_gs else "mj"
     out_dir = Path("outputs") / f"rendering_{render_tag}_{config_name}_{timestamp}"
     out_dir.mkdir(parents=True, exist_ok=True)
-    video_frames: dict[str, list[np.ndarray]] = {
-        cam_name: [] for cam_name in single_env._camera_specs
+    video_frames: dict[str, list[list[np.ndarray]]] = {
+        cam_name: [[] for _ in range(batch_size)]
+        for cam_name in single_env._camera_specs
     }
 
     try:
@@ -294,130 +320,176 @@ def main(cfg: DictConfig) -> None:
 
         step_idx = 0
         while True:
-            for cam_name, spec in single_env._camera_specs.items():
-                rgb = _find_obs_image(obs, cam_name, "color/image_raw", expected_ndim=3)
-                binary_mask = _find_obs_image(
-                    obs, cam_name, "mask/image_raw", expected_ndim=2
+            for cam_name in single_env._camera_specs:
+                rgb_batch = _find_obs_images(
+                    obs,
+                    cam_name,
+                    "color/image_raw",
+                    expected_ndim=3,
+                    batch_size=batch_size,
                 )
-                depth = _find_obs_image(
-                    obs, cam_name, "depth/image_raw", expected_ndim=2
+                binary_mask_batch = _find_obs_images(
+                    obs,
+                    cam_name,
+                    "mask/image_raw",
+                    expected_ndim=2,
+                    batch_size=batch_size,
                 )
-                if depth is None:
-                    depth = _find_obs_image(
+                depth_batch = _find_obs_images(
+                    obs,
+                    cam_name,
+                    "depth/image_raw",
+                    expected_ndim=2,
+                    batch_size=batch_size,
+                )
+                if depth_batch is None:
+                    depth_batch = _find_obs_images(
                         obs,
                         cam_name,
                         "aligned_depth_to_color/image_raw",
                         expected_ndim=2,
+                        batch_size=batch_size,
                     )
-                heat_map = _find_obs_image(
-                    obs, cam_name, "mask/heat_map", expected_ndim=3
+                heat_map_batch = _find_obs_images(
+                    obs,
+                    cam_name,
+                    "mask/heat_map",
+                    expected_ndim=3,
+                    batch_size=batch_size,
                 )
 
-                if rgb is None:
+                if rgb_batch is None:
                     print(f"[warn] No RGB image for camera '{cam_name}', skipping.")
                     continue
 
-                rgb = np.asarray(rgb, dtype=np.uint8)
-                has_mask = binary_mask is not None
-                if has_mask:
-                    binary_mask = np.asarray(binary_mask, dtype=np.uint8)
                 op_names = list(single_env.config.operations)
-                has_heat_map = heat_map is not None
-                if has_heat_map:
-                    heat_map = np.asarray(heat_map, dtype=np.uint8)
-                    heatmap_rgb = _make_heatmap_rgb(heat_map, op_names)
-                else:
-                    heatmap_rgb = None
-                overlay = _make_overlay(rgb, binary_mask) if has_mask else None
+                for env_index in range(batch_size):
+                    suffix = _env_suffix(batch_size, env_index)
+                    rgb = np.asarray(rgb_batch[env_index], dtype=np.uint8)
 
-                has_depth = depth is not None
-                if has_depth:
-                    depth = np.asarray(depth, dtype=np.float32)
+                    binary_mask = None
+                    if binary_mask_batch is not None:
+                        binary_mask = np.asarray(
+                            binary_mask_batch[env_index], dtype=np.uint8
+                        )
+                    has_mask = binary_mask is not None
 
-                if step_idx == 0:
-                    _save_rgb(out_dir / f"{cam_name}_rgb.png", rgb)
-                    if has_depth:
-                        _save_depth(out_dir / f"{cam_name}_depth.png", depth)
+                    heat_map = None
+                    if heat_map_batch is not None:
+                        heat_map = np.asarray(heat_map_batch[env_index], dtype=np.uint8)
+                    has_heat_map = heat_map is not None
+                    if has_heat_map:
+                        heatmap_rgb = _make_heatmap_rgb(heat_map, op_names)
                     else:
-                        print(
-                            f"[info] No depth observation for camera '{cam_name}', "
-                            "skipping depth export."
-                        )
-                    if has_mask:
-                        _save_mask(out_dir / f"{cam_name}_mask.png", binary_mask)
-                        _save_rgb(out_dir / f"{cam_name}_overlay.png", overlay)
-                    else:
-                        print(
-                            f"[info] No mask observation for camera '{cam_name}', "
-                            "skipping mask/overlay export."
-                        )
-                    if heatmap_rgb is not None:
-                        _save_heatmap_with_legend(
-                            out_dir / f"{cam_name}_heatmap.png",
-                            heatmap_rgb,
-                            op_names,
-                            heat_map,
-                        )
-                        if not np.any(heat_map):
-                            print(
-                                f"[info] Heat map for camera '{cam_name}' is all zeros "
-                                "on the saved frame."
+                        heatmap_rgb = None
+
+                    overlay = _make_overlay(rgb, binary_mask) if has_mask else None
+
+                    depth = None
+                    if depth_batch is not None:
+                        depth = np.asarray(depth_batch[env_index], dtype=np.float32)
+                    has_depth = depth is not None
+
+                    if step_idx == 0:
+                        _save_rgb(out_dir / f"{cam_name}_rgb{suffix}.png", rgb)
+                        if has_depth:
+                            _save_depth(
+                                out_dir / f"{cam_name}_depth{suffix}.png", depth
                             )
-                    else:
-                        print(
-                            f"[info] No heat map observation for camera '{cam_name}', "
-                            "skipping heatmap RGB export."
-                        )
-
-                    if (
-                        has_heat_map
-                        and heat_map.ndim == 3
-                        and heat_map.shape[-1] == len(op_names)
-                    ):
-                        for channel_idx, operation_name in enumerate(op_names):
-                            channel = heat_map[..., channel_idx]
-                            if np.any(channel):
-                                _save_mask(
-                                    out_dir / f"{cam_name}_heat_{operation_name}.png",
-                                    channel,
+                        else:
+                            print(
+                                f"[info] No depth observation for camera '{cam_name}' "
+                                f"(env {env_index}), skipping depth export."
+                            )
+                        if has_mask:
+                            _save_mask(
+                                out_dir / f"{cam_name}_mask{suffix}.png", binary_mask
+                            )
+                            _save_rgb(
+                                out_dir / f"{cam_name}_overlay{suffix}.png", overlay
+                            )
+                        else:
+                            print(
+                                f"[info] No mask observation for camera '{cam_name}' "
+                                f"(env {env_index}), skipping mask/overlay export."
+                            )
+                        if heatmap_rgb is not None:
+                            _save_heatmap_with_legend(
+                                out_dir / f"{cam_name}_heatmap{suffix}.png",
+                                heatmap_rgb,
+                                op_names,
+                                heat_map,
+                            )
+                            if not np.any(heat_map):
+                                print(
+                                    f"[info] Heat map for camera '{cam_name}' "
+                                    f"(env {env_index}) is all zeros on the saved frame."
                                 )
+                        else:
+                            print(
+                                f"[info] No heat map observation for camera '{cam_name}' "
+                                f"(env {env_index}), skipping heatmap RGB export."
+                            )
 
-                    print(
-                        f"Saved rendering outputs for camera '{cam_name}' to {out_dir}"
-                    )
+                        if (
+                            has_heat_map
+                            and heat_map.ndim == 3
+                            and heat_map.shape[-1] == len(op_names)
+                        ):
+                            for channel_idx, operation_name in enumerate(op_names):
+                                channel = heat_map[..., channel_idx]
+                                if np.any(channel):
+                                    _save_mask(
+                                        out_dir
+                                        / f"{cam_name}_heat_{operation_name}{suffix}.png",
+                                        channel,
+                                    )
 
-                    if show and has_mask:
-                        fig, axes = plt.subplots(1, 3, figsize=(12, 4), squeeze=False)
-                        axes[0, 0].imshow(rgb)
-                        axes[0, 0].set_title(f"{cam_name} RGB")
-                        axes[0, 0].axis("off")
-                        axes[0, 1].imshow(binary_mask, cmap="gray", vmin=0, vmax=1)
-                        axes[0, 1].set_title(f"{cam_name} Mask")
-                        axes[0, 1].axis("off")
-                        axes[0, 2].imshow(overlay)
-                        axes[0, 2].set_title(f"{cam_name} Overlay")
-                        axes[0, 2].axis("off")
-                        plt.tight_layout()
-                        plt.show()
-                        plt.close(fig)
-                    elif show:
-                        fig, ax = plt.subplots(1, 1, figsize=(4, 4), squeeze=False)
-                        ax[0, 0].imshow(rgb)
-                        ax[0, 0].set_title(f"{cam_name} RGB")
-                        ax[0, 0].axis("off")
-                        plt.tight_layout()
-                        plt.show()
-                        plt.close(fig)
+                        if batch_size == 1:
+                            print(
+                                f"Saved rendering outputs for camera '{cam_name}' to "
+                                f"{out_dir}"
+                            )
+                        else:
+                            print(
+                                f"Saved rendering outputs for camera '{cam_name}' "
+                                f"(env {env_index}) to {out_dir}"
+                            )
 
-                if rec_cfg.enabled:
-                    video_frames[cam_name].append(
-                        _select_video_frame(
-                            rec_cfg.video_stream,
-                            rgb=rgb,
-                            mask=binary_mask,
-                            overlay=overlay,
+                        if show and has_mask:
+                            fig, axes = plt.subplots(
+                                1, 3, figsize=(12, 4), squeeze=False
+                            )
+                            axes[0, 0].imshow(rgb)
+                            axes[0, 0].set_title(f"{cam_name}{suffix} RGB")
+                            axes[0, 0].axis("off")
+                            axes[0, 1].imshow(binary_mask, cmap="gray", vmin=0, vmax=1)
+                            axes[0, 1].set_title(f"{cam_name}{suffix} Mask")
+                            axes[0, 1].axis("off")
+                            axes[0, 2].imshow(overlay)
+                            axes[0, 2].set_title(f"{cam_name}{suffix} Overlay")
+                            axes[0, 2].axis("off")
+                            plt.tight_layout()
+                            plt.show()
+                            plt.close(fig)
+                        elif show:
+                            fig, ax = plt.subplots(1, 1, figsize=(4, 4), squeeze=False)
+                            ax[0, 0].imshow(rgb)
+                            ax[0, 0].set_title(f"{cam_name}{suffix} RGB")
+                            ax[0, 0].axis("off")
+                            plt.tight_layout()
+                            plt.show()
+                            plt.close(fig)
+
+                    if rec_cfg.enabled:
+                        video_frames[cam_name][env_index].append(
+                            _select_video_frame(
+                                rec_cfg.video_stream,
+                                rgb=rgb,
+                                mask=binary_mask,
+                                overlay=overlay,
+                            )
                         )
-                    )
 
             if not rec_cfg.enabled:
                 break
@@ -435,24 +507,40 @@ def main(cfg: DictConfig) -> None:
         runner.close()
 
     if rec_cfg.enabled:
-        for cam_name, frames in video_frames.items():
-            if not frames:
-                continue
-            if rec_cfg.save_mp4:
-                mp4_path = out_dir / f"{cam_name}_{rec_cfg.video_stream}.mp4"
-                iio.imwrite(
-                    mp4_path,
-                    frames,
-                    fps=rec_cfg.fps,
-                    codec="libx264",
-                    quality=8,
-                )
-                print(f"Saved MP4 for '{cam_name}': {mp4_path}")
-            if rec_cfg.save_gif:
-                gif_path = out_dir / f"{cam_name}_{rec_cfg.video_stream}.gif"
-                gif_fps = min(rec_cfg.fps, 15)
-                iio.imwrite(gif_path, frames, fps=gif_fps, loop=0)
-                print(f"Saved GIF for '{cam_name}': {gif_path}")
+        for cam_name, frames_by_env in video_frames.items():
+            for env_index, frames in enumerate(frames_by_env):
+                if not frames:
+                    continue
+                suffix = _env_suffix(batch_size, env_index)
+                if rec_cfg.save_mp4:
+                    mp4_path = (
+                        out_dir / f"{cam_name}_{rec_cfg.video_stream}{suffix}.mp4"
+                    )
+                    iio.imwrite(
+                        mp4_path,
+                        frames,
+                        fps=rec_cfg.fps,
+                        codec="libx264",
+                        quality=8,
+                    )
+                    if batch_size == 1:
+                        print(f"Saved MP4 for '{cam_name}': {mp4_path}")
+                    else:
+                        print(
+                            f"Saved MP4 for '{cam_name}' (env {env_index}): {mp4_path}"
+                        )
+                if rec_cfg.save_gif:
+                    gif_path = (
+                        out_dir / f"{cam_name}_{rec_cfg.video_stream}{suffix}.gif"
+                    )
+                    gif_fps = min(rec_cfg.fps, 15)
+                    iio.imwrite(gif_path, frames, fps=gif_fps, loop=0)
+                    if batch_size == 1:
+                        print(f"Saved GIF for '{cam_name}': {gif_path}")
+                    else:
+                        print(
+                            f"Saved GIF for '{cam_name}' (env {env_index}): {gif_path}"
+                        )
 
 
 if __name__ == "__main__":

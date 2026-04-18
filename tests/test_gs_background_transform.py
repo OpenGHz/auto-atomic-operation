@@ -1,3 +1,6 @@
+from types import SimpleNamespace
+from unittest.mock import Mock
+
 import numpy as np
 import pytest
 
@@ -5,10 +8,14 @@ from gaussian_renderer.core.gaussiandata import GaussianData
 from gaussian_renderer.core.util_gau import load_ply, save_ply
 
 from auto_atom.basis.mjc.gs_mujoco_env import (
+    BatchedGSUnifiedMujocoEnv,
     GaussianRenderConfig,
+    GSUnifiedMujocoEnv,
     _materialize_transformed_background_ply,
     _normalize_background_pose,
+    _sample_env_background_indices,
 )
+from auto_atom.basis.mjc.mujoco_env import BatchedUnifiedMujocoEnv, UnifiedMujocoEnv
 
 
 def _write_dummy_ply(path) -> None:
@@ -137,3 +144,109 @@ def test_materialize_identity_returns_original():
 def test_materialize_none_returns_none():
     pose = ((1.0, 2.0, 3.0), (0.0, 0.0, 0.0, 1.0))
     assert _materialize_transformed_background_ply(None, pose) is None
+
+
+def test_sample_env_background_indices_unique_when_backgrounds_cover_batch():
+    rng = np.random.default_rng(123)
+    indices = _sample_env_background_indices(
+        batch_size=3,
+        num_backgrounds=5,
+        rng=rng,
+    )
+
+    assert indices.shape == (3,)
+    assert len(np.unique(indices)) == 3
+    assert np.all(indices >= 0)
+    assert np.all(indices < 5)
+
+
+def test_sample_env_background_indices_uses_all_backgrounds_when_counts_match():
+    rng = np.random.default_rng(123)
+    indices = _sample_env_background_indices(
+        batch_size=4,
+        num_backgrounds=4,
+        rng=rng,
+    )
+
+    assert indices.shape == (4,)
+    np.testing.assert_array_equal(np.sort(indices), np.arange(4, dtype=np.int64))
+
+
+def test_sample_env_background_indices_allows_duplicates_when_backgrounds_insufficient():
+    rng = np.random.default_rng(123)
+    indices = _sample_env_background_indices(
+        batch_size=5,
+        num_backgrounds=2,
+        rng=rng,
+    )
+
+    assert indices.shape == (5,)
+    assert np.all(indices >= 0)
+    assert np.all(indices < 2)
+    assert len(np.unique(indices)) <= 2
+
+
+def test_single_gs_reset_reassigns_multi_backgrounds_when_enabled(monkeypatch):
+    monkeypatch.setattr(UnifiedMujocoEnv, "reset", lambda self: None)
+    env = object.__new__(GSUnifiedMujocoEnv)
+    env._is_multi_bg = True
+    env.config = SimpleNamespace(
+        gaussian_render=GaussianRenderConfig(randomize_background_on_reset=True)
+    )
+    env._randomize_active_bg = Mock()
+
+    GSUnifiedMujocoEnv.reset(env)
+
+    env._randomize_active_bg.assert_called_once_with()
+
+
+def test_single_gs_reset_keeps_multi_background_when_disabled(monkeypatch):
+    monkeypatch.setattr(UnifiedMujocoEnv, "reset", lambda self: None)
+    env = object.__new__(GSUnifiedMujocoEnv)
+    env._is_multi_bg = True
+    env.config = SimpleNamespace(
+        gaussian_render=GaussianRenderConfig(randomize_background_on_reset=False)
+    )
+    env._randomize_active_bg = Mock()
+
+    GSUnifiedMujocoEnv.reset(env)
+
+    env._randomize_active_bg.assert_not_called()
+
+
+def test_batched_gs_reset_reassigns_multi_backgrounds_when_enabled(monkeypatch):
+    monkeypatch.setattr(
+        BatchedUnifiedMujocoEnv,
+        "reset",
+        lambda self, env_mask=None: None,
+    )
+    env = object.__new__(BatchedGSUnifiedMujocoEnv)
+    env._is_multi_bg = True
+    env.config = SimpleNamespace(
+        gaussian_render=GaussianRenderConfig(randomize_background_on_reset=True)
+    )
+    env._randomize_env_bg_assignment = Mock()
+    env_mask = np.array([True, False])
+
+    BatchedGSUnifiedMujocoEnv.reset(env, env_mask)
+
+    env._randomize_env_bg_assignment.assert_called_once_with()
+
+
+def test_batched_gs_reset_keeps_multi_backgrounds_when_disabled(monkeypatch):
+    monkeypatch.setattr(
+        BatchedUnifiedMujocoEnv,
+        "reset",
+        lambda self, env_mask=None: None,
+    )
+    env = object.__new__(BatchedGSUnifiedMujocoEnv)
+    env._is_multi_bg = True
+    env.config = SimpleNamespace(
+        gaussian_render=GaussianRenderConfig(randomize_background_on_reset=False)
+    )
+    env._randomize_env_bg_assignment = Mock()
+    env_mask = np.array([True, False])
+
+    BatchedGSUnifiedMujocoEnv.reset(env, env_mask)
+
+    env._randomize_env_bg_assignment.assert_not_called()

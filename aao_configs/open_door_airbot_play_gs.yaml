@@ -4,7 +4,8 @@ defaults:
   - _self_
 
 door_name: door0
-bg3dgs_name: bg0
+bg3dgs_name: null
+bg3dgs_dir: ${assets_dir}/gs/backgrounds/door_bg/
 
 env:
   _target_: auto_atom.basis.mjc.gs_mujoco_env.BatchedGSUnifiedMujocoEnv
@@ -13,13 +14,28 @@ env:
       door_body: ${gs_dir}/${door_name}.ply
       handle_gs_frame: ${gs_dir}/${door_name}_knob.ply
       # bg_gs_frame: ${assets_dir}/gs/backgrounds/door_bg/${bg3dgs_name}.ply
-    background_ply: ${assets_dir}/gs/backgrounds/door_bg/${bg3dgs_name}.ply
+    background_ply:
+      - ${bg3dgs_dir}/bg0.ply
+      - ${bg3dgs_dir}/bg1.ply
+      - ${bg3dgs_dir}/bg2.ply
+      - ${bg3dgs_dir}/bg3.ply
+      - ${bg3dgs_dir}/bg4.ply
+      - ${bg3dgs_dir}/bg5.ply
+      - ${bg3dgs_dir}/bg6.ply
     # Original bg_gs_frame body pose from demo_gs_airbot_play.xml (wxyz→xyzw):
     # pos=[-0.105, 0.491151190, -0.136037800]
     # quat(wxyz)=[0.509794620, -0.516845570, 0.495912190, -0.476498890]
     # (7-float form: [x, y, z, qx, qy, qz, qw])
-    background_transform: [-0.105, 0.491151190, -0.136037800, -0.516845570, 0.495912190, -0.476498890, 0.509794620]
-    #
+    background_transform:
+      [
+        -0.105,
+        0.491151190,
+        -0.1360378,
+        -0.51684557,
+        0.495912190,
+        -0.47649889,
+        0.509794620,
+      ]
     # Flip the background 180° about the door's central vertical axis
     # (world z through the door-panel geometric centre at x=1.54, y=0.55)
     # so the "indoor" room ends up on the other side of the door —

@@ -112,6 +112,26 @@ def _is_identity_pose(pose: BackgroundPose) -> bool:
     return np.allclose(pos, 0.0) and np.allclose(quat, _IDENTITY_QUAT)
 
 
+def _sample_env_background_indices(
+    batch_size: int,
+    num_backgrounds: int,
+    rng: np.random.Generator,
+) -> np.ndarray:
+    """Assign one background index per env.
+
+    When enough backgrounds are available, sample without replacement so each
+    environment receives a distinct background. Otherwise fall back to sampling
+    with replacement because duplicates are unavoidable.
+    """
+    if batch_size <= 0:
+        return np.zeros(0, dtype=np.int64)
+    if num_backgrounds <= 0:
+        return np.zeros(batch_size, dtype=np.int64)
+    if batch_size <= num_backgrounds:
+        return np.asarray(rng.permutation(num_backgrounds)[:batch_size], dtype=np.int64)
+    return rng.integers(0, num_backgrounds, size=batch_size, dtype=np.int64)
+
+
 def _resolve_background_transform(
     background_ply: str | None,
     background_transform: Any | None,
@@ -513,12 +533,22 @@ class GaussianRenderConfig(BaseModel):
 
     body_gaussians: Dict[str, str] = Field(default_factory=dict)
     """Mapping from MuJoCo body name to PLY file path."""
-    background_ply: str | None = None
-    """Optional background PLY (loaded under the reserved key ``'background'``)."""
+    background_ply: str | list[str] | None = None
+    """Optional background PLY, or a list of PLYs.
+    When a list is given, GS envs randomly assign one background initially and
+    optionally reassign backgrounds on each ``reset``."""
+    randomize_background_on_reset: bool = False
+    """Whether to reassign list-valued backgrounds on every ``reset``.
+    When ``False``, multi-background envs keep the initial random assignment
+    across resets."""
     background_transform: list | tuple | None = None
-    """Explicit pose transform for the background PLY.
+    """Default pose transform for the background PLY.
     Length 3 → ``[x, y, z]`` (pure translation).
-    Length 7 → ``[x, y, z, qx, qy, qz, qw]`` (full rigid-body transform)."""
+    Length 7 → ``[x, y, z, qx, qy, qz, qw]`` (full rigid-body transform).
+    When ``background_ply`` is a list, this transform is applied to *every*
+    entry (useful when all backgrounds share a common capture frame);
+    individual entries can still be overridden via ``background_transforms``
+    keyed by path/name/stem."""
     background_transforms: Dict[str, list] = Field(default_factory=dict)
     """Per-background pose transforms keyed by full path, file name, or stem.
     Values: ``[x, y, z]`` or ``[x, y, z, qx, qy, qz, qw]``."""
@@ -530,6 +560,10 @@ class GaussianRenderConfig(BaseModel):
     """Per-body reflections applied to ``body_gaussians`` PLYs at load time.
     Keys must match entries in ``body_gaussians``. Mirrored PLYs are cached
     under ``.cache/gs_body_mirrors/`` keyed by (path, axis, center)."""
+    minibatch: int = 512
+    """Gaussian splat renderer minibatch size. Controls how many gaussians are
+    processed per kernel launch; larger values use more VRAM. Passed through to
+    every ``BatchSplatConfig`` built by the GS env classes."""
 
     def resolved_body_gaussians(self) -> Dict[str, str]:
         """Return ``body_gaussians`` with any configured transforms / mirrors
@@ -634,7 +668,29 @@ class GaussianRenderConfig(BaseModel):
             )
         return resolved
 
+    def _background_ply_list(self) -> list[str]:
+        """Return ``background_ply`` as a list (empty when unset)."""
+        if self.background_ply is None:
+            return []
+        if isinstance(self.background_ply, str):
+            return [self.background_ply]
+        return list(self.background_ply)
+
+    def is_multi_background(self) -> bool:
+        return isinstance(self.background_ply, (list, tuple))
+
     def resolved_background_transform(self) -> BackgroundPose:
+        """Resolve the singular pose transform for a single-path background.
+
+        For list-valued ``background_ply``, use ``resolved_background_plys``
+        which applies the singular ``background_transform`` as the default for
+        every entry plus any per-entry overrides from ``background_transforms``.
+        """
+        if self.is_multi_background():
+            # Callers for list backgrounds should go through
+            # ``resolved_background_plys``. Return identity here so the outer
+            # "store pose" step in the single-bg flow is a no-op.
+            return (0.0, 0.0, 0.0), _IDENTITY_QUAT
         return _resolve_background_transform(
             self.background_ply,
             self.background_transform,
@@ -642,10 +698,57 @@ class GaussianRenderConfig(BaseModel):
         )
 
     def resolved_background_ply(self) -> str | None:
+        """Return a materialized single background path.
+
+        Raises when ``background_ply`` is a list; callers should use
+        ``resolved_background_plys`` in that case.
+        """
+        if self.is_multi_background():
+            raise ValueError(
+                "background_ply is a list; call resolved_background_plys() instead."
+            )
         return _materialize_transformed_background_ply(
             self.background_ply,
             self.resolved_background_transform(),
         )
+
+    def resolved_background_plys(self) -> list[str]:
+        """Return materialized bg paths for each entry in ``background_ply``.
+
+        Pose resolution per entry (in order of precedence):
+
+        1. ``background_transforms`` entry keyed by full path / file name /
+           stem (per-entry override).
+        2. The singular ``background_transform`` when set (applied as the
+           default to every entry — e.g. a shared world pose for a pool of
+           backgrounds captured in the same frame).
+        3. Identity.
+        """
+        default_pose: BackgroundPose | None = None
+        if self.background_transform is not None:
+            default_pose = _normalize_background_pose(self.background_transform)
+
+        out: list[str] = []
+        for bg_ply in self._background_ply_list():
+            bg_path = Path(bg_ply)
+            pose: BackgroundPose | None = None
+            for key in (bg_ply, str(bg_path), bg_path.name, bg_path.stem):
+                if key in self.background_transforms:
+                    pose = _normalize_background_pose(self.background_transforms[key])
+                    break
+            if pose is None:
+                pose = (
+                    default_pose
+                    if default_pose is not None
+                    else (
+                        (0.0, 0.0, 0.0),
+                        _IDENTITY_QUAT,
+                    )
+                )
+            materialized = _materialize_transformed_background_ply(bg_ply, pose)
+            if materialized is not None:
+                out.append(materialized)
+        return out
 
 
 class GSEnvConfig(EnvConfig):
@@ -736,53 +839,113 @@ class GSUnifiedMujocoEnv(UnifiedMujocoEnv):
         self.config: GSEnvConfig
         gs_cfg = config.gaussian_render
         self._gs_background_source_ply = gs_cfg.background_ply
+        self._is_multi_bg = gs_cfg.is_multi_background()
         self._gs_body_gaussians = gs_cfg.resolved_body_gaussians()
         self._gs_renderer: GSRendererMuJoCo | None = None
         fg_cfg = BatchSplatConfig(
             body_gaussians=dict(self._gs_body_gaussians),
             background_ply=None,
-            minibatch=512,
+            minibatch=self.config.gaussian_render.minibatch,
         )
         self._fg_gs_renderer = MjxBatchSplatRenderer(fg_cfg, self.model)
         self._bg_gs_renderer: MjxBatchSplatRenderer | None = None
-        self.set_background_transform(gs_cfg.resolved_background_transform())
-        background_ply = gs_cfg.resolved_background_ply()
-        if background_ply:
+
+        # Multi-background state: parallel lists of per-bg renderers, plus the
+        # index of the currently active bg. ``_gs_renderer`` / ``_bg_gs_renderer``
+        # are re-pointed into these lists on reset.
+        self._gs_renderers_list: list[GSRendererMuJoCo] = []
+        self._bg_gs_renderers_list: list[MjxBatchSplatRenderer | None] = []
+        self._bg_source_plys: list[str] = []
+        self._active_bg_idx: int = 0
+        self._bg_rng = np.random.default_rng()
+
+        if self._is_multi_bg:
+            self._bg_source_plys = gs_cfg.resolved_background_plys()
+            for bg_ply in self._bg_source_plys:
+                self._gs_renderers_list.append(self._make_combined_gs_renderer(bg_ply))
+                self._bg_gs_renderers_list.append(self._make_bg_renderer(bg_ply))
+            self._randomize_active_bg()
+            reset_mode = (
+                "random pick per reset"
+                if gs_cfg.randomize_background_on_reset
+                else "fixed after initial pick"
+            )
             self.get_logger().debug(
-                f"GS renderer initialised with {len(self._gs_body_gaussians)} body gaussian(s) + background"
+                f"GS renderer initialised with {len(self._gs_body_gaussians)} "
+                f"body gaussian(s) + {len(self._bg_source_plys)} backgrounds "
+                f"({reset_mode})"
             )
         else:
-            self.get_logger().debug(
-                f"GS renderer initialised with {len(self._gs_body_gaussians)} body gaussian(s)"
-            )
+            self.set_background_transform(gs_cfg.resolved_background_transform())
+            background_ply = gs_cfg.resolved_background_ply()
+            if background_ply:
+                self.get_logger().debug(
+                    f"GS renderer initialised with {len(self._gs_body_gaussians)} body gaussian(s) + background"
+                )
+            else:
+                self.get_logger().debug(
+                    f"GS renderer initialised with {len(self._gs_body_gaussians)} body gaussian(s)"
+                )
         self._gs_mask_renderers = self._build_gs_mask_renderers(
             dict(self._gs_body_gaussians)
         )
 
+    def _make_combined_gs_renderer(
+        self, background_ply: str | None
+    ) -> GSRendererMuJoCo:
+        combined = dict(self._gs_body_gaussians)
+        if background_ply:
+            combined["background"] = background_ply
+        return GSRendererMuJoCo(combined, self.model)
+
+    def _make_bg_renderer(
+        self, background_ply: str | None
+    ) -> MjxBatchSplatRenderer | None:
+        if not background_ply:
+            return None
+        return MjxBatchSplatRenderer(
+            BatchSplatConfig(
+                body_gaussians={},
+                background_ply=background_ply,
+                minibatch=self.config.gaussian_render.minibatch,
+            ),
+            self.model,
+        )
+
+    def _randomize_active_bg(self) -> int:
+        if not self._gs_renderers_list:
+            return self._active_bg_idx
+        self._active_bg_idx = int(
+            self._bg_rng.integers(0, len(self._gs_renderers_list))
+        )
+        self._gs_renderer = self._gs_renderers_list[self._active_bg_idx]
+        self._bg_gs_renderer = self._bg_gs_renderers_list[self._active_bg_idx]
+        return self._active_bg_idx
+
+    def reset(self) -> None:
+        super().reset()
+        if (
+            self._is_multi_bg
+            and self.config.gaussian_render.randomize_background_on_reset
+        ):
+            self._randomize_active_bg()
+
     def set_background_transform(
         self, pose: BackgroundPose | list[float]
     ) -> BackgroundPose:
+        if self._is_multi_bg:
+            raise ValueError(
+                "set_background_transform is not supported when background_ply "
+                "is a list; use background_transforms in the config to set "
+                "per-background poses."
+            )
         pose = _normalize_background_pose(pose)
         background_ply = _materialize_transformed_background_ply(
             self._gs_background_source_ply,
             pose,
         )
-        combined_models = dict(self._gs_body_gaussians)
-        if background_ply:
-            combined_models["background"] = background_ply
-        self._gs_renderer = GSRendererMuJoCo(combined_models, self.model)
-        self._bg_gs_renderer = (
-            MjxBatchSplatRenderer(
-                BatchSplatConfig(
-                    body_gaussians={},
-                    background_ply=background_ply,
-                    minibatch=512,
-                ),
-                self.model,
-            )
-            if background_ply
-            else None
-        )
+        self._gs_renderer = self._make_combined_gs_renderer(background_ply)
+        self._bg_gs_renderer = self._make_bg_renderer(background_ply)
         object.__setattr__(self.config.gaussian_render, "background_transform", pose)
         return pose
 
@@ -1021,7 +1184,7 @@ class GSUnifiedMujocoEnv(UnifiedMujocoEnv):
             mask_cfg = BatchSplatConfig(
                 body_gaussians={body_name: body_gaussians[body_name]},
                 background_ply=None,
-                minibatch=512,
+                minibatch=self.config.gaussian_render.minibatch,
             )
             renderers[object_name] = MjxBatchSplatRenderer(mask_cfg, self.model)
         return renderers
@@ -1119,6 +1282,8 @@ class GSUnifiedMujocoEnv(UnifiedMujocoEnv):
         self._gs_renderer = None
         self._fg_gs_renderer = None
         self._bg_gs_renderer = None
+        self._gs_renderers_list = []
+        self._bg_gs_renderers_list = []
         self._gs_mask_renderers = {}
         super().close()
 
@@ -1143,7 +1308,8 @@ class BatchedGSUnifiedMujocoEnv(BatchedUnifiedMujocoEnv):
         super().__init__(config, **kwargs)
 
         gs_cfg = config.gaussian_render
-        self._gs_background_source_ply = gs_cfg.background_ply
+        self._gs_background_source = gs_cfg.background_ply
+        self._is_multi_bg = gs_cfg.is_multi_background()
         self._gs_body_gaussians = gs_cfg.resolved_body_gaussians()
 
         # Single shared foreground renderer
@@ -1151,13 +1317,17 @@ class BatchedGSUnifiedMujocoEnv(BatchedUnifiedMujocoEnv):
             BatchSplatConfig(
                 body_gaussians=dict(self._gs_body_gaussians),
                 background_ply=None,
-                minibatch=512,
+                minibatch=self.config.gaussian_render.minibatch,
             ),
             self.envs[0].model,
         )
 
-        # Single shared background renderer (optional)
-        self._bg_gs_renderer: MjxBatchSplatRenderer | None = None
+        # List of background renderers, one per unique PLY. Empty when no bg.
+        self._bg_gs_renderers: list[MjxBatchSplatRenderer] = []
+        self._bg_source_plys: list[str] = []
+        # Per-env mapping env_idx -> index into ``_bg_gs_renderers``.
+        self._env_bg_idx: np.ndarray = np.zeros(self.batch_size, dtype=np.int64)
+        self._bg_rng = np.random.default_rng()
 
         # Per-object mask renderers (shared) — build via env[0] which has
         # .model, .get_logger(), and .config.mask_objects needed by the builder.
@@ -1174,35 +1344,85 @@ class BatchedGSUnifiedMujocoEnv(BatchedUnifiedMujocoEnv):
             tuple[tuple[int, ...], int, int], tuple[torch.Tensor, torch.Tensor]
         ] = {}
 
-        self.set_background_transform(gs_cfg.resolved_background_transform())
-        background_ply = gs_cfg.resolved_background_ply()
+        if self._is_multi_bg:
+            self._bg_source_plys = gs_cfg.resolved_background_plys()
+            self._bg_gs_renderers = [
+                self._make_bg_renderer(p) for p in self._bg_source_plys
+            ]
+            self._randomize_env_bg_assignment()
+            reset_mode = (
+                "unique per env when available, randomized on reset"
+                if gs_cfg.randomize_background_on_reset
+                else "unique per env when available, fixed after initial assignment"
+            )
+            bg_str = f" + {len(self._bg_source_plys)} backgrounds ({reset_mode})"
+        else:
+            self.set_background_transform(gs_cfg.resolved_background_transform())
+            background_ply = gs_cfg.resolved_background_ply()
+            bg_str = " + background" if background_ply else ""
 
         n_bodies = len(self._gs_body_gaussians)
-        bg_str = " + background" if background_ply else ""
         self.envs[0].get_logger().debug(
             f"Batched GS renderer initialised with {n_bodies} body gaussian(s){bg_str}"
         )
 
+    # ------------------------------------------------------------------
+    # background lifecycle
+    # ------------------------------------------------------------------
+
+    def _make_bg_renderer(self, background_ply: str) -> MjxBatchSplatRenderer:
+        return MjxBatchSplatRenderer(
+            BatchSplatConfig(
+                body_gaussians={},
+                background_ply=background_ply,
+                minibatch=self.config.gaussian_render.minibatch,
+            ),
+            self.envs[0].model,
+        )
+
+    def _randomize_env_bg_assignment(self) -> np.ndarray:
+        """Randomly pick one bg per environment.
+
+        When the configured background count covers the whole batch, sampling is
+        done without replacement so every env gets a distinct background. Cache
+        is cleared because cached bg tensors are keyed by the prior env→bg
+        mapping.
+        """
+        self._env_bg_idx = _sample_env_background_indices(
+            batch_size=self.batch_size,
+            num_backgrounds=len(self._bg_gs_renderers),
+            rng=self._bg_rng,
+        )
+        self._bg_cache.clear()
+        return self._env_bg_idx
+
+    def reset(self, env_mask: np.ndarray | None = None) -> None:
+        super().reset(env_mask)
+        if (
+            self._is_multi_bg
+            and self.config.gaussian_render.randomize_background_on_reset
+        ):
+            self._randomize_env_bg_assignment()
+
     def set_background_transform(
         self, pose: BackgroundPose | list[float]
     ) -> BackgroundPose:
+        if self._is_multi_bg:
+            raise ValueError(
+                "set_background_transform is not supported when background_ply "
+                "is a list; use background_transforms in the config to set "
+                "per-background poses."
+            )
         pose = _normalize_background_pose(pose)
         background_ply = _materialize_transformed_background_ply(
-            self._gs_background_source_ply,
+            self._gs_background_source,
             pose,
         )
-        self._bg_gs_renderer = (
-            MjxBatchSplatRenderer(
-                BatchSplatConfig(
-                    body_gaussians={},
-                    background_ply=background_ply,
-                    minibatch=512,
-                ),
-                self.envs[0].model,
-            )
-            if background_ply
-            else None
+        self._bg_source_plys = [background_ply] if background_ply else []
+        self._bg_gs_renderers = (
+            [self._make_bg_renderer(background_ply)] if background_ply else []
         )
+        self._env_bg_idx = np.zeros(self.batch_size, dtype=np.int64)
         self._bg_cache.clear()
         object.__setattr__(self.config.gaussian_render, "background_transform", pose)
         return pose
@@ -1465,7 +1685,7 @@ class BatchedGSUnifiedMujocoEnv(BatchedUnifiedMujocoEnv):
             mask_cfg = BatchSplatConfig(
                 body_gaussians={body_name: body_gaussians[body_name]},
                 background_ply=None,
-                minibatch=512,
+                minibatch=self.config.gaussian_render.minibatch,
             )
             renderers[object_name] = MjxBatchSplatRenderer(mask_cfg, env0.model)
         return renderers
@@ -1492,19 +1712,78 @@ class BatchedGSUnifiedMujocoEnv(BatchedUnifiedMujocoEnv):
         Returns ``(bg_rgb, bg_depth)`` each of shape
         ``(Nenv, Ncam, H, W, C)`` or ``None`` when no background renderer is
         configured.
+
+        When multiple background renderers are configured, each unique
+        renderer is invoked only on the subset of envs that use it and the
+        per-env results are scattered back into the full ``(Nenv, …)`` tensor.
         """
-        if self._bg_gs_renderer is None:
+        if not self._bg_gs_renderers:
             return None
         cache_key = (tuple(cam_ids), width, height)
         if use_cache and cache_key in self._bg_cache:
             return self._bg_cache[cache_key]
-        bg_gsb = self._bg_gs_renderer.batch_update_gaussians(body_pos, body_quat)
-        bg_rgb, bg_depth = self._bg_gs_renderer.batch_env_render(
-            bg_gsb, cam_pos, cam_xmat, height, width, fovy
-        )
+
+        if len(self._bg_gs_renderers) == 1:
+            bg_rend = self._bg_gs_renderers[0]
+            bg_gsb = bg_rend.batch_update_gaussians(body_pos, body_quat)
+            bg_rgb, bg_depth = bg_rend.batch_env_render(
+                bg_gsb, cam_pos, cam_xmat, height, width, fovy
+            )
+        else:
+            bg_rgb, bg_depth = self._render_per_env_backgrounds(
+                cam_pos, cam_xmat, fovy, height, width, body_pos, body_quat
+            )
+
         if use_cache:
             self._bg_cache[cache_key] = (bg_rgb, bg_depth)
         return (bg_rgb, bg_depth)
+
+    def _render_per_env_backgrounds(
+        self,
+        cam_pos: np.ndarray,
+        cam_xmat: np.ndarray,
+        fovy: np.ndarray,
+        height: int,
+        width: int,
+        body_pos: np.ndarray,
+        body_quat: np.ndarray,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Render each unique background on its subset of envs and scatter
+        the results back into a full ``(Nenv, Ncam, …)`` tensor.
+        """
+        Nenv = self.batch_size
+        bg_rgb_full: torch.Tensor | None = None
+        bg_depth_full: torch.Tensor | None = None
+        unique_bg_idxs = np.unique(self._env_bg_idx)
+        for bg_idx in unique_bg_idxs:
+            env_mask = self._env_bg_idx == bg_idx
+            env_sel = np.nonzero(env_mask)[0]
+            bg_rend = self._bg_gs_renderers[int(bg_idx)]
+            sub_body_pos = body_pos[env_sel]
+            sub_body_quat = body_quat[env_sel]
+            sub_cam_pos = cam_pos[env_sel]
+            sub_cam_xmat = cam_xmat[env_sel]
+            sub_fovy = fovy[env_sel]
+            gsb = bg_rend.batch_update_gaussians(sub_body_pos, sub_body_quat)
+            sub_rgb, sub_depth = bg_rend.batch_env_render(
+                gsb, sub_cam_pos, sub_cam_xmat, height, width, sub_fovy
+            )
+            if bg_rgb_full is None:
+                shape_rgb = (Nenv,) + tuple(sub_rgb.shape[1:])
+                shape_depth = (Nenv,) + tuple(sub_depth.shape[1:])
+                bg_rgb_full = torch.empty(
+                    shape_rgb, dtype=sub_rgb.dtype, device=sub_rgb.device
+                )
+                bg_depth_full = torch.empty(
+                    shape_depth, dtype=sub_depth.dtype, device=sub_depth.device
+                )
+            env_idx_t = torch.as_tensor(
+                env_sel, dtype=torch.long, device=bg_rgb_full.device
+            )
+            bg_rgb_full.index_copy_(0, env_idx_t, sub_rgb)
+            bg_depth_full.index_copy_(0, env_idx_t, sub_depth)
+        assert bg_rgb_full is not None and bg_depth_full is not None
+        return bg_rgb_full, bg_depth_full
 
     def _render_batched_multicam(
         self,
@@ -1671,7 +1950,7 @@ class BatchedGSUnifiedMujocoEnv(BatchedUnifiedMujocoEnv):
 
     def close(self) -> None:
         self._fg_gs_renderer = None
-        self._bg_gs_renderer = None
+        self._bg_gs_renderers = []
         self._gs_mask_renderers = {}
         self._bg_cache.clear()
         super().close()
