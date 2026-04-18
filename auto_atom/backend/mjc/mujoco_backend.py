@@ -888,9 +888,7 @@ class MujocoTaskBackend(SceneBackend):
                 pos = np.array(cfg.position[:3], dtype=np.float64)
             if cfg.orientation is not None:
                 if len(cfg.orientation) == 3:
-                    ori = euler_to_quaternion(
-                        (cfg.orientation[2], cfg.orientation[1], cfg.orientation[0])
-                    )
+                    ori = euler_to_quaternion(tuple(cfg.orientation))
                 elif len(cfg.orientation) == 4:
                     ori = np.array(cfg.orientation, dtype=np.float64)
                 else:
@@ -928,9 +926,7 @@ class MujocoTaskBackend(SceneBackend):
                 )
             if cfg.orientation is not None:
                 if len(cfg.orientation) == 3:
-                    q = euler_to_quaternion(
-                        (cfg.orientation[2], cfg.orientation[1], cfg.orientation[0])
-                    )
+                    q = euler_to_quaternion(tuple(cfg.orientation))
                 elif len(cfg.orientation) == 4:
                     q = np.array(cfg.orientation, dtype=np.float64)
                 else:

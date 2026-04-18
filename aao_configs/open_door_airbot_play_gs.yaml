@@ -14,11 +14,11 @@ env:
       handle_gs_frame: ${gs_dir}/${door_name}_knob.ply
       # bg_gs_frame: ${assets_dir}/gs/backgrounds/door_bg/${bg3dgs_name}.ply
     background_ply: ${assets_dir}/gs/backgrounds/door_bg/${bg3dgs_name}.ply
-    # # Original bg_gs_frame body pose from demo_gs_airbot_play.xml (wxyz→xyzw):
-    # # pos=[-0.105, 0.491151190, -0.136037800]
-    # # quat(wxyz)=[0.509794620, -0.516845570, 0.495912190, -0.476498890]
-    # # (7-float form: [x, y, z, qx, qy, qz, qw])
-    # # background_transform: [-0.105, 0.491151190, -0.136037800, -0.516845570, 0.495912190, -0.476498890, 0.509794620]
+    # Original bg_gs_frame body pose from demo_gs_airbot_play.xml (wxyz→xyzw):
+    # pos=[-0.105, 0.491151190, -0.136037800]
+    # quat(wxyz)=[0.509794620, -0.516845570, 0.495912190, -0.476498890]
+    # (7-float form: [x, y, z, qx, qy, qz, qw])
+    background_transform: [-0.105, 0.491151190, -0.136037800, -0.516845570, 0.495912190, -0.476498890, 0.509794620]
     #
     # Flip the background 180° about the door's central vertical axis
     # (world z through the door-panel geometric centre at x=1.54, y=0.55)
@@ -26,4 +26,4 @@ env:
     # looking from the robot's side the scene now reads as outdoor.
     #   position: point-symmetric in (x, y) about (1.54, 0.55), z unchanged
     #   orientation: left-multiplied by q_180z (xyzw=[0,0,1,0])
-    background_transform: [3.185, 0.608849, -0.136038, -0.495912, -0.516846, 0.509795, 0.476499]
+    # background_transform: [3.185, 0.608849, -0.136038, -0.495912, -0.516846, 0.509795, 0.476499]
