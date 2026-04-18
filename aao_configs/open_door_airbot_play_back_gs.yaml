@@ -4,17 +4,17 @@ defaults:
   - _self_
 
 
-env:
-  gaussian_render:
-    # Mirror the door + knob PLYs along the door-width axis (body +X in the
-    # shared door_gs_frame / handle_gs_frame quat). Reuses the geometry the
-    # standalone third_party/mirror_door_plys.py script applies.
-    # share_center_with keeps door and knob aligned post-reflection.
-    body_mirrors:
-      door_body:
-        body_quat: [0.023543636, -0.014802135, 0.716127885, -0.697414831]
-        body_axis: [1, 0, 0]
-      handle_gs_frame:
-        body_quat: [0.023543636, -0.014802135, 0.716127885, -0.697414831]
-        body_axis: [1, 0, 0]
-        share_center_with: door_body
+# env:
+#   gaussian_render:
+#     # Mirror the door + knob PLYs along the door-width axis (body +X in the
+#     # shared door_gs_frame / handle_gs_frame quat). Reuses the geometry the
+#     # standalone third_party/mirror_door_plys.py script applies.
+#     # share_center_with keeps door and knob aligned post-reflection.
+#     body_mirrors:
+#       door_body:
+#         body_quat: [0.023543636, -0.014802135, 0.716127885, -0.697414831]
+#         body_axis: [1, 0, 0]
+#       handle_gs_frame:
+#         body_quat: [0.023543636, -0.014802135, 0.716127885, -0.697414831]
+#         body_axis: [1, 0, 0]
+#         share_center_with: door_body
