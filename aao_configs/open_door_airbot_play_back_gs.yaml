@@ -1,8 +1,7 @@
 defaults:
   - open_door_airbot_play_gs
-  - open_door_airbot_play_back
+  - open_door_airbot_play_back_mixin
   - _self_
-
 
 # env:
 #   gaussian_render:

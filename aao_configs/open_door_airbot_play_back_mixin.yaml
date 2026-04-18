@@ -17,9 +17,6 @@
 # orientation; mirroring around the door (world x≈1.54) gives
 # (2.030, 0.300, -0.480) with quat xyzw=(0,0,1,0). Tune if the arm
 # cannot reach the handle from this position.
-defaults:
-  - open_door_airbot_play
-  - _self_
 
 door_side: back
 
