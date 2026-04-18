@@ -1,0 +1,20 @@
+# @package _global_
+
+cam_width: 320
+cam_height: 240
+enable_color: true
+enable_depth: false
+enable_mask: false
+enable_heat_map: false
+
+env:
+  batch_size: 1
+  cameras:
+    - name: env2_cam
+      width: ${cam_width}
+      height: ${cam_height}
+      enable_color: ${enable_color}
+      enable_depth: ${enable_depth}
+      enable_mask: ${enable_mask}
+      enable_heat_map: ${enable_heat_map}
+      is_static: true
