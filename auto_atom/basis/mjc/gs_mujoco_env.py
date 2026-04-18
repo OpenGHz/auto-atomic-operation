@@ -188,6 +188,53 @@ class BodyMirrorSpec(BaseModel):
         return a / n
 
 
+class BodyTransformSpec(BaseModel):
+    """Rigid transform baked into a per-body Gaussian PLY at load time."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    position: list | None = None
+    """Translation [x, y, z] applied in the PLY's local GS coords."""
+    orientation: list | None = None
+    """Quaternion [x, y, z, w] or Euler [roll, pitch, yaw] in radians."""
+    center: list | None = None
+    """Optional pivot point [x, y, z] in the PLY's local GS coords."""
+    share_center_with: str | None = None
+    """Reuse another body's centroid as the pivot point."""
+
+    def resolved_pose(self) -> BackgroundPose:
+        pos = (0.0, 0.0, 0.0)
+        quat = _IDENTITY_QUAT
+        if self.position is not None:
+            arr = np.asarray(self.position, dtype=np.float64).ravel()
+            if arr.shape != (3,):
+                raise ValueError(
+                    f"BodyTransformSpec.position must be length 3, got {arr.shape}"
+                )
+            pos = tuple(float(v) for v in arr)
+        if self.orientation is not None:
+            arr = np.asarray(self.orientation, dtype=np.float64).ravel()
+            if arr.shape == (3,):
+                from scipy.spatial.transform import Rotation
+
+                quat = tuple(
+                    float(v) for v in Rotation.from_euler("xyz", arr).as_quat()
+                )
+            elif arr.shape == (4,):
+                norm = float(np.linalg.norm(arr))
+                quat = (
+                    _IDENTITY_QUAT
+                    if norm < 1e-12
+                    else tuple(float(v) for v in (arr / norm))
+                )
+            else:
+                raise ValueError(
+                    "BodyTransformSpec.orientation must be length 3 (Euler) "
+                    f"or 4 (quaternion), got {arr.shape}"
+                )
+        return pos, quat
+
+
 def _mirror_gaussians_inplace(gaussians, axis: np.ndarray, center: np.ndarray) -> None:
     """Reflect positions, rotations, and SH band-1 across the plane through
     ``center`` perpendicular to ``axis`` (unit, GS-local).
@@ -252,6 +299,66 @@ def _materialize_mirrored_body_ply(
 
     gaussians = load_ply(str(src_path))
     _mirror_gaussians_inplace(gaussians, axis, center)
+    save_ply(gaussians, cache_path)
+    return str(cache_path)
+
+
+def _materialize_transformed_body_ply(
+    src_ply: str,
+    pose: BackgroundPose,
+    center: np.ndarray | None = None,
+) -> str:
+    """Return a path to a (possibly cached) body PLY with *pose* baked in.
+
+    When *center* is provided, rotation is applied about that pivot:
+    ``p' = R @ (p - center) + center + t``.
+    """
+    pose = _normalize_background_pose(pose)
+    if _is_identity_pose(pose):
+        return src_ply
+
+    pos, quat = pose
+    src_path = Path(src_ply).expanduser().resolve()
+    center_key = (
+        "origin"
+        if center is None
+        else f"{center[0]:.6f},{center[1]:.6f},{center[2]:.6f}"
+    )
+    cache_key = hashlib.sha1(
+        (
+            f"{src_path}"
+            f"|{pos[0]:.6f},{pos[1]:.6f},{pos[2]:.6f}"
+            f"|{quat[0]:.6f},{quat[1]:.6f},{quat[2]:.6f},{quat[3]:.6f}"
+            f"|{center_key}"
+        ).encode("utf-8")
+    ).hexdigest()[:12]
+    cache_dir = Path(".cache/gs_body_transforms")
+    cache_path = cache_dir / f"{src_path.stem}__body_xform_{cache_key}.ply"
+    if cache_path.exists():
+        return str(cache_path)
+
+    gaussians = load_ply(str(src_path))
+    is_identity_rot = np.allclose(quat, _IDENTITY_QUAT)
+    if is_identity_rot:
+        gaussians.xyz = gaussians.xyz + np.asarray(pos, dtype=np.float32)
+    else:
+        from scipy.spatial.transform import Rotation
+
+        R = Rotation.from_quat(quat).as_matrix()
+        T = np.eye(4, dtype=np.float64)
+        T[:3, :3] = R
+        T[:3, 3] = np.asarray(pos, dtype=np.float64)
+        if center is not None:
+            Tc = np.eye(4, dtype=np.float64)
+            Tc[:3, 3] = np.asarray(center, dtype=np.float64)
+            Tnc = np.eye(4, dtype=np.float64)
+            Tnc[:3, 3] = -np.asarray(center, dtype=np.float64)
+            T = Tc @ T @ Tnc
+
+        from gaussian_renderer.transform_gs_model import transform_gaussian
+
+        transform_gaussian(gaussians, T, silent=True)
+
     save_ply(gaussians, cache_path)
     return str(cache_path)
 
@@ -325,37 +432,70 @@ class GaussianRenderConfig(BaseModel):
     background_transforms: Dict[str, list] = Field(default_factory=dict)
     """Per-background pose transforms keyed by full path, file name, or stem.
     Values: ``[x, y, z]`` or ``[x, y, z, qx, qy, qz, qw]``."""
+    body_transforms: Dict[str, BodyTransformSpec] = Field(default_factory=dict)
+    """Per-body rigid transforms applied to ``body_gaussians`` PLYs at load time.
+    Keys must match entries in ``body_gaussians``. Transformed PLYs are cached
+    under ``.cache/gs_body_transforms/`` keyed by (path, pose, center)."""
     body_mirrors: Dict[str, BodyMirrorSpec] = Field(default_factory=dict)
     """Per-body reflections applied to ``body_gaussians`` PLYs at load time.
     Keys must match entries in ``body_gaussians``. Mirrored PLYs are cached
     under ``.cache/gs_body_mirrors/`` keyed by (path, axis, center)."""
 
     def resolved_body_gaussians(self) -> Dict[str, str]:
-        """Return ``body_gaussians`` with any ``body_mirrors`` entries
-        substituted by the corresponding mirrored (cached) PLY path."""
-        if not self.body_mirrors:
+        """Return ``body_gaussians`` with any configured transforms / mirrors
+        substituted by the corresponding cached PLY paths."""
+        if not self.body_transforms and not self.body_mirrors:
             return dict(self.body_gaussians)
 
-        unknown = set(self.body_mirrors) - set(self.body_gaussians)
+        unknown = (set(self.body_transforms) | set(self.body_mirrors)) - set(
+            self.body_gaussians
+        )
         if unknown:
             raise ValueError(
-                f"body_mirrors references unknown body(s): {sorted(unknown)}. "
+                f"body_transforms/body_mirrors reference unknown body(s): {sorted(unknown)}. "
                 f"Keys must appear in body_gaussians: {sorted(self.body_gaussians)}"
             )
 
-        centroids: Dict[str, np.ndarray] = {}
+        centroids: Dict[tuple[str, str], np.ndarray] = {}
 
-        def _centroid(body_name: str) -> np.ndarray:
-            if body_name not in centroids:
-                centroids[body_name] = (
-                    load_ply(str(self.body_gaussians[body_name]))
-                    .xyz.mean(axis=0)
-                    .astype(np.float64)
+        def _centroid(paths: Dict[str, str], body_name: str) -> np.ndarray:
+            key = (body_name, paths[body_name])
+            if key not in centroids:
+                centroids[key] = (
+                    load_ply(str(paths[body_name])).xyz.mean(axis=0).astype(np.float64)
                 )
-            return centroids[body_name]
+            return centroids[key]
+
+        transformed: Dict[str, str] = {}
+        for body_name, src_ply in self.body_gaussians.items():
+            spec = self.body_transforms.get(body_name)
+            if spec is None:
+                transformed[body_name] = src_ply
+                continue
+            pose = spec.resolved_pose()
+            center = None
+            if spec.center is not None:
+                center = np.asarray(spec.center, dtype=np.float64).ravel()
+                if center.shape != (3,):
+                    raise ValueError(
+                        f"body_transforms['{body_name}'].center must be length 3"
+                    )
+            elif spec.share_center_with is not None:
+                if spec.share_center_with not in self.body_gaussians:
+                    raise ValueError(
+                        f"body_transforms['{body_name}'].share_center_with="
+                        f"'{spec.share_center_with}' is not in body_gaussians"
+                    )
+                center = _centroid(self.body_gaussians, spec.share_center_with)
+            transformed[body_name] = _materialize_transformed_body_ply(
+                src_ply, pose, center
+            )
+
+        if not self.body_mirrors:
+            return transformed
 
         resolved: Dict[str, str] = {}
-        for body_name, src_ply in self.body_gaussians.items():
+        for body_name, src_ply in transformed.items():
             spec = self.body_mirrors.get(body_name)
             if spec is None:
                 resolved[body_name] = src_ply
@@ -373,9 +513,9 @@ class GaussianRenderConfig(BaseModel):
                         f"body_mirrors['{body_name}'].share_center_with="
                         f"'{spec.share_center_with}' is not in body_gaussians"
                     )
-                center = _centroid(spec.share_center_with)
+                center = _centroid(transformed, spec.share_center_with)
             else:
-                center = _centroid(body_name)
+                center = _centroid(transformed, body_name)
             resolved[body_name] = _materialize_mirrored_body_ply(src_ply, axis, center)
         return resolved
 

@@ -3,17 +3,28 @@ defaults:
   - open_door_airbot_play_back_mixin
   - _self_
 
-# env:
-#   gaussian_render:
-#     # Mirror the door + knob PLYs along the door-width axis (body +X in the
-#     # shared door_gs_frame / handle_gs_frame quat). Reuses the geometry the
-#     # standalone third_party/mirror_door_plys.py script applies.
-#     # share_center_with keeps door and knob aligned post-reflection.
-#     body_mirrors:
-#       door_body:
-#         body_quat: [0.023543636, -0.014802135, 0.716127885, -0.697414831]
-#         body_axis: [1, 0, 0]
-#       handle_gs_frame:
-#         body_quat: [0.023543636, -0.014802135, 0.716127885, -0.697414831]
-#         body_axis: [1, 0, 0]
-#         share_center_with: door_body
+env:
+  gaussian_render:
+    # The physical doorway is rotated 180 degrees in the back-side layout,
+    # but the reconstructed GS assets only look correct from the original
+    # front-facing side. Fix this in two GS-local steps:
+    #   1. Rotate the door / knob PLYs 180 degrees back around the shared
+    #      door center so the visible panel face is front-facing again.
+    #   2. Mirror them across the door-width axis so the knob ends up on
+    #      the left side in the rotated scene.
+    body_transforms:
+      door_body:
+        orientation: [-0.0130740515, -0.9995734078, -0.0261165016, 0.0] # xyzw
+        center: [0.0332350396, 0.0065845978, 1.5886003971]
+      handle_gs_frame:
+        orientation: [-0.0130740515, -0.9995734078, -0.0261165016, 0.0] # xyzw
+        share_center_with: door_body
+    body_mirrors:
+      door_body:
+        body_quat: [0.023543636, -0.014802135, 0.716127885, -0.697414831]
+        body_axis: [1, 0, 0]
+        center: [0.0332350396, 0.0065845978, 1.5886003971]
+      handle_gs_frame:
+        body_quat: [0.023543636, -0.014802135, 0.716127885, -0.697414831]
+        body_axis: [1, 0, 0]
+        share_center_with: door_body

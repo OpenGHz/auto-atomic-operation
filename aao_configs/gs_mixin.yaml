@@ -33,6 +33,18 @@ env:
       hospital_table_25_5: [0.5158, -0.6083, 0.0755] # the bg itself looks not so good
       simple_room: [-0.0248, 0.1106, 0.0736]
       table: [-0.1354, -0.3838, 0.0709]
+    # Optional: apply rigid transforms to individual per-body PLYs at load
+    # time. Useful when the physical MuJoCo body pose is correct but the
+    # reconstructed GS asset needs an extra local correction.
+    # - `position`: [x, y, z] translation in local GS coords
+    # - `orientation`: [qx, qy, qz, qw] or [roll, pitch, yaw]
+    # - `center`: optional pivot point for the rotation
+    # - `share_center_with`: reuse another body's centroid as the pivot
+    # Transform is applied before `body_mirrors`.
+    # body_transforms:
+    #   door_gs:
+    #     orientation: [0, 0, 1, 0]
+    #     center: [0.0, 0.0, 0.0]
     # Optional: reflect individual per-body PLYs across a plane at load time.
     # Keys must match entries in `body_gaussians` (defined in task-specific
     # configs, not here). Mirrored PLYs are cached under

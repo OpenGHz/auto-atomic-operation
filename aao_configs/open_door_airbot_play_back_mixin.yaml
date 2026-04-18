@@ -1,51 +1,25 @@
 # Back-side variant of open_door_airbot_play.
 #
-# How it works: the base config uses `site: handle_grasp_${door_side}_site`
-# together with `reference: object` on every waypoint. Because
-# `handle_grasp_back_site` is designed with a quaternion that rotates
-# the front site's world-aligned frame by 180° about z, all site-local
-# offsets and orientations are auto-mirrored to the back side — no
-# per-waypoint numerical changes are needed here.
+# Instead of mirroring the robot/cameras to the opposite side of the
+# doorway, keep the robot layout unchanged and rotate the whole door-frame
+# assembly by 180° about the door centre's vertical axis. This makes the
+# back-side handle face the original robot side while preserving the
+# object-relative waypoint logic from the base config.
 #
-# What does need to change:
-#   1. `door_side` → `back` (selects the back grasp site)
-#   2. `arm` initial_state.base_pose → mounted on the far side of the
-#      door (mirror of the XML default x=1.050 around the door at
-#      x≈1.54, rotated 180° about z so the arm faces the handle).
+# The base config already uses `site: handle_grasp_${door_side}_site`
+# together with `reference: object` on all key waypoints, so once the
+# doorway is rotated we only need to switch `door_side` to `back`.
 #
-# The XML default arm_base pose is (1.050, 0.300, -0.480) with identity
-# orientation; mirroring around the door (world x≈1.54) gives
-# (2.030, 0.300, -0.480) with quat xyzw=(0,0,1,0). Tune if the arm
-# cannot reach the handle from this position.
+# Door-centre world coordinates are approximately (1.54, 0.55). The
+# frame root (`door_frame_physics`) is point-symmetric in x/y about that
+# centre: (1.54, 0.10) -> (1.54, 1.00). Orientation changes from +90°
+# yaw in the XML to -90° yaw here, i.e. a 180° turn about world z
+# through the door centre.
 
 door_side: back
 
-# Viewer and rendering cameras for the back-side layout.
-# - Positions are mirrored around the door plane (world x≈1.54), so each
-#   camera is the same distance from the scene as its front counterpart.
-# - Orientations are recomputed by a look-at construction that points
-#   each camera at the handle anchor (≈ [1.54, 0.22, -0.18]) with
-#   world-up = +z. (A reflection cannot be expressed as a rotation —
-#   det = -1 — so naive 180°-z rotation of the front quaternion gives a
-#   camera pointing off into empty space. The look-at construction is
-#   the robust fix.)
-env:
-  viewer:
-    lookat: [ 1.83, 0.15, -0.2 ]     # mirror of [1.25, 0.15, -0.2]
-    azimuth: 210                      # 30° + 180°
-
 task:
-  camera_initial_pose:
-    env1_cam:
-      position: [ 2.266, -0.615, 0.495 ]
-      orientation: [ 0.4585, 0.1714, 0.3054, 0.8168 ]  # xyzw
-    env0_cam:
-      position: [ 1.933, 2.181, -0.092 ]
-      orientation: [ 0.0683, 0.6880, 0.7190, 0.0713 ]
-
-task_operators:
-  arm:
-    initial_state:
-      base_pose:
-        position: [ 2.030, 0.300, -0.48 ]
-        orientation: [ 0.0, 0.0, 1.0, 0.0 ] # 180° about z (xyzw)
+  initial_pose:
+    door_frame_physics:
+      position: [1.54, 1.0, -1.0]
+      orientation: [0.0, 0.0, -0.7071067811865475, 0.7071067811865476] # quaternion xyzw
