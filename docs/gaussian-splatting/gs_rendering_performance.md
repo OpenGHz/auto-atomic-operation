@@ -5,6 +5,9 @@
 ## Benchmark 工具
 
 ```bash
+# 无头环境下先初始化 EGL / OpenGL 环境
+source env.sh
+
 # 基本测试 (默认关闭 viewer, to_numpy=false)
 python examples/bench_env.py press_three_buttons_gs 10
 
@@ -168,6 +171,127 @@ mask 循环中每个 object 都调用 `batch_update_gaussians(body_pos, body_qua
 2. **batch 吞吐量**: batch_size=2 时 env 吞吐最优 (16.8 env-step/s)，更大 batch 因 GS 渲染线性增长而吞吐趋于饱和 (~15 env-step/s)
 3. **task-level vs env-level 一致性**: task-level 的 obs 开销 ≈ env-level capture + ~10-18ms (runner 逻辑 + CUDA 同步开销)，两组数据吻合
 4. **warmup 重要性**: 首次 capture_observation 触发 gsplat CUDA JIT 编译（耗时数十秒），必须排除在计时之外。task-level 和 env-level 均已实现 warmup 机制
+
+---
+
+## 场景间对比 (open_door vs cup_on_coaster, 2026-04-19)
+
+> 测试环境:
+> - `open_door_airbot_play_back_gs env.batch_size=1 +test=open_the_door`
+> - `cup_on_coaster_gs env.batch_size=1`
+> - 两组测试都先 `source env.sh`
+> - `bench_env.py` 默认注入 `+env.viewer.disable=true +env.to_numpy=false +env.structured=false`
+
+### Benchmark 结果
+
+| 配置 | capture_observation | update | total | total 频率 |
+|---|---|---|---|---|
+| `open_door_airbot_play_back_gs +test=open_the_door` | **23.06 ms** | 0.35 ms | **23.42 ms** | **42.70 Hz** |
+| `cup_on_coaster_gs` | **9.75 ms** | 0.77 ms | **10.52 ms** | **95.03 Hz** |
+
+`open_door` 的总耗时约为 `cup_on_coaster` 的 `2.23x`，差异几乎全部来自 `capture_observation`；物理 `update()` 不是主要瓶颈。
+
+### cProfile 对比
+
+| 热点 | `open_door` | `cup_on_coaster` | 比值 |
+|---|---|---|---|
+| `_inject_batched_gs_renders` | 21.1 ms / iter | 6.7 ms / iter | 3.15x |
+| `batch_update_gaussians` | 19.9 ms / iter | 4.2 ms / iter | 4.74x |
+| `torch.tensor` | 18.6 ms / iter | 3.7 ms / iter | 5.03x |
+
+从 profile 看，差异主要在 GS 渲染前的数据准备阶段，而不是光栅化本身。`open_door` 更慢的核心原因是:
+
+1. `batch_update_gaussians()` 更重
+   - `open_door` 的时间大量花在 `gaussian_renderer.batch_splat.batch_update_gaussians()`。
+   - 该路径内部会反复把 `body_pos/body_quat/cam_pos/cam_xmat/fovy` 以及 gaussian template 从 `numpy` 包装为 `torch.Tensor`。
+   - `torch.tensor` 本身就占了 `18.6 ms / iter`，已经接近 `open_door` 单次 `capture_observation` 的大头。
+
+2. GS 资产规模更大
+   - `open_door` 前景高斯点数约 `933k`
+     - 门 + 把手: `144,834`
+     - Airbot Play + G2P 机器人: `788,549`
+   - `cup_on_coaster` 前景高斯点数约 `396k`
+     - cup + coaster: `379,888`
+     - Robotiq: `16,016`
+   - 比值约 `2.36x`，与 `capture_observation` 的 `2.36x` 慢速几乎一致。
+
+3. 背景高斯点数也更大
+   - `open_door` 背景 `bg0.ply`: `1,177,447` points
+   - `cup_on_coaster` 背景 `background_1.ply`: `624,772` points
+   - 背景规模约 `1.88x`
+
+### 不是主要原因的项
+
+1. 不是相机分辨率差异
+   - 两组测试都使用 `640x352`。
+
+2. 不是相机数量差异
+   - `open_door +test=open_the_door` 只保留了 1 个静态相机 `env2_cam`
+   - `cup_on_coaster_gs` 默认继承 3 个相机: `wrist_cam`, `env1_cam`, `env0_cam`
+   - 即使 `cup` 的相机更多，它仍然明显更快，说明主因不是相机数量，而是每次 GS 更新的数据规模。
+
+3. 不是 mask / heatmap 渲染
+   - 两组测试都是 `enable_mask=false`, `enable_heat_map=false`
+   - `open_door` 还打印了 `Skipping GS mask renderer for 'handle_lever_body'`，说明这次 benchmark 中 mask 路径没有成为瓶颈。
+
+4. 不是物理 update
+   - `open_door` 的 `update()` 反而更快: `0.35 ms` vs `0.77 ms`
+   - 这与配置一致: `open_door` 使用 `sim_freq=1000, update_freq=100`，而 `cup_on_coaster` 继承默认 `sim_freq=600, update_freq=30`，单次 `update()` 的物理子步更多。
+
+### 结论
+
+`open_door_airbot_play_back_gs` 比 `cup_on_coaster_gs` 慢，主因不是 camera 配置，而是 GS 场景本身更重，尤其是 Airbot+G2P 机器人和 door background 带来的更大 gaussian 数量，进一步放大了 `batch_update_gaussians()` 中的 `torch.tensor(numpy -> cuda)` 开销。
+
+因此，若要继续优化 `open_door` 场景，优先级应为:
+
+1. 缓存 gaussian template 的 GPU tensor，避免每帧重复 `torch.tensor()`
+2. 让 `body_pos/body_quat/cam_pos/cam_xmat/fovy` 在进入 renderer 前就完成 tensor 化
+3. 在不影响效果的前提下，优先压缩 Airbot+G2P 和 door background 的 GS 资产规模
+
+---
+
+## 分辨率反直觉现象 (open_door, 2026-04-19)
+
+在 `open_door_airbot_play_back_gs +test=open_the_door` 上观察到一个反直觉现象:
+
+- 将相机分辨率从 `320x240` 提高到 `640x480` 后，端到端帧率不是下降，而是多次测试中整体呈上升趋势。
+- 用户在完整 `airdc` 流程中多次复测后确认，该趋势是稳定可复现的，而不是单次抖动。
+- 在 `bench_env.py` 的纯环境测试中也能复现同方向结果，说明这不只是视频编码链路或外层 runner 的偶然现象。
+
+### 当前结论
+
+当前 `open_door` 配置下，瓶颈并不主要由像素数量决定，而更接近:
+
+1. 每帧固定开销主导
+   - `batch_update_gaussians()`
+   - `torch.tensor(numpy -> cuda)`
+   - 相机/物体位姿整理与同步
+
+2. GPU 利用率在低分辨率下可能更差
+   - `320x240` 时，GS rasterization 可能没有把 GPU 跑满，kernel launch / 同步 / 调度固定成本占比更高。
+   - `640x480` 时，虽然像素更多，但并行度更高，反而可能让 GPU 落在更高效的执行区间。
+
+3. 当前场景更像是 fixed-overhead / sync bound，而不是 pixel-fill-rate bound
+   - 因此简单降低分辨率，不保证更快。
+   - 在该场景中，低分辨率反而可能让固定成本占比进一步放大。
+
+### 实践含义
+
+对于当前 `open_door` 的 GS 观测链路:
+
+- 不应默认认为“降低分辨率一定提升 FPS”。
+- 在优化前，应先实测不同分辨率，而不是仅凭像素数做判断。
+- 现阶段更值得优先优化的仍然是 `batch_update_gaussians()` 前后的 tensor materialization 和 GPU 同步点，而不是单纯下调分辨率。
+
+### 说明
+
+这一现象已经通过多次端到端运行得到确认，但其底层根因仍应通过 GPU-aware profiling 进一步验证，例如:
+
+- `torch.cuda.Event`
+- `torch.profiler`
+- `nsys` / Nsight Systems
+
+也就是说，当前可以把“`640x480` 在此场景中整体更快”视为一个稳定经验结论；但若要精确解释是 tile 利用率、kernel 选路还是同步点迁移导致，还需要更细的 GPU 时间线分析。
 
 ---
 
