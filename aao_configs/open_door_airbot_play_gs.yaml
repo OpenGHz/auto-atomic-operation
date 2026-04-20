@@ -14,14 +14,7 @@ env:
       door_body: ${gs_dir}/${door_name}.ply
       handle_gs_frame: ${gs_dir}/${door_name}_knob.ply
       # bg_gs_frame: ${assets_dir}/gs/backgrounds/door_bg/${bg3dgs_name}.ply
-    background_ply:
-      - ${bg3dgs_dir}/bg0.ply
-      - ${bg3dgs_dir}/bg1.ply
-      - ${bg3dgs_dir}/bg2.ply
-      - ${bg3dgs_dir}/bg3.ply
-      - ${bg3dgs_dir}/bg4.ply
-      - ${bg3dgs_dir}/bg5.ply
-      - ${bg3dgs_dir}/bg6.ply
+    background_ply: ${bg3dgs_dir}/bg*.ply
     # Original bg_gs_frame body pose from demo_gs_airbot_play.xml (wxyz→xyzw):
     # pos=[-0.105, 0.491151190, -0.136037800]
     # quat(wxyz)=[0.509794620, -0.516845570, 0.495912190, -0.476498890]

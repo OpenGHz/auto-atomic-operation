@@ -24,6 +24,7 @@ gs = [
   "torch",
   "scipy",
   "plyfile",
+  "natsort",
   "gaussian_renderer @ git+https://github.com/OpenGHz/GaussianRenderer.git",
 ]
 

@@ -38,6 +38,7 @@ When ``gaussian_render`` is set:
 
 from __future__ import annotations
 
+import glob as _glob
 import hashlib
 from pathlib import Path
 from typing import Any, Dict, Optional, Set
@@ -46,6 +47,7 @@ import numpy as np
 import torch
 from gaussian_renderer import BatchSplatConfig, GSRendererMuJoCo, MjxBatchSplatRenderer
 from gaussian_renderer.core.util_gau import load_ply, save_ply
+from natsort import natsorted
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from auto_atom.basis.mjc.mujoco_env import (
@@ -54,6 +56,21 @@ from auto_atom.basis.mjc.mujoco_env import (
     UnifiedMujocoEnv,
     create_image_data,
 )
+
+_GLOB_META = ("*", "?", "[")
+
+
+def _has_glob(pattern: str) -> bool:
+    return any(c in pattern for c in _GLOB_META)
+
+
+def _expand_background_entry(entry: str) -> list[str]:
+    if not _has_glob(entry):
+        return [entry]
+    matches = _glob.glob(entry)
+    if not matches:
+        raise FileNotFoundError(f"background_ply glob matched no files: {entry}")
+    return list(natsorted(matches))
 
 
 def create_image_data_batch(
@@ -669,15 +686,29 @@ class GaussianRenderConfig(BaseModel):
         return resolved
 
     def _background_ply_list(self) -> list[str]:
-        """Return ``background_ply`` as a list (empty when unset)."""
+        """Return ``background_ply`` as a list (empty when unset).
+
+        Entries may contain glob patterns (``*``, ``?``, ``[...]``); matches
+        are expanded with natural sort order.
+        """
         if self.background_ply is None:
             return []
-        if isinstance(self.background_ply, str):
-            return [self.background_ply]
-        return list(self.background_ply)
+        entries = (
+            [self.background_ply]
+            if isinstance(self.background_ply, str)
+            else list(self.background_ply)
+        )
+        out: list[str] = []
+        for entry in entries:
+            out.extend(_expand_background_entry(entry))
+        return out
 
     def is_multi_background(self) -> bool:
-        return isinstance(self.background_ply, (list, tuple))
+        if isinstance(self.background_ply, (list, tuple)):
+            return True
+        if isinstance(self.background_ply, str) and _has_glob(self.background_ply):
+            return True
+        return False
 
     def resolved_background_transform(self) -> BackgroundPose:
         """Resolve the singular pose transform for a single-path background.
