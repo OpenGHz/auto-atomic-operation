@@ -1,0 +1,102 @@
+# w3_b1 switch wall layout
+# 17 switches (row 1 positions 1-5,10-13 reserved)
+
+panel:
+  xml: w3_b1_panel_base.xml
+  attach_to_body: panel_mount
+
+output_xml: generated/w3_b1_panel_assembly.xml
+
+layout:
+  coordinate_scale: 0.001
+  face_axes: [x, z]
+  base_pos: [0.0, 30.0, 0.0]
+  default_quat: [0.7071068, -0.7071068, 0.0, 0.0]
+  remove_root_joints: true
+
+placements:
+  # 1. Switch_Quantity1_36 | wall (1,6)
+  - xml: objects/Switch_Quantity1_36.xml
+    pos: [69.8, 120.0]
+    row: 1
+    col: 6
+  # 2. Switch_Quantity1_37 | wall (1,7)
+  - xml: objects/Switch_Quantity1_37.xml
+    pos: [9.8, 120.0]
+    row: 1
+    col: 7
+  # 3. Switch_Quantity1_38 | wall (1,8)
+  - xml: objects/Switch_Quantity1_38.xml
+    pos: [-50.2, 120.0]
+    row: 1
+    col: 8
+  # 4. Switch_Quantity1_39 | wall (1,9)
+  - xml: objects/Switch_Quantity1_39.xml
+    pos: [-110.2, 120.0]
+    row: 1
+    col: 9
+  # 5. Switch_Quantity3_04 | wall (2,1)
+  - xml: objects/Switch_Quantity3_04.xml
+    pos: [349.8, 0.0]
+    row: 2
+    col: 1
+  # 6. Switch_Quantity3_05 | wall (2,2)
+  - xml: objects/Switch_Quantity3_05.xml
+    pos: [233.2, 0.0]
+    row: 2
+    col: 2
+  # 7. Switch_Quantity2_03 | wall (2,3)
+  - xml: objects/Switch_Quantity2_03.xml
+    pos: [116.6, 0.0]
+    row: 2
+    col: 3
+  # 8. Switch_Quantity1_40 | wall (2,5)
+  - xml: objects/Switch_Quantity1_40.xml
+    pos: [-116.6, 0.0]
+    row: 2
+    col: 5
+  # 9. Switch_Quantity1_41 | wall (2,6)
+  - xml: objects/Switch_Quantity1_41.xml
+    pos: [-233.2, 0.0]
+    row: 2
+    col: 6
+  # 10. Switch_Quantity1_42 | wall (2,7)
+  - xml: objects/Switch_Quantity1_42.xml
+    pos: [-349.8, 0.0]
+    row: 2
+    col: 7
+  # 11. Switch_Quantity2_04 | wall (3,1)
+  - xml: objects/Switch_Quantity2_04.xml
+    pos: [349.8, -120.0]
+    row: 3
+    col: 1
+  # 12. Switch_Quantity2_05 | wall (3,2)
+  - xml: objects/Switch_Quantity2_05.xml
+    pos: [233.2, -120.0]
+    row: 3
+    col: 2
+  # 13. Toogle_Quantity4_01 | wall (3,3)
+  - xml: objects/Toogle_Quantity4_01.xml
+    pos: [116.6, -120.0]
+    row: 3
+    col: 3
+  # 14. Switch_Quantity2_06 | wall (3,4)
+  - xml: objects/Switch_Quantity2_06.xml
+    pos: [0.0, -120.0]
+    row: 3
+    col: 4
+  # 15. Switch_Quantity1_43 | wall (3,5)
+  - xml: objects/Switch_Quantity1_43.xml
+    pos: [-116.6, -120.0]
+    row: 3
+    col: 5
+  # 16. Switch_Quantity1_44 | wall (3,6)
+  - xml: objects/Switch_Quantity1_44.xml
+    pos: [-233.2, -120.0]
+    row: 3
+    col: 6
+  # 17. Toogle_Quantity1_04 | wall (3,7)
+  - xml: objects/Toogle_Quantity1_04.xml
+    pos: [-349.8, -120.0]
+    row: 3
+    col: 7

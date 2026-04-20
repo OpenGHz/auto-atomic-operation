@@ -1,0 +1,304 @@
+<?xml version='1.0' encoding='utf-8'?>
+<mujoco model="w2_b2_panel_base">
+  <asset>
+    <material name="Switch_1_bezel" rgba="0.15 0.15 0.18 1" />
+    <material name="Switch_1_button" rgba="0.72 0.74 0.78 1" />
+    <material name="Knob_2_base" rgba="0.5 0.5 0.55 1" />
+    <material name="Knob_2_button" rgba="0.78 0.80 0.85 1" />
+    <material name="Switch_3_bezel" rgba="0.15 0.15 0.18 1" />
+    <material name="Switch_3_button" rgba="0.85 0.15 0.15 0.5" />
+    <material name="Switch_4_bezel" rgba="0.15 0.15 0.18 1" />
+    <material name="Switch_4_button" rgba="0.85 0.15 0.15 0.8" />
+    <material name="Switch_5_bezel" rgba="0.15 0.15 0.18 1" />
+    <material name="Switch_5_button" rgba="0.20 0.45 0.80 0.8" />
+    <material name="Switch_6_bezel" rgba="0.15 0.15 0.18 1" />
+    <material name="Switch_6_button" rgba="0.92 0.52 0.15 0.7" />
+    <material name="Switch_7_base" rgba="0.5 0.5 0.55 1" />
+    <material name="Switch_7_button" rgba="0.78 0.80 0.85 1" />
+    <material name="Switch_8_base" rgba="0.5 0.5 0.55 1" />
+    <material name="Switch_8_button" rgba="0.05 0.05 0.05 1" />
+    <material name="Switch_9_base" rgba="0.5 0.5 0.55 1" />
+    <material name="Switch_9_button" rgba="0.78 0.80 0.85 1" />
+    <material name="Switch_10_base" rgba="0.5 0.5 0.55 1" />
+    <material name="Switch_10_button" rgba="0.78 0.80 0.85 1" />
+    <material name="Knob_11_base" rgba="0.5 0.5 0.55 1" />
+    <material name="Knob_11_button" rgba="0.78 0.80 0.85 1" />
+    <material name="Switch_12_bezel" rgba="0.15 0.15 0.18 1" />
+    <material name="Switch_12_button" rgba="0.10 0.90 0.20 0.5" />
+    <material name="Switch_13_bezel" rgba="0.15 0.15 0.18 1" />
+    <material name="Switch_13_button" rgba="0.95 0.10 0.10 0.8" />
+    <material name="Switch_14_base" rgba="0.15 0.15 0.18 1" />
+    <material name="Switch_14_button" rgba="0.18 0.62 0.22 1" />
+    <material name="Switch_15_base" rgba="0.15 0.15 0.18 1" />
+    <material name="Switch_15_button" rgba="0.20 0.40 0.78 1" />
+    <material name="Switch_16_base" rgba="0.15 0.15 0.18 1" />
+    <material name="Switch_16_button" rgba="0.95 0.95 0.95 1" />
+    <material name="Switch_17_base" rgba="0.15 0.15 0.18 1" />
+    <material name="Switch_17_button" rgba="0.92 0.52 0.15 1" />
+    <material name="Switch_18_base" rgba="0.15 0.15 0.18 1" />
+    <material name="Switch_18_button" rgba="0.05 0.05 0.05 1" />
+    <material name="Switch_19_base" rgba="0.5 0.5 0.55 1" />
+    <material name="Switch_19_button" rgba="0.08 0.35 0.12 1" />
+    <material name="Stop_20_base" rgba="0.2 0.2 0.2 1" />
+    <material name="Stop_20_button" rgba="0.85 0.15 0.15 1" />
+    <material name="Switch_21_base" rgba="0.5 0.5 0.55 1" />
+    <material name="Switch_21_button" rgba="0.78 0.80 0.85 1" />
+    <material name="Switch_22_base" rgba="0.5 0.5 0.55 1" />
+    <material name="Switch_22_button" rgba="0.78 0.80 0.85 1" />
+    <material name="Switch_23_base" rgba="0.5 0.5 0.55 1" />
+    <material name="Switch_23_button" rgba="0.82 0.12 0.12 1" />
+    <material name="Stop_24_base" rgba="0.2 0.2 0.2 1" />
+    <material name="Stop_24_button" rgba="0.85 0.12 0.12 1" />
+    <material name="Switch_25_bezel" rgba="0.15 0.15 0.18 1" />
+    <material name="Switch_25_button" rgba="0.45 0.70 0.95 1" />
+    <material name="Switch_26_bezel" rgba="0.15 0.15 0.18 1" />
+    <material name="Switch_26_button" rgba="0.72 0.74 0.78 1" />
+    <material name="Switch_27_bezel" rgba="0.15 0.15 0.18 1" />
+    <material name="Switch_27_button" rgba="0.18 0.62 0.22 1" />
+    <material name="Switch_28_bezel" rgba="0.15 0.15 0.18 1" />
+    <material name="Switch_28_button" rgba="0.08 0.35 0.12 1" />
+    <material name="Switch_29_bezel" rgba="0.15 0.15 0.18 1" />
+    <material name="Switch_29_button" rgba="0.65 0.55 0.10 1" />
+    <material name="Switch_30_bezel" rgba="0.15 0.15 0.18 1" />
+    <material name="Switch_30_button" rgba="0.20 0.45 0.80 1" />
+    <material name="Switch_31_bezel" rgba="0.15 0.15 0.18 1" />
+    <material name="Switch_31_button" rgba="0.82 0.84 0.87 1" />
+    <material name="Switch_32_bezel" rgba="0.15 0.15 0.18 1" />
+    <material name="Switch_32_button" rgba="0.82 0.84 0.87 1" />
+    <material name="Switch_33_bezel" rgba="0.15 0.15 0.18 1" />
+    <material name="Switch_33_button" rgba="0.05 0.05 0.05 1" />
+    <material name="Switch_34_bezel" rgba="0.15 0.15 0.18 1" />
+    <material name="Switch_34_button" rgba="0.82 0.12 0.12 1" />
+    <material name="Switch_35_material" rgba="0.3 0.3 0.35 1" />
+    <material name="Switch_36_material" rgba="0.3 0.3 0.35 1" />
+    <material name="Switch_37_material" rgba="0.3 0.3 0.35 1" />
+  </asset>
+  <worldbody>
+    <body name="panel_mount" pos="0 0 0">
+      <geom name="panel_backplate" type="box" pos="0 0 0" size="0.845 0.025 0.308" rgba="0.86 0.87 0.89 1" contype="1" conaffinity="1" />
+      <site name="panel_origin" pos="0 0.025 0" size="0.006" rgba="1 0 0 1" />
+      <body name="panel_slot_r4_c1" pos="0.35 0.03 0.12" quat="0.7071068 -0.7071068 0 0">
+        <body name="Switch_1_r4_c1">
+          <geom name="Switch_1_bezel__r4_c1" type="box" pos="0 0 0.0025" size="0.013 0.0105 0.0025" material="Switch_1_bezel" />
+          <geom name="Switch_1_button__r4_c1" type="box" pos="0 0 0.0045" size="0.012 0.0095 0.0045" material="Switch_1_button" />
+        </body>
+      </body>
+      <body name="panel_slot_r4_c2" pos="0.294 0.03 0.12" quat="0.7071068 -0.7071068 0 0">
+        <body name="Knob_2_r4_c2">
+          <geom name="Knob_2_base__r4_c2" type="cylinder" pos="0 0 0.0075" size="0.016 0.0075" material="Knob_2_base" />
+          <geom name="Knob_2_button__r4_c2" type="cylinder" pos="0 0 0.015" size="0.0145 0.015" material="Knob_2_button" />
+        </body>
+      </body>
+      <body name="panel_slot_r4_c3" pos="0.238 0.03 0.12" quat="0.7071068 -0.7071068 0 0">
+        <body name="Switch_3_r4_c3">
+          <geom name="Switch_3_bezel__r4_c3" type="box" pos="0 0 0.0025" size="0.013 0.0105 0.0025" material="Switch_3_bezel" />
+          <geom name="Switch_3_button__r4_c3" type="box" pos="0 0 0.0045" size="0.012 0.0095 0.0045" material="Switch_3_button" />
+        </body>
+      </body>
+      <body name="panel_slot_r4_c4" pos="0.182 0.03 0.12" quat="0.7071068 -0.7071068 0 0">
+        <body name="Switch_4_r4_c4">
+          <geom name="Switch_4_bezel__r4_c4" type="box" pos="0 0 0.0025" size="0.013 0.0105 0.0025" material="Switch_4_bezel" />
+          <geom name="Switch_4_button__r4_c4" type="box" pos="0 0 0.0045" size="0.012 0.0095 0.0045" material="Switch_4_button" />
+        </body>
+      </body>
+      <body name="panel_slot_r4_c5" pos="0.126 0.03 0.12" quat="0.7071068 -0.7071068 0 0">
+        <body name="Switch_5_r4_c5">
+          <geom name="Switch_5_bezel__r4_c5" type="box" pos="0 0 0.0025" size="0.013 0.0105 0.0025" material="Switch_5_bezel" />
+          <geom name="Switch_5_button__r4_c5" type="box" pos="0 0 0.0045" size="0.012 0.0095 0.0045" material="Switch_5_button" />
+        </body>
+      </body>
+      <body name="panel_slot_r4_c6" pos="0.07 0.03 0.12" quat="0.7071068 -0.7071068 0 0">
+        <body name="Switch_6_r4_c6">
+          <geom name="Switch_6_bezel__r4_c6" type="box" pos="0 0 0.0025" size="0.013 0.0105 0.0025" material="Switch_6_bezel" />
+          <geom name="Switch_6_button__r4_c6" type="box" pos="0 0 0.0045" size="0.012 0.0095 0.0045" material="Switch_6_button" />
+        </body>
+      </body>
+      <body name="panel_slot_r4_c7" pos="0.01 0.03 0.12" quat="0.7071068 -0.7071068 0 0">
+        <body name="Switch_7_r4_c7">
+          <geom name="Switch_7_base__r4_c7" type="cylinder" pos="0 0 0.0015" size="0.012 0.0015" material="Switch_7_base" />
+          <geom name="Switch_7_button__r4_c7" type="cylinder" pos="0 0 0.0015" size="0.0105 0.0015" material="Switch_7_button" />
+        </body>
+      </body>
+      <body name="panel_slot_r4_c8" pos="-0.05 0.03 0.12" quat="0.7071068 -0.7071068 0 0">
+        <body name="Switch_8_r4_c8">
+          <geom name="Switch_8_base__r4_c8" type="cylinder" pos="0 0 0.0015" size="0.012 0.0015" material="Switch_8_base" />
+          <geom name="Switch_8_button__r4_c8" type="cylinder" pos="0 0 0.0015" size="0.0105 0.0015" material="Switch_8_button" />
+        </body>
+      </body>
+      <body name="panel_slot_r4_c9" pos="-0.11 0.03 0.12" quat="0.7071068 -0.7071068 0 0">
+        <body name="Switch_9_r4_c9">
+          <geom name="Switch_9_base__r4_c9" type="cylinder" pos="0 0 0.0015" size="0.012 0.0015" material="Switch_9_base" />
+          <geom name="Switch_9_button__r4_c9" type="cylinder" pos="0 0 0.0015" size="0.0105 0.0015" material="Switch_9_button" />
+        </body>
+      </body>
+      <body name="panel_slot_r4_c10" pos="-0.17 0.03 0.12" quat="0.7071068 -0.7071068 0 0">
+        <body name="Switch_10_r4_c10">
+          <geom name="Switch_10_base__r4_c10" type="cylinder" pos="0 0 0.0015" size="0.012 0.0015" material="Switch_10_base" />
+          <geom name="Switch_10_button__r4_c10" type="cylinder" pos="0 0 0.0015" size="0.0105 0.0015" material="Switch_10_button" />
+        </body>
+      </body>
+      <body name="panel_slot_r4_c11" pos="-0.23 0.03 0.12" quat="0.7071068 -0.7071068 0 0">
+        <body name="Knob_11_r4_c11">
+          <geom name="Knob_11_base__r4_c11" type="cylinder" pos="0 0 0.0075" size="0.0155 0.0075" material="Knob_11_base" />
+          <geom name="Knob_11_button__r4_c11" type="cylinder" pos="0 0 0.015" size="0.0145 0.015" material="Knob_11_button" />
+        </body>
+      </body>
+      <body name="panel_slot_r4_c12" pos="-0.29 0.03 0.12" quat="0.7071068 -0.7071068 0 0">
+        <body name="Switch_12_r4_c12">
+          <geom name="Switch_12_bezel__r4_c12" type="box" pos="0 0 0.0025" size="0.013 0.0105 0.0025" material="Switch_12_bezel" />
+          <geom name="Switch_12_button__r4_c12" type="box" pos="0 0 0.0045" size="0.012 0.0095 0.0045" material="Switch_12_button" />
+        </body>
+      </body>
+      <body name="panel_slot_r4_c13" pos="-0.35 0.03 0.12" quat="0.7071068 -0.7071068 0 0">
+        <body name="Switch_13_r4_c13">
+          <geom name="Switch_13_bezel__r4_c13" type="box" pos="0 0 0.0041" size="0.013 0.0105 0.0041" material="Switch_13_bezel" />
+          <geom name="Switch_13_button__r4_c13" type="box" pos="0 0 0.0075" size="0.012 0.0095 0.0075" material="Switch_13_button" />
+        </body>
+      </body>
+      <body name="panel_slot_r5_c1" pos="0.35 0.03 0" quat="0.7071068 -0.7071068 0 0">
+        <body name="Switch_14_r5_c1">
+          <geom name="Switch_14_base__r5_c1" type="cylinder" pos="0 0 0.004" size="0.009 0.004" material="Switch_14_base" />
+          <geom name="Switch_14_button__r5_c1" type="sphere" pos="0 0 0.008" size="0.0075" material="Switch_14_button" />
+        </body>
+      </body>
+      <body name="panel_slot_r5_c2" pos="0.296 0.03 0" quat="0.7071068 -0.7071068 0 0">
+        <body name="Switch_15_r5_c2">
+          <geom name="Switch_15_base__r5_c2" type="cylinder" pos="0 0 0.004" size="0.009 0.004" material="Switch_15_base" />
+          <geom name="Switch_15_button__r5_c2" type="sphere" pos="0 0 0.008" size="0.0075" material="Switch_15_button" />
+        </body>
+      </body>
+      <body name="panel_slot_r5_c3" pos="0.242 0.03 0" quat="0.7071068 -0.7071068 0 0">
+        <body name="Switch_16_r5_c3">
+          <geom name="Switch_16_base__r5_c3" type="cylinder" pos="0 0 0.004" size="0.009 0.004" material="Switch_16_base" />
+          <geom name="Switch_16_button__r5_c3" type="sphere" pos="0 0 0.008" size="0.0075" material="Switch_16_button" />
+        </body>
+      </body>
+      <body name="panel_slot_r5_c4" pos="0.188 0.03 0" quat="0.7071068 -0.7071068 0 0">
+        <body name="Switch_17_r5_c4">
+          <geom name="Switch_17_base__r5_c4" type="cylinder" pos="0 0 0.004" size="0.009 0.004" material="Switch_17_base" />
+          <geom name="Switch_17_button__r5_c4" type="sphere" pos="0 0 0.008" size="0.0075" material="Switch_17_button" />
+        </body>
+      </body>
+      <body name="panel_slot_r5_c5" pos="0.134 0.03 0" quat="0.7071068 -0.7071068 0 0">
+        <body name="Switch_18_r5_c5">
+          <geom name="Switch_18_base__r5_c5" type="cylinder" pos="0 0 0.004" size="0.009 0.004" material="Switch_18_base" />
+          <geom name="Switch_18_button__r5_c5" type="sphere" pos="0 0 0.008" size="0.0075" material="Switch_18_button" />
+        </body>
+      </body>
+      <body name="panel_slot_r5_c6" pos="0.07 0.03 0" quat="0.7071068 -0.7071068 0 0">
+        <body name="Switch_19_r5_c6">
+          <geom name="Switch_19_base__r5_c6" type="cylinder" pos="0 0 0.0015" size="0.012 0.0015" material="Switch_19_base" />
+          <geom name="Switch_19_button__r5_c6" type="cylinder" pos="0 0 0.0015" size="0.0105 0.0015" material="Switch_19_button" />
+        </body>
+      </body>
+      <body name="panel_slot_r5_c8" pos="-0.07 0.03 0" quat="0.7071068 -0.7071068 0 0">
+        <body name="Stop_20_r5_c8">
+          <geom name="Stop_20_base__r5_c8" type="cylinder" pos="0 0 0.0075" size="0.0155 0.0075" material="Stop_20_base" />
+          <geom name="Stop_20_button__r5_c8" type="cylinder" pos="0 0 0.015" size="0.0145 0.015" material="Stop_20_button" />
+        </body>
+      </body>
+      <body name="panel_slot_r5_c9" pos="-0.14 0.03 0" quat="0.7071068 -0.7071068 0 0">
+        <body name="Switch_21_r5_c9">
+          <geom name="Switch_21_base__r5_c9" type="cylinder" pos="0 0 0.0015" size="0.012 0.0015" material="Switch_21_base" />
+          <geom name="Switch_21_button__r5_c9" type="cylinder" pos="0 0 0.0015" size="0.0105 0.0015" material="Switch_21_button" />
+        </body>
+      </body>
+      <body name="panel_slot_r5_c10" pos="-0.21 0.03 0" quat="0.7071068 -0.7071068 0 0">
+        <body name="Switch_22_r5_c10">
+          <geom name="Switch_22_base__r5_c10" type="cylinder" pos="0 0 0.0015" size="0.012 0.0015" material="Switch_22_base" />
+          <geom name="Switch_22_button__r5_c10" type="cylinder" pos="0 0 0.0015" size="0.0105 0.0015" material="Switch_22_button" />
+        </body>
+      </body>
+      <body name="panel_slot_r5_c11" pos="-0.28 0.03 0" quat="0.7071068 -0.7071068 0 0">
+        <body name="Switch_23_r5_c11">
+          <geom name="Switch_23_base__r5_c11" type="cylinder" pos="0 0 0.0015" size="0.012 0.0015" material="Switch_23_base" />
+          <geom name="Switch_23_button__r5_c11" type="cylinder" pos="0 0 0.0015" size="0.0105 0.0015" material="Switch_23_button" />
+        </body>
+      </body>
+      <body name="panel_slot_r5_c12" pos="-0.35 0.03 0" quat="0.7071068 -0.7071068 0 0">
+        <body name="Stop_24_r5_c12">
+          <geom name="Stop_24_base__r5_c12" type="cylinder" pos="0 0 0.0075" size="0.0155 0.0075" material="Stop_24_base" />
+          <geom name="Stop_24_button__r5_c12" type="cylinder" pos="0 0 0.015" size="0.0145 0.015" material="Stop_24_button" />
+        </body>
+      </body>
+      <body name="panel_slot_r6_c1" pos="0.35 0.03 -0.12" quat="0.7071068 -0.7071068 0 0">
+        <body name="Switch_25_r6_c1">
+          <geom name="Switch_25_bezel__r6_c1" type="box" pos="0 0 0.0025" size="0.016 0.0135 0.0025" material="Switch_25_bezel" />
+          <geom name="Switch_25_button__r6_c1" type="box" pos="0 0 0.0045" size="0.015 0.0125 0.0045" material="Switch_25_button" />
+        </body>
+      </body>
+      <body name="panel_slot_r6_c2" pos="0.285 0.03 -0.12" quat="0.7071068 -0.7071068 0 0">
+        <body name="Switch_26_r6_c2">
+          <geom name="Switch_26_bezel__r6_c2" type="box" pos="0 0 0.0025" size="0.016 0.0135 0.0025" material="Switch_26_bezel" />
+          <geom name="Switch_26_button__r6_c2" type="box" pos="0 0 0.0045" size="0.015 0.0125 0.0045" material="Switch_26_button" />
+        </body>
+      </body>
+      <body name="panel_slot_r6_c3" pos="0.22 0.03 -0.12" quat="0.7071068 -0.7071068 0 0">
+        <body name="Switch_27_r6_c3">
+          <geom name="Switch_27_bezel__r6_c3" type="box" pos="0 0 0.0025" size="0.016 0.0135 0.0025" material="Switch_27_bezel" />
+          <geom name="Switch_27_button__r6_c3" type="box" pos="0 0 0.0045" size="0.015 0.0125 0.0045" material="Switch_27_button" />
+        </body>
+      </body>
+      <body name="panel_slot_r6_c4" pos="0.155 0.03 -0.12" quat="0.7071068 -0.7071068 0 0">
+        <body name="Switch_28_r6_c4">
+          <geom name="Switch_28_bezel__r6_c4" type="box" pos="0 0 0.0025" size="0.016 0.0135 0.0025" material="Switch_28_bezel" />
+          <geom name="Switch_28_button__r6_c4" type="box" pos="0 0 0.0045" size="0.015 0.0125 0.0045" material="Switch_28_button" />
+        </body>
+      </body>
+      <body name="panel_slot_r6_c5" pos="0.09 0.03 -0.12" quat="0.7071068 -0.7071068 0 0">
+        <body name="Switch_29_r6_c5">
+          <geom name="Switch_29_bezel__r6_c5" type="box" pos="0 0 0.0025" size="0.016 0.0135 0.0025" material="Switch_29_bezel" />
+          <geom name="Switch_29_button__r6_c5" type="box" pos="0 0 0.0045" size="0.015 0.0125 0.0045" material="Switch_29_button" />
+        </body>
+      </body>
+      <body name="panel_slot_r6_c6" pos="0.025 0.03 -0.12" quat="0.7071068 -0.7071068 0 0">
+        <body name="Switch_30_r6_c6">
+          <geom name="Switch_30_bezel__r6_c6" type="box" pos="0 0 0.0025" size="0.016 0.0135 0.0025" material="Switch_30_bezel" />
+          <geom name="Switch_30_button__r6_c6" type="box" pos="0 0 0.0045" size="0.015 0.0125 0.0045" material="Switch_30_button" />
+        </body>
+      </body>
+      <body name="panel_slot_r6_c7" pos="-0.0432 0.03 -0.12" quat="0.7071068 -0.7071068 0 0">
+        <body name="Switch_31_r6_c7">
+          <geom name="Switch_31_bezel__r6_c7" type="box" pos="0 0 0.0025" size="0.012 0.0095 0.0025" material="Switch_31_bezel" />
+          <geom name="Switch_31_button__r6_c7" type="box" pos="0 0 0.0045" size="0.011 0.0085 0.0045" material="Switch_31_button" />
+        </body>
+      </body>
+      <body name="panel_slot_r6_c8" pos="-0.0962 0.03 -0.12" quat="0.7071068 -0.7071068 0 0">
+        <body name="Switch_32_r6_c8">
+          <geom name="Switch_32_bezel__r6_c8" type="box" pos="0 0 0.0025" size="0.012 0.0095 0.0025" material="Switch_32_bezel" />
+          <geom name="Switch_32_button__r6_c8" type="box" pos="0 0 0.0045" size="0.011 0.0085 0.0045" material="Switch_32_button" />
+        </body>
+      </body>
+      <body name="panel_slot_r6_c9" pos="-0.1492 0.03 -0.12" quat="0.7071068 -0.7071068 0 0">
+        <body name="Switch_33_r6_c9">
+          <geom name="Switch_33_bezel__r6_c9" type="box" pos="0 0 0.0017" size="0.011 0.0085 0.0017" material="Switch_33_bezel" />
+          <geom name="Switch_33_button__r6_c9" type="box" pos="0 0 0.003" size="0.01 0.0075 0.003" material="Switch_33_button" />
+        </body>
+      </body>
+      <body name="panel_slot_r6_c10" pos="-0.2022 0.03 -0.12" quat="0.7071068 -0.7071068 0 0">
+        <body name="Switch_34_r6_c10">
+          <geom name="Switch_34_bezel__r6_c10" type="box" pos="0 0 0.0017" size="0.011 0.0085 0.0017" material="Switch_34_bezel" />
+          <geom name="Switch_34_button__r6_c10" type="box" pos="0 0 0.003" size="0.01 0.0075 0.003" material="Switch_34_button" />
+        </body>
+      </body>
+      <body name="panel_slot_r6_c11" pos="-0.2552 0.03 -0.12" quat="0.7071068 -0.7071068 0 0">
+        <body name="Switch_35_r6_c11">
+          <geom name="Switch_35_base__r6_c11" type="box" pos="0 0 0.005" size="0.012 0.006 0.005" material="Switch_35_material" />
+          <geom name="Switch_35_toggle__r6_c11" type="box" pos="0 0 0.015" size="0.004 0.003 0.008" rgba="0.9 0.9 0.95 1" />
+        </body>
+      </body>
+      <body name="panel_slot_r6_c12" pos="-0.3082 0.03 -0.12" quat="0.7071068 -0.7071068 0 0">
+        <body name="Switch_36_r6_c12">
+          <geom name="Switch_36_base__r6_c12" type="box" pos="0 0 0.005" size="0.012 0.006 0.005" material="Switch_36_material" />
+          <geom name="Switch_36_toggle__r6_c12" type="box" pos="0 0 0.015" size="0.004 0.003 0.008" rgba="0.9 0.9 0.95 1" />
+        </body>
+      </body>
+      <body name="panel_slot_r6_c13" pos="-0.3612 0.03 -0.12" quat="0.7071068 -0.7071068 0 0">
+        <body name="Switch_37_r6_c13">
+          <geom name="Switch_37_base__r6_c13" type="box" pos="0 0 0.005" size="0.012 0.006 0.005" material="Switch_37_material" />
+          <geom name="Switch_37_toggle__r6_c13" type="box" pos="0 0 0.015" size="0.004 0.003 0.008" rgba="0.9 0.9 0.95 1" />
+        </body>
+      </body>
+    </body>
+  </worldbody>
+</mujoco>

@@ -1,0 +1,16 @@
+<mujoco model="Placeholder_31">
+  <asset>
+    <material name="Placeholder_31_bezel" rgba="0.30 0.30 0.33 1" specular="0.5" shininess="0.5"/>
+    <material name="Placeholder_31_button" rgba="0.60 0.60 0.63 1" specular="0.5" shininess="0.5"/>
+  </asset>
+  <worldbody>
+    <body name="Placeholder_31">
+      <geom name="Placeholder_31_bezel" type="box"
+            pos="0 0 0.001" size="0.043 0.043 0.001"
+            material="Placeholder_31_bezel"/>
+      <geom name="Placeholder_31_button" type="box"
+            pos="0 0 0.0035" size="0.04 0.04 0.0035"
+            material="Placeholder_31_button"/>
+    </body>
+  </worldbody>
+</mujoco>

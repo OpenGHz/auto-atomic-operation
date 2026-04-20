@@ -1,0 +1,118 @@
+# w1_b1 switch wall layout
+# 20 switches (various button counts), 3 rows x 7 columns
+# Geometry defined in objects/*.xml
+
+panel:
+  xml: w1_b1_panel_base.xml
+  attach_to_body: panel_mount
+
+output_xml: generated/w1_b1_panel_assembly.xml
+
+layout:
+  coordinate_scale: 0.001    # mm -> m
+  face_axes: [x, z]
+  base_pos: [0.0, 30.0, 0.0]
+  default_quat: [0.7071068, -0.7071068, 0.0, 0.0]
+  remove_root_joints: true
+
+placements:
+  # 1. Switch_Quantity2_07 | Switch | 2 btn | wall (1, 1, 1)
+  - xml: objects/Switch_Quantity2_07.xml
+    pos: [349.8, 120.0]
+    row: 1
+    col: 1
+  # 2. Switch_Quantity2_08 | Switch | 2 btn | wall (1, 1, 2)
+  - xml: objects/Switch_Quantity2_08.xml
+    pos: [233.2, 120.0]
+    row: 1
+    col: 2
+  # 3. Switch_Quantity2_09 | Switch | 2 btn | wall (1, 1, 3)
+  - xml: objects/Switch_Quantity2_09.xml
+    pos: [116.6, 120.0]
+    row: 1
+    col: 3
+  # 4. Switch_Quantity2_10 | Switch | 2 btn | wall (1, 1, 4)
+  - xml: objects/Switch_Quantity2_10.xml
+    pos: [0.0, 120.0]
+    row: 1
+    col: 4
+  # 5. Switch_Quantity4_02 | Switch | 4 btn | wall (1, 1, 5)
+  - xml: objects/Switch_Quantity4_02.xml
+    pos: [-116.6, 120.0]
+    row: 1
+    col: 5
+  # 6. Switch_Quantity1_45 | Switch | 1 btn | wall (1, 1, 6)
+  - xml: objects/Switch_Quantity1_45.xml
+    pos: [-233.2, 120.0]
+    row: 1
+    col: 6
+  # 7. Switch_Quantity1_46 | Switch | 1 btn | wall (1, 1, 7)
+  - xml: objects/Switch_Quantity1_46.xml
+    pos: [-349.8, 120.0]
+    row: 1
+    col: 7
+  # 8. Toogle_Quantity1_05 | Toggle | 1 btn | wall (1, 2, 1)
+  - xml: objects/Toogle_Quantity1_05.xml
+    pos: [349.8, 0.0]
+    row: 2
+    col: 1
+  # 9. Switch_Quantity4_03 | Switch | 4 btn | wall (1, 2, 2)
+  - xml: objects/Switch_Quantity4_03.xml
+    pos: [233.2, 0.0]
+    row: 2
+    col: 2
+  # 10. Switch_Quantity1_47 | Switch | 1 btn | wall (1, 2, 3)
+  - xml: objects/Switch_Quantity1_47.xml
+    pos: [116.6, 0.0]
+    row: 2
+    col: 3
+  # 11. Switch_Quantity2_11 | Switch | 2 btn | wall (1, 2, 5)
+  - xml: objects/Switch_Quantity2_11.xml
+    pos: [-116.6, 0.0]
+    row: 2
+    col: 5
+  # 12. Switch_Quantity1_48 | Switch | 1 btn | wall (1, 2, 6)
+  - xml: objects/Switch_Quantity1_48.xml
+    pos: [-233.2, 0.0]
+    row: 2
+    col: 6
+  # 13. Switch_Quantity1_49 | Switch | 1 btn | wall (1, 2, 7)
+  - xml: objects/Switch_Quantity1_49.xml
+    pos: [-349.8, 0.0]
+    row: 2
+    col: 7
+  # 14. Switch_Quantity3_06 | Switch | 3 btn | wall (1, 3, 1)
+  - xml: objects/Switch_Quantity3_06.xml
+    pos: [349.8, -120.0]
+    row: 3
+    col: 1
+  # 15. Toogle_Quantity2_01 | Toggle | 2 btn | wall (1, 3, 2)
+  - xml: objects/Toogle_Quantity2_01.xml
+    pos: [233.2, -120.0]
+    row: 3
+    col: 2
+  # 16. Toogle_Quantity1_06 | Toggle | 1 btn | wall (1, 3, 3)
+  - xml: objects/Toogle_Quantity1_06.xml
+    pos: [116.6, -120.0]
+    row: 3
+    col: 3
+  # 17. Placeholder_31 | Switch | 1 btn | wall (1, 3, 4)
+  - xml: objects/Placeholder_31.xml
+    pos: [0.0, -120.0]
+    row: 3
+    col: 4
+  # 18. Switch_Quantity2_12 | Switch | 2 btn | wall (1, 3, 5)
+  - xml: objects/Switch_Quantity2_12.xml
+    pos: [-116.6, -120.0]
+    row: 3
+    col: 5
+  # 19. Switch_Quantity2_13 | Switch | 2 btn | wall (1, 3, 6)
+  - xml: objects/Switch_Quantity2_13.xml
+    pos: [-233.2, -120.0]
+    row: 3
+    col: 6
+  # 20. Switch_Quantity4_04 | Switch | 4 btn | wall (1, 3, 7)
+  - xml: objects/Switch_Quantity4_04.xml
+    pos: [-349.8, -120.0]
+    row: 3
+    col: 7

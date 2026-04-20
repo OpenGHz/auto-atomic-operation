@@ -1,0 +1,20 @@
+<mujoco model="Switch_Quantity2_04">
+  <asset>
+    <material name="Switch_Quantity2_04_bezel" rgba="0.40 0.10 0.50 1" specular="0.8" shininess="0.85"/>
+    <material name="Switch_Quantity2_04_btn1" rgba="0.58 0.18 0.72 1" specular="0.8" shininess="0.85"/>
+    <material name="Switch_Quantity2_04_btn2" rgba="0.58 0.18 0.72 1" specular="0.8" shininess="0.85"/>
+  </asset>
+  <worldbody>
+    <body name="Switch_Quantity2_04">
+      <geom name="Switch_Quantity2_04_bezel" type="box"
+            pos="0 0 0.001" size="0.043 0.043 0.001"
+            material="Switch_Quantity2_04_bezel"/>
+      <geom name="Switch_Quantity2_04_btn1" type="box"
+            pos="-0.021 0 0.0035" size="0.019 0.04 0.0035"
+            material="Switch_Quantity2_04_btn1"/>
+      <geom name="Switch_Quantity2_04_btn2" type="box"
+            pos="0.021 0 0.0035" size="0.019 0.04 0.0035"
+            material="Switch_Quantity2_04_btn2"/>
+    </body>
+  </worldbody>
+</mujoco>

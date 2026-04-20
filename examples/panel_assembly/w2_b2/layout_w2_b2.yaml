@@ -1,0 +1,202 @@
+# Auto-generated from Excel sheet 'w2_b2'
+# Re-generate: python examples/panel_assembly/w2_b2/generate_layout_from_excel.py <excel_path>
+
+panel:
+  xml: w2_b2_panel_base.xml
+  attach_to_body: panel_mount
+
+output_xml: generated/w2_b2_panel_assembly.xml
+
+layout:
+  coordinate_scale: 0.001    # mm -> m
+  face_axes: [x, z]
+  base_pos: [0.0, 30.0, 0.0]
+  default_quat: [0.7071068, -0.7071068, 0.0, 0.0]
+  remove_root_joints: true
+
+placements:
+  # seq 1 | Switch | wall (4,1)
+  - xml: objects/Switch_1.xml
+    pos: [350.0, 120.0]
+    row: 4
+    col: 1
+  # seq 2 | Knob | wall (4,2)
+  - xml: objects/Knob_2.xml
+    pos: [294.0, 120.0]
+    row: 4
+    col: 2
+  # seq 3 | Switch | wall (4,3)
+  - xml: objects/Switch_3.xml
+    pos: [238.0, 120.0]
+    row: 4
+    col: 3
+  # seq 4 | Switch | wall (4,4) | 2.4*1.9
+  - xml: objects/Switch_4.xml
+    pos: [182.0, 120.0]
+    row: 4
+    col: 4
+  # seq 5 | Switch | wall (4,5)
+  - xml: objects/Switch_5.xml
+    pos: [126.0, 120.0]
+    row: 4
+    col: 5
+  # seq 6 | Switch | wall (4,6)
+  - xml: objects/Switch_6.xml
+    pos: [70.0, 120.0]
+    row: 4
+    col: 6
+  # seq 7 | Switch | wall (4,7)
+  - xml: objects/Switch_7.xml
+    pos: [10.0, 120.0]
+    row: 4
+    col: 7
+  # seq 8 | Switch | wall (4,8)
+  - xml: objects/Switch_8.xml
+    pos: [-50.0, 120.0]
+    row: 4
+    col: 8
+  # seq 9 | Switch | wall (4,9)
+  - xml: objects/Switch_9.xml
+    pos: [-110.0, 120.0]
+    row: 4
+    col: 9
+  # seq 10 | Switch | wall (4,10)
+  - xml: objects/Switch_10.xml
+    pos: [-170.0, 120.0]
+    row: 4
+    col: 10
+  # seq 11 | Knob | wall (4,11) | 厚30mm
+  - xml: objects/Knob_11.xml
+    pos: [-230.0, 120.0]
+    row: 4
+    col: 11
+  # seq 12 | Switch | wall (4,12) | 厚9mm
+  - xml: objects/Switch_12.xml
+    pos: [-290.0, 120.0]
+    row: 4
+    col: 12
+  # seq 13 | Switch | wall (4,13) | 厚15mm
+  - xml: objects/Switch_13.xml
+    pos: [-350.0, 120.0]
+    row: 4
+    col: 13
+  # seq 14 | Switch | wall (5,1)
+  - xml: objects/Switch_14.xml
+    pos: [350.0, 0.0]
+    row: 5
+    col: 1
+  # seq 15 | Switch | wall (5,2)
+  - xml: objects/Switch_15.xml
+    pos: [296.0, 0.0]
+    row: 5
+    col: 2
+  # seq 16 | Switch | wall (5,3)
+  - xml: objects/Switch_16.xml
+    pos: [242.0, 0.0]
+    row: 5
+    col: 3
+  # seq 17 | Switch | wall (5,4)
+  - xml: objects/Switch_17.xml
+    pos: [188.0, 0.0]
+    row: 5
+    col: 4
+  # seq 18 | Switch | wall (5,5)
+  - xml: objects/Switch_18.xml
+    pos: [134.0, 0.0]
+    row: 5
+    col: 5
+  # seq 19 | Switch | wall (5,6)
+  - xml: objects/Switch_19.xml
+    pos: [70.0, 0.0]
+    row: 5
+    col: 6
+  # seq 20 | Stop | wall (5,8)
+  - xml: objects/Stop_20.xml
+    pos: [-70.0, 0.0]
+    row: 5
+    col: 8
+  # seq 21 | Switch | wall (5,9) | 直径2.1
+  - xml: objects/Switch_21.xml
+    pos: [-140.0, 0.0]
+    row: 5
+    col: 9
+  # seq 22 | Switch | wall (5,10)
+  - xml: objects/Switch_22.xml
+    pos: [-210.0, 0.0]
+    row: 5
+    col: 10
+  # seq 23 | Switch | wall (5,11)
+  - xml: objects/Switch_23.xml
+    pos: [-280.0, 0.0]
+    row: 5
+    col: 11
+  # seq 24 | Stop | wall (5,12) | 厚20mm
+  - xml: objects/Stop_24.xml
+    pos: [-350.0, 0.0]
+    row: 5
+    col: 12
+  # seq 25 | Switch | wall (6,1) | 3*2.5
+  - xml: objects/Switch_25.xml
+    pos: [350.0, -120.0]
+    row: 6
+    col: 1
+  # seq 26 | Switch | wall (6,2)
+  - xml: objects/Switch_26.xml
+    pos: [285.0, -120.0]
+    row: 6
+    col: 2
+  # seq 27 | Switch | wall (6,3)
+  - xml: objects/Switch_27.xml
+    pos: [220.0, -120.0]
+    row: 6
+    col: 3
+  # seq 28 | Switch | wall (6,4)
+  - xml: objects/Switch_28.xml
+    pos: [155.0, -120.0]
+    row: 6
+    col: 4
+  # seq 29 | Switch | wall (6,5)
+  - xml: objects/Switch_29.xml
+    pos: [90.0, -120.0]
+    row: 6
+    col: 5
+  # seq 30 | Switch | wall (6,6)
+  - xml: objects/Switch_30.xml
+    pos: [25.0, -120.0]
+    row: 6
+    col: 6
+  # seq 31 | Switch | wall (6,7) | 2.2*1.7
+  - xml: objects/Switch_31.xml
+    pos: [-43.2, -120.0]
+    row: 6
+    col: 7
+  # seq 32 | Switch | wall (6,8)
+  - xml: objects/Switch_32.xml
+    pos: [-96.2, -120.0]
+    row: 6
+    col: 8
+  # seq 33 | Switch | wall (6,9) | 2*1.5
+  - xml: objects/Switch_33.xml
+    pos: [-149.2, -120.0]
+    row: 6
+    col: 9
+  # seq 34 | Switch | wall (6,10) | 厚6mm
+  - xml: objects/Switch_34.xml
+    pos: [-202.2, -120.0]
+    row: 6
+    col: 10
+  # seq 35 | Switch | wall (6,11)
+  - xml: objects/Switch_35.xml
+    pos: [-255.2, -120.0]
+    row: 6
+    col: 11
+  # seq 36 | Switch | wall (6,12)
+  - xml: objects/Switch_36.xml
+    pos: [-308.2, -120.0]
+    row: 6
+    col: 12
+  # seq 37 | Switch | wall (6,13)
+  - xml: objects/Switch_37.xml
+    pos: [-361.2, -120.0]
+    row: 6
+    col: 13

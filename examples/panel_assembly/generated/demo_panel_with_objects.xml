@@ -1,0 +1,146 @@
+<?xml version='1.0' encoding='utf-8'?>
+<mujoco model="demo_panel_base">
+  <asset>
+    <material name="red_switch_material" rgba="0.85 0.20 0.20 1" />
+    <material name="switch_base_material" rgba="0.18 0.18 0.20 1" />
+    <material name="amber_lamp_shell" rgba="0.16 0.16 0.18 1" />
+    <material name="amber_lamp_glow" rgba="0.98 0.72 0.18 0.95" />
+  </asset>
+  <default>
+    <default class="amber_lamp_geom">
+      <geom contype="1" conaffinity="1" />
+    </default>
+  </default>
+  <worldbody>
+    <body name="panel_mount" pos="0 0 0">
+      <geom name="panel_backplate" type="box" pos="0 0 0" size="0.420 0.030 0.160" rgba="0.86 0.87 0.89 1" contype="1" conaffinity="1" />
+      <site name="panel_origin" pos="0 0.030 0" size="0.006" rgba="1 0 0 1" />
+      <body name="panel_slot_r0_c0" pos="-0.3498 0.03 0.12" quat="0.7071068 -0.7071068 0 0">
+        <body name="red_switch_r0_c0">
+          <geom name="red_switch_base__r0_c0" type="box" pos="0 0 0.012" size="0.025 0.008 0.012" material="switch_base_material" />
+          <geom name="red_switch_toggle__r0_c0" type="box" pos="0 0 0.032" size="0.008 0.006 0.020" material="red_switch_material" />
+        </body>
+      </body>
+      <body name="panel_slot_r0_c1" pos="-0.2332 0.03 0.12" quat="0.7071068 -0.7071068 0 0">
+        <body name="green_knob_r0_c1">
+          <geom name="green_knob_base__r0_c1" type="cylinder" pos="0 0 0.005" size="0.020 0.005" rgba="0.15 0.16 0.18 1" />
+          <geom name="green_knob_cap__r0_c1" type="cylinder" pos="0 0 0.016" size="0.015 0.011" rgba="0.24 0.72 0.32 1" />
+          <site name="green_knob_tip__r0_c1" pos="0 0.012 0.016" size="0.002" rgba="1 1 1 1" />
+        </body>
+      </body>
+      <body name="panel_slot_r0_c2" pos="-0.1166 0.03 0.12" quat="0.7071068 -0.7071068 0 0">
+        <body name="amber_lamp_r0_c2">
+          <geom name="amber_lamp_base__r0_c2" class="amber_lamp_geom" type="box" pos="0 0 0.006" size="0.020 0.010 0.006" material="amber_lamp_shell" />
+          <geom name="amber_lamp_cover__r0_c2" class="amber_lamp_geom" type="sphere" pos="0 0 0.022" size="0.014" material="amber_lamp_glow" />
+        </body>
+      </body>
+      <body name="panel_slot_r0_c3" pos="0 0.03 0.125" quat="0.7071068 -0.7071068 0 0">
+        <body name="red_switch_r0_c3">
+          <geom name="red_switch_base__r0_c3" type="box" pos="0 0 0.012" size="0.025 0.008 0.012" material="switch_base_material" />
+          <geom name="red_switch_toggle__r0_c3" type="box" pos="0 0 0.032" size="0.008 0.006 0.020" material="red_switch_material" />
+        </body>
+      </body>
+      <body name="panel_slot_r0_c4" pos="0.1166 0.03 0.12" quat="0.7071068 -0.7071068 0 0">
+        <body name="green_knob_r0_c4">
+          <geom name="green_knob_base__r0_c4" type="cylinder" pos="0 0 0.005" size="0.020 0.005" rgba="0.15 0.16 0.18 1" />
+          <geom name="green_knob_cap__r0_c4" type="cylinder" pos="0 0 0.016" size="0.015 0.011" rgba="0.24 0.72 0.32 1" />
+          <site name="green_knob_tip__r0_c4" pos="0 0.012 0.016" size="0.002" rgba="1 1 1 1" />
+        </body>
+      </body>
+      <body name="panel_slot_r0_c5" pos="0.2332 0.03 0.12" quat="0.7071068 -0.7071068 0 0">
+        <body name="amber_lamp_r0_c5">
+          <geom name="amber_lamp_base__r0_c5" class="amber_lamp_geom" type="box" pos="0 0 0.006" size="0.020 0.010 0.006" material="amber_lamp_shell" />
+          <geom name="amber_lamp_cover__r0_c5" class="amber_lamp_geom" type="sphere" pos="0 0 0.022" size="0.014" material="amber_lamp_glow" />
+        </body>
+      </body>
+      <body name="panel_slot_r0_c6" pos="0.3498 0.03 0.12" quat="0.7071068 -0.7071068 0 0">
+        <body name="red_switch_r0_c6">
+          <geom name="red_switch_base__r0_c6" type="box" pos="0 0 0.012" size="0.025 0.008 0.012" material="switch_base_material" />
+          <geom name="red_switch_toggle__r0_c6" type="box" pos="0 0 0.032" size="0.008 0.006 0.020" material="red_switch_material" />
+        </body>
+      </body>
+      <body name="panel_slot_r1_c0" pos="-0.3498 0.03 0" quat="0.7071068 -0.7071068 0 0">
+        <body name="green_knob_r1_c0">
+          <geom name="green_knob_base__r1_c0" type="cylinder" pos="0 0 0.005" size="0.020 0.005" rgba="0.15 0.16 0.18 1" />
+          <geom name="green_knob_cap__r1_c0" type="cylinder" pos="0 0 0.016" size="0.015 0.011" rgba="0.24 0.72 0.32 1" />
+          <site name="green_knob_tip__r1_c0" pos="0 0.012 0.016" size="0.002" rgba="1 1 1 1" />
+        </body>
+      </body>
+      <body name="panel_slot_r1_c1" pos="-0.2332 0.03 0" quat="0.7071068 -0.7071068 0 0">
+        <body name="amber_lamp_r1_c1">
+          <geom name="amber_lamp_base__r1_c1" class="amber_lamp_geom" type="box" pos="0 0 0.006" size="0.020 0.010 0.006" material="amber_lamp_shell" />
+          <geom name="amber_lamp_cover__r1_c1" class="amber_lamp_geom" type="sphere" pos="0 0 0.022" size="0.014" material="amber_lamp_glow" />
+        </body>
+      </body>
+      <body name="panel_slot_r1_c2" pos="-0.1166 0.03 0" quat="0.7071068 -0.7071068 0 0">
+        <body name="red_switch_r1_c2">
+          <geom name="red_switch_base__r1_c2" type="box" pos="0 0 0.012" size="0.025 0.008 0.012" material="switch_base_material" />
+          <geom name="red_switch_toggle__r1_c2" type="box" pos="0 0 0.032" size="0.008 0.006 0.020" material="red_switch_material" />
+        </body>
+      </body>
+      <body name="panel_slot_r1_c4" pos="0.1166 0.03 0" quat="0.7071068 -0.7071068 0 0">
+        <body name="red_switch_r1_c4">
+          <geom name="red_switch_base__r1_c4" type="box" pos="0 0 0.012" size="0.025 0.008 0.012" material="switch_base_material" />
+          <geom name="red_switch_toggle__r1_c4" type="box" pos="0 0 0.032" size="0.008 0.006 0.020" material="red_switch_material" />
+        </body>
+      </body>
+      <body name="panel_slot_r1_c5" pos="0.2332 0.03 0" quat="0.7071068 -0.7071068 0 0">
+        <body name="green_knob_r1_c5">
+          <geom name="green_knob_base__r1_c5" type="cylinder" pos="0 0 0.005" size="0.020 0.005" rgba="0.15 0.16 0.18 1" />
+          <geom name="green_knob_cap__r1_c5" type="cylinder" pos="0 0 0.016" size="0.015 0.011" rgba="0.24 0.72 0.32 1" />
+          <site name="green_knob_tip__r1_c5" pos="0 0.012 0.016" size="0.002" rgba="1 1 1 1" />
+        </body>
+      </body>
+      <body name="panel_slot_r1_c6" pos="0.3498 0.03 0" quat="0.7071068 -0.7071068 0 0">
+        <body name="amber_lamp_r1_c6">
+          <geom name="amber_lamp_base__r1_c6" class="amber_lamp_geom" type="box" pos="0 0 0.006" size="0.020 0.010 0.006" material="amber_lamp_shell" />
+          <geom name="amber_lamp_cover__r1_c6" class="amber_lamp_geom" type="sphere" pos="0 0 0.022" size="0.014" material="amber_lamp_glow" />
+        </body>
+      </body>
+      <body name="panel_slot_r2_c0" pos="-0.3498 0.03 -0.12" quat="0.7071068 -0.7071068 0 0">
+        <body name="amber_lamp_r2_c0">
+          <geom name="amber_lamp_base__r2_c0" class="amber_lamp_geom" type="box" pos="0 0 0.006" size="0.020 0.010 0.006" material="amber_lamp_shell" />
+          <geom name="amber_lamp_cover__r2_c0" class="amber_lamp_geom" type="sphere" pos="0 0 0.022" size="0.014" material="amber_lamp_glow" />
+        </body>
+      </body>
+      <body name="panel_slot_r2_c1" pos="-0.2332 0.03 -0.12" quat="0.7071068 -0.7071068 0 0">
+        <body name="red_switch_r2_c1">
+          <geom name="red_switch_base__r2_c1" type="box" pos="0 0 0.012" size="0.025 0.008 0.012" material="switch_base_material" />
+          <geom name="red_switch_toggle__r2_c1" type="box" pos="0 0 0.032" size="0.008 0.006 0.020" material="red_switch_material" />
+        </body>
+      </body>
+      <body name="panel_slot_r2_c2" pos="-0.1166 0.03 -0.12" quat="0.7071068 -0.7071068 0 0">
+        <body name="green_knob_r2_c2">
+          <geom name="green_knob_base__r2_c2" type="cylinder" pos="0 0 0.005" size="0.020 0.005" rgba="0.15 0.16 0.18 1" />
+          <geom name="green_knob_cap__r2_c2" type="cylinder" pos="0 0 0.016" size="0.015 0.011" rgba="0.24 0.72 0.32 1" />
+          <site name="green_knob_tip__r2_c2" pos="0 0.012 0.016" size="0.002" rgba="1 1 1 1" />
+        </body>
+      </body>
+      <body name="panel_slot_r2_c3" pos="0 0.03 -0.12" quat="0.7071068 -0.7071068 0 0">
+        <body name="amber_lamp_r2_c3">
+          <geom name="amber_lamp_base__r2_c3" class="amber_lamp_geom" type="box" pos="0 0 0.006" size="0.020 0.010 0.006" material="amber_lamp_shell" />
+          <geom name="amber_lamp_cover__r2_c3" class="amber_lamp_geom" type="sphere" pos="0 0 0.022" size="0.014" material="amber_lamp_glow" />
+        </body>
+      </body>
+      <body name="panel_slot_r2_c4" pos="0.1166 0.03 -0.12" quat="0.7071068 -0.7071068 0 0">
+        <body name="red_switch_r2_c4">
+          <geom name="red_switch_base__r2_c4" type="box" pos="0 0 0.012" size="0.025 0.008 0.012" material="switch_base_material" />
+          <geom name="red_switch_toggle__r2_c4" type="box" pos="0 0 0.032" size="0.008 0.006 0.020" material="red_switch_material" />
+        </body>
+      </body>
+      <body name="panel_slot_r2_c5" pos="0.2332 0.03 -0.12" quat="0.7071068 -0.7071068 0 0">
+        <body name="green_knob_r2_c5">
+          <geom name="green_knob_base__r2_c5" type="cylinder" pos="0 0 0.005" size="0.020 0.005" rgba="0.15 0.16 0.18 1" />
+          <geom name="green_knob_cap__r2_c5" type="cylinder" pos="0 0 0.016" size="0.015 0.011" rgba="0.24 0.72 0.32 1" />
+          <site name="green_knob_tip__r2_c5" pos="0 0.012 0.016" size="0.002" rgba="1 1 1 1" />
+        </body>
+      </body>
+      <body name="panel_slot_r2_c6" pos="0.3498 0.03 -0.12" quat="0.7071068 -0.7071068 0 0">
+        <body name="amber_lamp_r2_c6">
+          <geom name="amber_lamp_base__r2_c6" class="amber_lamp_geom" type="box" pos="0 0 0.006" size="0.020 0.010 0.006" material="amber_lamp_shell" />
+          <geom name="amber_lamp_cover__r2_c6" class="amber_lamp_geom" type="sphere" pos="0 0 0.022" size="0.014" material="amber_lamp_glow" />
+        </body>
+      </body>
+    </body>
+  </worldbody>
+</mujoco>

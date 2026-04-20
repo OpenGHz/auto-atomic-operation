@@ -1,0 +1,16 @@
+<mujoco model="Switch_13">
+  <asset>
+    <material name="Switch_13_bezel" rgba="0.15 0.15 0.18 1"/>
+    <material name="Switch_13_button" rgba="0.95 0.10 0.10 0.8"/>
+  </asset>
+  <worldbody>
+    <body name="Switch_13">
+      <geom name="Switch_13_bezel" type="box"
+            pos="0 0 0.0041" size="0.013 0.0105 0.0041"
+            material="Switch_13_bezel"/>
+      <geom name="Switch_13_button" type="box"
+            pos="0 0 0.0075" size="0.012 0.0095 0.0075"
+            material="Switch_13_button"/>
+    </body>
+  </worldbody>
+</mujoco>
