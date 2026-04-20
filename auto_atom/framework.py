@@ -208,7 +208,14 @@ class PoseRandomRange(BaseModel):
       computed (``delta = sampled * default⁻¹``) and applied to this
       entity's default pose so they move together. Then the per-axis
       ranges are applied as additive offsets on top, just like
-      ``relative`` mode.
+      ``relative`` mode. For an **operator** name, the plain form
+      tracks the operator's **base** pose (equivalent to the
+      ``"<operator>.base"`` form below).
+    - **Operator attribute** (e.g. ``"arm.base"`` or ``"arm.eef"``):
+      same delta-carry semantics as the entity-name form, but
+      explicitly anchored to the operator's **base** or
+      **end-effector** pose. Only ``.base`` / ``.eef`` suffixes are
+      recognized, and only for operator names.
 
     A ``None`` value on an axis (the default) means "do not randomize
     this axis" — it keeps its value from the default pose (in the
@@ -243,6 +250,17 @@ class PoseRandomRange(BaseModel):
             reference: vase1
             x: [-0.005, 0.005]
             y: [-0.005, 0.005]
+
+        # Operator-base reference: carry vase with the arm's base
+        randomization:
+          arm:
+            base:
+              x: [-0.05, 0.05]
+              y: [-0.05, 0.05]
+          vase:
+            reference: arm.base
+            x: [-0.005, 0.005]
+            y: [-0.005, 0.005]
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -267,10 +285,12 @@ class PoseRandomRange(BaseModel):
     leave this axis at the default-pose value."""
     reference: Union[RandomizationReference, str] = RandomizationReference.RELATIVE
     """One of the :class:`RandomizationReference` modes (``"relative"``,
-    ``"absolute_world"``, ``"absolute_base"``) or the **name of another
-    entity**. An entity name causes this entry to track the referenced
-    entity's displacement (delta-carry) and then apply the per-axis
-    ranges as relative offsets on top."""
+    ``"absolute_world"``, ``"absolute_base"``), the **name of another
+    entity**, or an **operator attribute** (``"<operator>.base"`` /
+    ``"<operator>.eef"``). An entity/attribute reference causes this
+    entry to track the referenced pose's displacement (delta-carry) and
+    then apply the per-axis ranges as relative offsets on top. A plain
+    operator name is equivalent to ``"<operator>.base"``."""
     collision_radius: float = 0.05
     """Approximate bounding radius used for pairwise collision rejection (metres)."""
 

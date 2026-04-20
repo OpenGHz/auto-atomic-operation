@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional, Set, Union
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Union
 
 import mujoco
 import numpy as np
@@ -947,6 +947,20 @@ class MujocoTaskBackend(SceneBackend):
     #  Randomization: ordering, reference resolution, and application
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _parse_entity_reference(ref: str) -> Tuple[str, Optional[str]]:
+        """Split an entity-name reference into ``(name, attr)``.
+
+        ``'arm.base'`` → ``('arm', 'base')``; ``'arm.eef'`` → ``('arm', 'eef')``;
+        plain ``'vase'`` → ``('vase', None)``. Only ``.base`` / ``.eef`` suffixes
+        are recognized; any other dotted form is returned unchanged.
+        """
+        if "." in ref:
+            name, attr = ref.split(".", 1)
+            if attr in ("base", "eef"):
+                return name, attr
+        return ref, None
+
     def _randomization_dependencies(self) -> Dict[str, Set[str]]:
         deps: Dict[str, Set[str]] = {name: set() for name in self.randomization}
         for name, rand in self.randomization.items():
@@ -961,8 +975,9 @@ class MujocoTaskBackend(SceneBackend):
             for ref in refs:
                 if isinstance(ref, RandomizationReference):
                     continue
-                if ref in self.randomization:
-                    deps[name].add(ref)
+                bare, _attr = self._parse_entity_reference(ref)
+                if bare in self.randomization:
+                    deps[name].add(bare)
         return deps
 
     def _randomization_order(self) -> List[str]:
@@ -999,8 +1014,9 @@ class MujocoTaskBackend(SceneBackend):
     ) -> Set[str]:
         if isinstance(reference, RandomizationReference):
             return set()
+        bare, _attr = self._parse_entity_reference(reference)
         ancestors: Set[str] = set()
-        pending = [reference]
+        pending = [bare]
         while pending:
             current = pending.pop()
             if current in ancestors:
@@ -1027,22 +1043,37 @@ class MujocoTaskBackend(SceneBackend):
         if isinstance(reference, RandomizationReference):
             return default_pose
         # --- Entity-name reference: delta-carry ---
-        ref_sampled = sampled_poses.get(reference)
-        # Resolve the reference entity's default pose.
-        if reference in self._default_object_poses:
-            ref_default = self._default_object_poses[reference]
-        elif reference in self._default_operator_eef_poses:
-            ref_default = self._default_operator_eef_poses[reference]
-        elif reference in self.object_handlers:
-            ref_default = self.object_handlers[reference].get_pose()
-        elif reference in self.operator_handlers:
-            ref_default = self.operator_handlers[reference].get_end_effector_pose()
+        bare, attr = self._parse_entity_reference(reference)
+        if attr is None and bare in self.operator_handlers:
+            attr = "base"  # plain operator name defaults to its base
+        if attr is not None:
+            if bare not in self.operator_handlers:
+                raise ValueError(
+                    f"Randomization reference '{reference}' — '.{attr}' is only "
+                    f"valid for operator names, but '{bare}' is not a known operator."
+                )
+            handler = self.operator_handlers[bare]
+            if attr == "base":
+                ref_default = self._default_operator_base_poses.get(
+                    bare, handler.get_base_pose()
+                )
+            else:
+                ref_default = self._default_operator_eef_poses.get(
+                    bare, handler.get_end_effector_pose()
+                )
+            ref_sampled = sampled_poses.get(f"{bare}.{attr}")
         else:
-            raise ValueError(
-                f"Randomization reference '{reference}' is not a known mode "
-                "('relative', 'absolute_world', 'absolute_base') nor an "
-                "existing object/operator name."
-            )
+            ref_sampled = sampled_poses.get(bare)
+            if bare in self._default_object_poses:
+                ref_default = self._default_object_poses[bare]
+            elif bare in self.object_handlers:
+                ref_default = self.object_handlers[bare].get_pose()
+            else:
+                raise ValueError(
+                    f"Randomization reference '{reference}' is not a known mode "
+                    "('relative', 'absolute_world', 'absolute_base') nor an "
+                    "existing object/operator name."
+                )
         if ref_sampled is None:
             return default_pose  # entity not randomized → no delta
         delta = compose_pose(ref_sampled, inverse_pose(ref_default))
@@ -1151,6 +1182,8 @@ class MujocoTaskBackend(SceneBackend):
                 )
 
             for name, pose in env_sampled_poses.items():
+                if name not in key_buffers:
+                    continue
                 key_buffers[name].position[env_index] = pose.position[0]
                 key_buffers[name].orientation[env_index] = pose.orientation[0]
             for action in env_actions:
@@ -1309,6 +1342,8 @@ class MujocoTaskBackend(SceneBackend):
                 )
                 sampled_poses[name] = sampled_base
                 working_poses[name] = sampled_base
+                sampled_poses[f"{name}.base"] = sampled_base
+                working_poses[f"{name}.base"] = sampled_base
                 actions.append(
                     _PendingRandomizationAction(
                         kind="operator_base",
@@ -1332,6 +1367,8 @@ class MujocoTaskBackend(SceneBackend):
                 )
                 sampled_poses[name] = sampled_eef
                 working_poses[name] = sampled_eef
+                sampled_poses[f"{name}.eef"] = sampled_eef
+                working_poses[f"{name}.eef"] = sampled_eef
                 actions.append(
                     _PendingRandomizationAction(
                         kind="operator_eef",
@@ -1354,7 +1391,7 @@ class MujocoTaskBackend(SceneBackend):
             env_index,
             working_poses,
         )
-        return {name: sampled_eef}, [
+        return {name: sampled_eef, f"{name}.eef": sampled_eef}, [
             _PendingRandomizationAction(
                 kind="operator_eef",
                 owner=name,
@@ -1445,25 +1482,37 @@ class MujocoTaskBackend(SceneBackend):
     ) -> PoseState:
         if isinstance(reference, RandomizationReference):
             return default_pose
-        ref_sampled = sampled_poses.get(reference)
-        if reference in self._default_object_poses:
-            ref_default = self._default_object_poses[reference].select(env_index)
-        elif reference in self._default_operator_eef_poses:
-            ref_default = self._default_operator_eef_poses[reference].select(env_index)
-        elif reference in self.object_handlers:
-            ref_default = self.object_handlers[reference].get_pose().select(env_index)
-        elif reference in self.operator_handlers:
-            ref_default = (
-                self.operator_handlers[reference]
-                .get_end_effector_pose()
-                .select(env_index)
-            )
+        bare, attr = self._parse_entity_reference(reference)
+        if attr is None and bare in self.operator_handlers:
+            attr = "base"  # plain operator name defaults to its base
+        if attr is not None:
+            if bare not in self.operator_handlers:
+                raise ValueError(
+                    f"Randomization reference '{reference}' — '.{attr}' is only "
+                    f"valid for operator names, but '{bare}' is not a known operator."
+                )
+            handler = self.operator_handlers[bare]
+            if attr == "base":
+                ref_default = self._default_operator_base_poses.get(
+                    bare, handler.get_base_pose()
+                ).select(env_index)
+            else:
+                ref_default = self._default_operator_eef_poses.get(
+                    bare, handler.get_end_effector_pose()
+                ).select(env_index)
+            ref_sampled = sampled_poses.get(f"{bare}.{attr}")
         else:
-            raise ValueError(
-                f"Randomization reference '{reference}' is not a known mode "
-                "('relative', 'absolute_world', 'absolute_base') nor an existing "
-                "object/operator name."
-            )
+            ref_sampled = sampled_poses.get(bare)
+            if bare in self._default_object_poses:
+                ref_default = self._default_object_poses[bare].select(env_index)
+            elif bare in self.object_handlers:
+                ref_default = self.object_handlers[bare].get_pose().select(env_index)
+            else:
+                raise ValueError(
+                    f"Randomization reference '{reference}' is not a known mode "
+                    "('relative', 'absolute_world', 'absolute_base') nor an existing "
+                    "object/operator name."
+                )
         if ref_sampled is None:
             return default_pose
         delta = compose_pose(ref_sampled, inverse_pose(ref_default))

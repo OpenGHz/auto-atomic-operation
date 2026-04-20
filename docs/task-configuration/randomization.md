@@ -204,7 +204,8 @@ interpreted:
 | `relative` (default) | Sampled values are **added** to the entity's default pose (the existing behavior). |
 | `absolute_world`  | Sampled values are **absolute world-frame** coordinates (metres) / Euler angles (rad). |
 | `absolute_base`   | Sampled values are absolute coordinates in the **operator's base frame**, then transformed to world before being applied. **Only valid for operator EEF randomization** (direct operator form or the nested `eef:` sub-entry). |
-| `<entity_name>`   | **Entity-reference mode.** The referenced entity is randomized first (dependency ordering via topological sort). Then a **delta-carry** is applied: `delta = ref_sampled * ref_default⁻¹` is computed and applied to this entity's default pose, preserving the original spatial relationship. After carrying, the per-axis ranges are applied as additive offsets (like `relative` mode). |
+| `<entity_name>`   | **Entity-reference mode.** The referenced entity is randomized first (dependency ordering via topological sort). Then a **delta-carry** is applied: `delta = ref_sampled * ref_default⁻¹` is computed and applied to this entity's default pose, preserving the original spatial relationship. After carrying, the per-axis ranges are applied as additive offsets (like `relative` mode). For an **object** name the referenced pose is the object pose; for an **operator** name (plain, no suffix) the referenced pose is the operator's **base** — equivalent to `<operator>.base` below. |
+| `<operator>.base` / `<operator>.eef` | **Operator-attribute reference.** Same delta-carry semantics as an entity name, but anchored to the operator's **base** (`get_base_pose()`) or **home end-effector** (`get_end_effector_pose()`) pose. Only `.base` / `.eef` are recognized, and only for operator names. A plain operator name (e.g. `arm`) is equivalent to `arm.base`. |
 
 Examples:
 
@@ -267,6 +268,31 @@ stays inside the vase's opening regardless of where the vase is placed.
 
 The entries are automatically topologically sorted — `vase` is processed before
 `flower`. Circular references (A → B → A) raise a ``ValueError``.
+
+Operator-attribute reference example (objects drift with the arm's base):
+
+```yaml
+task:
+  randomization:
+    arm:
+      base:
+        x: [-0.05, 0.05]
+        y: [-0.05, 0.05]
+    vase:
+      reference: arm.base        # equivalent to `reference: arm`
+      x: [-0.005, 0.005]
+      y: [-0.005, 0.005]
+    gripper_hover: # rarely used
+      reference: arm.eef         # track the operator's home EEF instead
+      z: [-0.01, 0.01]
+```
+
+The plain `reference: arm` form is equivalent to `arm.base`; write `arm.eef`
+explicitly to track the operator's home end-effector pose. If the referenced
+attribute is not randomized (for example `arm.base` with no `base:` sub-entry),
+the delta is zero and this entry keeps its own default pose before applying the
+per-axis offsets. `.base` / `.eef` suffixes only apply to operator names; using
+them on an object (e.g. `vase.base`) raises a `ValueError`.
 
 Restrictions on `absolute_base`:
 
@@ -521,6 +547,14 @@ Each randomization key is resolved in order:
    - for `reference: absolute_base` the sampler also calls `get_base_pose()`
      to transform between the base frame and world
 3. If neither matches, a warning is emitted and the key is skipped.
+
+References are resolved with the same fallback:
+
+- `reference: <object_name>` uses the referenced object's `get_pose()`.
+- `reference: <operator_name>` uses the operator's **base** pose
+  (`get_base_pose()`), equivalent to `<operator_name>.base`.
+- `reference: <operator_name>.eef` uses the operator's home end-effector pose (rarely used).
+- `reference: <non_operator>.base` / `.eef` raises a `ValueError`.
 
 ## Multi-Round Evaluation
 
