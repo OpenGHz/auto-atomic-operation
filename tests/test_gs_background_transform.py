@@ -250,3 +250,28 @@ def test_batched_gs_reset_keeps_multi_backgrounds_when_disabled(monkeypatch):
     BatchedGSUnifiedMujocoEnv.reset(env, env_mask)
 
     env._randomize_env_bg_assignment.assert_not_called()
+
+
+def test_batched_gs_is_updated_broadcasts_shared_physics_result():
+    class _FakeEnv:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def is_updated(self) -> bool:
+            self.calls += 1
+            return self.calls == 1
+
+    fake = _FakeEnv()
+    env = object.__new__(BatchedGSUnifiedMujocoEnv)
+    env._share_physics = True
+    env.batch_size = 3
+    env.envs = [fake, fake, fake]
+
+    np.testing.assert_array_equal(
+        BatchedGSUnifiedMujocoEnv.is_updated(env),
+        np.array([True, True, True]),
+    )
+    np.testing.assert_array_equal(
+        BatchedGSUnifiedMujocoEnv.is_updated(env),
+        np.array([False, False, False]),
+    )

@@ -1566,6 +1566,19 @@ class BatchedGSUnifiedMujocoEnv(BatchedUnifiedMujocoEnv):
         else:
             super().refresh_viewer()
 
+    def is_updated(self) -> np.ndarray:
+        if not self._share_physics:
+            return super().is_updated()
+        # ``UnifiedMujocoEnv.is_updated()`` is stateful: it advances the
+        # env's cached ``_last_time`` when reporting ``True``. In shared
+        # physics mode ``self.envs`` contains N aliases of the same env, so
+        # calling the parent implementation would yield
+        # ``[True, False, False, ...]`` for a single physics tick, causing
+        # downstream batched samplers to only record env 0. Probe the shared
+        # physics replica once and broadcast the result to all virtual envs.
+        updated = bool(self.envs[0].is_updated())
+        return np.full(self.batch_size, updated, dtype=bool)
+
     def set_background_transform(
         self, pose: BackgroundPose | list[float]
     ) -> BackgroundPose:
