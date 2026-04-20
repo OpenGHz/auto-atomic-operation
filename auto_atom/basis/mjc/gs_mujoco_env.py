@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import glob as _glob
 import hashlib
+from collections import OrderedDict
 from pathlib import Path
 from typing import Any, Dict, Optional, Set
 
@@ -581,6 +582,11 @@ class GaussianRenderConfig(BaseModel):
     """Gaussian splat renderer minibatch size. Controls how many gaussians are
     processed per kernel launch; larger values use more VRAM. Passed through to
     every ``BatchSplatConfig`` built by the GS env classes."""
+    share_physics: bool = False
+    """In batched GS envs, share a single physics replica and foreground GS
+    render across the whole batch; only the composited background differs per
+    env. Requires ``background_ply`` to be multi-valued (list/glob) and
+    ``batch_size > 1``. Validated on ``GSEnvConfig``."""
 
     def resolved_body_gaussians(self) -> Dict[str, str]:
         """Return ``body_gaussians`` with any configured transforms / mirrors
@@ -856,6 +862,19 @@ class GSEnvConfig(EnvConfig):
                 object.__setattr__(cam, "enable_mask", False)
             if cam.name in gs_heat:
                 object.__setattr__(cam, "enable_heat_map", False)
+
+        if self.gaussian_render.share_physics:
+            if self.batch_size <= 1:
+                raise ValueError(
+                    "gaussian_render.share_physics requires batch_size > 1; "
+                    f"got batch_size={self.batch_size}"
+                )
+            if not self.gaussian_render.is_multi_background():
+                raise ValueError(
+                    "gaussian_render.share_physics requires background_ply to "
+                    "be multi-valued (list or glob). A single background would "
+                    "produce identical observations across the batch."
+                )
         return self
 
 
@@ -1330,15 +1349,38 @@ class BatchedGSUnifiedMujocoEnv(BatchedUnifiedMujocoEnv):
 
     _GS_MASK_ALPHA_THRESHOLD = 0.5
     _GS_MASK_DEPTH_EPS = 0.01
+    # Class-level defaults so that tests which bypass ``__init__`` via
+    # ``object.__new__(BatchedGSUnifiedMujocoEnv)`` still see sensible values
+    # for the shared-physics attrs.
+    _share_physics: bool = False
+    _virtual_batch_size: int = 0
 
     def __init__(self, config: Optional[GSEnvConfig] = None, **kwargs) -> None:
         if config is None:
             config = GSEnvConfig.model_validate(kwargs)
-        # Parent creates N plain UnifiedMujocoEnv instances (physics only).
-        # GSEnvConfig validator already disabled native color/depth on GS cameras.
-        super().__init__(config, **kwargs)
 
         gs_cfg = config.gaussian_render
+        self._share_physics = bool(gs_cfg.share_physics)
+        self._virtual_batch_size = int(config.batch_size)
+
+        # Parent creates N plain UnifiedMujocoEnv instances (physics only).
+        # GSEnvConfig validator already disabled native color/depth on GS cameras.
+        # In share_physics mode, only 1 physics replica is created; self.batch_size
+        # is then restored to the virtual batch size so downstream bg bookkeeping,
+        # capture_observation, and user-visible APIs continue to see N.
+        if self._share_physics:
+            physics_cfg = config.model_copy(update={"batch_size": 1})
+            super().__init__(physics_cfg, **kwargs)
+            self.batch_size = self._virtual_batch_size
+            self.config = config
+            # Expose N aliases of the single physics env so external code
+            # (backends, eval scripts) can index ``env.envs[i]`` for any i in
+            # ``[0, N)``. Parent methods that iterate ``self.envs`` see N, so
+            # the step-like methods below override them to avoid N× work.
+            self.envs = [self.envs[0]] * self._virtual_batch_size
+        else:
+            super().__init__(config, **kwargs)
+
         self._gs_background_source = gs_cfg.background_ply
         self._is_multi_bg = gs_cfg.is_multi_background()
         self._gs_body_gaussians = gs_cfg.resolved_body_gaussians()
@@ -1398,6 +1440,83 @@ class BatchedGSUnifiedMujocoEnv(BatchedUnifiedMujocoEnv):
         )
 
     # ------------------------------------------------------------------
+    # shared-physics step-like overrides (run the single physics env once)
+    # ------------------------------------------------------------------
+    #
+    # In shared-physics mode ``self.envs`` is N aliases of the same underlying
+    # ``UnifiedMujocoEnv``. Parent methods that iterate ``for env in self.envs``
+    # therefore call the same env N times; for getters that is cheap (identity
+    # rows stacked), but for anything that advances / mutates physics it is a
+    # waste at best, and incorrect (last-wins on different inputs) at worst.
+    # Override the hot step-like methods to apply element ``[0]`` of any
+    # ``(N, …)`` input exactly once.
+
+    @staticmethod
+    def _any_in_mask(batch_size: int, env_mask) -> bool:
+        if env_mask is None:
+            return True
+        return bool(np.asarray(env_mask, dtype=bool).reshape(-1).any())
+
+    def step(self, action: np.ndarray, env_mask: np.ndarray | None = None) -> None:
+        if not self._share_physics:
+            return super().step(action, env_mask)
+        action = np.asarray(action, dtype=np.float64)
+        if action.ndim == 1:
+            raise ValueError(
+                f"Batched step expects shape (B, action_dim), got {action.shape}"
+            )
+        if action.shape[0] != self.batch_size:
+            raise ValueError(
+                f"Expected action shape ({self.batch_size}, action_dim), got {action.shape}"
+            )
+        if self._any_in_mask(self.batch_size, env_mask):
+            self.envs[0].step(action[0])
+
+    def update(self, env_mask: np.ndarray | None = None) -> None:
+        if not self._share_physics:
+            return super().update(env_mask)
+        if self._any_in_mask(self.batch_size, env_mask):
+            self.envs[0].update()
+
+    def apply_joint_action(
+        self,
+        operator: str,
+        action,
+        env_mask: np.ndarray | None = None,
+        kinematic: bool = False,
+    ) -> None:
+        if not self._share_physics:
+            return super().apply_joint_action(operator, action, env_mask, kinematic)
+        action = np.asarray(action, dtype=np.float64)
+        first = action if action.ndim == 1 else action[0]
+        if self._any_in_mask(self.batch_size, env_mask):
+            self.envs[0].apply_joint_action(operator, first, kinematic=kinematic)
+
+    def apply_pose_action(
+        self,
+        operator: str,
+        position,
+        orientation,
+        gripper=None,
+        env_mask: np.ndarray | None = None,
+        kinematic: bool = False,
+    ) -> None:
+        if not self._share_physics:
+            return super().apply_pose_action(
+                operator, position, orientation, gripper, env_mask, kinematic
+            )
+        pos = np.asarray(position)
+        ori = np.asarray(orientation)
+        p0 = pos if pos.ndim == 1 else pos[0]
+        o0 = ori if ori.ndim == 1 else ori[0]
+        g0 = None
+        if gripper is not None:
+            g = np.asarray(gripper, dtype=np.float64)
+            g0 = g if g.ndim == 1 else g[0]
+        if self._any_in_mask(self.batch_size, env_mask):
+            self.envs[0].apply_pose_action(operator, p0, o0, g0, kinematic=kinematic)
+
+    # ------------------------------------------------------------------
     # background lifecycle
     # ------------------------------------------------------------------
 
@@ -1428,12 +1547,24 @@ class BatchedGSUnifiedMujocoEnv(BatchedUnifiedMujocoEnv):
         return self._env_bg_idx
 
     def reset(self, env_mask: np.ndarray | None = None) -> None:
-        super().reset(env_mask)
+        if self._share_physics:
+            # Partial per-env resets aren't meaningful when physics is shared;
+            # reset the single replica iff any virtual env asked for it.
+            if self._any_in_mask(self.batch_size, env_mask):
+                self.envs[0].reset()
+        else:
+            super().reset(env_mask)
         if (
             self._is_multi_bg
             and self.config.gaussian_render.randomize_background_on_reset
         ):
             self._randomize_env_bg_assignment()
+
+    def refresh_viewer(self) -> None:
+        if self._share_physics:
+            self.envs[0].refresh_viewer()
+        else:
+            super().refresh_viewer()
 
     def set_background_transform(
         self, pose: BackgroundPose | list[float]
@@ -1463,9 +1594,38 @@ class BatchedGSUnifiedMujocoEnv(BatchedUnifiedMujocoEnv):
     # ------------------------------------------------------------------
 
     def capture_observation(self) -> dict[str, dict[str, Any]]:
-        obs = super().capture_observation()
+        if self._share_physics:
+            # Bypass parent's N-fold loop: in shared mode ``self.envs`` is N
+            # aliases of the same env, so parent would call
+            # ``env.capture_observation()`` N times redundantly.
+            obs = self._broadcast_single_obs(self.envs[0].capture_observation())
+        else:
+            obs = super().capture_observation()
         self._inject_batched_gs_renders(obs)
         return obs
+
+    def _broadcast_single_obs(
+        self, obs_one: dict[str, dict[str, Any]]
+    ) -> dict[str, dict[str, Any]]:
+        """Replicate a single-env obs dict into the batched ``(N, ...)`` format."""
+        n = self.batch_size
+        batched: dict[str, dict[str, Any]] = {}
+        for key, entry in obs_one.items():
+            data = entry["data"]
+            t = entry["t"]
+            if isinstance(data, dict):
+                # Structured entries: list-of-N where each row is the same dict.
+                batched[key] = {
+                    "data": [data] * n,
+                    "t": np.asarray([t] * n),
+                }
+            else:
+                arr = np.asarray(data)
+                batched[key] = {
+                    "data": np.broadcast_to(arr[None, ...], (n,) + arr.shape).copy(),
+                    "t": np.asarray([t] * n),
+                }
+        return batched
 
     def _inject_batched_gs_renders(self, obs: dict[str, dict[str, Any]]) -> None:
         """Batch-render GS color/depth/mask across all envs and cameras.
@@ -1474,6 +1634,10 @@ class BatchedGSUnifiedMujocoEnv(BatchedUnifiedMujocoEnv):
         called once per resolution group with ``Ncam > 1``, rather than once
         per camera.
         """
+        if self._share_physics:
+            self._inject_shared_gs_renders(obs)
+            return
+
         gs_color_set = self.config.gs_color_cameras
         gs_depth_set = self.config.gs_depth_cameras
         gs_mask_set = self.config.gs_mask_cameras | self.config.gs_heat_map_cameras
@@ -1971,6 +2135,346 @@ class BatchedGSUnifiedMujocoEnv(BatchedUnifiedMujocoEnv):
                 heat_map_t[env_idx, ..., channel_idx] |= visible[env_idx]
 
         # Single GPU→CPU transfer of final compact results
+        binary_mask = binary_mask_t.to(torch.uint8).cpu().numpy()
+        heat_map = heat_map_t.to(torch.uint8).cpu().numpy()
+        return binary_mask, heat_map
+
+    # ------------------------------------------------------------------
+    # shared-physics GS path
+    # ------------------------------------------------------------------
+
+    def _inject_shared_gs_renders(self, obs: dict[str, dict[str, Any]]) -> None:
+        """Render GS color/depth/mask for the shared-physics mode.
+
+        Physics (and thus body/camera poses) is shared across the virtual
+        batch: foreground gaussians are updated and rasterized only once at
+        ``nenv=1``. Each unique background is rendered once at ``nenv=1`` and
+        scattered to the rows of the virtual batch that use it. The
+        compositing against the shared foreground is done in Python with
+        PyTorch broadcasting between the ``(1, ...)`` foreground tensors and
+        ``(N, ...)`` background tensors.
+        """
+        gs_color_set = self.config.gs_color_cameras
+        gs_depth_set = self.config.gs_depth_cameras
+        gs_mask_set = self.config.gs_mask_cameras | self.config.gs_heat_map_cameras
+        all_gs_cams = [
+            c
+            for c in self._camera_specs
+            if c in gs_color_set | gs_depth_set | gs_mask_set
+        ]
+        if not all_gs_cams:
+            return
+
+        structured: bool = self.config.structured
+        N = self._virtual_batch_size
+        env0 = self.envs[0]
+        t0 = (
+            int(env0.data.time * 1e9) if self.config.stamp_ns else float(env0.data.time)
+        )
+        timestamps = np.full((N,), t0)
+
+        # body_pos/body_quat come from the single shared physics env.
+        body_pos = np.asarray(env0.data.xpos, dtype=np.float32).reshape(
+            1, env0.model.nbody, 3
+        )
+        body_quat = np.asarray(env0.data.xquat, dtype=np.float32).reshape(
+            1, env0.model.nbody, 4
+        )
+
+        fg_gsb = self._fg_gs_renderer.batch_update_gaussians(body_pos, body_quat)
+
+        res_groups: OrderedDict[tuple[int, int, bool], list[str]] = OrderedDict()
+        for cam_name in all_gs_cams:
+            spec = self._camera_specs[cam_name]
+            key = (spec.height, spec.width, spec.is_static)
+            res_groups.setdefault(key, []).append(cam_name)
+
+        for (H, W, is_static), cam_names in res_groups.items():
+            Ncam = len(cam_names)
+            cam_ids = [self._camera_ids[c] for c in cam_names]
+
+            cam_pos = np.stack(
+                [
+                    np.asarray(env0.data.cam_xpos[cid], dtype=np.float32)
+                    for cid in cam_ids
+                ]
+            ).reshape(1, Ncam, 3)
+            cam_xmat = np.stack(
+                [
+                    np.asarray(env0.data.cam_xmat[cid], dtype=np.float32)
+                    for cid in cam_ids
+                ]
+            ).reshape(1, Ncam, 9)
+            fovy = np.asarray(
+                [env0.model.cam_fovy[cid] for cid in cam_ids], dtype=np.float32
+            ).reshape(1, Ncam)
+
+            any_color = any(c in gs_color_set for c in cam_names)
+            any_depth = any(c in gs_depth_set for c in cam_names)
+            any_mask = (
+                any(c in gs_mask_set for c in cam_names) and self._gs_mask_renderers
+            )
+
+            # Foreground render at nenv=1, no bg_imgs (we composite manually
+            # so background can have leading dim N).
+            fg_rgb_1, fg_depth_1 = self._fg_gs_renderer.batch_env_render(
+                fg_gsb, cam_pos, cam_xmat, H, W, fovy
+            )
+            alphas_1 = self._fg_gs_renderer.rasterizations[1]
+
+            # Background render per unique bg idx, scatter to (N, Ncam, ...).
+            # Static cameras reuse the cached (N, Ncam, ...) tensor across frames;
+            # bg assignment changes (on reset with randomize=True) clear the cache.
+            bg_rgb_N: torch.Tensor | None = None
+            bg_depth_N: torch.Tensor | None = None
+            if self._bg_gs_renderers:
+                bg_rgb_N, bg_depth_N = self._render_shared_per_env_backgrounds(
+                    cam_pos,
+                    cam_xmat,
+                    fovy,
+                    H,
+                    W,
+                    body_pos,
+                    body_quat,
+                    cam_ids=cam_ids,
+                    use_cache=is_static,
+                )
+
+            # Composite with broadcasting.
+            if bg_rgb_N is not None:
+                one_minus_alpha = 1 - alphas_1
+                full_rgb = fg_rgb_1 * alphas_1 + bg_rgb_N * one_minus_alpha
+                full_depth = fg_depth_1 * alphas_1 + bg_depth_N * one_minus_alpha
+            else:
+                full_rgb = fg_rgb_1.expand(N, *fg_rgb_1.shape[1:])
+                full_depth = fg_depth_1.expand(N, *fg_depth_1.shape[1:])
+
+            kc = self._key_creator
+            for cam_idx, cam_name in enumerate(cam_names):
+                spec = self._camera_specs[cam_name]
+                if cam_name in gs_color_set:
+                    rgb = (
+                        torch.clamp(full_rgb[:, cam_idx], 0.0, 1.0)
+                        .mul(255)
+                        .to(torch.uint8)
+                    )
+                    if self.config.to_numpy:
+                        rgb = rgb.cpu().numpy()
+                    obs[kc.create_color_key(cam_name)] = {
+                        "data": rgb
+                        if not structured
+                        else create_image_data_batch(
+                            rgb, timestamps, cam_name, tobytes=False
+                        ),
+                        "t": timestamps,
+                    }
+                if cam_name in gs_depth_set:
+                    depth = full_depth[:, cam_idx, :, :, 0]
+                    if self.config.to_numpy:
+                        depth = depth.cpu().numpy()
+                        depth[depth > spec.depth_max] = 0.0
+                    else:
+                        depth = torch.where(
+                            depth > spec.depth_max,
+                            torch.zeros_like(depth),
+                            depth,
+                        )
+                    data = (
+                        create_image_data_batch(depth, timestamps, cam_name)
+                        if structured
+                        else depth
+                    )
+                    obs[kc.create_depth_key(cam_name)] = {
+                        "data": data,
+                        "t": timestamps,
+                    }
+
+            if any_mask:
+                scene_depth_t = GSUnifiedMujocoEnv._compose_mask_scene_depth(
+                    fg_depth=fg_depth_1,
+                    bg_depth=bg_depth_N,
+                )
+                all_masks, all_heat_maps = self._render_shared_gs_masks_multicam(
+                    cam_pos=cam_pos,
+                    cam_xmat=cam_xmat,
+                    fovy=fovy,
+                    height=H,
+                    width=W,
+                    body_pos=body_pos,
+                    body_quat=body_quat,
+                    scene_depth_t=scene_depth_t,
+                )
+                for cam_idx, cam_name in enumerate(cam_names):
+                    if cam_name not in gs_mask_set:
+                        continue
+                    if cam_name in self.config.gs_mask_cameras:
+                        data = (
+                            create_image_data_batch(
+                                all_masks[:, cam_idx], timestamps, cam_name
+                            )
+                            if structured
+                            else all_masks[:, cam_idx]
+                        )
+                        obs[kc.create_mask_key(cam_name)] = {
+                            "data": data,
+                            "t": timestamps,
+                        }
+                    if cam_name in self.config.gs_heat_map_cameras:
+                        data = (
+                            create_image_data_batch(
+                                all_heat_maps[:, cam_idx], timestamps, cam_name
+                            )
+                            if structured
+                            else all_heat_maps[:, cam_idx]
+                        )
+                        obs[kc.create_heat_map_key(cam_name)] = {
+                            "data": data,
+                            "t": timestamps,
+                        }
+            # Silence unused flags on pure-color groups.
+            _ = any_color, any_depth
+
+    def _render_shared_per_env_backgrounds(
+        self,
+        cam_pos: np.ndarray,
+        cam_xmat: np.ndarray,
+        fovy: np.ndarray,
+        height: int,
+        width: int,
+        body_pos: np.ndarray,
+        body_quat: np.ndarray,
+        cam_ids: list[int],
+        use_cache: bool = True,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Render each unique background once at ``nenv=1``, scatter to
+        ``(N, Ncam, H, W, C)`` at rows selected by ``self._env_bg_idx``.
+
+        When ``use_cache`` is True (static cameras + fixed bg assignment), the
+        scattered ``(N, Ncam, ...)`` tensor is cached under ``self._bg_cache``
+        keyed by ``(tuple(cam_ids), width, height)``; subsequent frames return
+        the cached tensor unchanged. ``_randomize_env_bg_assignment`` and
+        ``set_background_transform`` both clear the cache so stale mappings
+        cannot leak across bg resampling.
+        """
+        cache_key = (tuple(cam_ids), width, height)
+        if use_cache and cache_key in self._bg_cache:
+            return self._bg_cache[cache_key]
+
+        N = self._virtual_batch_size
+        bg_rgb_full: torch.Tensor | None = None
+        bg_depth_full: torch.Tensor | None = None
+        unique_bg_idxs = np.unique(self._env_bg_idx)
+        for bg_idx in unique_bg_idxs:
+            rows = np.nonzero(self._env_bg_idx == bg_idx)[0]
+            bg_rend = self._bg_gs_renderers[int(bg_idx)]
+            gsb = bg_rend.batch_update_gaussians(body_pos, body_quat)
+            sub_rgb, sub_depth = bg_rend.batch_env_render(
+                gsb, cam_pos, cam_xmat, height, width, fovy
+            )
+            # sub_rgb, sub_depth: (1, Ncam, H, W, C)
+            if bg_rgb_full is None:
+                shape_rgb = (N,) + tuple(sub_rgb.shape[1:])
+                shape_depth = (N,) + tuple(sub_depth.shape[1:])
+                bg_rgb_full = torch.empty(
+                    shape_rgb, dtype=sub_rgb.dtype, device=sub_rgb.device
+                )
+                bg_depth_full = torch.empty(
+                    shape_depth, dtype=sub_depth.dtype, device=sub_depth.device
+                )
+            rows_t = torch.as_tensor(rows, dtype=torch.long, device=bg_rgb_full.device)
+            bg_rgb_full.index_copy_(
+                0, rows_t, sub_rgb.expand(len(rows), *sub_rgb.shape[1:])
+            )
+            bg_depth_full.index_copy_(
+                0, rows_t, sub_depth.expand(len(rows), *sub_depth.shape[1:])
+            )
+        assert bg_rgb_full is not None and bg_depth_full is not None
+        if use_cache:
+            self._bg_cache[cache_key] = (bg_rgb_full, bg_depth_full)
+        return bg_rgb_full, bg_depth_full
+
+    def _render_shared_gs_masks_multicam(
+        self,
+        *,
+        cam_pos: np.ndarray,
+        cam_xmat: np.ndarray,
+        fovy: np.ndarray,
+        height: int,
+        width: int,
+        body_pos: np.ndarray,
+        body_quat: np.ndarray,
+        scene_depth_t: torch.Tensor,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Shared-physics mask rendering.
+
+        Each mask object is rasterized once at ``nenv=1``; the visibility
+        comparison is broadcast against ``(N, Ncam, H, W)`` scene depth.
+        Heat-map channel assignment is driven by ``envs[0]`` because all
+        virtual envs share physics (and therefore interest-object state).
+        """
+        N = self._virtual_batch_size
+        # scene_depth_t may be (1, Ncam, H, W, 1) or (N, Ncam, H, W, 1).
+        if scene_depth_t.ndim == 5:
+            scene_depth = scene_depth_t[..., 0]
+        elif scene_depth_t.ndim == 4:
+            scene_depth = scene_depth_t
+        else:
+            raise TypeError(
+                "scene_depth_t must be (B,Ncam,H,W,1) or (B,Ncam,H,W), "
+                f"got shape {tuple(scene_depth_t.shape)}"
+            )
+        Ncam = scene_depth.shape[1]
+        scene_depth = torch.nan_to_num(
+            scene_depth.detach(), nan=0.0, posinf=0.0, neginf=0.0
+        )
+
+        n_heatmap_ops = len(self.config.heatmap_operations)
+        dev = scene_depth.device
+        binary_mask_t = torch.zeros(
+            (N, Ncam, height, width), dtype=torch.bool, device=dev
+        )
+        heat_map_t = torch.zeros(
+            (N, Ncam, height, width, n_heatmap_ops), dtype=torch.bool, device=dev
+        )
+
+        heatmap_ops_index = {
+            op: i for i, op in enumerate(self.config.heatmap_operations)
+        }
+
+        body_pos_t = torch.as_tensor(body_pos, device=dev, dtype=torch.float32)
+        body_quat_t = torch.as_tensor(body_quat, device=dev, dtype=torch.float32)
+        cam_pos_t = torch.as_tensor(cam_pos, device=dev, dtype=torch.float32)
+        cam_xmat_t = torch.as_tensor(cam_xmat, device=dev, dtype=torch.float32)
+
+        interest_ops = self.envs[0]._interest_object_operations
+
+        for object_name, renderer in self._gs_mask_renderers.items():
+            gsb = renderer.batch_update_gaussians(body_pos_t, body_quat_t)
+            alpha_t, obj_depth_t = renderer.batch_env_render(
+                gsb, cam_pos_t, cam_xmat_t, height, width, fovy
+            )
+            # alpha_t: (1, Ncam, H, W, 3), obj_depth_t: (1, Ncam, H, W, 1)
+            alpha_max = alpha_t.detach().max(dim=-1).values  # (1, Ncam, H, W)
+            obj_depth = torch.nan_to_num(
+                obj_depth_t[..., 0].detach(), nan=0.0, posinf=0.0, neginf=0.0
+            )  # (1, Ncam, H, W)
+
+            raw_visible = alpha_max > self._GS_MASK_ALPHA_THRESHOLD  # (1, ...)
+            depth_valid = (scene_depth > 0.0) & (
+                obj_depth > 0.0
+            )  # broadcasts to (N, ...)
+            occluded = depth_valid & (obj_depth > scene_depth + self._GS_MASK_DEPTH_EPS)
+            visible = raw_visible & ~occluded  # (N, Ncam, H, W)
+            binary_mask_t |= visible
+
+            operation_name = interest_ops.get(object_name)
+            if operation_name is None:
+                continue
+            channel_idx = heatmap_ops_index.get(operation_name)
+            if channel_idx is None:
+                continue
+            heat_map_t[..., channel_idx] |= visible
+
         binary_mask = binary_mask_t.to(torch.uint8).cpu().numpy()
         heat_map = heat_map_t.to(torch.uint8).cpu().numpy()
         return binary_mask, heat_map

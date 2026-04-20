@@ -295,6 +295,80 @@ mask 循环中每个 object 都调用 `batch_update_gaussians(body_pos, body_qua
 
 ---
 
+## Phase 3: 共享物理模式 (2026-04-20)
+
+`BatchedGSUnifiedMujocoEnv` 新增 `gaussian_render.share_physics` 开关，专门针对「batch 各 env 仅背景不同、其余物理状态完全一致」的场景随机化用法。开启后：
+
+- 只创建 **1 个** `UnifiedMujocoEnv` 物理副本；
+- 每个 step 物理只更新一次；
+- 前景 Gaussian 的 `batch_update_gaussians` + `batch_env_render` 也只跑一次（`nenv=1`）；
+- 各 unique 背景各渲染一次（`nenv=1`），按 `_env_bg_idx` 映射 scatter 到 `(N, Ncam, H, W, C)`；
+- 前景/背景的合成在 Python 侧用 PyTorch 广播完成（`fg * α + bg * (1-α)`），合成结果自然带 `N` 的 batch 维。
+
+### 启用方式
+
+```yaml
+env:
+  _target_: auto_atom.basis.mjc.gs_mujoco_env.BatchedGSUnifiedMujocoEnv
+  config:
+    batch_size: 10
+    gaussian_render:
+      background_ply: ["bg1.ply", "bg2.ply", ...]   # 或 glob
+      share_physics: true
+```
+
+Config validator 会强制要求：
+- `batch_size > 1`（否则退化为单 env，无意义）；
+- `background_ply` 为 list/glob（单背景会产生 N 张完全一样的观测，开 share_physics 无收益）。
+
+### 对外 API 兼容性
+
+- `env.envs` 仍提供 N 个别名（`self.envs = [env_0] * N`），外部代码（如 `mujoco_backend.home()`）里的 `self.env.envs[env_index]` 依然可用。
+- 所有 getter（`get_body_pose` 等）返回 `(N, …)`：父类 `np.stack` 在别名列表上自然得到 N 行相同数据。
+- 热路径的 step-like 方法（`step`、`update`、`apply_joint_action`、`apply_pose_action`、`reset`、`capture_observation`）被重写为「仅在 env_0 上执行一次」，避免父类 `for env in self.envs` 在别名列表上产生 N× 冗余。
+- `env_mask` 在 shared 模式下按 `env_mask.any()` 合并——部分子 env reset/step 在共享物理里没有意义。
+
+### Benchmark (open_door_airbot_play_gs, 2026-04-20)
+
+> 同一硬件 / 同一任务，仅切换 `share_physics`；bench 命令：`python examples/bench_env.py env.batch_size=X [+env.gaussian_render.share_physics=true]`
+> `open_door_airbot_play_gs` 的背景是 14 张 `bg*.ply`（每张 ~1.17 M 点），相机为静态。
+> shared 路径复用 `_bg_cache`，每种 unique 背景首帧渲染后缓存 `(N, Ncam, H, W, C)` 张量，后续帧直接索引。
+
+| batch_size | 模式 | capture_observation (mean / min) | update | total | 频率 |
+|---|---|---|---|---|---|
+| 4 | baseline | 77.60 / 75.42 ms | 1.66 ms | 79.26 ms | 12.62 Hz |
+| 4 | `share_physics=true` | **40.54 / 20.91 ms** | **0.44 ms** | **40.98 ms** | **24.67 Hz** |
+| 10 | baseline | **CUDA OOM**（scene + 10 份物理/FG 超出 8 GB 卡容量） | — | — | — |
+| 10 | `share_physics=true` | **57.94 / 37.75 ms** | 0.45 ms | 58.39 ms | 17.13 Hz |
+
+关键观察：
+
+1. **物理** `update` 稳定降到 `~0.45 ms`（不随 N 增长，真正跑的只有 1 个 env）。
+2. **capture_observation** 在 batch=4 下 ~48%，batch=10 对比"baseline 单 env 57 ms"也只有 ~2% 开销。
+3. **N 维只留合成**：batch=10 vs batch=4 的 capture 时间差只有 ~17 ms，全部是 `fg*α + bg*(1-α)` 这类 `(N, Ncam, H, W, C)` 广播 kernel 的线性开销；背景渲染被 cache 掉了。
+4. **显存**：开启后显存占用不随 N 增长（fg gaussian buffer 从 `(N, …)` 降到 `(1, …)`），baseline 在 batch=10 OOM 的场景，shared 模式下可轻松跑通。
+5. **min 值远低于 mean**：首帧在填 `_bg_cache`，后续帧大部分落在 `min` 附近。意味着稳定态性能比 mean 显示得还要好。
+
+### 什么时候该用
+
+- 训练阶段只想对「背景贴图」做随机化、其余物理一致（视觉域随机化/ sim-to-real）：典型收益。
+- 需要在同一 GPU 上跑更大虚拟 batch 以扩展数据多样性：显存不随 N 增长。
+
+### 什么时候不该用
+
+- 各子 env 初始状态/扰动不同（如不同物体初始位置）——shared 模式下它们会全部归一到 env_0 的状态。
+- 需要不同的 action/teleport 到不同 env：shared 模式只取 `[0]`，其他会被丢弃。
+
+### 实现要点
+
+- `auto_atom/basis/mjc/gs_mujoco_env.py`:
+  - `GaussianRenderConfig.share_physics` 字段 + `GSEnvConfig.setup_gs_cameras` 里的 validator；
+  - `BatchedGSUnifiedMujocoEnv.__init__`：`model_copy(update={"batch_size": 1})` 后传给父类，再把 `self.batch_size` 恢复成虚拟 N，并 alias `self.envs`；
+  - `_inject_shared_gs_renders` / `_render_shared_per_env_backgrounds` / `_render_shared_gs_masks_multicam`：`nenv=1` 的前景 + 按 unique bg 分组的 BG 渲染 + 广播合成；
+  - step/update/apply_*/reset/capture_observation 的 shared 分支只动 `envs[0]`。
+
+---
+
 ## 后续优化方向
 
 ### A. 合并多 mask object 为单次渲染 (预估 -50~60% mask 时间)
