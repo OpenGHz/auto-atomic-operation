@@ -19,7 +19,8 @@ Examples:
         +replay.mcap_path=data/recording.mcap \
         +replay.arm_topic=/robot/right_arm/joint_state \
         +replay.gripper_topic=/robot/right_gripper/distance \
-        +replay.base_topic=/robot/base_pose
+        +replay.base_topic=/robot/base_pose \
+        +replay.scene_joint_topic=/scene/door/joint_states
 """
 
 from __future__ import annotations

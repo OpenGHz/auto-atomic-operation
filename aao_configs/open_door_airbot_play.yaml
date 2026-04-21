@@ -8,6 +8,7 @@ task_name: open_door_airbot_play
 door_side: front
 
 replay:
+  # scene_joint_topic: /scene/door/joint_states
   # Generic transform-driven scene reset: use the recorded
   # base_link → handle_grasp_point transform to position the arm's
   # operator base so the simulated handle matches its recorded relative

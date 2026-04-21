@@ -23,7 +23,8 @@ python examples/replay_demo.py --config-name pick_and_place \
     +replay.mcap_path=data/recording.mcap \
     +replay.arm_topic=/robot/right_arm/joint_state \
     +replay.gripper_topic=/robot/right_gripper/distance \
-    +replay.base_topic=/robot/base_pose
+    +replay.base_topic=/robot/base_pose \
+    +replay.scene_joint_topic=/scene/door/joint_states
 ```
 
 ## Replay Modes
@@ -48,6 +49,7 @@ All replay settings live under the `replay` key in Hydra overrides
 | `arm_topic`           | `str`           | `/robot/right_arm/joint_state`         | ROS2 topic for arm joint states |
 | `gripper_topic`       | `str`           | `/robot/right_gripper/joint_state`     | ROS2 topic for gripper joint states |
 | `base_topic`          | `str \| None`   | `None`                                 | Optional ROS2 `geometry_msgs/PoseStamped` topic for the operator base pose in world frame |
+| `scene_joint_topic`   | `str \| None`   | `None`                                 | Optional ROS2 `sensor_msgs/JointState` topic for passive scene joints such as doors / handles |
 | `joint_name_mapping`  | `dict`          | `{"gripper": "xfg_claw_joint"}`        | Maps mcap joint names to YAML actuator names |
 | `joint_axis_scale`    | `list[float]`   | `[]`                                   | Per-joint replay multipliers applied to the first `N` actuator columns after reordering; useful for mirroring by negating selected axes |
 | `joint_clip`          | `dict[str, {min, max}]` | `{}`                            | Per-actuator `[min, max]` clamp applied to the recorded trajectory once at demo-load time (after column reordering). Values are in the actuator's user-facing units (e.g. finger distance for an `eef_mapper`). Either bound can be omitted. |
@@ -102,7 +104,29 @@ replay:
   base_topic: /robot/base_pose
 ```
 
-### 3. Optional joint-axis scaling
+### 3. Optional scene joint replay
+
+If `scene_joint_topic` is set, replay reads `sensor_msgs/JointState` messages
+from that topic and aligns them to the arm joint timestamps. Joint names are
+taken from the first message and later messages are reordered to match that
+name list. During replay, the aligned positions are written directly into the
+MuJoCo scene joints by name before and after the robot action for that frame.
+If the topic is configured but missing from a particular MCAP, replay logs a
+warning and skips scene-joint playback instead of failing.
+
+This is useful for passive articulated scene elements that are not operator
+actuators, for example:
+
+- `door_hinge`
+- `handle_hinge`
+
+```yaml
+replay:
+  mcap_path: data/recording.mcap
+  scene_joint_topic: /scene/door/joint_states
+```
+
+### 4. Optional joint-axis scaling
 
 If `joint_axis_scale` is provided, the replay multiplies the first `N`
 actuator columns by the configured factors after column reordering.  This is
@@ -115,7 +139,7 @@ replay:
 
 Any trailing actuator columns not covered by the list keep a factor of `1.0`.
 
-### 4. Gripper finger-distance handling
+### 5. Gripper finger-distance handling
 
 Real gripper data is in finger-distance space (metres). The replay pipeline
 relies on the operator's [`eef_mapper`](../mujoco-backend/eef_mapper.md) to
@@ -124,7 +148,7 @@ conversion internally, so no separate rescaling step is performed in
 replay. Configure an `eef_mapper` on the EEF operator when replaying mcap
 data whose gripper values are finger distances.
 
-### 5. Optional joint clipping
+### 6. Optional joint clipping
 
 If `joint_clip` is set, the replay clamps the recorded trajectory per
 actuator at load time (after column reordering). Keys are actuator names
@@ -141,7 +165,7 @@ replay:
       min: 0.015        # finger distance in metres (with eef_mapper)
 ```
 
-### 6. Transform resets
+### 7. Transform resets
 
 `transform_resets` lets the replay reposition scene entities to match a
 recorded `geometry_msgs/TransformStamped` topic from the MCAP. Each entry
@@ -181,18 +205,20 @@ Fields:
 `override_operator_base_pose` under the hood so mocap and joint-mode
 operators behave consistently.
 
-### 7. Initial joint position injection
+### 8. Initial joint position injection
 
-The first frame's joint positions are injected into `env.initial_joint_positions`
-so the robot resets at the recorded starting configuration.  When `eef_mapper`
-is configured, EEF joint values are excluded from `initial_joint_positions`
-(since they are in user-space, not raw qpos) and are applied through the
-mapper via the reset action instead.
+The first frame's replayed joint positions are injected into
+`env.initial_joint_positions` so the simulation resets at the recorded
+starting configuration. This includes the robot arm/gripper joints and, when
+`scene_joint_topic` is enabled, the passive scene joints from that topic.
+When `eef_mapper` is configured, EEF joint values are excluded from
+`initial_joint_positions` (since they are in user-space, not raw qpos) and
+are applied through the mapper via the reset action instead.
 
 See [Scene Initialization & Randomization](../task-configuration/randomization.md) for details on
 `initial_joint_positions`.
 
-### 8. Randomization disabled
+### 9. Randomization disabled
 
 Task randomization is automatically disabled (`task.randomization = {}`) to
 ensure exact trajectory reproduction.

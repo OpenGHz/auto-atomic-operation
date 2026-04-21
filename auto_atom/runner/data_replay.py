@@ -136,6 +136,13 @@ class DataReplayConfig(BaseModel):
     interpreted as the operator base pose in world frame and is aligned to arm
     joint timestamps before replay.
     """
+    scene_joint_topic: str | None = Field(default=None)
+    """Optional ROS2 ``sensor_msgs/JointState`` topic for scene joints.
+
+    The topic is aligned to arm joint timestamps and replayed by joint name
+    directly into MuJoCo ``qpos``. This is intended for passive articulated
+    scene elements such as doors and handles that are not operator actuators.
+    """
     joint_name_mapping: Dict[str, str] = {"gripper": "xfg_claw_joint"}
     joint_axis_scale: List[float] = Field(default_factory=list)
     """Per-joint multipliers applied to recorded joint/ctrl data after
@@ -288,6 +295,8 @@ class McapDemo:
     joint_names: list[str]
     base_position: np.ndarray | None
     base_orientation: np.ndarray | None
+    scene_joint: np.ndarray | None
+    scene_joint_names: list[str]
 
     def __init__(
         self,
@@ -296,14 +305,26 @@ class McapDemo:
         *,
         base_position: np.ndarray | None = None,
         base_orientation: np.ndarray | None = None,
+        scene_joint: np.ndarray | None = None,
+        scene_joint_names: list[str] | None = None,
     ) -> None:
         self.joint = joint
         self.joint_names = joint_names
         self.base_position = base_position
         self.base_orientation = base_orientation
+        self.scene_joint = scene_joint
+        self.scene_joint_names = list(scene_joint_names or [])
 
     def first_frame_joint_positions(self) -> Dict[str, float]:
-        return {n: float(v) for n, v in zip(self.joint_names, self.joint[0])}
+        result = {n: float(v) for n, v in zip(self.joint_names, self.joint[0])}
+        if self.scene_joint is not None:
+            result.update(
+                {
+                    n: float(v)
+                    for n, v in zip(self.scene_joint_names, self.scene_joint[0])
+                }
+            )
+        return result
 
     def align_to_actuators(
         self,
@@ -403,13 +424,82 @@ def _extract_pose_stamped_xyzw(
     return pos, quat
 
 
+def _extract_joint_state_positions(
+    msg: Any,
+    *,
+    topic: str,
+    expected_names: list[str] | None = None,
+) -> tuple[list[str], np.ndarray]:
+    """Extract ``(joint_names, positions)`` from a JointState-like dict."""
+
+    if not isinstance(msg, dict):
+        raise TypeError(
+            f"Expected JointState message on topic '{topic}' to decode as dict, "
+            f"got {type(msg).__name__}."
+        )
+    names_raw = msg.get("name")
+    pos_raw = msg.get("position")
+    if names_raw is None or pos_raw is None:
+        raise ValueError(
+            f"Expected JointState message on topic '{topic}' to contain "
+            "'name' and 'position' fields."
+        )
+    names = [str(name) for name in names_raw]
+    positions = np.asarray(pos_raw, dtype=np.float32).reshape(-1)
+    if len(names) != positions.shape[0]:
+        raise ValueError(
+            f"JointState message on topic '{topic}' has {len(names)} names but "
+            f"{positions.shape[0]} positions."
+        )
+    if expected_names is None:
+        return names, positions
+    index_by_name = {name: idx for idx, name in enumerate(names)}
+    missing = [name for name in expected_names if name not in index_by_name]
+    if missing:
+        raise ValueError(
+            f"JointState message on topic '{topic}' is missing joint(s) {missing}; "
+            f"available names: {names}"
+        )
+    reordered = np.asarray(
+        [positions[index_by_name[name]] for name in expected_names], dtype=np.float32
+    )
+    return list(expected_names), reordered
+
+
+def _align_optional_scene_joint(
+    scene_joint_positions: list[np.ndarray],
+    scene_joint_times: list[int],
+    arm_times: np.ndarray,
+    *,
+    scene_joint_topic: str,
+    mcap_path: str,
+) -> np.ndarray | None:
+    """Align optional scene-joint samples or skip cleanly when absent."""
+
+    if not scene_joint_positions:
+        print(
+            f"[scene_joint_topic] No JointState messages found on "
+            f"'{scene_joint_topic}' in {mcap_path}; skipping scene joint replay."
+        )
+        return None
+
+    scene_joint_t = np.array(scene_joint_times, dtype=np.int64)
+    return _align_samples_to_times(
+        np.asarray(scene_joint_positions, dtype=np.float32),
+        scene_joint_t,
+        arm_times,
+        label=f"scene joint topic '{scene_joint_topic}'",
+    )
+
+
 def _load_mcap_demo(
     mcap_path: str,
     arm_topic: str,
     gripper_topic: str,
     base_topic: str | None = None,
+    scene_joint_topic: str | None = None,
 ) -> McapDemo:
-    """Load arm, gripper, and optional base-pose arrays from a ROS2 mcap file."""
+    """Load arm, gripper, and optional base/scene arrays from a ROS2 mcap file."""
     from mcap.reader import make_reader
     from mcap_ros2idl_support import Ros2DecodeFactory
 
@@ -423,9 +513,14 @@ def _load_mcap_demo(
     base_positions: list[np.ndarray] = []
     base_orientations: list[np.ndarray] = []
     base_times: list[int] = []
+    scene_joint_names: list[str] | None = None
+    scene_joint_positions: list[np.ndarray] = []
+    scene_joint_times: list[int] = []
     topics = [arm_topic, gripper_topic]
     if base_topic is not None:
         topics.append(base_topic)
+    if scene_joint_topic is not None:
+        topics.append(scene_joint_topic)
 
     with open(mcap_path, "rb") as f:
         reader = make_reader(f, decoder_factories=[factory])
@@ -448,6 +543,14 @@ def _load_mcap_demo(
                 base_positions.append(pos)
                 base_orientations.append(quat)
                 base_times.append(t)
+            elif scene_joint_topic is not None and topic == scene_joint_topic:
+                scene_joint_names, scene_pos = _extract_joint_state_positions(
+                    msg,
+                    topic=scene_joint_topic,
+                    expected_names=scene_joint_names,
+                )
+                scene_joint_positions.append(scene_pos)
+                scene_joint_times.append(t)
 
     if not arm_positions:
         raise ValueError(f"No arm messages found on topic '{arm_topic}' in {mcap_path}")
@@ -491,6 +594,16 @@ def _load_mcap_demo(
             label=f"base topic '{base_topic}' orientation",
         )
 
+    scene_joint: np.ndarray | None = None
+    if scene_joint_topic is not None:
+        scene_joint = _align_optional_scene_joint(
+            scene_joint_positions,
+            scene_joint_times,
+            arm_t,
+            scene_joint_topic=scene_joint_topic,
+            mcap_path=mcap_path,
+        )
+
     joint = np.concatenate([arm, grip], axis=-1)
     joint_names = (arm_names or []) + (gripper_names or [])
     return McapDemo(
@@ -498,6 +611,8 @@ def _load_mcap_demo(
         joint_names=joint_names,
         base_position=base_position,
         base_orientation=base_orientation,
+        scene_joint=scene_joint,
+        scene_joint_names=scene_joint_names,
     )
 
 
@@ -622,6 +737,20 @@ def normalize_demo_for_batch(
             demo["base_orientation"], "base_orientation"
         )
 
+    def attach_optional_scene_joint(result: Dict[str, Any]) -> None:
+        has_joint = "scene_joint" in demo
+        has_names = "scene_joint_names" in demo
+        if not has_joint and not has_names:
+            return
+        if has_joint != has_names:
+            missing_key = "scene_joint_names" if has_joint else "scene_joint"
+            raise KeyError(
+                "Scene joint replay actions must provide both scene_joint and "
+                f"scene_joint_names; missing '{missing_key}'."
+            )
+        result["scene_joint"] = normalize_series(demo["scene_joint"], "scene_joint")
+        result["scene_joint_names"] = list(demo["scene_joint_names"])
+
     if mode == "pose":
         result: Dict[str, np.ndarray] = {
             "position": normalize_series(demo["position"], "pose position"),
@@ -630,6 +759,7 @@ def normalize_demo_for_batch(
         if "gripper" in demo:
             result["gripper"] = normalize_series(demo["gripper"], "gripper")
         attach_optional_base_pose(result)
+        attach_optional_scene_joint(result)
         return result
 
     if mode == "joint":
@@ -640,10 +770,12 @@ def normalize_demo_for_batch(
             else {"joint": normalize_series(joint, "joint")}
         )
         attach_optional_base_pose(result)
+        attach_optional_scene_joint(result)
         return result
 
     result = {"ctrl": normalize_series(demo["ctrl"], "ctrl")}
     attach_optional_base_pose(result)
+    attach_optional_scene_joint(result)
     return result
 
 
@@ -686,26 +818,39 @@ class ReplayPolicy:
             }
             if "gripper" in self._demo:
                 action["gripper"] = self._demo["gripper"][i]
-            return self._attach_base_pose_action(action, i)
+            return self._attach_optional_state_action(action, i)
         if self._mode == "joint":
-            return self._attach_base_pose_action({"joint": self._demo["joint"][i]}, i)
-        return self._attach_base_pose_action({"ctrl": self._demo["ctrl"][i]}, i)
+            return self._attach_optional_state_action(
+                {"joint": self._demo["joint"][i]}, i
+            )
+        return self._attach_optional_state_action({"ctrl": self._demo["ctrl"][i]}, i)
 
-    def _attach_base_pose_action(
+    def _attach_optional_state_action(
         self, action: Dict[str, Any], index: int
     ) -> Dict[str, Any]:
         has_position = "base_position" in self._demo
         has_orientation = "base_orientation" in self._demo
-        if not has_position and not has_orientation:
-            return action
-        if has_position != has_orientation:
-            missing_key = "base_orientation" if has_position else "base_position"
-            raise KeyError(
-                "Base pose replay actions must provide both base_position and "
-                f"base_orientation; missing '{missing_key}'."
-            )
-        action["base_position"] = self._demo["base_position"][index]
-        action["base_orientation"] = self._demo["base_orientation"][index]
+        if has_position or has_orientation:
+            if has_position != has_orientation:
+                missing_key = "base_orientation" if has_position else "base_position"
+                raise KeyError(
+                    "Base pose replay actions must provide both base_position and "
+                    f"base_orientation; missing '{missing_key}'."
+                )
+            action["base_position"] = self._demo["base_position"][index]
+            action["base_orientation"] = self._demo["base_orientation"][index]
+
+        has_scene_joint = "scene_joint" in self._demo
+        has_scene_joint_names = "scene_joint_names" in self._demo
+        if has_scene_joint or has_scene_joint_names:
+            if has_scene_joint != has_scene_joint_names:
+                missing_key = "scene_joint_names" if has_scene_joint else "scene_joint"
+                raise KeyError(
+                    "Scene joint replay actions must provide both scene_joint and "
+                    f"scene_joint_names; missing '{missing_key}'."
+                )
+            action["scene_joint_positions"] = self._demo["scene_joint"][index]
+            action["scene_joint_names"] = list(self._demo["scene_joint_names"])
         return action
 
     def apply_first_frame_as_reset(self) -> Dict[str, Any] | None:
@@ -764,12 +909,83 @@ def _apply_base_pose_action(
     return True
 
 
+def _apply_scene_joint_action(
+    env: Any,
+    action: Any,
+    env_mask: Optional[np.ndarray] = None,
+) -> bool:
+    """Apply optional passive-scene joint positions from a replay action."""
+
+    if not isinstance(action, dict):
+        return False
+    has_positions = "scene_joint_positions" in action
+    has_names = "scene_joint_names" in action
+    if not has_positions and not has_names:
+        return False
+    if has_positions != has_names:
+        missing_key = "scene_joint_names" if has_positions else "scene_joint_positions"
+        raise KeyError(
+            "Scene joint replay action must provide both scene_joint_positions "
+            f"and scene_joint_names; missing '{missing_key}'."
+        )
+
+    import mujoco
+
+    names = [str(name) for name in action["scene_joint_names"]]
+    positions = np.asarray(action["scene_joint_positions"], dtype=np.float64)
+    if positions.ndim == 1:
+        positions = positions.reshape(1, -1)
+    if positions.shape[-1] != len(names):
+        raise ValueError(
+            "scene_joint_positions width does not match scene_joint_names: "
+            f"{positions.shape[-1]} vs {len(names)}"
+        )
+
+    envs = getattr(env, "envs", None)
+    if envs is None:
+        raise AttributeError(
+            "Replay action contains scene_joint_positions, but the backend env "
+            "does not expose batched envs."
+        )
+    batch_size = getattr(env, "batch_size", len(envs))
+    mask = (
+        np.ones(batch_size, dtype=bool)
+        if env_mask is None
+        else np.asarray(env_mask, dtype=bool).reshape(-1)
+    )
+    if positions.shape[0] not in (1, batch_size):
+        raise ValueError(
+            "scene_joint_positions must have leading dimension 1 or batch_size; "
+            f"got {positions.shape[0]} with batch_size={batch_size}."
+        )
+
+    for env_index, single_env in enumerate(envs):
+        if env_index >= mask.shape[0] or not mask[env_index]:
+            continue
+        row = positions[0] if positions.shape[0] == 1 else positions[env_index]
+        for joint_name, joint_value in zip(names, row):
+            jid = mujoco.mj_name2id(
+                single_env.model, mujoco.mjtObj.mjOBJ_JOINT, joint_name
+            )
+            if jid < 0:
+                raise ValueError(
+                    f"Scene replay joint '{joint_name}' not found in model."
+                )
+            qadr = int(single_env.model.jnt_qposadr[jid])
+            dadr = int(single_env.model.jnt_dofadr[jid])
+            single_env.data.qpos[qadr] = float(joint_value)
+            single_env.data.qvel[dadr] = 0.0
+        mujoco.mj_forward(single_env.model, single_env.data)
+    return True
+
+
 def _apply_reset_action(context: ExecutionContext, action: Any) -> None:
     """Apply a recorded action as an exact reset state when possible."""
     if action is None:
         return
     env = context.backend.env
     _apply_base_pose_action(env, action)
+    _apply_scene_joint_action(env, action)
     if "joint" in action:
         env.apply_joint_action("arm", action["joint"], kinematic=True)
     elif "ctrl" in action:
@@ -785,6 +1001,7 @@ def _apply_reset_action(context: ExecutionContext, action: Any) -> None:
             action.get("gripper"),
             kinematic=True,
         )
+    _apply_scene_joint_action(env, action)
 
 
 def _make_replay_action_applier(kinematic: bool = False):
@@ -799,6 +1016,7 @@ def _make_replay_action_applier(kinematic: bool = False):
             return
         env = context.backend.env
         _apply_base_pose_action(env, action, env_mask=env_mask)
+        _apply_scene_joint_action(env, action, env_mask=env_mask)
         if "joint" in action:
             env.apply_joint_action(
                 "arm", action["joint"], env_mask=env_mask, kinematic=kinematic
@@ -817,6 +1035,7 @@ def _make_replay_action_applier(kinematic: bool = False):
                 env_mask=env_mask,
                 kinematic=kinematic,
             )
+        _apply_scene_joint_action(env, action, env_mask=env_mask)
 
     return replay_action_applier
 
@@ -1122,7 +1341,11 @@ def preprocess_replay_dictconfig(
         raise FileNotFoundError(f"MCAP file not found: {mcap_path}")
 
     mcap_demo = _load_mcap_demo(
-        mcap_path, replay_cfg.arm_topic, replay_cfg.gripper_topic
+        mcap_path,
+        replay_cfg.arm_topic,
+        replay_cfg.gripper_topic,
+        replay_cfg.base_topic,
+        replay_cfg.scene_joint_topic,
     )
     replay_cfg.mode = "joint"
 
@@ -1207,6 +1430,7 @@ class DataReplayRunner(RunnerBase):
         demo_dir: Optional[str] = None,
         mcap_path: Optional[str] = None,
         base_topic: Optional[str] = None,
+        scene_joint_topic: Optional[str] = None,
         mode: Optional[str] = None,
     ) -> None:
         """Change the demo data source.  Takes effect on the next ``reset()``.
@@ -1220,6 +1444,8 @@ class DataReplayRunner(RunnerBase):
             rcfg.mcap_path = mcap_path
         if base_topic is not None:
             rcfg.base_topic = base_topic
+        if scene_joint_topic is not None:
+            rcfg.scene_joint_topic = scene_joint_topic
         if demo_name is not None:
             rcfg.demo_name = demo_name
         if demo_dir is not None:
@@ -1261,7 +1487,7 @@ class DataReplayRunner(RunnerBase):
 
         self._action_step += 1
         # print(f"action={self._current_action}")
-        # input("Press Enter to continue to the next step...")
+        input("Press Enter to continue to the next step...")
         task_update = evaluator.update(self._current_action, env_mask)
 
         # Defer done for successful envs until replay data is exhausted.
@@ -1328,6 +1554,7 @@ class DataReplayRunner(RunnerBase):
                 rcfg.arm_topic,
                 rcfg.gripper_topic,
                 rcfg.base_topic,
+                rcfg.scene_joint_topic,
             )
             rcfg.mode = "joint"
 
@@ -1347,6 +1574,9 @@ class DataReplayRunner(RunnerBase):
                 demo["base_position"] = mcap_demo.base_position
             if mcap_demo.base_orientation is not None:
                 demo["base_orientation"] = mcap_demo.base_orientation
+            if mcap_demo.scene_joint is not None:
+                demo["scene_joint"] = mcap_demo.scene_joint
+                demo["scene_joint_names"] = list(mcap_demo.scene_joint_names)
         else:
             demo_name = rcfg.demo_name or "demo"
             demo_dir = rcfg.demo_dir or os.path.join(
