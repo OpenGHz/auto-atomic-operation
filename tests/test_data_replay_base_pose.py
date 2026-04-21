@@ -1,14 +1,18 @@
 from __future__ import annotations
 
+import logging
+
 import numpy as np
 
 from auto_atom.runner.data_replay import (
     ReplayPolicy,
-    _align_samples_to_times,
+    TransformResetConfig,
     _align_optional_scene_joint,
+    _align_samples_to_times,
     _extract_joint_state_positions,
     _extract_pose_stamped_xyzw,
     _make_replay_action_applier,
+    _select_transform_reset_message_index,
     normalize_demo_for_batch,
 )
 
@@ -177,7 +181,9 @@ def test_joint_state_scene_topic_helpers_extract_reordered_positions() -> None:
     np.testing.assert_allclose(positions, [0.45, -0.25])
 
 
-def test_optional_scene_joint_alignment_skips_missing_topic(capsys) -> None:
+def test_optional_scene_joint_alignment_skips_missing_topic(caplog) -> None:
+    caplog.set_level(logging.WARNING, logger="auto_atom.runner.data_replay")
+
     aligned = _align_optional_scene_joint(
         [],
         [],
@@ -187,9 +193,8 @@ def test_optional_scene_joint_alignment_skips_missing_topic(capsys) -> None:
     )
 
     assert aligned is None
-    captured = capsys.readouterr()
-    assert "skipping scene joint replay" in captured.out
-    assert "/scene/door/joint_states" in captured.out
+    assert "skipping scene joint replay" in caplog.text
+    assert "/scene/door/joint_states" in caplog.text
 
 
 def test_replay_action_applier_writes_scene_joints() -> None:
@@ -263,3 +268,122 @@ def test_replay_action_applier_writes_scene_joints() -> None:
 
     np.testing.assert_allclose(env.envs[0].data.qpos[[1, 4]], [0.45, -0.25])
     np.testing.assert_allclose(env.envs[0].data.qvel[[2, 5]], [0.0, 0.0])
+
+
+def test_transform_reset_selector_supports_first_last_and_index() -> None:
+    translations = np.asarray(
+        [
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [2.0, 0.0, 0.0],
+        ],
+        dtype=np.float32,
+    )
+    rotations = np.asarray(
+        [
+            [0.0, 0.0, 0.0, 1.0],
+            [0.0, 0.0, 0.0, 1.0],
+            [0.0, 0.0, 0.0, 1.0],
+        ],
+        dtype=np.float32,
+    )
+
+    assert (
+        _select_transform_reset_message_index(
+            translations,
+            rotations,
+            TransformResetConfig.model_validate(
+                {
+                    "topic": "/tf_static",
+                    "parent": {"kind": "site", "name": "p"},
+                    "child": {"kind": "site", "name": "c"},
+                    "message_selector": "first",
+                }
+            ),
+        )
+        == 0
+    )
+    assert (
+        _select_transform_reset_message_index(
+            translations,
+            rotations,
+            TransformResetConfig.model_validate(
+                {
+                    "topic": "/tf_static",
+                    "parent": {"kind": "site", "name": "p"},
+                    "child": {"kind": "site", "name": "c"},
+                    "message_selector": "last",
+                }
+            ),
+        )
+        == 2
+    )
+    assert (
+        _select_transform_reset_message_index(
+            translations,
+            rotations,
+            TransformResetConfig.model_validate(
+                {
+                    "topic": "/tf_static",
+                    "parent": {"kind": "site", "name": "p"},
+                    "child": {"kind": "site", "name": "c"},
+                    "message_selector": "index",
+                    "message_index": 1,
+                }
+            ),
+        )
+        == 1
+    )
+
+
+def test_transform_reset_selector_supports_first_jump_and_fallback(caplog) -> None:
+    caplog.set_level(logging.INFO, logger="auto_atom.runner.data_replay")
+
+    translations = np.asarray(
+        [
+            [0.0, 0.0, 0.0],
+            [0.001, 0.0, 0.0],
+            [0.060, 0.0, 0.0],
+            [0.061, 0.0, 0.0],
+        ],
+        dtype=np.float32,
+    )
+    rotations = np.asarray(
+        [
+            [0.0, 0.0, 0.0, 1.0],
+            [0.0, 0.0, 0.0, 1.0],
+            [0.0, 0.0, 0.0, 1.0],
+            [0.0, 0.0, 0.0, 1.0],
+        ],
+        dtype=np.float32,
+    )
+    cfg = TransformResetConfig.model_validate(
+        {
+            "topic": "/robot/right_arm/base_handle/transform",
+            "parent": {"kind": "operator_base", "name": "arm"},
+            "child": {"kind": "site", "name": "handle_grasp_front_site"},
+            "message_selector": "first_jump",
+            "jump_position_threshold": 0.02,
+        }
+    )
+
+    assert _select_transform_reset_message_index(translations, rotations, cfg) == 2
+    assert "selected_index=2 differs from first frame" in caplog.text
+    assert "jump_from=1 jump_to=2" in caplog.text
+    assert "pos_delta=" in caplog.text
+    assert "ori_delta=" in caplog.text
+
+    no_jump_cfg = TransformResetConfig.model_validate(
+        {
+            "topic": "/robot/right_arm/base_handle/transform",
+            "parent": {"kind": "operator_base", "name": "arm"},
+            "child": {"kind": "site", "name": "handle_grasp_front_site"},
+            "message_selector": "first_jump",
+            "jump_position_threshold": 1.0,
+            "jump_orientation_threshold": 1.0,
+        }
+    )
+    assert (
+        _select_transform_reset_message_index(translations, rotations, no_jump_cfg) == 0
+    )
+    assert "falling back to first message" in caplog.text

@@ -8,17 +8,20 @@ lifecycle.
 
 from __future__ import annotations
 
+import logging
 import os
 from typing import Any, Dict, List, Literal, Optional
 
 import numpy as np
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, NonNegativeFloat, model_validator
 
 from auto_atom.framework import TaskFileConfig
 from auto_atom.policy_eval import PolicyEvaluator
 from auto_atom.runtime import ExecutionContext, TaskUpdate
 
 from .base import RunnerBase
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -73,25 +76,43 @@ class PoseOffset(BaseModel):
 class TransformResetConfig(BaseModel):
     """Generic scene-reset rule driven by a recorded ``TransformStamped``.
 
-    Reads the ``message_index``-th ``geometry_msgs/TransformStamped`` on
-    ``topic`` from the MCAP. The message is interpreted as
-    ``T_parent->child`` (translation of the child origin expressed in the
-    parent frame, plus child-in-parent rotation). At reset time the
-    runner queries the ``move``-side entity's current pose together with
-    the *other* (fixed) side's world pose, then repositions the
-    ``move``-side entity so that the simulated relative pose matches the
-    recording.  The optional ``offset`` is applied afterwards for fine
-    calibration.
+    Reads a selected ``geometry_msgs/TransformStamped`` on ``topic`` from the
+    MCAP. The message is interpreted as ``T_parent->child`` (translation of
+    the child origin expressed in the parent frame, plus child-in-parent
+    rotation). At reset time the runner queries the ``move``-side entity's
+    current pose together with the *other* (fixed) side's world pose, then
+    repositions the ``move``-side entity so that the simulated relative pose
+    matches the recording. The optional ``offset`` is applied afterwards for
+    fine calibration.
     """
 
     model_config = ConfigDict(validate_assignment=True)
 
     topic: str
+    """Topic in the MCAP containing geometry_msgs/TransformStamped messages to use for this reset."""
     parent: SimEntityRef
+    """The parent side of the transform. """
     child: SimEntityRef
+    """The child side of the transform."""
     move: Literal["parent", "child"] = "parent"
     """Which side to reposition. The other side is treated as fixed."""
-    message_index: int = 0
+    message_selector: Literal["index", "first", "last", "first_jump"] = "index"
+    """How to choose the transform message from the topic history.
+
+    ``index`` preserves the legacy behavior and uses ``message_index``.
+    ``first`` always picks the first message, ``last`` the last message, and
+    ``first_jump`` picks the first message after a detected transform jump.
+    """
+    message_index: int = Field(default=0, ge=0)
+    """Used when ``message_selector == 'index'``."""
+    jump_position_threshold: NonNegativeFloat = Field(default=1e-6)
+    """Metres. For ``message_selector == 'first_jump'``, select the first
+    message whose translation delta from the previous message exceeds this
+    threshold."""
+    jump_orientation_threshold: NonNegativeFloat = Field(default=1e-6)
+    """Radians. For ``message_selector == 'first_jump'``, select the first
+    message whose relative orientation angle from the previous message exceeds
+    this threshold."""
     use_orientation: bool = False
     """If False (default) keep the movable entity's current world
     orientation and only adjust translation. If True, compose the full
@@ -477,7 +498,7 @@ def _align_optional_scene_joint(
     """Align optional scene-joint samples or skip cleanly when absent."""
 
     if not scene_joint_positions:
-        print(
+        logger.warning(
             f"[scene_joint_topic] No JointState messages found on "
             f"'{scene_joint_topic}' in {mcap_path}; skipping scene joint replay."
         )
@@ -648,6 +669,119 @@ def _load_mcap_transform_at(
         f"Fewer than {index + 1} TransformStamped message(s) on topic "
         f"'{topic}' in {mcap_path}"
     )
+
+
+def _load_mcap_transform_series(
+    mcap_path: str,
+    topic: str,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return every ``TransformStamped`` sample on ``topic`` in ``mcap_path``."""
+
+    from mcap.reader import make_reader
+    from mcap_ros2idl_support import Ros2DecodeFactory
+
+    factory = Ros2DecodeFactory()
+    translations: list[np.ndarray] = []
+    rotations: list[np.ndarray] = []
+    with open(mcap_path, "rb") as f:
+        reader = make_reader(f, decoder_factories=[factory])
+        for decoded in reader.iter_decoded_messages(topics=[topic]):
+            msg = decoded.decoded_message
+            t = msg["transform"]["translation"]
+            r = msg["transform"]["rotation"]
+            translations.append(
+                np.array(
+                    [float(t["x"]), float(t["y"]), float(t["z"])],
+                    dtype=np.float32,
+                )
+            )
+            rotations.append(
+                np.array(
+                    [float(r["x"]), float(r["y"]), float(r["z"]), float(r["w"])],
+                    dtype=np.float32,
+                )
+            )
+    if not translations:
+        raise ValueError(
+            f"No TransformStamped messages found on topic '{topic}' in {mcap_path}"
+        )
+    return np.stack(translations), np.stack(rotations)
+
+
+def _quat_relative_angle_xyzw(a: np.ndarray, b: np.ndarray) -> np.ndarray:
+    """Return the relative angle(s) between xyzw quaternion arrays in radians."""
+
+    a = np.asarray(a, dtype=np.float64)
+    b = np.asarray(b, dtype=np.float64)
+    dots = np.sum(a * b, axis=-1)
+    dots = np.clip(np.abs(dots), -1.0, 1.0)
+    return 2.0 * np.arccos(dots)
+
+
+def _select_transform_reset_message_index(
+    translations: np.ndarray,
+    rotations: np.ndarray,
+    tr: "TransformResetConfig",
+) -> int:
+    """Choose which TransformStamped sample to use for a transform reset."""
+
+    num_messages = int(np.asarray(translations).shape[0])
+    if num_messages <= 0:
+        raise ValueError("Expected at least one transform message to select from.")
+
+    selector = tr.message_selector
+    if selector == "index":
+        if tr.message_index < 0 or tr.message_index >= num_messages:
+            raise ValueError(
+                f"transform_reset topic={tr.topic!r} requested message_index="
+                f"{tr.message_index}, but only {num_messages} message(s) exist."
+            )
+        return int(tr.message_index)
+    if selector == "first":
+        return 0
+    if selector == "last":
+        return num_messages - 1
+    if selector == "first_jump":
+        if num_messages == 1:
+            return 0
+        pos_delta = np.linalg.norm(
+            np.asarray(translations[1:], dtype=np.float64)
+            - np.asarray(translations[:-1], dtype=np.float64),
+            axis=-1,
+        )
+        ori_delta = _quat_relative_angle_xyzw(rotations[1:], rotations[:-1])
+        jump_mask = (pos_delta > float(tr.jump_position_threshold)) | (
+            ori_delta > float(tr.jump_orientation_threshold)
+        )
+        jump_indices = np.flatnonzero(jump_mask)
+        if jump_indices.size > 0:
+            before_index = int(jump_indices[0])
+            selected_index = before_index + 1
+            logger.info(
+                f"[transform_reset] topic={tr.topic!r} selector='first_jump' "
+                f"selected_index={selected_index} differs from first frame; "
+                f"jump_from={before_index} jump_to={selected_index} "
+                f"pos_delta={float(pos_delta[before_index]):.6f}m "
+                f"ori_delta={float(ori_delta[before_index]):.6f}rad"
+            )
+            return selected_index
+        # logger.warning(
+        #     f"[transform_reset] topic={tr.topic!r} selector='first_jump' found no "
+        #     "jump; falling back to first message."
+        # )
+        return 0
+    raise ValueError(f"Unknown TransformResetConfig.message_selector: {selector!r}")
+
+
+def _load_mcap_transform_for_reset(
+    mcap_path: str,
+    tr: "TransformResetConfig",
+) -> tuple[np.ndarray, np.ndarray, int]:
+    """Load and select the transform sample configured by ``tr``."""
+
+    translations, rotations = _load_mcap_transform_series(mcap_path, tr.topic)
+    index = _select_transform_reset_message_index(translations, rotations, tr)
+    return translations[index], rotations[index], index
 
 
 # ---------------------------------------------------------------------------
@@ -1007,7 +1141,7 @@ def _apply_reset_action(context: ExecutionContext, action: Any) -> None:
 def _make_replay_action_applier(kinematic: bool = False):
     """Return an action applier closure with the configured *kinematic* flag."""
 
-    print(f"Replay action applier created with kinematic={kinematic}")
+    logger.info("Replay action applier created with kinematic=%s", kinematic)
 
     def replay_action_applier(
         context: ExecutionContext, action: Any, env_mask: Optional[np.ndarray] = None
@@ -1120,7 +1254,7 @@ def _apply_joint_axis_scale(
         trailing = (
             f"; remaining {data.shape[-1] - num_scaled} trailing column(s) keep x 1.0"
         )
-    print(f"[joint_axis_scale] {label}: " + ", ".join(name_parts) + trailing)
+    logger.info("[joint_axis_scale] %s: %s%s", label, ", ".join(name_parts), trailing)
     return scaled
 
 
@@ -1166,7 +1300,7 @@ def _apply_joint_clip_to_mcap_demo(
         if bounds.max is not None:
             col = np.minimum(col, bounds.max)
         mcap_demo.joint[:, idx] = col
-        print(
+        logger.info(
             f"[joint_clip] '{name}': "
             f"raw range=[{before_min:.4f}, {before_max:.4f}] -> "
             f"clipped range=[{float(np.min(col)):.4f}, {float(np.max(col)):.4f}] "
@@ -1229,7 +1363,7 @@ def _apply_transform_resets(
     env = context.backend.env
 
     for tr in replay_cfg.transform_resets:
-        t_pc, q_pc = _load_mcap_transform_at(mcap_path, tr.topic, tr.message_index)
+        t_pc, q_pc, selected_index = _load_mcap_transform_for_reset(mcap_path, tr)
         p_wp, q_wp = _query_entity_world(env, tr.parent)
         p_wc, q_wc = _query_entity_world(env, tr.child)
         # p_wp/q_wp and p_wc/q_wc are batched (B, 3) / (B, 4)
@@ -1287,8 +1421,10 @@ def _apply_transform_resets(
             if off_identity
             else (f" (+offset pos={off_pos.tolist()} quat={off_quat.tolist()})")
         )
-        print(
+        logger.info(
             f"[transform_reset] topic={tr.topic!r} "
+            f"selector={tr.message_selector!r} "
+            f"selected_index={selected_index} "
             f"moved {move_ref.kind}:{move_ref.name} "
             f"from pos={cur_pos[0].tolist()} to pos={new_pos[0].tolist()}"
             f"{offset_str}"
@@ -1307,7 +1443,6 @@ def _apply_first_frame_reset(
     if context is None:
         raise RuntimeError("PolicyEvaluator must be initialized before applying reset.")
     with evaluator.sim_lock:
-        # print(f"{reset_action=}")
         _apply_reset_action(context, reset_action)
     return reset_action
 
@@ -1366,7 +1501,7 @@ def preprocess_replay_dictconfig(
         if "initial_joint_positions" not in cfg.env:
             cfg.env.initial_joint_positions = {}
         cfg.env.initial_joint_positions.update(init_jpos)
-    print(f"Injected initial_joint_positions: {init_jpos}")
+    logger.info("Injected initial_joint_positions: %s", init_jpos)
 
 
 class DataReplayRunner(RunnerBase):
@@ -1487,7 +1622,7 @@ class DataReplayRunner(RunnerBase):
 
         self._action_step += 1
         # print(f"action={self._current_action}")
-        input("Press Enter to continue to the next step...")
+        # input("Press Enter to continue to the next step...")
         task_update = evaluator.update(self._current_action, env_mask)
 
         # Defer done for successful envs until replay data is exhausted.

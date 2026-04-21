@@ -27,12 +27,15 @@ replay:
         kind: site
         name: handle_grasp_${door_side}_site
       move: parent
+      # Some recordings begin with a stale transform from the previous task.
+      # Pick the first frame after the transform jumps into the current one.
+      message_selector: first_jump
       use_orientation: false
       offset:
         # Expressed in the movable entity's (operator_base) local frame.
         # -x means "pull back from the handle" regardless of which side.
-        position: [-0.028, -0.05, 0.0]
-        orientation: [0.0, 0.0, 0.0, 1.0]
+        position: [ -0.03, 0.0, 0.0 ]
+        orientation: [ 0.0, 0.0, 0.0, 1.0 ]
 
   # Per-actuator clamp for the recorded trajectory.  In kinematic replay
   # the gripper command is applied to qpos directly with no contact
@@ -52,8 +55,8 @@ replay:
 env:
   sim_freq: 1000
   update_freq: 100
-  mask_objects: ["handle_lever_body"]
-  operations: ["push"]
+  mask_objects: [ "handle_lever_body" ]
+  operations: [ "push" ]
   pre_step_callbacks:
     - _target_: auto_atom.callbacks.door_latch.DoorLatchCallback
       door_joint: door_hinge
@@ -63,7 +66,7 @@ env:
       unlock_threshold: 0.12
       lock_zone: 0.05
   viewer:
-    lookat: [1.25, 0.15, -0.2]
+    lookat: [ 1.25, 0.15, -0.2 ]
     distance: 1.8
     azimuth: 30
     elevation: -15
@@ -75,13 +78,13 @@ task:
   randomization:
     arm:
       base:
-        x: [0.01, 0.10]
-        y: [-0.10, 0.10]
-        z: [-0.10, 0.10]
+        x: [ 0.01, 0.10 ]
+        y: [ -0.1, 0.10 ]
+        z: [ -0.1, 0.10 ]
       eef:
-        x: [0.05, 0.10]
-        y: [-0.10, 0.10]
-        z: [0.05, 0.15]
+        x: [ 0.05, 0.10 ]
+        y: [ -0.1, 0.10 ]
+        z: [ 0.05, 0.15 ]
         # roll: [-0.005, 0.005]
         # pitch: [-0.005, 0.005]
         # yaw: [-0.005, 0.005]
@@ -102,20 +105,20 @@ task:
           # automatically. For the front site the site frame is world-
           # aligned, so behavior matches the previous object_world setup.
           # 1. Approach: ~4.5cm in front of grasp site (site-local -x)
-          - position: [-0.045, 0.0, 0.0]
+          - position: [ -0.045, 0.0, 0.0 ]
             reference: object
-            orientation: [0.71328438, -0.02933355, 0.00430715, 0.70024737]
+            orientation: [ 0.71328438, -0.02933355, 0.00430715, 0.70024737 ]
             max_linear_step: 0.04
             max_angular_step: 0.25
           # 2. Grasp position: at the grasp site (0.5cm overshoot to ensure contact)
-          - position: [0.005, 0.0, 0.0]
+          - position: [ 0.005, 0.0, 0.0 ]
             reference: object
             max_linear_step: 0.04
             max_angular_step: 0.2
             randomization:
-              x: [-0.02, 0.00]
-              y: [-0.00, 0.02]
-              z: [-0.01, 0.01]
+              x: [ -0.02, 0.00 ]
+              y: [ -0, 0.02 ]
+              z: [ -0.01, 0.01 ]
         eef:
           close: true
         post_move:
@@ -124,7 +127,7 @@ task:
           #    Positive angle = press handle down = unlock
           - arc:
               pivot: handle_hinge
-              axis: [-1, 0, 0]
+              axis: [ -1, 0, 0 ]
               angle: 0.45
               absolute: true
               max_step: 0.15
@@ -146,14 +149,14 @@ task:
           # `static: true` snapshots the site pose at action start — required
           # because the gripper rigidly holds the handle, so a tracking
           # reference would move with the gripper and never close the gap.
-          - position: [0.2, 0.0, 0.03]
+          - position: [ 0.2, 0.0, 0.03 ]
             reference: object
             static: true
             # orientation: [-0.19902274, 0.68997457, -0.66492774, -0.20541703]
             max_linear_step: 0.02
             max_angular_step: 0.3
             tolerance:
-              position: [0.01, 0.02, 0.02]
+              position: [ 0.01, 0.02, 0.02 ]
 
 task_operators:
   arm:

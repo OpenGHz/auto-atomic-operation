@@ -169,12 +169,11 @@ replay:
 
 `transform_resets` lets the replay reposition scene entities to match a
 recorded `geometry_msgs/TransformStamped` topic from the MCAP. Each entry
-reads the `message_index`-th transform on `topic` and interprets it as
-`T_parent->child`. At reset the runner queries the `move`-side entity's
-current pose, the other side's world pose, and repositions the movable
-side so the simulated relative pose matches the recording. Entries are
-applied after `evaluator.reset()` and before the first-frame action
-reset.
+selects one transform sample on `topic` and interprets it as `T_parent->child`.
+At reset the runner queries the `move`-side entity's current pose, the other
+side's world pose, and repositions the movable side so the simulated relative
+pose matches the recording. Entries are applied after `evaluator.reset()` and
+before the first-frame action reset.
 
 ```yaml
 replay:
@@ -183,6 +182,7 @@ replay:
       parent: { kind: site, name: door_frame_site }
       child:  { kind: body, name: door }
       move: child
+      message_selector: last
       use_orientation: true
       offset:
         position: [-0.025, 0, 0]    # local frame of the movable entity
@@ -197,13 +197,27 @@ Fields:
 | `parent`          | `{kind: site\|body\|operator_base, name: str}` | required | Parent side of the recorded transform |
 | `child`           | `{kind: site\|body\|operator_base, name: str}` | required | Child side of the recorded transform |
 | `move`            | `"parent" \| "child"`                       | `"parent"`   | Which side to reposition; the other side is treated as fixed |
-| `message_index`   | `int`                                        | `0`          | Which message on `topic` to read |
+| `message_selector`| `"index" \| "first" \| "last" \| "first_jump"` | `"index"` | How to pick the transform sample from the topic history |
+| `message_index`   | `int`                                        | `0`          | Used when `message_selector: index` |
+| `jump_position_threshold` | `float`                             | `0.02`       | Metres; for `first_jump`, triggers on translation delta above this threshold |
+| `jump_orientation_threshold` | `float`                          | `0.10`       | Radians; for `first_jump`, triggers on orientation delta above this threshold |
 | `use_orientation` | `bool`                                       | `false`      | `false`: keep movable entity's current world orientation, only adjust translation. `true`: compose the full transform |
 | `offset`          | `PoseOffset`                                 | identity     | Post-hoc calibration: `position` is in the movable entity's local frame; `orientation` right-multiplies the computed rotation (xyzw or euler rpy) |
 
 `operator_base` as a side refers to the operator's base frame and uses
 `override_operator_base_pose` under the hood so mocap and joint-mode
 operators behave consistently.
+
+Selector behavior:
+
+- `index`: legacy behavior, equivalent to “use `message_index`”.
+- `first`: always use the first message on the topic.
+- `last`: always use the last message on the topic.
+- `first_jump`: scan adjacent messages and pick the first message after a
+  transform jump. A jump is detected when either the translation delta exceeds
+  `jump_position_threshold` or the relative orientation angle exceeds
+  `jump_orientation_threshold`. If no jump is found, replay falls back to the
+  first message and logs a note.
 
 ### 8. Initial joint position injection
 
