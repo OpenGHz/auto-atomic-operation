@@ -65,8 +65,8 @@ task:
           #    -0.35 rad ≈ 20° — within P7 arm reachable workspace
           - arc:
               pivot: door_hinge
-              axis: [0, 0, -1]
-              angle: -0.35
+              axis: [0, 0, 1]
+              angle: 0.35
               absolute: true
               max_step: 0.15
             reference: world
