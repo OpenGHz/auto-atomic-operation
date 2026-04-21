@@ -295,6 +295,21 @@ mask 循环中每个 object 都调用 `batch_update_gaussians(body_pos, body_qua
 
 ---
 
+## VRAM / 速度调参：`minibatch`
+
+`env.gaussian_render.minibatch`（默认 `512`）控制每次 gsplat rasterization 的
+minibatch 大小，会透传给所有由 GS env 构造的 `BatchSplatConfig`：前景渲染器、
+背景渲染器（每张背景一份）、以及每个 object 的 mask 渲染器。
+
+| 取值方向 | 效果 |
+|---|---|
+| 调大（如 1024 / 2048） | 每次 kernel launch 处理更多 gaussian，减少 launch 次数；**显存占用变高**，适合 batch_size 小但单帧 gaussian 多（例如 `open_door` 这种 ~900k 前景）的场景 |
+| 调小（如 256 / 128） | 降低单次显存峰值；吞吐可能下降 |
+| 保持默认 `512` | 大多数场景下够用 |
+
+该值完全是一个性能/显存旋钮，不影响渲染数值结果；遇到 CUDA OOM 时首选调小此值，
+再考虑 [Phase 3 share_physics](#phase-3-共享物理模式-2026-04-20) 或降低 `batch_size`。
+
 ## Phase 3: 共享物理模式 (2026-04-20)
 
 `BatchedGSUnifiedMujocoEnv` 新增 `gaussian_render.share_physics` 开关，专门针对「batch 各 env 仅背景不同、其余物理状态完全一致」的场景随机化用法。开启后：

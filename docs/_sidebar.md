@@ -30,6 +30,7 @@
   - [GS Rendering Alignment](gaussian-splatting/gs_rendering_alignment.md)
   - [GS Background Transform Tuning](gaussian-splatting/gs_background_transform_tuning.md)
   - [GS Multi-Background Assignment](gaussian-splatting/gs_background_assignment.md)
+  - [GS Body Transforms & Mirrors](gaussian-splatting/gs_body_transforms_mirrors.md)
   - [GS Rendering Performance](gaussian-splatting/gs_rendering_performance.md)
   - [GS Collision Box Sizing](gaussian-splatting/gs_scene_collision_box_sizing.md)
 

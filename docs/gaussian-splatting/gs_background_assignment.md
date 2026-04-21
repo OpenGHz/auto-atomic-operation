@@ -16,8 +16,9 @@
 | 形式 | 含义 |
 | --- | --- |
 | `null` | 不使用 GS 背景 |
-| `str` | 单个背景，所有环境共享 |
-| `list[str]` | 多背景池，由环境在初始化或 reset 时分配 |
+| `str` | 单个背景路径，所有环境共享 |
+| `str` 含 glob 元字符（`*`、`?`、`[...]`） | 单条字符串展开为多背景池 |
+| `list[str]` | 多背景池；列表中的任意一项也可以是 glob |
 
 示例：
 
@@ -32,6 +33,20 @@ env:
       [-0.105, 0.491151190, -0.1360378, -0.51684557, 0.495912190, -0.47649889, 0.509794620]
     randomize_background_on_reset: false
 ```
+
+### Glob 展开
+
+列表条目或单条字符串如果包含 `*` / `?` / `[...]`，会在配置解析时被 `glob.glob` 展开，
+并按 `natsort.natsorted` 排序，保证 `bg2.ply` 在 `bg10.ply` 之前。
+没有 glob 元字符的条目原样保留。
+
+```yaml
+env:
+  gaussian_render:
+    background_ply: ${assets_dir}/gs/backgrounds/door_bg/bg*.ply
+```
+
+如果 glob 一项都没匹配上，会在解析配置时抛 `FileNotFoundError: background_ply glob matched no files: <pattern>`，而不是静默忽略；这让缺少背景素材可以被尽早发现。
 
 ## Transform 规则
 
