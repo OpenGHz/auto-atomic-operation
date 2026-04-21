@@ -87,6 +87,8 @@ env.apply_pose_action("arm", positions, orientations, grippers, env_mask=mask)
 |------|-------|-------------|
 | `action/{op}/pose/position` | `(T, 3)` | EEF target position (base frame) |
 | `action/{op}/pose/orientation` | `(T, 4)` | EEF target quaternion xyzw (base frame) |
+| `action/{op}/base_pose/position` | `(T, 3)` | Optional operator base position in world frame |
+| `action/{op}/base_pose/orientation` | `(T, 4)` | Optional operator base quaternion xyzw in world frame |
 | `action/eef/joint_state/position` | `(T, n_eef)` | Gripper target |
 
 ## Replay Example
@@ -101,6 +103,10 @@ grippers = demo_arrays["action/eef/joint_state/position"]  # (T, 1)
 
 # In your action_applier:
 def action_applier(context, action, env_mask=None):
+    if "base_position" in action:
+        context.backend.env.set_operator_base_pose(
+            "arm", action["base_position"], action["base_orientation"], env_mask=env_mask,
+        )
     context.backend.env.apply_pose_action(
         "arm", action["position"], action["orientation"], action["gripper"],
     )

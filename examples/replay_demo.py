@@ -18,7 +18,8 @@ Examples:
     python examples/replay_demo.py --config-name pick_and_place \
         +replay.mcap_path=data/recording.mcap \
         +replay.arm_topic=/robot/right_arm/joint_state \
-        +replay.gripper_topic=/robot/right_gripper/distance
+        +replay.gripper_topic=/robot/right_gripper/distance \
+        +replay.base_topic=/robot/base_pose
 """
 
 from __future__ import annotations
@@ -35,7 +36,15 @@ from pydantic import Field
 
 from auto_atom import ExecutionContext
 from auto_atom.runner.common import get_config_dir
-from auto_atom.runner.data_replay import DataReplayConfig, DataReplayRunner
+from auto_atom.runner.data_replay import (
+    DataReplayConfig,
+    DataReplayRunner,
+    ReplayPolicy,
+    normalize_demo_for_batch,
+)
+from auto_atom.runner.data_replay import (
+    _apply_first_frame_reset as apply_first_frame_reset,
+)
 
 # ---------------------------------------------------------------------------
 # Script-level config (extends DataReplayConfig with video options)

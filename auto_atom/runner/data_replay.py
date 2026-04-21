@@ -129,6 +129,13 @@ class DataReplayConfig(BaseModel):
     mcap_path: str | None = Field(default=None)
     arm_topic: str = Field(default="/robot/right_arm/joint_state")
     gripper_topic: str = Field(default="/robot/right_gripper/joint_state")
+    base_topic: str | None = Field(default=None)
+    """Optional ROS2 topic carrying the operator base pose for MCAP replay.
+
+    Expects ``geometry_msgs/PoseStamped`` decoded as a dict. The pose is
+    interpreted as the operator base pose in world frame and is aligned to arm
+    joint timestamps before replay.
+    """
     joint_name_mapping: Dict[str, str] = {"gripper": "xfg_claw_joint"}
     joint_axis_scale: List[float] = Field(default_factory=list)
     """Per-joint multipliers applied to recorded joint/ctrl data after
@@ -193,6 +200,41 @@ def _load_low_dim_map(demo_data: np.lib.npyio.NpzFile) -> Dict[str, np.ndarray]:
     return low_dim_map
 
 
+def _load_optional_base_pose_channels(
+    low_dim: Dict[str, np.ndarray],
+    result: Dict[str, np.ndarray],
+    *,
+    operator_name: str = "arm",
+) -> None:
+    """Attach optional replay-time operator base pose channels to *result*.
+
+    The operator-specific key is preferred, while the shorter
+    ``action/base/pose/*`` pair is accepted for externally-generated demos.
+    """
+
+    candidate_pairs = (
+        (
+            f"action/{operator_name}/base_pose/position",
+            f"action/{operator_name}/base_pose/orientation",
+        ),
+        ("action/base/pose/position", "action/base/pose/orientation"),
+    )
+    for position_key, orientation_key in candidate_pairs:
+        has_position = position_key in low_dim
+        has_orientation = orientation_key in low_dim
+        if not has_position and not has_orientation:
+            continue
+        if has_position != has_orientation:
+            missing_key = orientation_key if has_position else position_key
+            raise KeyError(
+                "Base pose replay channels must provide both position and "
+                f"orientation; missing '{missing_key}'."
+            )
+        result["base_position"] = low_dim[position_key]
+        result["base_orientation"] = low_dim[orientation_key]
+        return
+
+
 def _load_pose_demo(demo_data: np.lib.npyio.NpzFile) -> Dict[str, np.ndarray]:
     """Load pose + gripper arrays for pose-mode replay."""
     low_dim = _load_low_dim_map(demo_data)
@@ -207,6 +249,7 @@ def _load_pose_demo(demo_data: np.lib.npyio.NpzFile) -> Dict[str, np.ndarray]:
     )
     if gripper_key in low_dim:
         result["gripper"] = low_dim[gripper_key]
+    _load_optional_base_pose_channels(low_dim, result)
     return result
 
 
@@ -219,7 +262,9 @@ def _load_ctrl_demo(demo_data: np.lib.npyio.NpzFile) -> Dict[str, np.ndarray]:
         ctrl = np.concatenate([arm, low_dim[eef_key]], axis=-1)
     else:
         ctrl = arm
-    return {"ctrl": ctrl}
+    result: Dict[str, np.ndarray] = {"ctrl": ctrl}
+    _load_optional_base_pose_channels(low_dim, result)
+    return result
 
 
 def _get_operator_actuator_names(op_cfg: Any) -> list[str]:
@@ -241,10 +286,21 @@ class McapDemo:
 
     joint: np.ndarray  # (T, n_arm + n_grip)
     joint_names: list[str]
+    base_position: np.ndarray | None
+    base_orientation: np.ndarray | None
 
-    def __init__(self, joint: np.ndarray, joint_names: list[str]) -> None:
+    def __init__(
+        self,
+        joint: np.ndarray,
+        joint_names: list[str],
+        *,
+        base_position: np.ndarray | None = None,
+        base_orientation: np.ndarray | None = None,
+    ) -> None:
         self.joint = joint
         self.joint_names = joint_names
+        self.base_position = base_position
+        self.base_orientation = base_orientation
 
     def first_frame_joint_positions(self) -> Dict[str, float]:
         return {n: float(v) for n, v in zip(self.joint_names, self.joint[0])}
@@ -268,8 +324,92 @@ class McapDemo:
         self.joint_names = [actuator_names[i] for i in range(len(actuator_names))]
 
 
-def _load_mcap_demo(mcap_path: str, arm_topic: str, gripper_topic: str) -> McapDemo:
-    """Load arm joint + gripper arrays from a ROS2 mcap file."""
+def _nearest_sample_indices(
+    source_times: np.ndarray,
+    target_times: np.ndarray,
+) -> np.ndarray:
+    """Return indices of ``source_times`` nearest to each ``target_times`` item."""
+
+    source_times = np.asarray(source_times, dtype=np.int64).reshape(-1)
+    target_times = np.asarray(target_times, dtype=np.int64).reshape(-1)
+    if source_times.size == 0:
+        raise ValueError("Cannot align against an empty timestamp array.")
+    right = np.searchsorted(source_times, target_times, side="left")
+    right = np.clip(right, 0, source_times.size - 1)
+    left = np.clip(right - 1, 0, source_times.size - 1)
+    choose_left = np.abs(target_times - source_times[left]) <= np.abs(
+        source_times[right] - target_times
+    )
+    return np.where(choose_left, left, right)
+
+
+def _align_samples_to_times(
+    samples: np.ndarray,
+    sample_times: np.ndarray,
+    target_times: np.ndarray,
+    *,
+    label: str,
+) -> np.ndarray:
+    """Nearest-neighbour align sample rows to target timestamps."""
+
+    samples = np.asarray(samples)
+    sample_times = np.asarray(sample_times, dtype=np.int64).reshape(-1)
+    if samples.shape[0] != sample_times.shape[0]:
+        raise ValueError(
+            f"{label} sample count ({samples.shape[0]}) does not match timestamp "
+            f"count ({sample_times.shape[0]})."
+        )
+    order = np.argsort(sample_times)
+    sorted_times = sample_times[order]
+    sorted_samples = samples[order]
+    return sorted_samples[_nearest_sample_indices(sorted_times, target_times)]
+
+
+def _extract_pose_stamped_xyzw(
+    msg: Any, *, topic: str
+) -> tuple[np.ndarray, np.ndarray]:
+    """Extract ``(position xyz, orientation xyzw)`` from a PoseStamped-like dict."""
+
+    if not isinstance(msg, dict):
+        raise TypeError(
+            f"Expected PoseStamped message on topic '{topic}' to decode as dict, "
+            f"got {type(msg).__name__}."
+        )
+    pose = msg.get("pose")
+    if not isinstance(pose, dict):
+        raise ValueError(
+            f"Expected PoseStamped message on topic '{topic}' to contain a 'pose' dict."
+        )
+    position = pose.get("position")
+    orientation = pose.get("orientation")
+    if not isinstance(position, dict) or not isinstance(orientation, dict):
+        raise ValueError(
+            f"Expected PoseStamped message on topic '{topic}' to contain "
+            "pose.position and pose.orientation dicts."
+        )
+    pos = np.array(
+        [float(position["x"]), float(position["y"]), float(position["z"])],
+        dtype=np.float32,
+    )
+    quat = np.array(
+        [
+            float(orientation["x"]),
+            float(orientation["y"]),
+            float(orientation["z"]),
+            float(orientation["w"]),
+        ],
+        dtype=np.float32,
+    )
+    return pos, quat
+
+
+def _load_mcap_demo(
+    mcap_path: str,
+    arm_topic: str,
+    gripper_topic: str,
+    base_topic: str | None = None,
+) -> McapDemo:
+    """Load arm, gripper, and optional base-pose arrays from a ROS2 mcap file."""
     from mcap.reader import make_reader
     from mcap_ros2idl_support import Ros2DecodeFactory
 
@@ -280,10 +420,16 @@ def _load_mcap_demo(mcap_path: str, arm_topic: str, gripper_topic: str) -> McapD
     gripper_positions: list[list[float]] = []
     arm_times: list[int] = []
     gripper_times: list[int] = []
+    base_positions: list[np.ndarray] = []
+    base_orientations: list[np.ndarray] = []
+    base_times: list[int] = []
+    topics = [arm_topic, gripper_topic]
+    if base_topic is not None:
+        topics.append(base_topic)
 
     with open(mcap_path, "rb") as f:
         reader = make_reader(f, decoder_factories=[factory])
-        for decoded in reader.iter_decoded_messages(topics=[arm_topic, gripper_topic]):
+        for decoded in reader.iter_decoded_messages(topics=topics):
             topic = decoded.channel.topic
             msg = decoded.decoded_message
             t = decoded.message.log_time
@@ -297,6 +443,11 @@ def _load_mcap_demo(mcap_path: str, arm_topic: str, gripper_topic: str) -> McapD
                     gripper_names = list(msg["name"])
                 gripper_positions.append(list(msg["position"]))
                 gripper_times.append(t)
+            elif base_topic is not None and topic == base_topic:
+                pos, quat = _extract_pose_stamped_xyzw(msg, topic=base_topic)
+                base_positions.append(pos)
+                base_orientations.append(quat)
+                base_times.append(t)
 
     if not arm_positions:
         raise ValueError(f"No arm messages found on topic '{arm_topic}' in {mcap_path}")
@@ -311,13 +462,43 @@ def _load_mcap_demo(mcap_path: str, arm_topic: str, gripper_topic: str) -> McapD
     grip_t = np.array(gripper_times, dtype=np.int64)
 
     if len(arm_t) != len(grip_t) or np.any(np.abs(arm_t - grip_t) > 50_000_000):
-        indices = np.searchsorted(grip_t, arm_t, side="left")
-        indices = np.clip(indices, 0, len(grip_t) - 1)
-        grip = grip[indices]
+        grip = _align_samples_to_times(
+            grip,
+            grip_t,
+            arm_t,
+            label=f"gripper topic '{gripper_topic}'",
+        )
+
+    base_position: np.ndarray | None = None
+    base_orientation: np.ndarray | None = None
+    if base_topic is not None:
+        if not base_positions:
+            raise ValueError(
+                f"No PoseStamped messages found on base topic '{base_topic}' "
+                f"in {mcap_path}"
+            )
+        base_t = np.array(base_times, dtype=np.int64)
+        base_position = _align_samples_to_times(
+            np.asarray(base_positions, dtype=np.float32),
+            base_t,
+            arm_t,
+            label=f"base topic '{base_topic}' position",
+        )
+        base_orientation = _align_samples_to_times(
+            np.asarray(base_orientations, dtype=np.float32),
+            base_t,
+            arm_t,
+            label=f"base topic '{base_topic}' orientation",
+        )
 
     joint = np.concatenate([arm, grip], axis=-1)
     joint_names = (arm_names or []) + (gripper_names or [])
-    return McapDemo(joint=joint, joint_names=joint_names)
+    return McapDemo(
+        joint=joint,
+        joint_names=joint_names,
+        base_position=base_position,
+        base_orientation=base_orientation,
+    )
 
 
 def _load_mcap_transform_at(
@@ -402,48 +583,68 @@ def normalize_demo_for_batch(
     mode: str,
 ) -> Dict[str, np.ndarray]:
     """Slice a (T, B_rec, dim) demo to match the replay *batch_size*."""
-    if mode == "pose":
-        position = demo["position"]
-        orientation = demo["orientation"]
-        rec_bs = position.shape[1]
+
+    def normalize_series(arr: np.ndarray, label: str) -> np.ndarray:
+        arr = np.asarray(arr)
+        if arr.ndim == 2:
+            # Unbatched trajectories are intentionally accepted for any
+            # replay batch size; the env action APIs broadcast single-row
+            # commands to selected envs.
+            return arr
+        if arr.ndim < 3:
+            raise ValueError(
+                f"{label} must have shape (T, dim) or (T, B, dim), got {arr.shape}."
+            )
+        rec_bs = arr.shape[1]
         if batch_size > rec_bs:
             raise ValueError(
-                f"Demo recorded with batch_size={rec_bs}, "
+                f"{label} recorded with batch_size={rec_bs}, "
                 f"but replay requires batch_size={batch_size}."
             )
-        position = position[:, :batch_size, :]
-        orientation = orientation[:, :batch_size, :]
+        arr = arr[:, :batch_size, ...]
+        return arr[:, 0, ...] if batch_size == 1 else arr
+
+    def attach_optional_base_pose(result: Dict[str, np.ndarray]) -> None:
+        has_position = "base_position" in demo
+        has_orientation = "base_orientation" in demo
+        if not has_position and not has_orientation:
+            return
+        if has_position != has_orientation:
+            missing_key = "base_orientation" if has_position else "base_position"
+            raise KeyError(
+                "Base pose replay actions must provide both base_position and "
+                f"base_orientation; missing '{missing_key}'."
+            )
+        result["base_position"] = normalize_series(
+            demo["base_position"], "base_position"
+        )
+        result["base_orientation"] = normalize_series(
+            demo["base_orientation"], "base_orientation"
+        )
+
+    if mode == "pose":
         result: Dict[str, np.ndarray] = {
-            "position": position[:, 0, :] if batch_size == 1 else position,
-            "orientation": orientation[:, 0, :] if batch_size == 1 else orientation,
+            "position": normalize_series(demo["position"], "pose position"),
+            "orientation": normalize_series(demo["orientation"], "pose orientation"),
         }
         if "gripper" in demo:
-            gripper = demo["gripper"][:, :batch_size, :]
-            result["gripper"] = gripper[:, 0, :] if batch_size == 1 else gripper
+            result["gripper"] = normalize_series(demo["gripper"], "gripper")
+        attach_optional_base_pose(result)
         return result
 
     if mode == "joint":
         joint = demo["joint"]
-        if joint.ndim == 2:
-            return {"joint": joint}
-        rec_bs = joint.shape[1]
-        if batch_size > rec_bs:
-            raise ValueError(
-                f"Demo recorded with batch_size={rec_bs}, "
-                f"but replay requires batch_size={batch_size}."
-            )
-        joint = joint[:, :batch_size, :]
-        return {"joint": joint[:, 0, :] if batch_size == 1 else joint}
-
-    ctrl = demo["ctrl"]
-    rec_bs = ctrl.shape[1]
-    if batch_size > rec_bs:
-        raise ValueError(
-            f"Demo recorded with batch_size={rec_bs}, "
-            f"but replay requires batch_size={batch_size}."
+        result = (
+            {"joint": joint}
+            if joint.ndim == 2
+            else {"joint": normalize_series(joint, "joint")}
         )
-    ctrl = ctrl[:, :batch_size, :]
-    return {"ctrl": ctrl[:, 0, :] if batch_size == 1 else ctrl}
+        attach_optional_base_pose(result)
+        return result
+
+    result = {"ctrl": normalize_series(demo["ctrl"], "ctrl")}
+    attach_optional_base_pose(result)
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -485,10 +686,27 @@ class ReplayPolicy:
             }
             if "gripper" in self._demo:
                 action["gripper"] = self._demo["gripper"][i]
-            return action
+            return self._attach_base_pose_action(action, i)
         if self._mode == "joint":
-            return {"joint": self._demo["joint"][i]}
-        return {"ctrl": self._demo["ctrl"][i]}
+            return self._attach_base_pose_action({"joint": self._demo["joint"][i]}, i)
+        return self._attach_base_pose_action({"ctrl": self._demo["ctrl"][i]}, i)
+
+    def _attach_base_pose_action(
+        self, action: Dict[str, Any], index: int
+    ) -> Dict[str, Any]:
+        has_position = "base_position" in self._demo
+        has_orientation = "base_orientation" in self._demo
+        if not has_position and not has_orientation:
+            return action
+        if has_position != has_orientation:
+            missing_key = "base_orientation" if has_position else "base_position"
+            raise KeyError(
+                "Base pose replay actions must provide both base_position and "
+                f"base_orientation; missing '{missing_key}'."
+            )
+        action["base_position"] = self._demo["base_position"][index]
+        action["base_orientation"] = self._demo["base_orientation"][index]
+        return action
 
     def apply_first_frame_as_reset(self) -> Dict[str, Any] | None:
         if self.num_steps <= 0:
@@ -508,11 +726,50 @@ class ReplayPolicy:
 # ---------------------------------------------------------------------------
 
 
+def _apply_base_pose_action(
+    env: Any,
+    action: Any,
+    env_mask: Optional[np.ndarray] = None,
+) -> bool:
+    """Apply optional operator-base pose fields from a replay action.
+
+    Returns ``True`` when a base command was present.  The command uses
+    ``set_operator_base_pose`` rather than ``override_operator_base_pose`` so
+    mocap and joint-mode operators move their physical root consistently.
+    """
+
+    if not isinstance(action, dict):
+        return False
+    has_position = "base_position" in action
+    has_orientation = "base_orientation" in action
+    if not has_position and not has_orientation:
+        return False
+    if has_position != has_orientation:
+        missing_key = "base_orientation" if has_position else "base_position"
+        raise KeyError(
+            "Base pose replay action must provide both base_position and "
+            f"base_orientation; missing '{missing_key}'."
+        )
+    if not hasattr(env, "set_operator_base_pose"):
+        raise AttributeError(
+            "Replay action contains base_position/base_orientation, but the "
+            "backend env does not expose set_operator_base_pose()."
+        )
+    env.set_operator_base_pose(
+        "arm",
+        action["base_position"],
+        action["base_orientation"],
+        env_mask=env_mask,
+    )
+    return True
+
+
 def _apply_reset_action(context: ExecutionContext, action: Any) -> None:
     """Apply a recorded action as an exact reset state when possible."""
     if action is None:
         return
     env = context.backend.env
+    _apply_base_pose_action(env, action)
     if "joint" in action:
         env.apply_joint_action("arm", action["joint"], kinematic=True)
     elif "ctrl" in action:
@@ -520,7 +777,7 @@ def _apply_reset_action(context: ExecutionContext, action: Any) -> None:
         if ctrl.ndim == 1:
             ctrl = ctrl.reshape(1, -1).repeat(env.batch_size, axis=0)
         env.step(ctrl)
-    else:
+    elif "position" in action and "orientation" in action:
         env.apply_pose_action(
             "arm",
             action["position"],
@@ -541,6 +798,7 @@ def _make_replay_action_applier(kinematic: bool = False):
         if action is None:
             return
         env = context.backend.env
+        _apply_base_pose_action(env, action, env_mask=env_mask)
         if "joint" in action:
             env.apply_joint_action(
                 "arm", action["joint"], env_mask=env_mask, kinematic=kinematic
@@ -550,7 +808,7 @@ def _make_replay_action_applier(kinematic: bool = False):
             if ctrl.ndim == 1:
                 ctrl = ctrl.reshape(1, -1).repeat(env.batch_size, axis=0)
             env.step(ctrl, env_mask=env_mask)
-        else:
+        elif "position" in action and "orientation" in action:
             env.apply_pose_action(
                 "arm",
                 action["position"],
@@ -948,6 +1206,7 @@ class DataReplayRunner(RunnerBase):
         demo_name: Optional[str] = None,
         demo_dir: Optional[str] = None,
         mcap_path: Optional[str] = None,
+        base_topic: Optional[str] = None,
         mode: Optional[str] = None,
     ) -> None:
         """Change the demo data source.  Takes effect on the next ``reset()``.
@@ -959,6 +1218,8 @@ class DataReplayRunner(RunnerBase):
         rcfg = self._require_replay_cfg()
         if mcap_path is not None:
             rcfg.mcap_path = mcap_path
+        if base_topic is not None:
+            rcfg.base_topic = base_topic
         if demo_name is not None:
             rcfg.demo_name = demo_name
         if demo_dir is not None:
@@ -1062,7 +1323,12 @@ class DataReplayRunner(RunnerBase):
                 mcap_path = os.path.join(os.getcwd(), mcap_path)
             if not os.path.exists(mcap_path):
                 raise FileNotFoundError(f"MCAP file not found: {mcap_path}")
-            mcap_demo = _load_mcap_demo(mcap_path, rcfg.arm_topic, rcfg.gripper_topic)
+            mcap_demo = _load_mcap_demo(
+                mcap_path,
+                rcfg.arm_topic,
+                rcfg.gripper_topic,
+                rcfg.base_topic,
+            )
             rcfg.mode = "joint"
 
             # Align mcap column order to the YAML actuator declaration order.
@@ -1077,6 +1343,10 @@ class DataReplayRunner(RunnerBase):
             _prepare_mcap_demo_for_replay(mcap_demo, actuator_names, rcfg)
 
             demo: Dict[str, np.ndarray] = {"joint": mcap_demo.joint}
+            if mcap_demo.base_position is not None:
+                demo["base_position"] = mcap_demo.base_position
+            if mcap_demo.base_orientation is not None:
+                demo["base_orientation"] = mcap_demo.base_orientation
         else:
             demo_name = rcfg.demo_name or "demo"
             demo_dir = rcfg.demo_dir or os.path.join(

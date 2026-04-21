@@ -102,6 +102,29 @@ def _extract_low_dim_observation(obs: dict[str, dict]) -> dict[str, dict]:
     return low_dim
 
 
+def _inject_operator_base_pose_actions(
+    obs: dict[str, dict],
+    backend: MujocoTaskBackend,
+) -> None:
+    """Add replayable operator-base pose commands to an observation snapshot."""
+
+    t = None
+    for payload in obs.values():
+        t = payload.get("t")
+        if t is not None:
+            break
+    for op_name in backend.operator_handlers:
+        pos_w, quat_w = backend.env.get_operator_base_pose(op_name)
+        obs[f"action/{op_name}/base_pose/position"] = {
+            "data": np.asarray(pos_w, dtype=np.float32),
+            "t": t,
+        }
+        obs[f"action/{op_name}/base_pose/orientation"] = {
+            "data": np.asarray(quat_w, dtype=np.float32),
+            "t": t,
+        }
+
+
 def _iter_low_dim_leaf_items(
     low_dim_step: dict[str, dict],
 ) -> list[tuple[str, object, object]]:
@@ -210,6 +233,7 @@ def main(cfg: DictConfig) -> None:
         if not isinstance(backend, MujocoTaskBackend):
             return
         obs = backend.env.capture_observation()
+        _inject_operator_base_pose_actions(obs, backend)
         low_dim_observations.append(_extract_low_dim_observation(obs))
         nonlocal resolved_camera, resolved_camera_key
         if resolved_camera_key is None:
