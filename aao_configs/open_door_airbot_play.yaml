@@ -30,7 +30,7 @@ replay:
       offset:
         # Expressed in the movable entity's (operator_base) local frame.
         # -x means "pull back from the handle" regardless of which side.
-        position: [-0.025, -0.02, 0.0]
+        position: [-0.028, -0.05, 0.0]
         orientation: [0.0, 0.0, 0.0, 1.0]
 
   # Per-actuator clamp for the recorded trajectory.  In kinematic replay
