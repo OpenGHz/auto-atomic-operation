@@ -1019,34 +1019,29 @@ class MujocoTaskBackend(SceneBackend):
 
         For enum modes the entity's own ``default_pose`` is returned.
 
-        For an entity-name reference, the delta-carry algorithm is applied:
-        ``delta = ref_sampled * ref_default⁻¹``, then ``delta * default_pose``
-        so the current entity moves with the referenced entity while
-        preserving their original spatial relationship.
+        For an entity-name reference, the sampled pose of the referenced
+        entity is used as the base directly — so ranges like ``x: [-0.005,
+        0.005]`` are interpreted as offsets from the referenced entity's
+        currently randomized pose, not from this entity's XML default.
         """
         if isinstance(reference, RandomizationReference):
             return default_pose
-        # --- Entity-name reference: delta-carry ---
-        ref_sampled = sampled_poses.get(reference)
-        # Resolve the reference entity's default pose.
-        if reference in self._default_object_poses:
-            ref_default = self._default_object_poses[reference]
-        elif reference in self._default_operator_eef_poses:
-            ref_default = self._default_operator_eef_poses[reference]
-        elif reference in self.object_handlers:
-            ref_default = self.object_handlers[reference].get_pose()
-        elif reference in self.operator_handlers:
-            ref_default = self.operator_handlers[reference].get_end_effector_pose()
-        else:
+        known_entity = (
+            reference in self._default_object_poses
+            or reference in self._default_operator_eef_poses
+            or reference in self.object_handlers
+            or reference in self.operator_handlers
+        )
+        if not known_entity:
             raise ValueError(
                 f"Randomization reference '{reference}' is not a known mode "
                 "('relative', 'absolute_world', 'absolute_base') nor an "
                 "existing object/operator name."
             )
+        ref_sampled = sampled_poses.get(reference)
         if ref_sampled is None:
-            return default_pose  # entity not randomized → no delta
-        delta = compose_pose(ref_sampled, inverse_pose(ref_default))
-        return compose_pose(delta, default_pose)
+            return default_pose  # reference not randomized → fall back
+        return ref_sampled
 
     def _apply_randomization(self, env_mask: np.ndarray) -> None:
         deps = self._randomization_dependencies()
@@ -1445,29 +1440,22 @@ class MujocoTaskBackend(SceneBackend):
     ) -> PoseState:
         if isinstance(reference, RandomizationReference):
             return default_pose
-        ref_sampled = sampled_poses.get(reference)
-        if reference in self._default_object_poses:
-            ref_default = self._default_object_poses[reference].select(env_index)
-        elif reference in self._default_operator_eef_poses:
-            ref_default = self._default_operator_eef_poses[reference].select(env_index)
-        elif reference in self.object_handlers:
-            ref_default = self.object_handlers[reference].get_pose().select(env_index)
-        elif reference in self.operator_handlers:
-            ref_default = (
-                self.operator_handlers[reference]
-                .get_end_effector_pose()
-                .select(env_index)
-            )
-        else:
+        known_entity = (
+            reference in self._default_object_poses
+            or reference in self._default_operator_eef_poses
+            or reference in self.object_handlers
+            or reference in self.operator_handlers
+        )
+        if not known_entity:
             raise ValueError(
                 f"Randomization reference '{reference}' is not a known mode "
                 "('relative', 'absolute_world', 'absolute_base') nor an existing "
                 "object/operator name."
             )
+        ref_sampled = sampled_poses.get(reference)
         if ref_sampled is None:
             return default_pose
-        delta = compose_pose(ref_sampled, inverse_pose(ref_default))
-        return compose_pose(delta, default_pose)
+        return ref_sampled
 
     def _current_pose_for_randomization_key(self, name: str) -> PoseState:
         rand_range = self.randomization[name]

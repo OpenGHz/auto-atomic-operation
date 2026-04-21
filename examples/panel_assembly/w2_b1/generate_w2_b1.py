@@ -14,20 +14,20 @@ BASE_DIR = Path(__file__).parent
 # 14 switches from Excel w2_b1 (positions with known coordinates)
 # (class_name, x_mm, y_mm, wall_row, wall_col)
 SWITCHES = [
-    ("Knob_Quantity1_02",    -286.5,  160.0, 1, 10),
-    ("Knob_Quantity1_01",    -356.5,  160.0, 1, 11),
-    ("Toogle_Quantity1_01",   217.5,   50.0, 2,  2),
-    ("Toogle_Quantity1_02",   111.5,   50.0, 2,  3),
-    ("Toogle_Quantity1_03",  -100.5,   50.0, 2,  5),
-    ("Toogle_Quantity3_01",  -206.5,   50.0, 2,  6),
-    ("Switch_Quantity3_03",  -312.5,   50.0, 2,  7),
-    ("Switch_Quantity1_01",   323.5,  -80.0, 3,  1),
-    ("Switch_Quantity4_01",   217.5,  -80.0, 3,  2),
-    ("Switch_Quantity1_03",   111.5,  -80.0, 3,  3),
-    ("Switch_Quantity2_02",     5.5,  -80.0, 3,  4),
-    ("Switch_Quantity3_02",  -100.5,  -80.0, 3,  5),
-    ("Switch_Quantity1_05",  -206.5,  -80.0, 3,  6),
-    ("Switch_Quantity1_04",  -312.5,  -80.0, 3,  7),
+    ("Knob_Quantity1_02", -286.5, 160.0, 1, 10),
+    ("Knob_Quantity1_01", -356.5, 160.0, 1, 11),
+    ("Toogle_Quantity1_01", 217.5, 50.0, 2, 2),
+    ("Toogle_Quantity1_02", 111.5, 50.0, 2, 3),
+    ("Toogle_Quantity1_03", -100.5, 50.0, 2, 5),
+    ("Toogle_Quantity3_01", -206.5, 50.0, 2, 6),
+    ("Switch_Quantity3_03", -312.5, 50.0, 2, 7),
+    ("Switch_Quantity1_01", 323.5, -80.0, 3, 1),
+    ("Switch_Quantity4_01", 217.5, -80.0, 3, 2),
+    ("Switch_Quantity1_03", 111.5, -80.0, 3, 3),
+    ("Switch_Quantity2_02", 5.5, -80.0, 3, 4),
+    ("Switch_Quantity3_02", -100.5, -80.0, 3, 5),
+    ("Switch_Quantity1_05", -206.5, -80.0, 3, 6),
+    ("Switch_Quantity1_04", -312.5, -80.0, 3, 7),
 ]
 
 PANEL_HALF_X = 0.42
@@ -112,13 +112,17 @@ def generate_assembly_xml() -> str:
         for mat in materials:
             asset_lines.append(f"    {ET.tostring(mat, encoding='unicode').strip()}")
 
-        slot_lines.append(f'      <body name="{slot_name}" pos="{x_m} {base_y} {z_m}" quat="{quat}">')
+        slot_lines.append(
+            f'      <body name="{slot_name}" pos="{x_m} {base_y} {z_m}" quat="{quat}">'
+        )
         slot_lines.append(f'        <body name="{assembled_body}">')
         for geom in geoms:
             orig = geom.get("name", "")
             if orig:
                 geom.set("name", f"{orig}__{slot_name}")
-            slot_lines.append(f"          {ET.tostring(geom, encoding='unicode').strip()}")
+            slot_lines.append(
+                f"          {ET.tostring(geom, encoding='unicode').strip()}"
+            )
         slot_lines.append("        </body>")
         slot_lines.append("      </body>")
 
@@ -144,13 +148,19 @@ def main() -> None:
         return
     (BASE_DIR / "generated").mkdir(exist_ok=True)
 
-    (BASE_DIR / "layout_w2_b1.yaml").write_text(generate_layout_yaml(), encoding="utf-8")
+    (BASE_DIR / "layout_w2_b1.yaml").write_text(
+        generate_layout_yaml(), encoding="utf-8"
+    )
     print("  Created layout_w2_b1.yaml")
 
-    (BASE_DIR / "w2_b1_panel_base.xml").write_text(generate_panel_base_xml(), encoding="utf-8")
+    (BASE_DIR / "w2_b1_panel_base.xml").write_text(
+        generate_panel_base_xml(), encoding="utf-8"
+    )
     print("  Created w2_b1_panel_base.xml")
 
-    (BASE_DIR / "generated" / "w2_b1_panel_assembly.xml").write_text(generate_assembly_xml(), encoding="utf-8")
+    (BASE_DIR / "generated" / "w2_b1_panel_assembly.xml").write_text(
+        generate_assembly_xml(), encoding="utf-8"
+    )
     print("  Created generated/w2_b1_panel_assembly.xml")
 
     print(f"\nDone. Assembly built from {len(SWITCHES)} switches.")

@@ -23,14 +23,14 @@ from typing import Any
 import openpyxl
 
 # ── Excel column indices (1-based) ──────────────────────────────────────
-COL_TYPE = 2       # B: Switch / Knob / Stop
-COL_SEQ = 3        # C: sequence number (1-37)
-COL_QTY = 4        # D: quantity
-COL_CLASS = 5      # E: class_name  e.g. Switch_Quantity1_06
-COL_BTN_CLS = 6   # F: button_class
-COL_COORD = 8      # H: distance-from-centre coordinate
-COL_POS = 9        # I: (wall, row, col)  e.g. (2,4,1)
-COL_NOTES = 11     # K: notes (size, diameter, …)
+COL_TYPE = 2  # B: Switch / Knob / Stop
+COL_SEQ = 3  # C: sequence number (1-37)
+COL_QTY = 4  # D: quantity
+COL_CLASS = 5  # E: class_name  e.g. Switch_Quantity1_06
+COL_BTN_CLS = 6  # F: button_class
+COL_COORD = 8  # H: distance-from-centre coordinate
+COL_POS = 9  # I: (wall, row, col)  e.g. (2,4,1)
+COL_NOTES = 11  # K: notes (size, diameter, …)
 
 # ── Known y-values per wall-row (mm) ───────────────────────────────────
 ROW_Y_MAP: dict[int, float] = {
@@ -44,6 +44,7 @@ DATA_START_ROW = 3  # first row with actual placement data
 
 
 # ── coordinate parsing ──────────────────────────────────────────────────
+
 
 def _parse_coord(raw: Any, *, fallback_y: float | None) -> tuple[float, float]:
     """Parse the H-column value into ``(x, y)`` in millimetres.
@@ -99,6 +100,7 @@ def _parse_wall_pos(raw: Any) -> tuple[int, int, int] | None:
 
 # ── main extraction ─────────────────────────────────────────────────────
 
+
 def _extract_placements(
     excel_path: str | Path,
 ) -> list[dict[str, Any]]:
@@ -153,9 +155,7 @@ def _extract_placements(
         if rc_key in seen_cols:
             old_seq = seen_cols[rc_key]
             # Auto-correct: assign next available col.
-            max_col_in_row = max(
-                c for (r, c) in seen_cols if r == w_row
-            )
+            max_col_in_row = max(c for (r, c) in seen_cols if r == w_row)
             w_col = max_col_in_row + 1
             warnings.warn(
                 f"seq {seq}: position ({w_row},{rc_key[1]}) already used by seq {old_seq} "
@@ -197,11 +197,14 @@ def _extract_placements(
 
 # ── YAML generation ─────────────────────────────────────────────────────
 
+
 def _format_yaml(placements: list[dict[str, Any]]) -> str:
     lines: list[str] = []
     lines.append("# Auto-generated from Excel sheet 'w2_b2'")
-    lines.append("# Re-generate: python examples/panel_assembly/w2_b2/"
-                 "generate_layout_from_excel.py <excel_path>")
+    lines.append(
+        "# Re-generate: python examples/panel_assembly/w2_b2/"
+        "generate_layout_from_excel.py <excel_path>"
+    )
     lines.append("")
     lines.append("panel:")
     lines.append("  xml: w2_b2_panel_base.xml")
@@ -239,6 +242,7 @@ def _format_yaml(placements: list[dict[str, Any]]) -> str:
 
 # ── CLI ─────────────────────────────────────────────────────────────────
 
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Generate w2_b2 panel layout YAML from Excel workbook."
@@ -263,9 +267,11 @@ def main() -> None:
 
     print(f"Generated {output} with {len(placements)} placements.")
     for p in placements:
-        print(f"  seq={p['seq']:>2}  type={p['type']:<6}  "
-              f"pos=({p['pos'][0]:>7.1f}, {p['pos'][1]:>6.1f})  "
-              f"row={p['row']}  col={p['col']}  xml={p['xml']}")
+        print(
+            f"  seq={p['seq']:>2}  type={p['type']:<6}  "
+            f"pos=({p['pos'][0]:>7.1f}, {p['pos'][1]:>6.1f})  "
+            f"row={p['row']}  col={p['col']}  xml={p['xml']}"
+        )
 
 
 if __name__ == "__main__":

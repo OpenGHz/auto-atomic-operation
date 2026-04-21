@@ -4,6 +4,7 @@ Each switch is 8.6cm x 8.6cm square, 7mm thick, default black metallic.
 """
 
 from __future__ import annotations
+
 from pathlib import Path
 
 OBJECTS_DIR = Path(__file__).parent / "objects"
@@ -57,20 +58,20 @@ COLORS = {
 # 14 switches with known coordinates from Excel w2_b1
 # (class_name, x_mm, y_mm, wall_pos)
 SWITCHES = [
-    ("Knob_Quantity1_02",    -286.5,  160.0, (2,1,10)),
-    ("Knob_Quantity1_01",    -356.5,  160.0, (2,1,11)),
-    ("Toogle_Quantity1_01",   217.5,   50.0, (2,2,2)),
-    ("Toogle_Quantity1_02",   111.5,   50.0, (2,2,3)),
-    ("Toogle_Quantity1_03",  -100.5,   50.0, (2,2,5)),
-    ("Toogle_Quantity3_01",  -206.5,   50.0, (2,2,6)),
-    ("Switch_Quantity3_03",  -312.5,   50.0, (2,2,7)),
-    ("Switch_Quantity1_01",   323.5,  -80.0, (2,3,1)),
-    ("Switch_Quantity4_01",   217.5,  -80.0, (2,3,2)),
-    ("Switch_Quantity1_03",   111.5,  -80.0, (2,3,3)),
-    ("Switch_Quantity2_02",     5.5,  -80.0, (2,3,4)),
-    ("Switch_Quantity3_02",  -100.5,  -80.0, (2,3,5)),
-    ("Switch_Quantity1_05",  -206.5,  -80.0, (2,3,6)),
-    ("Switch_Quantity1_04",  -312.5,  -80.0, (2,3,7)),
+    ("Knob_Quantity1_02", -286.5, 160.0, (2, 1, 10)),
+    ("Knob_Quantity1_01", -356.5, 160.0, (2, 1, 11)),
+    ("Toogle_Quantity1_01", 217.5, 50.0, (2, 2, 2)),
+    ("Toogle_Quantity1_02", 111.5, 50.0, (2, 2, 3)),
+    ("Toogle_Quantity1_03", -100.5, 50.0, (2, 2, 5)),
+    ("Toogle_Quantity3_01", -206.5, 50.0, (2, 2, 6)),
+    ("Switch_Quantity3_03", -312.5, 50.0, (2, 2, 7)),
+    ("Switch_Quantity1_01", 323.5, -80.0, (2, 3, 1)),
+    ("Switch_Quantity4_01", 217.5, -80.0, (2, 3, 2)),
+    ("Switch_Quantity1_03", 111.5, -80.0, (2, 3, 3)),
+    ("Switch_Quantity2_02", 5.5, -80.0, (2, 3, 4)),
+    ("Switch_Quantity3_02", -100.5, -80.0, (2, 3, 5)),
+    ("Switch_Quantity1_05", -206.5, -80.0, (2, 3, 6)),
+    ("Switch_Quantity1_04", -312.5, -80.0, (2, 3, 7)),
 ]
 
 
@@ -79,8 +80,8 @@ def generate_switch_xml(class_name: str, color: str) -> str:
     sp, sh = c["specular"], c["shininess"]
     return f"""<mujoco model="{class_name}">
   <asset>
-    <material name="{class_name}_bezel" rgba="{c['bezel']}" specular="{sp}" shininess="{sh}"/>
-    <material name="{class_name}_button" rgba="{c['button']}" specular="{sp}" shininess="{sh}"/>
+    <material name="{class_name}_bezel" rgba="{c["bezel"]}" specular="{sp}" shininess="{sh}"/>
+    <material name="{class_name}_button" rgba="{c["button"]}" specular="{sp}" shininess="{sh}"/>
   </asset>
   <worldbody>
     <body name="{class_name}">

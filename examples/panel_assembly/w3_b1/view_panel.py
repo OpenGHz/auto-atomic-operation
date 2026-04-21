@@ -1,6 +1,7 @@
 """View the w3_b1 panel assembly in MuJoCo interactive viewer."""
 
 from pathlib import Path
+
 import mujoco
 import mujoco.viewer
 

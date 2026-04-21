@@ -471,13 +471,24 @@ class RandomizationInspector:
                 )
                 target.apply_pose(compose_pose(base_world, sampled_in_base))
             else:
+                base_pose = self._resolve_base_pose(target)
                 target.apply_pose(
                     _with_offsets(
-                        target.get_default_pose(),
+                        base_pose,
                         offsets,
                         target.rand_range,
                     )
                 )
+
+    def _resolve_base_pose(self, target: RandomizationTarget) -> PoseState:
+        reference = target.rand_range.reference
+        if isinstance(reference, RandomizationReference):
+            return target.get_default_pose()
+        if reference in self.backend.object_handlers:
+            return self.backend.object_handlers[reference].get_pose()
+        if reference in self.backend.operator_handlers:
+            return self.backend.operator_handlers[reference].get_end_effector_pose()
+        return target.get_default_pose()
         self.env.refresh_viewer()
         self.case_var.set(case.name)
         self.desc_var.set(case.description)

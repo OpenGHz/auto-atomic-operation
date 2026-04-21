@@ -22,26 +22,26 @@ BASE_DIR = Path(__file__).parent
 # (class_name, type, x_mm, y_mm, num_buttons, wall_pos)
 # ---------------------------------------------------------------------------
 SWITCHES = [
-    ("Switch_Quantity2_07", "Switch",  349.8,  120.0, 2, (1,1,1)),
-    ("Switch_Quantity2_08", "Switch",  233.2,  120.0, 2, (1,1,2)),
-    ("Switch_Quantity2_09", "Switch",  116.6,  120.0, 2, (1,1,3)),
-    ("Switch_Quantity2_10", "Switch",    0.0,  120.0, 2, (1,1,4)),
-    ("Switch_Quantity4_02", "Switch", -116.6,  120.0, 4, (1,1,5)),
-    ("Switch_Quantity1_45", "Switch", -233.2,  120.0, 1, (1,1,6)),
-    ("Switch_Quantity1_46", "Switch", -349.8,  120.0, 1, (1,1,7)),
-    ("Toogle_Quantity1_05", "Toggle",  349.8,    0.0, 1, (1,2,1)),
-    ("Switch_Quantity4_03", "Switch",  233.2,    0.0, 4, (1,2,2)),
-    ("Switch_Quantity1_47", "Switch",  116.6,    0.0, 1, (1,2,3)),
-    ("Switch_Quantity2_11", "Switch", -116.6,    0.0, 2, (1,2,5)),
-    ("Switch_Quantity1_48", "Switch", -233.2,    0.0, 1, (1,2,6)),
-    ("Switch_Quantity1_49", "Switch", -349.8,    0.0, 1, (1,2,7)),
-    ("Switch_Quantity3_06", "Switch",  349.8, -120.0, 3, (1,3,1)),
-    ("Toogle_Quantity2_01", "Toggle",  233.2, -120.0, 2, (1,3,2)),
-    ("Toogle_Quantity1_06", "Toggle",  116.6, -120.0, 1, (1,3,3)),
-    ("Placeholder_31",      "Switch",    0.0, -120.0, 1, (1,3,4)),
-    ("Switch_Quantity2_12", "Switch", -116.6, -120.0, 2, (1,3,5)),
-    ("Switch_Quantity2_13", "Switch", -233.2, -120.0, 2, (1,3,6)),
-    ("Switch_Quantity4_04", "Switch", -349.8, -120.0, 4, (1,3,7)),
+    ("Switch_Quantity2_07", "Switch", 349.8, 120.0, 2, (1, 1, 1)),
+    ("Switch_Quantity2_08", "Switch", 233.2, 120.0, 2, (1, 1, 2)),
+    ("Switch_Quantity2_09", "Switch", 116.6, 120.0, 2, (1, 1, 3)),
+    ("Switch_Quantity2_10", "Switch", 0.0, 120.0, 2, (1, 1, 4)),
+    ("Switch_Quantity4_02", "Switch", -116.6, 120.0, 4, (1, 1, 5)),
+    ("Switch_Quantity1_45", "Switch", -233.2, 120.0, 1, (1, 1, 6)),
+    ("Switch_Quantity1_46", "Switch", -349.8, 120.0, 1, (1, 1, 7)),
+    ("Toogle_Quantity1_05", "Toggle", 349.8, 0.0, 1, (1, 2, 1)),
+    ("Switch_Quantity4_03", "Switch", 233.2, 0.0, 4, (1, 2, 2)),
+    ("Switch_Quantity1_47", "Switch", 116.6, 0.0, 1, (1, 2, 3)),
+    ("Switch_Quantity2_11", "Switch", -116.6, 0.0, 2, (1, 2, 5)),
+    ("Switch_Quantity1_48", "Switch", -233.2, 0.0, 1, (1, 2, 6)),
+    ("Switch_Quantity1_49", "Switch", -349.8, 0.0, 1, (1, 2, 7)),
+    ("Switch_Quantity3_06", "Switch", 349.8, -120.0, 3, (1, 3, 1)),
+    ("Toogle_Quantity2_01", "Toggle", 233.2, -120.0, 2, (1, 3, 2)),
+    ("Toogle_Quantity1_06", "Toggle", 116.6, -120.0, 1, (1, 3, 3)),
+    ("Placeholder_31", "Switch", 0.0, -120.0, 1, (1, 3, 4)),
+    ("Switch_Quantity2_12", "Switch", -116.6, -120.0, 2, (1, 3, 5)),
+    ("Switch_Quantity2_13", "Switch", -233.2, -120.0, 2, (1, 3, 6)),
+    ("Switch_Quantity4_04", "Switch", -349.8, -120.0, 4, (1, 3, 7)),
 ]
 
 # Panel backplate half-extents (m)
@@ -147,7 +147,9 @@ def generate_assembly_xml() -> str:
             orig = geom.get("name", "")
             if orig:
                 geom.set("name", f"{orig}__{slot_name}")
-            slot_lines.append(f"          {ET.tostring(geom, encoding='unicode').strip()}")
+            slot_lines.append(
+                f"          {ET.tostring(geom, encoding='unicode').strip()}"
+            )
         slot_lines.append("        </body>")
         slot_lines.append("      </body>")
 
