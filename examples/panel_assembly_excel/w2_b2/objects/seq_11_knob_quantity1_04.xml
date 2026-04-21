@@ -1,0 +1,9 @@
+<?xml version='1.0' encoding='utf-8'?>
+<mujoco model="knob_quantity1_04">
+  <worldbody>
+    <body name="seq_11">
+      <geom name="seq_11_base" type="cylinder" pos="0 0 0.01" size="0.022 0.01" rgba="0.22 0.24 0.28 1" />
+      <geom name="seq_11_cap" type="cylinder" pos="0 0 0.026" size="0.015 0.014" rgba="0.70 0.72 0.75 1" />
+    </body>
+  </worldbody>
+</mujoco>

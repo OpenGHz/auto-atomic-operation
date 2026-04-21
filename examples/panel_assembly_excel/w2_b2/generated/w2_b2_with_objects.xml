@@ -1,0 +1,231 @@
+<?xml version='1.0' encoding='utf-8'?>
+<mujoco model="w2_b2_panel_base">
+  <worldbody>
+    <body name="panel_mount" pos="0 0 0">
+      <geom name="panel_backplate" type="box" pos="0 0 0" size="0.4212 0.015 0.18" rgba="0.86 0.87 0.89 1" contype="1" conaffinity="1" />
+      <site name="panel_origin" pos="0 0.015 0" size="0.006" rgba="1 0 0 1" />
+      <body name="w2_b2_slot_seq_13" pos="-0.35 0.015 0.12" quat="0.7071068 -0.7071068 0 0">
+        <body name="w2_b2_seq_13">
+          <geom name="seq_13_base__r0_c1" type="box" pos="0 0 0.012" size="0.025 0.008 0.012" rgba="0.18 0.18 0.20 1" />
+          <geom name="seq_13_toggle__r0_c1" type="box" pos="0 0 0.032" size="0.008 0.006 0.02" rgba="0.72 0.74 0.78 1" />
+        </body>
+      </body>
+      <body name="w2_b2_slot_seq_12" pos="-0.29 0.015 0.12" quat="0.7071068 -0.7071068 0 0">
+        <body name="w2_b2_seq_12">
+          <geom name="seq_12_base__r0_c3" type="box" pos="0 0 0.012" size="0.025 0.008 0.012" rgba="0.18 0.18 0.20 1" />
+          <geom name="seq_12_toggle__r0_c3" type="box" pos="0 0 0.032" size="0.008 0.006 0.02" rgba="0.72 0.74 0.78 1" />
+        </body>
+      </body>
+      <body name="w2_b2_slot_seq_11" pos="-0.23 0.015 0.12" quat="0.7071068 -0.7071068 0 0">
+        <body name="w2_b2_seq_11">
+          <geom name="seq_11_base__r0_c6" type="cylinder" pos="0 0 0.01" size="0.022 0.01" rgba="0.22 0.24 0.28 1" />
+          <geom name="seq_11_cap__r0_c6" type="cylinder" pos="0 0 0.026" size="0.015 0.014" rgba="0.70 0.72 0.75 1" />
+        </body>
+      </body>
+      <body name="w2_b2_slot_seq_10" pos="-0.17 0.015 0.12" quat="0.7071068 -0.7071068 0 0">
+        <body name="w2_b2_seq_10">
+          <geom name="seq_10_base__r0_c9" type="box" pos="0 0 0.012" size="0.025 0.008 0.012" rgba="0.18 0.18 0.20 1" />
+          <geom name="seq_10_toggle__r0_c9" type="box" pos="0 0 0.032" size="0.008 0.006 0.02" rgba="0.72 0.74 0.78 1" />
+        </body>
+      </body>
+      <body name="w2_b2_slot_seq_09" pos="-0.11 0.015 0.12" quat="0.7071068 -0.7071068 0 0">
+        <body name="w2_b2_seq_09">
+          <geom name="seq_09_base__r0_c12" type="box" pos="0 0 0.012" size="0.025 0.008 0.012" rgba="0.18 0.18 0.20 1" />
+          <geom name="seq_09_toggle__r0_c12" type="box" pos="0 0 0.032" size="0.008 0.006 0.02" rgba="0.72 0.74 0.78 1" />
+        </body>
+      </body>
+      <body name="w2_b2_slot_seq_08" pos="-0.05 0.015 0.12" quat="0.7071068 -0.7071068 0 0">
+        <body name="w2_b2_seq_08">
+          <geom name="seq_08_base__r0_c15" type="box" pos="0 0 0.012" size="0.025 0.008 0.012" rgba="0.18 0.18 0.20 1" />
+          <geom name="seq_08_toggle__r0_c15" type="box" pos="0 0 0.032" size="0.008 0.006 0.02" rgba="0.72 0.74 0.78 1" />
+        </body>
+      </body>
+      <body name="w2_b2_slot_seq_07" pos="0.01 0.015 0.12" quat="0.7071068 -0.7071068 0 0">
+        <body name="w2_b2_seq_07">
+          <geom name="seq_07_base__r0_c17" type="box" pos="0 0 0.012" size="0.025 0.008 0.012" rgba="0.18 0.18 0.20 1" />
+          <geom name="seq_07_toggle__r0_c17" type="box" pos="0 0 0.032" size="0.008 0.006 0.02" rgba="0.72 0.74 0.78 1" />
+        </body>
+      </body>
+      <body name="w2_b2_slot_seq_06" pos="0.07 0.015 0.12" quat="0.7071068 -0.7071068 0 0">
+        <body name="w2_b2_seq_06">
+          <geom name="seq_06_base__r0_c19" type="box" pos="0 0 0.012" size="0.025 0.008 0.012" rgba="0.18 0.18 0.20 1" />
+          <geom name="seq_06_toggle__r0_c19" type="box" pos="0 0 0.032" size="0.008 0.006 0.02" rgba="0.72 0.74 0.78 1" />
+        </body>
+      </body>
+      <body name="w2_b2_slot_seq_05" pos="0.126 0.015 0.12" quat="0.7071068 -0.7071068 0 0">
+        <body name="w2_b2_seq_05">
+          <geom name="seq_05_base__r0_c21" type="box" pos="0 0 0.012" size="0.025 0.008 0.012" rgba="0.18 0.18 0.20 1" />
+          <geom name="seq_05_toggle__r0_c21" type="box" pos="0 0 0.032" size="0.008 0.006 0.02" rgba="0.72 0.74 0.78 1" />
+        </body>
+      </body>
+      <body name="w2_b2_slot_seq_04" pos="0.182 0.015 0.12" quat="0.7071068 -0.7071068 0 0">
+        <body name="w2_b2_seq_04">
+          <geom name="seq_04_base__r0_c24" type="box" pos="0 0 0.012" size="0.025 0.008 0.012" rgba="0.18 0.18 0.20 1" />
+          <geom name="seq_04_toggle__r0_c24" type="box" pos="0 0 0.032" size="0.008 0.006 0.02" rgba="0.72 0.74 0.78 1" />
+        </body>
+      </body>
+      <body name="w2_b2_slot_seq_03" pos="0.238 0.015 0.12" quat="0.7071068 -0.7071068 0 0">
+        <body name="w2_b2_seq_03">
+          <geom name="seq_03_base__r0_c27" type="box" pos="0 0 0.012" size="0.025 0.008 0.012" rgba="0.18 0.18 0.20 1" />
+          <geom name="seq_03_toggle__r0_c27" type="box" pos="0 0 0.032" size="0.008 0.006 0.02" rgba="0.72 0.74 0.78 1" />
+        </body>
+      </body>
+      <body name="w2_b2_slot_seq_02" pos="0.294 0.015 0.12" quat="0.7071068 -0.7071068 0 0">
+        <body name="w2_b2_seq_02">
+          <geom name="seq_02_base__r0_c30" type="cylinder" pos="0 0 0.01" size="0.022 0.01" rgba="0.22 0.24 0.28 1" />
+          <geom name="seq_02_cap__r0_c30" type="cylinder" pos="0 0 0.026" size="0.015 0.014" rgba="0.70 0.72 0.75 1" />
+        </body>
+      </body>
+      <body name="w2_b2_slot_seq_01" pos="0.35 0.015 0.12" quat="0.7071068 -0.7071068 0 0">
+        <body name="w2_b2_seq_01">
+          <geom name="seq_01_base__r0_c32" type="box" pos="0 0 0.012" size="0.025 0.008 0.012" rgba="0.18 0.18 0.20 1" />
+          <geom name="seq_01_toggle__r0_c32" type="box" pos="0 0 0.032" size="0.008 0.006 0.02" rgba="0.72 0.74 0.78 1" />
+        </body>
+      </body>
+      <body name="w2_b2_slot_seq_24" pos="-0.35 0.015 0" quat="0.7071068 -0.7071068 0 0">
+        <body name="w2_b2_seq_24">
+          <geom name="seq_24_base__r1_c1" type="cylinder" pos="0 0 0.01" size="0.025 0.01" rgba="0.18 0.18 0.20 1" />
+          <geom name="seq_24_button__r1_c1" type="cylinder" pos="0 0 0.028" size="0.018 0.018" rgba="0.85 0.15 0.10 1" />
+        </body>
+      </body>
+      <body name="w2_b2_slot_seq_23" pos="-0.28 0.015 0" quat="0.7071068 -0.7071068 0 0">
+        <body name="w2_b2_seq_23">
+          <geom name="seq_23_base__r1_c4" type="box" pos="0 0 0.012" size="0.025 0.008 0.012" rgba="0.18 0.18 0.20 1" />
+          <geom name="seq_23_toggle__r1_c4" type="box" pos="0 0 0.032" size="0.008 0.006 0.02" rgba="0.72 0.74 0.78 1" />
+        </body>
+      </body>
+      <body name="w2_b2_slot_seq_22" pos="-0.21 0.015 0" quat="0.7071068 -0.7071068 0 0">
+        <body name="w2_b2_seq_22">
+          <geom name="seq_22_base__r1_c7" type="box" pos="0 0 0.012" size="0.025 0.008 0.012" rgba="0.18 0.18 0.20 1" />
+          <geom name="seq_22_toggle__r1_c7" type="box" pos="0 0 0.032" size="0.008 0.006 0.02" rgba="0.72 0.74 0.78 1" />
+        </body>
+      </body>
+      <body name="w2_b2_slot_seq_21" pos="-0.14 0.015 0" quat="0.7071068 -0.7071068 0 0">
+        <body name="w2_b2_seq_21">
+          <geom name="seq_21_base__r1_c11" type="box" pos="0 0 0.012" size="0.025 0.008 0.012" rgba="0.18 0.18 0.20 1" />
+          <geom name="seq_21_toggle__r1_c11" type="box" pos="0 0 0.032" size="0.008 0.006 0.02" rgba="0.72 0.74 0.78 1" />
+        </body>
+      </body>
+      <body name="w2_b2_slot_seq_20" pos="-0.07 0.015 0" quat="0.7071068 -0.7071068 0 0">
+        <body name="w2_b2_seq_20">
+          <geom name="seq_20_base__r1_c14" type="cylinder" pos="0 0 0.01" size="0.025 0.01" rgba="0.18 0.18 0.20 1" />
+          <geom name="seq_20_button__r1_c14" type="cylinder" pos="0 0 0.028" size="0.018 0.018" rgba="0.85 0.15 0.10 1" />
+        </body>
+      </body>
+      <body name="w2_b2_slot_seq_19" pos="0.07 0.015 0" quat="0.7071068 -0.7071068 0 0">
+        <body name="w2_b2_seq_19">
+          <geom name="seq_19_base__r1_c19" type="box" pos="0 0 0.012" size="0.025 0.008 0.012" rgba="0.18 0.18 0.20 1" />
+          <geom name="seq_19_toggle__r1_c19" type="box" pos="0 0 0.032" size="0.008 0.006 0.02" rgba="0.72 0.74 0.78 1" />
+        </body>
+      </body>
+      <body name="w2_b2_slot_seq_18" pos="0.134 0.015 0" quat="0.7071068 -0.7071068 0 0">
+        <body name="w2_b2_seq_18">
+          <geom name="seq_18_base__r1_c22" type="box" pos="0 0 0.012" size="0.025 0.008 0.012" rgba="0.18 0.18 0.20 1" />
+          <geom name="seq_18_toggle__r1_c22" type="box" pos="0 0 0.032" size="0.008 0.006 0.02" rgba="0.72 0.74 0.78 1" />
+        </body>
+      </body>
+      <body name="w2_b2_slot_seq_17" pos="0.188 0.015 0" quat="0.7071068 -0.7071068 0 0">
+        <body name="w2_b2_seq_17">
+          <geom name="seq_17_base__r1_c25" type="box" pos="0 0 0.012" size="0.025 0.008 0.012" rgba="0.18 0.18 0.20 1" />
+          <geom name="seq_17_toggle__r1_c25" type="box" pos="0 0 0.032" size="0.008 0.006 0.02" rgba="0.72 0.74 0.78 1" />
+        </body>
+      </body>
+      <body name="w2_b2_slot_seq_16" pos="0.242 0.015 0" quat="0.7071068 -0.7071068 0 0">
+        <body name="w2_b2_seq_16">
+          <geom name="seq_16_base__r1_c28" type="box" pos="0 0 0.012" size="0.025 0.008 0.012" rgba="0.18 0.18 0.20 1" />
+          <geom name="seq_16_toggle__r1_c28" type="box" pos="0 0 0.032" size="0.008 0.006 0.02" rgba="0.72 0.74 0.78 1" />
+        </body>
+      </body>
+      <body name="w2_b2_slot_seq_15" pos="0.296 0.015 0" quat="0.7071068 -0.7071068 0 0">
+        <body name="w2_b2_seq_15">
+          <geom name="seq_15_base__r1_c31" type="box" pos="0 0 0.012" size="0.025 0.008 0.012" rgba="0.18 0.18 0.20 1" />
+          <geom name="seq_15_toggle__r1_c31" type="box" pos="0 0 0.032" size="0.008 0.006 0.02" rgba="0.72 0.74 0.78 1" />
+        </body>
+      </body>
+      <body name="w2_b2_slot_seq_14" pos="0.35 0.015 0" quat="0.7071068 -0.7071068 0 0">
+        <body name="w2_b2_seq_14">
+          <geom name="seq_14_base__r1_c32" type="box" pos="0 0 0.012" size="0.025 0.008 0.012" rgba="0.18 0.18 0.20 1" />
+          <geom name="seq_14_toggle__r1_c32" type="box" pos="0 0 0.032" size="0.008 0.006 0.02" rgba="0.72 0.74 0.78 1" />
+        </body>
+      </body>
+      <body name="w2_b2_slot_seq_37" pos="-0.3612 0.015 -0.12" quat="0.7071068 -0.7071068 0 0">
+        <body name="w2_b2_seq_37">
+          <geom name="seq_37_base__r2_c0" type="box" pos="0 0 0.012" size="0.025 0.008 0.012" rgba="0.18 0.18 0.20 1" />
+          <geom name="seq_37_toggle__r2_c0" type="box" pos="0 0 0.032" size="0.008 0.006 0.02" rgba="0.72 0.74 0.78 1" />
+        </body>
+      </body>
+      <body name="w2_b2_slot_seq_36" pos="-0.3082 0.015 -0.12" quat="0.7071068 -0.7071068 0 0">
+        <body name="w2_b2_seq_36">
+          <geom name="seq_36_base__r2_c2" type="box" pos="0 0 0.012" size="0.025 0.008 0.012" rgba="0.18 0.18 0.20 1" />
+          <geom name="seq_36_toggle__r2_c2" type="box" pos="0 0 0.032" size="0.008 0.006 0.02" rgba="0.72 0.74 0.78 1" />
+        </body>
+      </body>
+      <body name="w2_b2_slot_seq_35" pos="-0.2552 0.015 -0.12" quat="0.7071068 -0.7071068 0 0">
+        <body name="w2_b2_seq_35">
+          <geom name="seq_35_base__r2_c5" type="box" pos="0 0 0.012" size="0.025 0.008 0.012" rgba="0.18 0.18 0.20 1" />
+          <geom name="seq_35_toggle__r2_c5" type="box" pos="0 0 0.032" size="0.008 0.006 0.02" rgba="0.72 0.74 0.78 1" />
+        </body>
+      </body>
+      <body name="w2_b2_slot_seq_34" pos="-0.2022 0.015 -0.12" quat="0.7071068 -0.7071068 0 0">
+        <body name="w2_b2_seq_34">
+          <geom name="seq_34_base__r2_c8" type="box" pos="0 0 0.012" size="0.025 0.008 0.012" rgba="0.18 0.18 0.20 1" />
+          <geom name="seq_34_toggle__r2_c8" type="box" pos="0 0 0.032" size="0.008 0.006 0.02" rgba="0.72 0.74 0.78 1" />
+        </body>
+      </body>
+      <body name="w2_b2_slot_seq_33" pos="-0.1492 0.015 -0.12" quat="0.7071068 -0.7071068 0 0">
+        <body name="w2_b2_seq_33">
+          <geom name="seq_33_base__r2_c10" type="box" pos="0 0 0.012" size="0.025 0.008 0.012" rgba="0.18 0.18 0.20 1" />
+          <geom name="seq_33_toggle__r2_c10" type="box" pos="0 0 0.032" size="0.008 0.006 0.02" rgba="0.72 0.74 0.78 1" />
+        </body>
+      </body>
+      <body name="w2_b2_slot_seq_32" pos="-0.0962 0.015 -0.12" quat="0.7071068 -0.7071068 0 0">
+        <body name="w2_b2_seq_32">
+          <geom name="seq_32_base__r2_c13" type="box" pos="0 0 0.012" size="0.025 0.008 0.012" rgba="0.18 0.18 0.20 1" />
+          <geom name="seq_32_toggle__r2_c13" type="box" pos="0 0 0.032" size="0.008 0.006 0.02" rgba="0.72 0.74 0.78 1" />
+        </body>
+      </body>
+      <body name="w2_b2_slot_seq_31" pos="-0.0432 0.015 -0.12" quat="0.7071068 -0.7071068 0 0">
+        <body name="w2_b2_seq_31">
+          <geom name="seq_31_base__r2_c16" type="box" pos="0 0 0.012" size="0.025 0.008 0.012" rgba="0.18 0.18 0.20 1" />
+          <geom name="seq_31_toggle__r2_c16" type="box" pos="0 0 0.032" size="0.008 0.006 0.02" rgba="0.72 0.74 0.78 1" />
+        </body>
+      </body>
+      <body name="w2_b2_slot_seq_30" pos="0.025 0.015 -0.12" quat="0.7071068 -0.7071068 0 0">
+        <body name="w2_b2_seq_30">
+          <geom name="seq_30_base__r2_c18" type="box" pos="0 0 0.012" size="0.025 0.008 0.012" rgba="0.18 0.18 0.20 1" />
+          <geom name="seq_30_toggle__r2_c18" type="box" pos="0 0 0.032" size="0.008 0.006 0.02" rgba="0.72 0.74 0.78 1" />
+        </body>
+      </body>
+      <body name="w2_b2_slot_seq_29" pos="0.09 0.015 -0.12" quat="0.7071068 -0.7071068 0 0">
+        <body name="w2_b2_seq_29">
+          <geom name="seq_29_base__r2_c20" type="box" pos="0 0 0.012" size="0.025 0.008 0.012" rgba="0.18 0.18 0.20 1" />
+          <geom name="seq_29_toggle__r2_c20" type="box" pos="0 0 0.032" size="0.008 0.006 0.02" rgba="0.72 0.74 0.78 1" />
+        </body>
+      </body>
+      <body name="w2_b2_slot_seq_28" pos="0.155 0.015 -0.12" quat="0.7071068 -0.7071068 0 0">
+        <body name="w2_b2_seq_28">
+          <geom name="seq_28_base__r2_c23" type="box" pos="0 0 0.012" size="0.025 0.008 0.012" rgba="0.18 0.18 0.20 1" />
+          <geom name="seq_28_toggle__r2_c23" type="box" pos="0 0 0.032" size="0.008 0.006 0.02" rgba="0.72 0.74 0.78 1" />
+        </body>
+      </body>
+      <body name="w2_b2_slot_seq_27" pos="0.22 0.015 -0.12" quat="0.7071068 -0.7071068 0 0">
+        <body name="w2_b2_seq_27">
+          <geom name="seq_27_base__r2_c26" type="box" pos="0 0 0.012" size="0.025 0.008 0.012" rgba="0.18 0.18 0.20 1" />
+          <geom name="seq_27_toggle__r2_c26" type="box" pos="0 0 0.032" size="0.008 0.006 0.02" rgba="0.72 0.74 0.78 1" />
+        </body>
+      </body>
+      <body name="w2_b2_slot_seq_26" pos="0.285 0.015 -0.12" quat="0.7071068 -0.7071068 0 0">
+        <body name="w2_b2_seq_26">
+          <geom name="seq_26_base__r2_c29" type="box" pos="0 0 0.012" size="0.025 0.008 0.012" rgba="0.18 0.18 0.20 1" />
+          <geom name="seq_26_toggle__r2_c29" type="box" pos="0 0 0.032" size="0.008 0.006 0.02" rgba="0.72 0.74 0.78 1" />
+        </body>
+      </body>
+      <body name="w2_b2_slot_seq_25" pos="0.35 0.015 -0.12" quat="0.7071068 -0.7071068 0 0">
+        <body name="w2_b2_seq_25">
+          <geom name="seq_25_base__r2_c32" type="box" pos="0 0 0.012" size="0.025 0.008 0.012" rgba="0.18 0.18 0.20 1" />
+          <geom name="seq_25_toggle__r2_c32" type="box" pos="0 0 0.032" size="0.008 0.006 0.02" rgba="0.72 0.74 0.78 1" />
+        </body>
+      </body>
+    </body>
+  </worldbody>
+</mujoco>

@@ -1,0 +1,129 @@
+<?xml version='1.0' encoding='utf-8'?>
+<mujoco model="w2_b1_panel_base">
+  <asset>
+    <material name="Knob_Quantity1_02_base" rgba="0.05 0.05 0.07 1" specular="0.7" shininess="0.8" />
+    <material name="Knob_Quantity1_02_button" rgba="0.10 0.10 0.13 1" specular="0.7" shininess="0.8" />
+    <material name="Knob_Quantity1_01_base" rgba="0.05 0.05 0.07 1" specular="0.7" shininess="0.8" />
+    <material name="Knob_Quantity1_01_button" rgba="0.10 0.10 0.13 1" specular="0.7" shininess="0.8" />
+    <material name="Toogle_Quantity1_01_bezel" rgba="0.85 0.85 0.88 1" specular="0.85" shininess="0.9" />
+    <material name="Toogle_Quantity1_01_button" rgba="0.95 0.95 0.97 1" specular="0.85" shininess="0.9" />
+    <material name="Toogle_Quantity1_02_bezel" rgba="0.40 0.40 0.43 1" specular="0.85" shininess="0.9" />
+    <material name="Toogle_Quantity1_02_button" rgba="0.55 0.55 0.58 1" specular="0.85" shininess="0.9" />
+    <material name="Toogle_Quantity1_03_bezel" rgba="0.05 0.05 0.07 1" specular="0.7" shininess="0.8" />
+    <material name="Toogle_Quantity1_03_button" rgba="0.10 0.10 0.13 1" specular="0.7" shininess="0.8" />
+    <material name="Toogle_Quantity3_01_bezel" rgba="0.05 0.05 0.07 1" specular="0.7" shininess="0.8" />
+    <material name="Toogle_Quantity3_01_button" rgba="0.10 0.10 0.13 1" specular="0.7" shininess="0.8" />
+    <material name="Switch_Quantity3_03_bezel" rgba="0.85 0.85 0.88 1" specular="0.85" shininess="0.9" />
+    <material name="Switch_Quantity3_03_button" rgba="0.95 0.95 0.97 1" specular="0.85" shininess="0.9" />
+    <material name="Switch_Quantity1_01_bezel" rgba="0.85 0.85 0.88 1" specular="0.85" shininess="0.9" />
+    <material name="Switch_Quantity1_01_button" rgba="0.95 0.95 0.97 1" specular="0.85" shininess="0.9" />
+    <material name="Switch_Quantity4_01_bezel" rgba="0.85 0.85 0.88 1" specular="0.85" shininess="0.9" />
+    <material name="Switch_Quantity4_01_button" rgba="0.95 0.95 0.97 1" specular="0.85" shininess="0.9" />
+    <material name="Switch_Quantity1_03_bezel" rgba="0.85 0.85 0.88 1" specular="0.85" shininess="0.9" />
+    <material name="Switch_Quantity1_03_button" rgba="0.95 0.95 0.97 1" specular="0.85" shininess="0.9" />
+    <material name="Switch_Quantity2_02_bezel" rgba="0.85 0.85 0.88 1" specular="0.85" shininess="0.9" />
+    <material name="Switch_Quantity2_02_btn1" rgba="0.95 0.95 0.97 1" specular="0.85" shininess="0.9" />
+    <material name="Switch_Quantity2_02_btn2" rgba="0.95 0.95 0.97 1" specular="0.85" shininess="0.9" />
+    <material name="Switch_Quantity3_02_bezel" rgba="0.85 0.85 0.88 1" specular="0.85" shininess="0.9" />
+    <material name="Switch_Quantity3_02_btn1" rgba="0.95 0.95 0.97 1" specular="0.85" shininess="0.9" />
+    <material name="Switch_Quantity3_02_btn2" rgba="0.95 0.95 0.97 1" specular="0.85" shininess="0.9" />
+    <material name="Switch_Quantity3_02_btn3" rgba="0.95 0.95 0.97 1" specular="0.85" shininess="0.9" />
+    <material name="Switch_Quantity1_05_bezel" rgba="0.85 0.85 0.88 1" specular="0.85" shininess="0.9" />
+    <material name="Switch_Quantity1_05_button" rgba="0.95 0.95 0.97 1" specular="0.85" shininess="0.9" />
+    <material name="Switch_Quantity1_04_bezel" rgba="0.65 0.53 0.15 1" specular="0.9" shininess="0.95" />
+    <material name="Switch_Quantity1_04_button" rgba="0.83 0.69 0.22 1" specular="0.9" shininess="0.95" />
+  </asset>
+  <worldbody>
+    <body name="panel_mount" pos="0 0 0">
+      <geom name="panel_backplate" type="box" pos="0 0 0" size="0.42 0.025 0.22" rgba="0.86 0.87 0.89 1" contype="1" conaffinity="1" />
+      <site name="panel_origin" pos="0 0.025 0" size="0.006" rgba="1 0 0 1" />
+      <body name="panel_slot_r1_c10" pos="-0.28650000000000003 0.03 0.16" quat="0.7071068 -0.7071068 0 0">
+        <body name="Knob_Quantity1_02_r1_c10">
+          <geom name="Knob_Quantity1_02_base__panel_slot_r1_c10" type="cylinder" pos="0 0 0.001" size="0.012 0.001" material="Knob_Quantity1_02_base" />
+          <geom name="Knob_Quantity1_02_button__panel_slot_r1_c10" type="cylinder" pos="0 0 0.0035" size="0.0105 0.0035" material="Knob_Quantity1_02_button" />
+        </body>
+      </body>
+      <body name="panel_slot_r1_c11" pos="-0.3565 0.03 0.16" quat="0.7071068 -0.7071068 0 0">
+        <body name="Knob_Quantity1_01_r1_c11">
+          <geom name="Knob_Quantity1_01_base__panel_slot_r1_c11" type="cylinder" pos="0 0 0.001" size="0.012 0.001" material="Knob_Quantity1_01_base" />
+          <geom name="Knob_Quantity1_01_button__panel_slot_r1_c11" type="cylinder" pos="0 0 0.0035" size="0.0105 0.0035" material="Knob_Quantity1_01_button" />
+        </body>
+      </body>
+      <body name="panel_slot_r2_c2" pos="0.2175 0.03 0.05" quat="0.7071068 -0.7071068 0 0">
+        <body name="Toogle_Quantity1_01_r2_c2">
+          <geom name="Toogle_Quantity1_01_bezel__panel_slot_r2_c2" type="box" pos="0 0 0.001" size="0.043 0.043 0.001" material="Toogle_Quantity1_01_bezel" />
+          <geom name="Toogle_Quantity1_01_button__panel_slot_r2_c2" type="box" pos="0 0 0.0035" size="0.04 0.04 0.0035" material="Toogle_Quantity1_01_button" />
+        </body>
+      </body>
+      <body name="panel_slot_r2_c3" pos="0.1115 0.03 0.05" quat="0.7071068 -0.7071068 0 0">
+        <body name="Toogle_Quantity1_02_r2_c3">
+          <geom name="Toogle_Quantity1_02_bezel__panel_slot_r2_c3" type="box" pos="0 0 0.001" size="0.043 0.043 0.001" material="Toogle_Quantity1_02_bezel" />
+          <geom name="Toogle_Quantity1_02_button__panel_slot_r2_c3" type="box" pos="0 0 0.0035" size="0.04 0.04 0.0035" material="Toogle_Quantity1_02_button" />
+        </body>
+      </body>
+      <body name="panel_slot_r2_c5" pos="-0.1005 0.03 0.05" quat="0.7071068 -0.7071068 0 0">
+        <body name="Toogle_Quantity1_03_r2_c5">
+          <geom name="Toogle_Quantity1_03_bezel__panel_slot_r2_c5" type="box" pos="0 0 0.001" size="0.043 0.043 0.001" material="Toogle_Quantity1_03_bezel" />
+          <geom name="Toogle_Quantity1_03_button__panel_slot_r2_c5" type="box" pos="0 0 0.0035" size="0.04 0.04 0.0035" material="Toogle_Quantity1_03_button" />
+        </body>
+      </body>
+      <body name="panel_slot_r2_c6" pos="-0.20650000000000002 0.03 0.05" quat="0.7071068 -0.7071068 0 0">
+        <body name="Toogle_Quantity3_01_r2_c6">
+          <geom name="Toogle_Quantity3_01_bezel__panel_slot_r2_c6" type="box" pos="0 0 0.001" size="0.043 0.043 0.001" material="Toogle_Quantity3_01_bezel" />
+          <geom name="Toogle_Quantity3_01_button__panel_slot_r2_c6" type="box" pos="0 0 0.0035" size="0.04 0.04 0.0035" material="Toogle_Quantity3_01_button" />
+        </body>
+      </body>
+      <body name="panel_slot_r2_c7" pos="-0.3125 0.03 0.05" quat="0.7071068 -0.7071068 0 0">
+        <body name="Switch_Quantity3_03_r2_c7">
+          <geom name="Switch_Quantity3_03_bezel__panel_slot_r2_c7" type="box" pos="0 0 0.001" size="0.043 0.043 0.001" material="Switch_Quantity3_03_bezel" />
+          <geom name="Switch_Quantity3_03_button__panel_slot_r2_c7" type="box" pos="0 0 0.0035" size="0.04 0.04 0.0035" material="Switch_Quantity3_03_button" />
+        </body>
+      </body>
+      <body name="panel_slot_r3_c1" pos="0.3235 0.03 -0.08" quat="0.7071068 -0.7071068 0 0">
+        <body name="Switch_Quantity1_01_r3_c1">
+          <geom name="Switch_Quantity1_01_bezel__panel_slot_r3_c1" type="box" pos="0 0 0.001" size="0.043 0.043 0.001" material="Switch_Quantity1_01_bezel" />
+          <geom name="Switch_Quantity1_01_button__panel_slot_r3_c1" type="box" pos="0 0 0.0035" size="0.04 0.04 0.0035" material="Switch_Quantity1_01_button" />
+        </body>
+      </body>
+      <body name="panel_slot_r3_c2" pos="0.2175 0.03 -0.08" quat="0.7071068 -0.7071068 0 0">
+        <body name="Switch_Quantity4_01_r3_c2">
+          <geom name="Switch_Quantity4_01_bezel__panel_slot_r3_c2" type="box" pos="0 0 0.001" size="0.043 0.043 0.001" material="Switch_Quantity4_01_bezel" />
+          <geom name="Switch_Quantity4_01_button__panel_slot_r3_c2" type="box" pos="0 0 0.0035" size="0.04 0.04 0.0035" material="Switch_Quantity4_01_button" />
+        </body>
+      </body>
+      <body name="panel_slot_r3_c3" pos="0.1115 0.03 -0.08" quat="0.7071068 -0.7071068 0 0">
+        <body name="Switch_Quantity1_03_r3_c3">
+          <geom name="Switch_Quantity1_03_bezel__panel_slot_r3_c3" type="box" pos="0 0 0.001" size="0.043 0.043 0.001" material="Switch_Quantity1_03_bezel" />
+          <geom name="Switch_Quantity1_03_button__panel_slot_r3_c3" type="box" pos="0 0 0.0035" size="0.04 0.04 0.0035" material="Switch_Quantity1_03_button" />
+        </body>
+      </body>
+      <body name="panel_slot_r3_c4" pos="0.0055 0.03 -0.08" quat="0.7071068 -0.7071068 0 0">
+        <body name="Switch_Quantity2_02_r3_c4">
+          <geom name="Switch_Quantity2_02_bezel__panel_slot_r3_c4" type="box" pos="0 0 0.001" size="0.043 0.043 0.001" material="Switch_Quantity2_02_bezel" />
+          <geom name="Switch_Quantity2_02_btn1__panel_slot_r3_c4" type="box" pos="-0.021 0 0.0035" size="0.019 0.04 0.0035" material="Switch_Quantity2_02_btn1" />
+          <geom name="Switch_Quantity2_02_btn2__panel_slot_r3_c4" type="box" pos="0.021 0 0.0035" size="0.019 0.04 0.0035" material="Switch_Quantity2_02_btn2" />
+        </body>
+      </body>
+      <body name="panel_slot_r3_c5" pos="-0.1005 0.03 -0.08" quat="0.7071068 -0.7071068 0 0">
+        <body name="Switch_Quantity3_02_r3_c5">
+          <geom name="Switch_Quantity3_02_bezel__panel_slot_r3_c5" type="box" pos="0 0 0.001" size="0.043 0.043 0.001" material="Switch_Quantity3_02_bezel" />
+          <geom name="Switch_Quantity3_02_btn1__panel_slot_r3_c5" type="box" pos="-0.028 0 0.0035" size="0.012 0.04 0.0035" material="Switch_Quantity3_02_btn1" />
+          <geom name="Switch_Quantity3_02_btn2__panel_slot_r3_c5" type="box" pos="0 0 0.0035" size="0.012 0.04 0.0035" material="Switch_Quantity3_02_btn2" />
+          <geom name="Switch_Quantity3_02_btn3__panel_slot_r3_c5" type="box" pos="0.028 0 0.0035" size="0.012 0.04 0.0035" material="Switch_Quantity3_02_btn3" />
+        </body>
+      </body>
+      <body name="panel_slot_r3_c6" pos="-0.20650000000000002 0.03 -0.08" quat="0.7071068 -0.7071068 0 0">
+        <body name="Switch_Quantity1_05_r3_c6">
+          <geom name="Switch_Quantity1_05_bezel__panel_slot_r3_c6" type="box" pos="0 0 0.001" size="0.023 0.0475 0.001" material="Switch_Quantity1_05_bezel" />
+          <geom name="Switch_Quantity1_05_button__panel_slot_r3_c6" type="box" pos="0 0 0.011" size="0.02 0.0445 0.011" material="Switch_Quantity1_05_button" />
+        </body>
+      </body>
+      <body name="panel_slot_r3_c7" pos="-0.3125 0.03 -0.08" quat="0.7071068 -0.7071068 0 0">
+        <body name="Switch_Quantity1_04_r3_c7">
+          <geom name="Switch_Quantity1_04_bezel__panel_slot_r3_c7" type="box" pos="0 0 0.001" size="0.023 0.0475 0.001" material="Switch_Quantity1_04_bezel" />
+          <geom name="Switch_Quantity1_04_button__panel_slot_r3_c7" type="box" pos="0 0 0.011" size="0.02 0.0445 0.011" material="Switch_Quantity1_04_button" />
+        </body>
+      </body>
+    </body>
+  </worldbody>
+</mujoco>

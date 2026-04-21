@@ -1,0 +1,28 @@
+<mujoco model="Switch_Quantity4_03">
+  <asset>
+    <material name="Switch_Quantity4_03_bezel" rgba="0.15 0.15 0.18 1" specular="0.75" shininess="0.85"/>
+    <material name="Switch_Quantity4_03_btn1" rgba="0.25 0.25 0.28 1" specular="0.75" shininess="0.85"/>
+    <material name="Switch_Quantity4_03_btn2" rgba="0.25 0.25 0.28 1" specular="0.75" shininess="0.85"/>
+    <material name="Switch_Quantity4_03_btn3" rgba="0.25 0.25 0.28 1" specular="0.75" shininess="0.85"/>
+    <material name="Switch_Quantity4_03_btn4" rgba="0.25 0.25 0.28 1" specular="0.75" shininess="0.85"/>
+  </asset>
+  <worldbody>
+    <body name="Switch_Quantity4_03">
+      <geom name="Switch_Quantity4_03_bezel" type="box"
+            pos="0 0 0.001" size="0.043 0.043 0.001"
+            material="Switch_Quantity4_03_bezel"/>
+      <geom name="Switch_Quantity4_03_btn1" type="box"
+            pos="-0.030 0 0.0035" size="0.008 0.037 0.0035"
+            material="Switch_Quantity4_03_btn1"/>
+      <geom name="Switch_Quantity4_03_btn2" type="box"
+            pos="-0.010 0 0.0035" size="0.008 0.037 0.0035"
+            material="Switch_Quantity4_03_btn2"/>
+      <geom name="Switch_Quantity4_03_btn3" type="box"
+            pos="0.010 0 0.0035" size="0.008 0.037 0.0035"
+            material="Switch_Quantity4_03_btn3"/>
+      <geom name="Switch_Quantity4_03_btn4" type="box"
+            pos="0.030 0 0.0035" size="0.008 0.037 0.0035"
+            material="Switch_Quantity4_03_btn4"/>
+    </body>
+  </worldbody>
+</mujoco>

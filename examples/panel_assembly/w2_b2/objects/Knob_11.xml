@@ -1,0 +1,16 @@
+<mujoco model="Knob_11">
+  <asset>
+    <material name="Knob_11_base" rgba="0.5 0.5 0.55 1"/>
+    <material name="Knob_11_button" rgba="0.78 0.80 0.85 1"/>
+  </asset>
+  <worldbody>
+    <body name="Knob_11">
+      <geom name="Knob_11_base" type="cylinder"
+            pos="0 0 0.0075" size="0.0155 0.0075"
+            material="Knob_11_base"/>
+      <geom name="Knob_11_button" type="cylinder"
+            pos="0 0 0.015" size="0.0145 0.015"
+            material="Knob_11_button"/>
+    </body>
+  </worldbody>
+</mujoco>

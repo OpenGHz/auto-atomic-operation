@@ -1,0 +1,712 @@
+panel:
+  xml: panel_base.xml
+  attach_to_body: panel_mount
+output_xml: generated/w2_b2_with_objects.xml
+layout:
+  coordinate_scale: 0.001
+  face_axes:
+  - x
+  - z
+  x_coords:
+  - -361.2
+  - -350.0
+  - -308.2
+  - -290.0
+  - -280.0
+  - -255.2
+  - -230.0
+  - -210.0
+  - -202.2
+  - -170.0
+  - -149.2
+  - -140.0
+  - -110.0
+  - -96.2
+  - -70.0
+  - -50.0
+  - -43.2
+  - 10.0
+  - 25.0
+  - 70.0
+  - 90.0
+  - 126.0
+  - 134.0
+  - 155.0
+  - 182.0
+  - 188.0
+  - 220.0
+  - 238.0
+  - 242.0
+  - 285.0
+  - 294.0
+  - 296.0
+  - 350.0
+  y_coords:
+  - 120.0
+  - 0.0
+  - -120.0
+  base_pos:
+  - 0.0
+  - 15.0
+  - 0.0
+  default_quat:
+  - 0.7071068
+  - -0.7071068
+  - 0.0
+  - 0.0
+  remove_root_joints: true
+placements:
+- - null
+  - xml: objects/seq_13_switch_quantity1_16.xml
+    slot_name: w2_b2_slot_seq_13
+    mounted_body_name: w2_b2_seq_13
+    sequence: 13
+    category: Switch
+    class_name: Switch_Quantity1_16
+    button_class: '1_1'
+    wire_number: '47'
+    center_xy_mm:
+    - -350.0
+    - 120.0
+    source_location:
+    - 2
+    - 4
+    - 12
+    note: 厚15mm
+  - null
+  - xml: objects/seq_12_switch_quantity1_15.xml
+    slot_name: w2_b2_slot_seq_12
+    mounted_body_name: w2_b2_seq_12
+    sequence: 12
+    category: Switch
+    class_name: Switch_Quantity1_15
+    button_class: '1_1'
+    wire_number: '46'
+    center_xy_mm:
+    - -290.0
+    - 120.0
+    source_location:
+    - 2
+    - 4
+    - 11
+    note: 厚9mm
+  - null
+  - null
+  - xml: objects/seq_11_knob_quantity1_04.xml
+    slot_name: w2_b2_slot_seq_11
+    mounted_body_name: w2_b2_seq_11
+    sequence: 11
+    category: Knob
+    class_name: Knob_Quantity1_04
+    button_class: '1_1'
+    wire_number: '45'
+    center_xy_mm:
+    - -230.0
+    - 120.0
+    source_location:
+    - 2
+    - 4
+    - 10
+    note: 厚30mm
+  - null
+  - null
+  - xml: objects/seq_10_switch_quantity1_14.xml
+    slot_name: w2_b2_slot_seq_10
+    mounted_body_name: w2_b2_seq_10
+    sequence: 10
+    category: Switch
+    class_name: Switch_Quantity1_14
+    button_class: '1_1'
+    wire_number: '44'
+    center_xy_mm:
+    - -170.0
+    - 120.0
+    source_location:
+    - 2
+    - 4
+    - 9
+    note: null
+  - null
+  - null
+  - xml: objects/seq_09_switch_quantity1_13.xml
+    slot_name: w2_b2_slot_seq_09
+    mounted_body_name: w2_b2_seq_09
+    sequence: 9
+    category: Switch
+    class_name: Switch_Quantity1_13
+    button_class: '1_1'
+    wire_number: '43'
+    center_xy_mm:
+    - -110.0
+    - 120.0
+    source_location:
+    - 2
+    - 4
+    - 9
+    note: null
+  - null
+  - null
+  - xml: objects/seq_08_switch_quantity1_12.xml
+    slot_name: w2_b2_slot_seq_08
+    mounted_body_name: w2_b2_seq_08
+    sequence: 8
+    category: Switch
+    class_name: Switch_Quantity1_12
+    button_class: '1_1'
+    wire_number: '42'
+    center_xy_mm:
+    - -50.0
+    - 120.0
+    source_location:
+    - 2
+    - 4
+    - 8
+    note: null
+  - null
+  - xml: objects/seq_07_switch_quantity1_11.xml
+    slot_name: w2_b2_slot_seq_07
+    mounted_body_name: w2_b2_seq_07
+    sequence: 7
+    category: Switch
+    class_name: Switch_Quantity1_11
+    button_class: '1_1'
+    wire_number: '41'
+    center_xy_mm:
+    - 10.0
+    - 120.0
+    source_location:
+    - 2
+    - 4
+    - 7
+    note: null
+  - null
+  - xml: objects/seq_06_switch_quantity1_10.xml
+    slot_name: w2_b2_slot_seq_06
+    mounted_body_name: w2_b2_seq_06
+    sequence: 6
+    category: Switch
+    class_name: Switch_Quantity1_10
+    button_class: '1_1'
+    wire_number: '40'
+    center_xy_mm:
+    - 70.0
+    - 120.0
+    source_location:
+    - 2
+    - 4
+    - 6
+    note: null
+  - null
+  - xml: objects/seq_05_switch_quantity1_09.xml
+    slot_name: w2_b2_slot_seq_05
+    mounted_body_name: w2_b2_seq_05
+    sequence: 5
+    category: Switch
+    class_name: Switch_Quantity1_09
+    button_class: '1_1'
+    wire_number: '39'
+    center_xy_mm:
+    - 126.0
+    - 120.0
+    source_location:
+    - 2
+    - 4
+    - 5
+    note: null
+  - null
+  - null
+  - xml: objects/seq_04_switch_quantity1_08.xml
+    slot_name: w2_b2_slot_seq_04
+    mounted_body_name: w2_b2_seq_04
+    sequence: 4
+    category: Switch
+    class_name: Switch_Quantity1_08
+    button_class: '1_1'
+    wire_number: '38'
+    center_xy_mm:
+    - 182.0
+    - 120.0
+    source_location:
+    - 2
+    - 4
+    - 4
+    note: 2.4*1.9
+  - null
+  - null
+  - xml: objects/seq_03_switch_quantity1_07.xml
+    slot_name: w2_b2_slot_seq_03
+    mounted_body_name: w2_b2_seq_03
+    sequence: 3
+    category: Switch
+    class_name: Switch_Quantity1_07
+    button_class: '1_1'
+    wire_number: '37'
+    center_xy_mm:
+    - 238.0
+    - 120.0
+    source_location:
+    - 2
+    - 4
+    - 3
+    note: null
+  - null
+  - null
+  - xml: objects/seq_02_knob_quantity1_03.xml
+    slot_name: w2_b2_slot_seq_02
+    mounted_body_name: w2_b2_seq_02
+    sequence: 2
+    category: Knob
+    class_name: Knob_Quantity1_03
+    button_class: '1_1'
+    wire_number: '36'
+    center_xy_mm:
+    - 294.0
+    - 120.0
+    source_location:
+    - 2
+    - 4
+    - 2
+    note: null
+  - null
+  - xml: objects/seq_01_switch_quantity1_06.xml
+    slot_name: w2_b2_slot_seq_01
+    mounted_body_name: w2_b2_seq_01
+    sequence: 1
+    category: Switch
+    class_name: Switch_Quantity1_06
+    button_class: '1_1'
+    wire_number: '35'
+    center_xy_mm:
+    - 350.0
+    - 120.0
+    source_location:
+    - 2
+    - 4
+    - 1
+    note: null
+- - null
+  - xml: objects/seq_24_stop_quantity1_2.xml
+    slot_name: w2_b2_slot_seq_24
+    mounted_body_name: w2_b2_seq_24
+    sequence: 24
+    category: Stop
+    class_name: Stop_Quantity1_2
+    button_class: '1_1'
+    wire_number: '58'
+    center_xy_mm:
+    - -350.0
+    - 0.0
+    source_location:
+    - 2
+    - 5
+    - 12
+    note: 厚20mm
+  - null
+  - null
+  - xml: objects/seq_23_switch_quantity1_25.xml
+    slot_name: w2_b2_slot_seq_23
+    mounted_body_name: w2_b2_seq_23
+    sequence: 23
+    category: Switch
+    class_name: Switch_Quantity1_25
+    button_class: '1_1'
+    wire_number: '57'
+    center_xy_mm:
+    - -280.0
+    - 0.0
+    source_location:
+    - 2
+    - 5
+    - 11
+    note: null
+  - null
+  - null
+  - xml: objects/seq_22_switch_quantity1_24.xml
+    slot_name: w2_b2_slot_seq_22
+    mounted_body_name: w2_b2_seq_22
+    sequence: 22
+    category: Switch
+    class_name: Switch_Quantity1_24
+    button_class: '1_1'
+    wire_number: '56'
+    center_xy_mm:
+    - -210.0
+    - 0.0
+    source_location:
+    - 2
+    - 5
+    - 10
+    note: null
+  - null
+  - null
+  - null
+  - xml: objects/seq_21_switch_quantity1_23.xml
+    slot_name: w2_b2_slot_seq_21
+    mounted_body_name: w2_b2_seq_21
+    sequence: 21
+    category: Switch
+    class_name: Switch_Quantity1_23
+    button_class: '1_1'
+    wire_number: '55'
+    center_xy_mm:
+    - -140.0
+    - 0.0
+    source_location:
+    - 2
+    - 5
+    - 9
+    note: 直径2.1
+  - null
+  - null
+  - xml: objects/seq_20_stop_quantity1_1.xml
+    slot_name: w2_b2_slot_seq_20
+    mounted_body_name: w2_b2_seq_20
+    sequence: 20
+    category: Stop
+    class_name: Stop_Quantity1_1
+    button_class: '1_1'
+    wire_number: '54'
+    center_xy_mm:
+    - -70.0
+    - 0.0
+    source_location:
+    - 2
+    - 5
+    - 8
+    note: null
+  - null
+  - null
+  - null
+  - null
+  - xml: objects/seq_19_switch_quantity1_22.xml
+    slot_name: w2_b2_slot_seq_19
+    mounted_body_name: w2_b2_seq_19
+    sequence: 19
+    category: Switch
+    class_name: Switch_Quantity1_22
+    button_class: '1_1'
+    wire_number: '53'
+    center_xy_mm:
+    - 70.0
+    - 0.0
+    source_location:
+    - 2
+    - 5
+    - 6
+    note: null
+  - null
+  - null
+  - xml: objects/seq_18_switch_quantity1_21.xml
+    slot_name: w2_b2_slot_seq_18
+    mounted_body_name: w2_b2_seq_18
+    sequence: 18
+    category: Switch
+    class_name: Switch_Quantity1_21
+    button_class: '1_1'
+    wire_number: '52'
+    center_xy_mm:
+    - 134.0
+    - 0.0
+    source_location:
+    - 2
+    - 5
+    - 5
+    note: null
+  - null
+  - null
+  - xml: objects/seq_17_switch_quantity1_20.xml
+    slot_name: w2_b2_slot_seq_17
+    mounted_body_name: w2_b2_seq_17
+    sequence: 17
+    category: Switch
+    class_name: Switch_Quantity1_20
+    button_class: '1_1'
+    wire_number: '51'
+    center_xy_mm:
+    - 188.0
+    - 0.0
+    source_location:
+    - 2
+    - 5
+    - 4
+    note: null
+  - null
+  - null
+  - xml: objects/seq_16_switch_quantity1_19.xml
+    slot_name: w2_b2_slot_seq_16
+    mounted_body_name: w2_b2_seq_16
+    sequence: 16
+    category: Switch
+    class_name: Switch_Quantity1_19
+    button_class: '1_1'
+    wire_number: '50'
+    center_xy_mm:
+    - 242.0
+    - 0.0
+    source_location:
+    - 2
+    - 5
+    - 3
+    note: null
+  - null
+  - null
+  - xml: objects/seq_15_switch_quantity1_18.xml
+    slot_name: w2_b2_slot_seq_15
+    mounted_body_name: w2_b2_seq_15
+    sequence: 15
+    category: Switch
+    class_name: Switch_Quantity1_18
+    button_class: '1_1'
+    wire_number: '49'
+    center_xy_mm:
+    - 296.0
+    - 0.0
+    source_location:
+    - 2
+    - 5
+    - 2
+    note: null
+  - xml: objects/seq_14_switch_quantity1_17.xml
+    slot_name: w2_b2_slot_seq_14
+    mounted_body_name: w2_b2_seq_14
+    sequence: 14
+    category: Switch
+    class_name: Switch_Quantity1_17
+    button_class: '1_1'
+    wire_number: '48'
+    center_xy_mm:
+    - 350.0
+    - 0.0
+    source_location:
+    - 2
+    - 5
+    - 1
+    note: null
+- - xml: objects/seq_37_unknown.xml
+    slot_name: w2_b2_slot_seq_37
+    mounted_body_name: w2_b2_seq_37
+    sequence: 37
+    category: null
+    class_name: null
+    button_class: null
+    wire_number: null
+    center_xy_mm:
+    - -361.2
+    - -120.0
+    source_location:
+    - 2
+    - 6
+    - 13
+    note: null
+  - null
+  - xml: objects/seq_36_unknown.xml
+    slot_name: w2_b2_slot_seq_36
+    mounted_body_name: w2_b2_seq_36
+    sequence: 36
+    category: null
+    class_name: null
+    button_class: null
+    wire_number: null
+    center_xy_mm:
+    - -308.2
+    - -120.0
+    source_location:
+    - 2
+    - 6
+    - 12
+    note: null
+  - null
+  - null
+  - xml: objects/seq_35_unknown.xml
+    slot_name: w2_b2_slot_seq_35
+    mounted_body_name: w2_b2_seq_35
+    sequence: 35
+    category: null
+    class_name: null
+    button_class: null
+    wire_number: null
+    center_xy_mm:
+    - -255.2
+    - -120.0
+    source_location:
+    - 2
+    - 6
+    - 11
+    note: null
+  - null
+  - null
+  - xml: objects/seq_34_switch_quantity1_35.xml
+    slot_name: w2_b2_slot_seq_34
+    mounted_body_name: w2_b2_seq_34
+    sequence: 34
+    category: Switch
+    class_name: Switch_Quantity1_35
+    button_class: '1_1'
+    wire_number: '68'
+    center_xy_mm:
+    - -202.2
+    - -120.0
+    source_location:
+    - 2
+    - 6
+    - 10
+    note: 厚6mm
+  - null
+  - xml: objects/seq_33_switch_quantity1_34.xml
+    slot_name: w2_b2_slot_seq_33
+    mounted_body_name: w2_b2_seq_33
+    sequence: 33
+    category: Switch
+    class_name: Switch_Quantity1_34
+    button_class: '1_1'
+    wire_number: '67'
+    center_xy_mm:
+    - -149.2
+    - -120.0
+    source_location:
+    - 2
+    - 6
+    - 9
+    note: 2*1.5
+  - null
+  - null
+  - xml: objects/seq_32_switch_quantity1_33.xml
+    slot_name: w2_b2_slot_seq_32
+    mounted_body_name: w2_b2_seq_32
+    sequence: 32
+    category: Switch
+    class_name: Switch_Quantity1_33
+    button_class: '1_1'
+    wire_number: '66'
+    center_xy_mm:
+    - -96.2
+    - -120.0
+    source_location:
+    - 2
+    - 6
+    - 8
+    note: null
+  - null
+  - null
+  - xml: objects/seq_31_switch_quantity1_32.xml
+    slot_name: w2_b2_slot_seq_31
+    mounted_body_name: w2_b2_seq_31
+    sequence: 31
+    category: Switch
+    class_name: Switch_Quantity1_32
+    button_class: '1_1'
+    wire_number: '65'
+    center_xy_mm:
+    - -43.2
+    - -120.0
+    source_location:
+    - 2
+    - 6
+    - 7
+    note: 2.2*1.7
+  - null
+  - xml: objects/seq_30_switch_quantity1_31.xml
+    slot_name: w2_b2_slot_seq_30
+    mounted_body_name: w2_b2_seq_30
+    sequence: 30
+    category: Switch
+    class_name: Switch_Quantity1_31
+    button_class: '1_1'
+    wire_number: '64'
+    center_xy_mm:
+    - 25.0
+    - -120.0
+    source_location:
+    - 2
+    - 6
+    - 6
+    note: null
+  - null
+  - xml: objects/seq_29_switch_quantity1_30.xml
+    slot_name: w2_b2_slot_seq_29
+    mounted_body_name: w2_b2_seq_29
+    sequence: 29
+    category: Switch
+    class_name: Switch_Quantity1_30
+    button_class: '1_1'
+    wire_number: '63'
+    center_xy_mm:
+    - 90.0
+    - -120.0
+    source_location:
+    - 2
+    - 6
+    - 5
+    note: null
+  - null
+  - null
+  - xml: objects/seq_28_switch_quantity1_29.xml
+    slot_name: w2_b2_slot_seq_28
+    mounted_body_name: w2_b2_seq_28
+    sequence: 28
+    category: Switch
+    class_name: Switch_Quantity1_29
+    button_class: '1_1'
+    wire_number: '62'
+    center_xy_mm:
+    - 155.0
+    - -120.0
+    source_location:
+    - 2
+    - 6
+    - 4
+    note: null
+  - null
+  - null
+  - xml: objects/seq_27_switch_quantity1_28.xml
+    slot_name: w2_b2_slot_seq_27
+    mounted_body_name: w2_b2_seq_27
+    sequence: 27
+    category: Switch
+    class_name: Switch_Quantity1_28
+    button_class: '1_1'
+    wire_number: '61'
+    center_xy_mm:
+    - 220.0
+    - -120.0
+    source_location:
+    - 2
+    - 6
+    - 3
+    note: null
+  - null
+  - null
+  - xml: objects/seq_26_switch_quantity1_27.xml
+    slot_name: w2_b2_slot_seq_26
+    mounted_body_name: w2_b2_seq_26
+    sequence: 26
+    category: Switch
+    class_name: Switch_Quantity1_27
+    button_class: '1_1'
+    wire_number: '60'
+    center_xy_mm:
+    - 285.0
+    - -120.0
+    source_location:
+    - 2
+    - 6
+    - 2
+    note: null
+  - null
+  - null
+  - xml: objects/seq_25_switch_quantity1_26.xml
+    slot_name: w2_b2_slot_seq_25
+    mounted_body_name: w2_b2_seq_25
+    sequence: 25
+    category: Switch
+    class_name: Switch_Quantity1_26
+    button_class: '1_1'
+    wire_number: '59'
+    center_xy_mm:
+    - 350.0
+    - -120.0
+    source_location:
+    - 2
+    - 6
+    - 1
+    note: 3*2.5

@@ -1,0 +1,9 @@
+<?xml version='1.0' encoding='utf-8'?>
+<mujoco model="stop_quantity1_2">
+  <worldbody>
+    <body name="seq_24">
+      <geom name="seq_24_base" type="cylinder" pos="0 0 0.01" size="0.025 0.01" rgba="0.18 0.18 0.20 1" />
+      <geom name="seq_24_button" type="cylinder" pos="0 0 0.028" size="0.018 0.018" rgba="0.85 0.15 0.10 1" />
+    </body>
+  </worldbody>
+</mujoco>

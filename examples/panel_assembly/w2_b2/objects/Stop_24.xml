@@ -1,0 +1,16 @@
+<mujoco model="Stop_24">
+  <asset>
+    <material name="Stop_24_base" rgba="0.2 0.2 0.2 1"/>
+    <material name="Stop_24_button" rgba="0.85 0.12 0.12 1"/>
+  </asset>
+  <worldbody>
+    <body name="Stop_24">
+      <geom name="Stop_24_base" type="cylinder"
+            pos="0 0 0.0075" size="0.0155 0.0075"
+            material="Stop_24_base"/>
+      <geom name="Stop_24_button" type="cylinder"
+            pos="0 0 0.015" size="0.0145 0.015"
+            material="Stop_24_button"/>
+    </body>
+  </worldbody>
+</mujoco>

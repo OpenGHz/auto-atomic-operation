@@ -1,0 +1,16 @@
+<mujoco model="Toogle_Quantity1_06">
+  <asset>
+    <material name="Toogle_Quantity1_06_bezel" rgba="0.15 0.15 0.18 1" specular="0.75" shininess="0.85"/>
+    <material name="Toogle_Quantity1_06_button" rgba="0.25 0.25 0.28 1" specular="0.75" shininess="0.85"/>
+  </asset>
+  <worldbody>
+    <body name="Toogle_Quantity1_06">
+      <geom name="Toogle_Quantity1_06_bezel" type="box"
+            pos="0 0 0.001" size="0.043 0.043 0.001"
+            material="Toogle_Quantity1_06_bezel"/>
+      <geom name="Toogle_Quantity1_06_button" type="box"
+            pos="0 0 0.0035" size="0.04 0.04 0.0035"
+            material="Toogle_Quantity1_06_button"/>
+    </body>
+  </worldbody>
+</mujoco>

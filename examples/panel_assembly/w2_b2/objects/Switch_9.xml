@@ -1,0 +1,16 @@
+<mujoco model="Switch_9">
+  <asset>
+    <material name="Switch_9_base" rgba="0.5 0.5 0.55 1"/>
+    <material name="Switch_9_button" rgba="0.78 0.80 0.85 1"/>
+  </asset>
+  <worldbody>
+    <body name="Switch_9">
+      <geom name="Switch_9_base" type="cylinder"
+            pos="0 0 0.0015" size="0.012 0.0015"
+            material="Switch_9_base"/>
+      <geom name="Switch_9_button" type="cylinder"
+            pos="0 0 0.0015" size="0.0105 0.0015"
+            material="Switch_9_button"/>
+    </body>
+  </worldbody>
+</mujoco>

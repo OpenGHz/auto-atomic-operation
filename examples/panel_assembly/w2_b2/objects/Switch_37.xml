@@ -1,0 +1,11 @@
+<mujoco model="Switch_37">
+  <asset>
+    <material name="Switch_37_material" rgba="0.3 0.3 0.35 1"/>
+  </asset>
+  <worldbody>
+    <body name="Switch_37">
+      <geom name="Switch_37_base" type="box" pos="0 0 0.005" size="0.012 0.006 0.005" material="Switch_37_material"/>
+      <geom name="Switch_37_toggle" type="box" pos="0 0 0.015" size="0.004 0.003 0.008" rgba="0.9 0.9 0.95 1"/>
+    </body>
+  </worldbody>
+</mujoco>
