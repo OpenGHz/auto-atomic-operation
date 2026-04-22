@@ -5,15 +5,16 @@ Colours are placeholder grey — edit objects/*.xml to set final colours.
 """
 
 from __future__ import annotations
+
 from pathlib import Path
 
 OBJECTS_DIR = Path(__file__).parent / "objects"
 
 # Geometry (metres)
-BTN_HALF = 0.043        # 43mm half-width  (86mm full)
-BTN_FACE_HALF = 0.040   # 40mm half (80mm inner face)
-BEZEL_HALF_Z = 0.001    # bezel base half-thickness
-BTN_HALF_Z = 0.0035     # button half-thickness (7mm total)
+BTN_HALF = 0.043  # 43mm half-width  (86mm full)
+BTN_FACE_HALF = 0.040  # 40mm half (80mm inner face)
+BEZEL_HALF_Z = 0.001  # bezel base half-thickness
+BTN_HALF_Z = 0.0035  # button half-thickness (7mm total)
 
 # Metallic colours: (bezel_rgba, button_rgba, specular, shininess)
 COLORS = {
@@ -52,26 +53,26 @@ COLORS = {
 # 20 switches: (class_name, x_mm, y_mm, color)
 # 白色: 1-2,4-5,10-11,13-14,18  深灰: 3,7-9,12,15-16  金色: 6,20  粉色: 19
 SWITCHES = [
-    ("Switch_Quantity2_07",  349.8,  120.0, "white"),      # 1
-    ("Switch_Quantity2_08",  233.2,  120.0, "white"),      # 2
-    ("Switch_Quantity2_09",  116.6,  120.0, "dark_gray"),  # 3
-    ("Switch_Quantity2_10",    0.0,  120.0, "white"),      # 4
-    ("Switch_Quantity4_02", -116.6,  120.0, "white"),      # 5
-    ("Switch_Quantity1_45", -233.2,  120.0, "gold"),       # 6
-    ("Switch_Quantity1_46", -349.8,  120.0, "dark_gray"),  # 7
-    ("Toogle_Quantity1_05",  349.8,    0.0, "dark_gray"),  # 8
-    ("Switch_Quantity4_03",  233.2,    0.0, "dark_gray"),  # 9
-    ("Switch_Quantity1_47",  116.6,    0.0, "white"),      # 10
-    ("Switch_Quantity2_11", -116.6,    0.0, "white"),      # 11
-    ("Switch_Quantity1_48", -233.2,    0.0, "dark_gray"),  # 12
-    ("Switch_Quantity1_49", -349.8,    0.0, "white"),      # 13
-    ("Switch_Quantity3_06",  349.8, -120.0, "white"),      # 14
-    ("Toogle_Quantity2_01",  233.2, -120.0, "dark_gray"),  # 15
-    ("Toogle_Quantity1_06",  116.6, -120.0, "dark_gray"),  # 16
-    ("Placeholder_31",         0.0, -120.0, "placeholder"),# 17
-    ("Switch_Quantity2_12", -116.6, -120.0, "white"),      # 18
-    ("Switch_Quantity2_13", -233.2, -120.0, "pink"),       # 19
-    ("Switch_Quantity4_04", -349.8, -120.0, "gold"),       # 20
+    ("Switch_Quantity2_07", 349.8, 120.0, "white"),  # 1
+    ("Switch_Quantity2_08", 233.2, 120.0, "white"),  # 2
+    ("Switch_Quantity2_09", 116.6, 120.0, "dark_gray"),  # 3
+    ("Switch_Quantity2_10", 0.0, 120.0, "white"),  # 4
+    ("Switch_Quantity4_02", -116.6, 120.0, "white"),  # 5
+    ("Switch_Quantity1_45", -233.2, 120.0, "gold"),  # 6
+    ("Switch_Quantity1_46", -349.8, 120.0, "dark_gray"),  # 7
+    ("Toogle_Quantity1_05", 349.8, 0.0, "dark_gray"),  # 8
+    ("Switch_Quantity4_03", 233.2, 0.0, "dark_gray"),  # 9
+    ("Switch_Quantity1_47", 116.6, 0.0, "white"),  # 10
+    ("Switch_Quantity2_11", -116.6, 0.0, "white"),  # 11
+    ("Switch_Quantity1_48", -233.2, 0.0, "dark_gray"),  # 12
+    ("Switch_Quantity1_49", -349.8, 0.0, "white"),  # 13
+    ("Switch_Quantity3_06", 349.8, -120.0, "white"),  # 14
+    ("Toogle_Quantity2_01", 233.2, -120.0, "dark_gray"),  # 15
+    ("Toogle_Quantity1_06", 116.6, -120.0, "dark_gray"),  # 16
+    ("Placeholder_31", 0.0, -120.0, "placeholder"),  # 17
+    ("Switch_Quantity2_12", -116.6, -120.0, "white"),  # 18
+    ("Switch_Quantity2_13", -233.2, -120.0, "pink"),  # 19
+    ("Switch_Quantity4_04", -349.8, -120.0, "gold"),  # 20
 ]
 
 
@@ -80,8 +81,8 @@ def generate_switch_xml(class_name: str, color: str) -> str:
     sp, sh = c["specular"], c["shininess"]
     return f"""<mujoco model="{class_name}">
   <asset>
-    <material name="{class_name}_bezel" rgba="{c['bezel']}" specular="{sp}" shininess="{sh}"/>
-    <material name="{class_name}_button" rgba="{c['button']}" specular="{sp}" shininess="{sh}"/>
+    <material name="{class_name}_bezel" rgba="{c["bezel"]}" specular="{sp}" shininess="{sh}"/>
+    <material name="{class_name}_button" rgba="{c["button"]}" specular="{sp}" shininess="{sh}"/>
   </asset>
   <worldbody>
     <body name="{class_name}">

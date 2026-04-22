@@ -15,25 +15,25 @@ BASE_DIR = Path(__file__).parent
 # (class_name, x_mm, y_mm, wall_row, wall_col)
 SWITCHES = [
     # Row 1 (y=120): 4 switches (cols 6-9 only)
-    ("Switch_Quantity1_36",   69.8,  120.0, 1,  6),
-    ("Switch_Quantity1_37",    9.8,  120.0, 1,  7),
-    ("Switch_Quantity1_38",  -50.2,  120.0, 1,  8),
-    ("Switch_Quantity1_39", -110.2,  120.0, 1,  9),
+    ("Switch_Quantity1_36", 69.8, 120.0, 1, 6),
+    ("Switch_Quantity1_37", 9.8, 120.0, 1, 7),
+    ("Switch_Quantity1_38", -50.2, 120.0, 1, 8),
+    ("Switch_Quantity1_39", -110.2, 120.0, 1, 9),
     # Row 2 (y=0): 6 switches (no col 4)
-    ("Switch_Quantity3_04",  349.8,    0.0, 2,  1),
-    ("Switch_Quantity3_05",  233.2,    0.0, 2,  2),
-    ("Switch_Quantity2_03",  116.6,    0.0, 2,  3),
-    ("Switch_Quantity1_40", -116.6,    0.0, 2,  5),
-    ("Switch_Quantity1_41", -233.2,    0.0, 2,  6),
-    ("Switch_Quantity1_42", -349.8,    0.0, 2,  7),
+    ("Switch_Quantity3_04", 349.8, 0.0, 2, 1),
+    ("Switch_Quantity3_05", 233.2, 0.0, 2, 2),
+    ("Switch_Quantity2_03", 116.6, 0.0, 2, 3),
+    ("Switch_Quantity1_40", -116.6, 0.0, 2, 5),
+    ("Switch_Quantity1_41", -233.2, 0.0, 2, 6),
+    ("Switch_Quantity1_42", -349.8, 0.0, 2, 7),
     # Row 3 (y=-120): 7 switches
-    ("Switch_Quantity2_04",  349.8, -120.0, 3,  1),
-    ("Switch_Quantity2_05",  233.2, -120.0, 3,  2),
-    ("Toogle_Quantity4_01",  116.6, -120.0, 3,  3),
-    ("Switch_Quantity2_06",    0.0, -120.0, 3,  4),
-    ("Switch_Quantity1_43", -116.6, -120.0, 3,  5),
-    ("Switch_Quantity1_44", -233.2, -120.0, 3,  6),
-    ("Toogle_Quantity1_04", -349.8, -120.0, 3,  7),
+    ("Switch_Quantity2_04", 349.8, -120.0, 3, 1),
+    ("Switch_Quantity2_05", 233.2, -120.0, 3, 2),
+    ("Toogle_Quantity4_01", 116.6, -120.0, 3, 3),
+    ("Switch_Quantity2_06", 0.0, -120.0, 3, 4),
+    ("Switch_Quantity1_43", -116.6, -120.0, 3, 5),
+    ("Switch_Quantity1_44", -233.2, -120.0, 3, 6),
+    ("Toogle_Quantity1_04", -349.8, -120.0, 3, 7),
 ]
 
 PANEL_HALF_X = 0.81
@@ -118,13 +118,17 @@ def generate_assembly_xml() -> str:
         for mat in materials:
             asset_lines.append(f"    {ET.tostring(mat, encoding='unicode').strip()}")
 
-        slot_lines.append(f'      <body name="{slot_name}" pos="{x_m} {base_y} {z_m}" quat="{quat}">')
+        slot_lines.append(
+            f'      <body name="{slot_name}" pos="{x_m} {base_y} {z_m}" quat="{quat}">'
+        )
         slot_lines.append(f'        <body name="{assembled_body}">')
         for geom in geoms:
             orig = geom.get("name", "")
             if orig:
                 geom.set("name", f"{orig}__{slot_name}")
-            slot_lines.append(f"          {ET.tostring(geom, encoding='unicode').strip()}")
+            slot_lines.append(
+                f"          {ET.tostring(geom, encoding='unicode').strip()}"
+            )
         slot_lines.append("        </body>")
         slot_lines.append("      </body>")
 
@@ -150,13 +154,19 @@ def main() -> None:
         return
     (BASE_DIR / "generated").mkdir(exist_ok=True)
 
-    (BASE_DIR / "layout_w3_b1.yaml").write_text(generate_layout_yaml(), encoding="utf-8")
+    (BASE_DIR / "layout_w3_b1.yaml").write_text(
+        generate_layout_yaml(), encoding="utf-8"
+    )
     print("  Created layout_w3_b1.yaml")
 
-    (BASE_DIR / "w3_b1_panel_base.xml").write_text(generate_panel_base_xml(), encoding="utf-8")
+    (BASE_DIR / "w3_b1_panel_base.xml").write_text(
+        generate_panel_base_xml(), encoding="utf-8"
+    )
     print("  Created w3_b1_panel_base.xml")
 
-    (BASE_DIR / "generated" / "w3_b1_panel_assembly.xml").write_text(generate_assembly_xml(), encoding="utf-8")
+    (BASE_DIR / "generated" / "w3_b1_panel_assembly.xml").write_text(
+        generate_assembly_xml(), encoding="utf-8"
+    )
     print("  Created generated/w3_b1_panel_assembly.xml")
 
     print(f"\nDone. Assembly built from {len(SWITCHES)} switches.")
