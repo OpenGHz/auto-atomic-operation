@@ -8,6 +8,14 @@ env:
   _target_: auto_atom.basis.mjc.mujoco_env.BatchedUnifiedMujocoEnv
   name: ${task_name}
   model_path: ${assets_dir}/xmls/scenes/${scene_name}/${model_name}.xml
+  # Optional list of robot XML paths injected as <include> siblings of
+  # <mujoco> at load time. Leave empty when ``model_path`` already embeds its
+  # own robot (legacy monolithic scenes). Set per task when the scene XML is
+  # robot-less, e.g.:
+  #   env:
+  #     robot_paths:
+  #       - ${assets_dir}/xmls/robots/robotiq.xml
+  # robot_paths: []
   batch_size: 2
   enabled_sensors:
     - camera

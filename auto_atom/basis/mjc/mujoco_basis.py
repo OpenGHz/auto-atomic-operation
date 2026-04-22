@@ -188,7 +188,12 @@ class EnvConfig(BaseModel, frozen=True):
     name: str = ""
     """Optional registry name. When set, the constructed batched env self-registers under this name."""
     model_path: Path
-    """The path to the Mujoco XML model file used to create the environment."""
+    """Path to the scene XML. If ``robot_paths`` is non-empty, the scene is
+    composed by injecting each robot XML as an ``<include>`` sibling under
+    ``<mujoco>`` at load time; otherwise the scene file is loaded as-is."""
+    robot_paths: List[Path] = Field(default_factory=list)
+    """Optional robot XMLs to compose with ``model_path``. Leave empty when
+    ``model_path`` already embeds its robot (legacy monolithic scenes)."""
     operators: Dict[str, OperatorBinding] = Field(default_factory=dict)
     """Operator definitions keyed by logical name, mapping to XML actuators and sensors."""
     enabled_sensors: Set[DataType] = Field(default_factory=set)
@@ -209,8 +214,15 @@ class EnvConfig(BaseModel, frozen=True):
     """Control update frequency in Hz. Must be <= sim_freq. If None, defaults to sim_freq (n_substeps=1)."""
     ctrl_interpolation: bool = False
     """Linearly interpolate ctrl across substeps when n_substeps > 1 to prevent PD overshoot."""
-    initial_joint_positions: Dict[str, float] = Field(default_factory=dict)
-    """Joint name → qpos value overrides applied after every reset (after the keyframe)."""
+    initial_joint_positions: Dict[str, float | List[float]] = Field(
+        default_factory=dict
+    )
+    """Joint name → qpos value overrides applied after every reset (after the
+    keyframe). Use a scalar for 1-DOF joints (slide/hinge); use a list for
+    multi-DOF joints — 4 values for ball joints (quat wxyz), 7 values for free
+    joints (pos xyz + quat wxyz). Multi-DOF entries are written *after* the
+    parallel-linkage settle loop so the weld/equality drift does not
+    override them."""
     viewer: ViewerConfig | None = None
     """Viewer configuration. If None, the passive viewer is not launched."""
     structured: bool = False
@@ -319,7 +331,7 @@ class MujocoBasis:
             config = EnvConfig.model_validate(kwargs)
         self.config = config
         self._info = None
-        self.model, self.data = self._load_model(config.model_path)
+        self.model, self.data = self._load_model(config.model_path, config.robot_paths)
         if config.sim_freq is not None:
             self.model.opt.timestep = 1.0 / config.sim_freq
         self.get_logger().info(
@@ -487,6 +499,12 @@ class MujocoBasis:
             self._init_tactile_manager()
         self._last_time = None
 
+        # Apply initial_joint_positions now that operator indices (needed by
+        # the constraint-settle loop inside reset()) are bound. Without this,
+        # the env's observable state stays at qpos0 until the caller invokes
+        # reset() explicitly, so freejoint-based home poses wouldn't be seen.
+        self.reset()
+
         self._viewer = None
         if config.viewer is not None:
             self._launch_viewer()
@@ -639,9 +657,12 @@ class MujocoBasis:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _load_model(model_path: Path) -> tuple[Any, Any]:
-        xml_path = Path(model_path).resolve()
-        model = mujoco.MjModel.from_xml_path(str(xml_path))
+    def _load_model(
+        model_path: Path, robot_paths: List[Path] | None = None
+    ) -> tuple[Any, Any]:
+        from auto_atom.utils.scene_loader import load_scene
+
+        model = load_scene(model_path, robot_paths or [])
         data = mujoco.MjData(model)
         return model, data
 
@@ -850,40 +871,67 @@ class MujocoBasis:
             mujoco.mj_resetDataKeyframe(self.model, self.data, 0)
         else:
             mujoco.mj_resetData(self.model, self.data)
-        for joint_name, qpos_val in self.config.initial_joint_positions.items():
+        qpos_widths = {0: 7, 1: 4, 2: 1, 3: 1}  # free, ball, slide, hinge
+        multi_dof_entries: list[tuple[int, np.ndarray]] = []
+        pin_addrs: list[int] = []
+        for joint_name, value in self.config.initial_joint_positions.items():
             jid = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, joint_name)
-            if jid >= 0:
-                self.data.qpos[int(self.model.jnt_qposadr[jid])] = qpos_val
-        if self.config.initial_joint_positions and self.model.neq > 0:
+            if jid < 0:
+                continue
+            addr = int(self.model.jnt_qposadr[jid])
+            width = qpos_widths[int(self.model.jnt_type[jid])]
+            if isinstance(value, (list, tuple)):
+                arr = np.asarray(value, dtype=float)
+                if arr.size != width:
+                    raise ValueError(
+                        f"initial_joint_positions['{joint_name}'] has {arr.size} "
+                        f"values but joint has {width} qpos slots"
+                    )
+                multi_dof_entries.append((addr, arr))
+            else:
+                if width != 1:
+                    raise ValueError(
+                        f"initial_joint_positions['{joint_name}'] is scalar but joint "
+                        f"has {width} qpos slots; use a list to set all slots"
+                    )
+                self.data.qpos[addr] = value
+                pin_addrs.append(addr)
+        if pin_addrs and self.model.neq > 0:
             # Equality constraints (parallel linkage grippers, etc.) are only
             # resolved during mj_step.  Pin the configured joints and step so
             # passive joints settle to a constraint-consistent state.
-            pin_addrs = []
-            for jn in self.config.initial_joint_positions:
-                jid = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, jn)
-                if jid >= 0:
-                    pin_addrs.append(int(self.model.jnt_qposadr[jid]))
-            if pin_addrs:
-                # Also sync ctrl so the actuator doesn't fight the qpos.
-                for op in self._operators.values():
-                    for aidx in [
-                        self._op_arm_aidx[op.name],
-                        self._op_eef_aidx[op.name],
-                    ]:
-                        for ai in aidx:
-                            ji = self.model.actuator_trnid[ai, 0]
-                            if ji >= 0:
-                                self.data.ctrl[ai] = self.data.qpos[
-                                    self.model.jnt_qposadr[ji]
-                                ]
-                saved_gravity = self.model.opt.gravity.copy()
-                self.model.opt.gravity[:] = 0
-                target = self.data.qpos[pin_addrs].copy()
-                for _ in range(500):
-                    mujoco.mj_step(self.model, self.data)
-                    self.data.qpos[pin_addrs] = target
-                self.data.qvel[:] = 0.0
-                self.model.opt.gravity[:] = saved_gravity
+            for op in self._operators.values():
+                for aidx in [
+                    self._op_arm_aidx[op.name],
+                    self._op_eef_aidx[op.name],
+                ]:
+                    for ai in aidx:
+                        ji = self.model.actuator_trnid[ai, 0]
+                        if ji >= 0:
+                            self.data.ctrl[ai] = self.data.qpos[
+                                self.model.jnt_qposadr[ji]
+                            ]
+            saved_gravity = self.model.opt.gravity.copy()
+            self.model.opt.gravity[:] = 0
+            target = self.data.qpos[pin_addrs].copy()
+            # Pin all free-joint qpos during settle so bodies with a freejoint
+            # (objects on the table, mocap-driven arm bases) do not drift from
+            # contact-solver repulsion or residual constraint forces.
+            free_addrs: list[int] = []
+            for j in range(self.model.njnt):
+                if int(self.model.jnt_type[j]) == 0:  # mjJNT_FREE
+                    a = int(self.model.jnt_qposadr[j])
+                    free_addrs.extend(range(a, a + 7))
+            free_snapshot = self.data.qpos[free_addrs].copy() if free_addrs else None
+            for _ in range(500):
+                mujoco.mj_step(self.model, self.data)
+                self.data.qpos[pin_addrs] = target
+                if free_snapshot is not None:
+                    self.data.qpos[free_addrs] = free_snapshot
+            self.data.qvel[:] = 0.0
+            self.model.opt.gravity[:] = saved_gravity
+        for addr, arr in multi_dof_entries:
+            self.data.qpos[addr : addr + arr.size] = arr
         mujoco.mj_forward(self.model, self.data)
         self._sync_mocap_to_freejoint()
         self._prev_ctrl = None

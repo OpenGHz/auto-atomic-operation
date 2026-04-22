@@ -1,5 +1,4 @@
 <mujoco model="pick_place_demo">
-  <include file="../../robots/robotiq.xml"/>
 
   <visual>
     <map znear="0.001"/>
@@ -75,13 +74,4 @@
     </body>
   </worldbody>
 
-  <keyframe>
-    <key
-      qpos="
-         0 0 0.4 1 0 0 0
-         0.00522882 0.00541525 0.00562153 0.00529892 0.00548528 0.00569143
-         -0.04 0 0.078 1 0 0 0"
-      ctrl="0"
-    />
-  </keyframe>
 </mujoco>

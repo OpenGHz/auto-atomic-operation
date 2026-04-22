@@ -2,6 +2,21 @@ defaults:
   - basis
 
 env:
+  # Home pose at reset; mirrors the qpos from the legacy <keyframe> in
+  # assets/xmls/scenes/*/demo.xml. For scenes that still embed a <keyframe>,
+  # these values duplicate the keyframe and are no-ops. For composed scenes
+  # (scene XML is robot-less, robot injected via env.robot_paths) this is
+  # the sole source of the gripper's home pose.
+  initial_joint_positions:
+    # freejoint: pos(xyz) + quat(wxyz) — arm hangs 0.4m above the floor.
+    robotiq_freejoint: [0.0, 0.0, 0.4, 1.0, 0.0, 0.0, 0.0]
+    # 6 gripper joints: near-zero rest values from parallel-linkage settling.
+    left_driver_joint:       0.00522882
+    left_spring_link_joint:  0.00541525
+    left_follower:           0.00562153
+    right_driver_joint:      0.00529892
+    right_spring_link_joint: 0.00548528
+    right_follower_joint:    0.00569143
   operators:
     arm:
       arm_actuators: []

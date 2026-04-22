@@ -6,6 +6,27 @@ defaults:
   - basis
 
 env:
+  # Home pose at reset; mirrors the qpos from the <keyframe name="home"> in
+  # assets/xmls/scenes/pick_and_place/demo_franka.xml. Duplicates the keyframe
+  # no-op-ily for scenes that still embed one; provides the sole home pose
+  # for composed (robot-less) scenes where the robot is injected via
+  # env.robot_paths.
+  initial_joint_positions:
+    # Panda arm (7 hinges) — "home" posture.
+    joint1:  0.0006515062070403818
+    joint2: -0.7803480700396634
+    joint3:  0.00017030853030599173
+    joint4: -2.75422728452774
+    joint5:  0.0029799970628169147
+    joint6:  1.95947888200644
+    joint7: -0.7854
+    # 6 Robotiq 2F-85 gripper joints — fully open rest.
+    left_driver_joint:       0.0
+    left_spring_link_joint:  0.0
+    left_follower:           0.0
+    right_driver_joint:      0.0
+    right_spring_link_joint: 0.0
+    right_follower_joint:    0.0
   operators:
     arm:
       arm_actuators:

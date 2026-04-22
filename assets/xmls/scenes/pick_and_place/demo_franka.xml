@@ -1,5 +1,5 @@
 <mujoco model="pick_place_demo_franka">
-  <include file="../../robots/panda_robotiq.xml"/>
+  <!-- Robot-less scene. Compose via env.robot_paths in the task YAML. -->
 
   <visual>
     <map znear="0.001"/>
@@ -34,16 +34,4 @@
       <site name="source_block_site" pos="0 0 0" size="0.004" rgba="1 0 0 0"/>
     </body>
   </worldbody>
-
-  <keyframe>
-    <!-- Panda arm (7) + gripper joints (6) + source block freejoint (7). -->
-    <key
-      name="home"
-      qpos="
-         0.0006515062070403818 -0.7803480700396634 0.00017030853030599173 -2.75422728452774 0.0029799970628169147 1.95947888200644 -0.7854
-         0 0 0 0 0 0
-         -0.04 0 0.078 1 0 0 0"
-      ctrl="0.0006515062070403818 -0.7803480700396634 0.00017030853030599173 -2.75422728452774 0.0029799970628169147 1.95947888200644 -0.7854 0"
-    />
-  </keyframe>
 </mujoco>

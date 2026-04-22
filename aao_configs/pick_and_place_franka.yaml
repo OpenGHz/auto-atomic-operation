@@ -6,6 +6,10 @@ scene_name: pick_and_place
 model_name: demo_franka
 
 env:
+  # demo_franka.xml is a composable (robot-less) scene — inject panda_robotiq
+  # at load time.
+  robot_paths:
+    - ${assets_dir}/xmls/robots/panda_robotiq.xml
   mask_objects: ["source_block", "target_pedestal"]
   operations: ["pick", "place"]
   viewer:
