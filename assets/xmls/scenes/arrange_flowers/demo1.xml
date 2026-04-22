@@ -1,0 +1,431 @@
+<?xml version="1.0" encoding="utf-8"?>
+<mujoco model="demo1 arrange_flowers (p7_xf9600, simplified flower)">
+  <!-- Simplified rebuild of the arrange_flowers scene:
+       - P7 + xf9600 arm (same as demo_p7_xf9600.xml)
+       - vase + vase2 (static, mesh decomposed, colliding)
+       - flower: capsule stem (colliding) + sphere head (non-colliding)
+         This eliminates the petal-collision + gripper feedback loop that
+         made the gripper "bounce off" the full-mesh flower.
+       - grasp_site on flower (mid-stem) and drop_site on vase2 (opening)
+         so YAML stages can anchor references via stage.site. -->
+  <include file="../../robots/p7_arm_with_xf9600_arrangeflowers.xml"/>
+
+  <statistic center="0.0 0.075 0.1" extent="1"/>
+
+  <option timestep="0.001"
+          iterations="5"
+          ls_iterations="8"
+          integrator="implicitfast"
+          noslip_iterations="2">
+    <flag eulerdamp="disable"/>
+  </option>
+
+  <custom>
+    <numeric data="1000" name="max_contact_points"/>
+  </custom>
+
+  <visual>
+    <headlight diffuse=".8 .8 .8" ambient=".2 .2 .2" specular="1 1 1"/>
+    <rgba force="1 0 0 1"/>
+    <global azimuth="-40" elevation="-30"/>
+    <map force="0.01" znear="0.001"/>
+    <quality shadowsize="8192"/>
+    <scale contactwidth="0.075"
+           contactheight="0.025"
+           forcewidth="0.05"
+           com="0.05"
+           framewidth="0.01"
+           framelength="0.2"/>
+  </visual>
+
+  <asset>
+    <texture type="skybox" builtin="gradient" rgb1="1 1 1" rgb2="1 1 1" width="800" height="800"/>
+    <texture type="2d" name="groundplane" builtin="checker" mark="edge"
+             rgb1="1 1 1" rgb2="1 1 1" markrgb="0 0 0" width="300" height="300"/>
+    <material name="groundplane" texture="groundplane" texuniform="true" texrepeat="5 5" reflectance="0"/>
+
+    <!-- meshdir inherited from p7_arm_with_xf9600_arrangeflowers.xml = assets/meshes/p7_arm
+         so arrange_flowers mesh paths need ../arrange_flowers/... prefix. -->
+    <mesh name="vase_part_000" file="../arrange_flowers/vase/part_000.obj"/>
+    <mesh name="vase_part_001" file="../arrange_flowers/vase/part_001.obj"/>
+    <mesh name="vase_part_002" file="../arrange_flowers/vase/part_002.obj"/>
+    <mesh name="vase_part_003" file="../arrange_flowers/vase/part_003.obj"/>
+    <mesh name="vase_part_004" file="../arrange_flowers/vase/part_004.obj"/>
+    <mesh name="vase_part_005" file="../arrange_flowers/vase/part_005.obj"/>
+    <mesh name="vase_part_006" file="../arrange_flowers/vase/part_006.obj"/>
+    <mesh name="vase_part_007" file="../arrange_flowers/vase/part_007.obj"/>
+    <mesh name="vase_part_008" file="../arrange_flowers/vase/part_008.obj"/>
+    <mesh name="vase_part_009" file="../arrange_flowers/vase/part_009.obj"/>
+    <mesh name="vase_part_010" file="../arrange_flowers/vase/part_010.obj"/>
+    <mesh name="vase_part_011" file="../arrange_flowers/vase/part_011.obj"/>
+    <mesh name="vase_part_012" file="../arrange_flowers/vase/part_012.obj"/>
+    <mesh name="vase_part_013" file="../arrange_flowers/vase/part_013.obj"/>
+    <mesh name="vase_part_014" file="../arrange_flowers/vase/part_014.obj"/>
+    <mesh name="vase_part_015" file="../arrange_flowers/vase/part_015.obj"/>
+    <mesh name="vase_part_016" file="../arrange_flowers/vase/part_016.obj"/>
+    <mesh name="vase_part_017" file="../arrange_flowers/vase/part_017.obj"/>
+    <mesh name="vase_part_018" file="../arrange_flowers/vase/part_018.obj"/>
+    <mesh name="vase_part_019" file="../arrange_flowers/vase/part_019.obj"/>
+    <mesh name="vase_part_020" file="../arrange_flowers/vase/part_020.obj"/>
+    <mesh name="vase_part_021" file="../arrange_flowers/vase/part_021.obj"/>
+    <mesh name="vase_part_022" file="../arrange_flowers/vase/part_022.obj"/>
+    <mesh name="vase_part_023" file="../arrange_flowers/vase/part_023.obj"/>
+    <mesh name="vase_part_024" file="../arrange_flowers/vase/part_024.obj"/>
+    <mesh name="vase_part_025" file="../arrange_flowers/vase/part_025.obj"/>
+    <mesh name="vase_part_026" file="../arrange_flowers/vase/part_026.obj"/>
+    <mesh name="vase_part_027" file="../arrange_flowers/vase/part_027.obj"/>
+    <mesh name="vase_part_028" file="../arrange_flowers/vase/part_028.obj"/>
+    <mesh name="vase_part_029" file="../arrange_flowers/vase/part_029.obj"/>
+    <mesh name="vase_part_030" file="../arrange_flowers/vase/part_030.obj"/>
+    <mesh name="vase_part_031" file="../arrange_flowers/vase/part_031.obj"/>
+    <mesh name="vase_part_032" file="../arrange_flowers/vase/part_032.obj"/>
+    <mesh name="vase_part_033" file="../arrange_flowers/vase/part_033.obj"/>
+    <mesh name="vase_part_034" file="../arrange_flowers/vase/part_034.obj"/>
+    <mesh name="vase_part_035" file="../arrange_flowers/vase/part_035.obj"/>
+    <mesh name="vase_part_036" file="../arrange_flowers/vase/part_036.obj"/>
+    <mesh name="vase_part_037" file="../arrange_flowers/vase/part_037.obj"/>
+    <mesh name="vase_part_038" file="../arrange_flowers/vase/part_038.obj"/>
+    <mesh name="vase_part_039" file="../arrange_flowers/vase/part_039.obj"/>
+    <mesh name="vase_part_040" file="../arrange_flowers/vase/part_040.obj"/>
+    <mesh name="vase_part_041" file="../arrange_flowers/vase/part_041.obj"/>
+    <mesh name="vase_part_042" file="../arrange_flowers/vase/part_042.obj"/>
+    <mesh name="vase_part_043" file="../arrange_flowers/vase/part_043.obj"/>
+    <mesh name="vase_part_044" file="../arrange_flowers/vase/part_044.obj"/>
+    <mesh name="vase_part_045" file="../arrange_flowers/vase/part_045.obj"/>
+    <mesh name="vase_part_046" file="../arrange_flowers/vase/part_046.obj"/>
+    <mesh name="vase_part_047" file="../arrange_flowers/vase/part_047.obj"/>
+    <mesh name="vase_part_048" file="../arrange_flowers/vase/part_048.obj"/>
+    <mesh name="vase_part_049" file="../arrange_flowers/vase/part_049.obj"/>
+    <mesh name="vase_part_050" file="../arrange_flowers/vase/part_050.obj"/>
+    <mesh name="vase_part_051" file="../arrange_flowers/vase/part_051.obj"/>
+    <mesh name="vase_part_052" file="../arrange_flowers/vase/part_052.obj"/>
+    <mesh name="vase_part_053" file="../arrange_flowers/vase/part_053.obj"/>
+    <mesh name="vase_part_054" file="../arrange_flowers/vase/part_054.obj"/>
+    <mesh name="vase_part_055" file="../arrange_flowers/vase/part_055.obj"/>
+    <mesh name="vase_part_056" file="../arrange_flowers/vase/part_056.obj"/>
+
+    <mesh name="vase2_part_000" file="../arrange_flowers/vase2/part_000.obj"/>
+    <mesh name="vase2_part_001" file="../arrange_flowers/vase2/part_001.obj"/>
+    <mesh name="vase2_part_002" file="../arrange_flowers/vase2/part_002.obj"/>
+    <mesh name="vase2_part_003" file="../arrange_flowers/vase2/part_003.obj"/>
+    <mesh name="vase2_part_004" file="../arrange_flowers/vase2/part_004.obj"/>
+    <mesh name="vase2_part_005" file="../arrange_flowers/vase2/part_005.obj"/>
+    <mesh name="vase2_part_006" file="../arrange_flowers/vase2/part_006.obj"/>
+    <mesh name="vase2_part_007" file="../arrange_flowers/vase2/part_007.obj"/>
+    <mesh name="vase2_part_008" file="../arrange_flowers/vase2/part_008.obj"/>
+    <mesh name="vase2_part_009" file="../arrange_flowers/vase2/part_009.obj"/>
+    <mesh name="vase2_part_010" file="../arrange_flowers/vase2/part_010.obj"/>
+    <mesh name="vase2_part_011" file="../arrange_flowers/vase2/part_011.obj"/>
+    <mesh name="vase2_part_012" file="../arrange_flowers/vase2/part_012.obj"/>
+    <mesh name="vase2_part_013" file="../arrange_flowers/vase2/part_013.obj"/>
+    <mesh name="vase2_part_014" file="../arrange_flowers/vase2/part_014.obj"/>
+    <mesh name="vase2_part_015" file="../arrange_flowers/vase2/part_015.obj"/>
+    <mesh name="vase2_part_016" file="../arrange_flowers/vase2/part_016.obj"/>
+    <mesh name="vase2_part_017" file="../arrange_flowers/vase2/part_017.obj"/>
+    <mesh name="vase2_part_018" file="../arrange_flowers/vase2/part_018.obj"/>
+    <mesh name="vase2_part_019" file="../arrange_flowers/vase2/part_019.obj"/>
+    <mesh name="vase2_part_020" file="../arrange_flowers/vase2/part_020.obj"/>
+    <mesh name="vase2_part_021" file="../arrange_flowers/vase2/part_021.obj"/>
+    <mesh name="vase2_part_022" file="../arrange_flowers/vase2/part_022.obj"/>
+    <mesh name="vase2_part_023" file="../arrange_flowers/vase2/part_023.obj"/>
+    <mesh name="vase2_part_024" file="../arrange_flowers/vase2/part_024.obj"/>
+    <mesh name="vase2_part_025" file="../arrange_flowers/vase2/part_025.obj"/>
+    <mesh name="vase2_part_026" file="../arrange_flowers/vase2/part_026.obj"/>
+    <mesh name="vase2_part_027" file="../arrange_flowers/vase2/part_027.obj"/>
+    <mesh name="vase2_part_028" file="../arrange_flowers/vase2/part_028.obj"/>
+    <mesh name="vase2_part_029" file="../arrange_flowers/vase2/part_029.obj"/>
+    <mesh name="vase2_part_030" file="../arrange_flowers/vase2/part_030.obj"/>
+    <mesh name="vase2_part_031" file="../arrange_flowers/vase2/part_031.obj"/>
+    <mesh name="vase2_part_032" file="../arrange_flowers/vase2/part_032.obj"/>
+    <mesh name="vase2_part_033" file="../arrange_flowers/vase2/part_033.obj"/>
+    <mesh name="vase2_part_034" file="../arrange_flowers/vase2/part_034.obj"/>
+    <mesh name="vase2_part_035" file="../arrange_flowers/vase2/part_035.obj"/>
+    <mesh name="vase2_part_036" file="../arrange_flowers/vase2/part_036.obj"/>
+    <mesh name="vase2_part_037" file="../arrange_flowers/vase2/part_037.obj"/>
+    <mesh name="vase2_part_038" file="../arrange_flowers/vase2/part_038.obj"/>
+    <mesh name="vase2_part_039" file="../arrange_flowers/vase2/part_039.obj"/>
+    <mesh name="vase2_part_040" file="../arrange_flowers/vase2/part_040.obj"/>
+    <mesh name="vase2_part_041" file="../arrange_flowers/vase2/part_041.obj"/>
+    <mesh name="vase2_part_042" file="../arrange_flowers/vase2/part_042.obj"/>
+    <mesh name="vase2_part_043" file="../arrange_flowers/vase2/part_043.obj"/>
+    <mesh name="vase2_part_044" file="../arrange_flowers/vase2/part_044.obj"/>
+    <mesh name="vase2_part_045" file="../arrange_flowers/vase2/part_045.obj"/>
+    <mesh name="vase2_part_046" file="../arrange_flowers/vase2/part_046.obj"/>
+    <mesh name="vase2_part_047" file="../arrange_flowers/vase2/part_047.obj"/>
+    <mesh name="vase2_part_048" file="../arrange_flowers/vase2/part_048.obj"/>
+    <mesh name="vase2_part_049" file="../arrange_flowers/vase2/part_049.obj"/>
+    <mesh name="vase2_part_050" file="../arrange_flowers/vase2/part_050.obj"/>
+    <mesh name="vase2_part_051" file="../arrange_flowers/vase2/part_051.obj"/>
+    <mesh name="vase2_part_052" file="../arrange_flowers/vase2/part_052.obj"/>
+    <mesh name="vase2_part_053" file="../arrange_flowers/vase2/part_053.obj"/>
+    <mesh name="vase2_part_054" file="../arrange_flowers/vase2/part_054.obj"/>
+    <mesh name="vase2_part_055" file="../arrange_flowers/vase2/part_055.obj"/>
+    <mesh name="vase2_part_056" file="../arrange_flowers/vase2/part_056.obj"/>
+    <mesh name="vase2_part_057" file="../arrange_flowers/vase2/part_057.obj"/>
+    <mesh name="vase2_part_058" file="../arrange_flowers/vase2/part_058.obj"/>
+    <mesh name="vase2_part_059" file="../arrange_flowers/vase2/part_059.obj"/>
+    <mesh name="vase2_part_060" file="../arrange_flowers/vase2/part_060.obj"/>
+    <mesh name="vase2_part_061" file="../arrange_flowers/vase2/part_061.obj"/>
+    <mesh name="vase2_part_062" file="../arrange_flowers/vase2/part_062.obj"/>
+    <mesh name="vase2_part_063" file="../arrange_flowers/vase2/part_063.obj"/>
+
+    <!-- Original rose mesh parts (visual only in this scene). -->
+    <mesh name="flower_part_000" file="../arrange_flowers/flower1/part_000.obj"/>
+    <mesh name="flower_part_001" file="../arrange_flowers/flower1/part_001.obj"/>
+    <mesh name="flower_part_002" file="../arrange_flowers/flower1/part_002.obj"/>
+    <mesh name="flower_part_003" file="../arrange_flowers/flower1/part_003.obj"/>
+    <mesh name="flower_part_004" file="../arrange_flowers/flower1/part_004.obj"/>
+    <mesh name="flower_part_005" file="../arrange_flowers/flower1/part_005.obj"/>
+    <mesh name="flower_part_006" file="../arrange_flowers/flower1/part_006.obj"/>
+    <mesh name="flower_part_007" file="../arrange_flowers/flower1/part_007.obj"/>
+    <mesh name="flower_part_008" file="../arrange_flowers/flower1/part_008.obj"/>
+    <mesh name="flower_part_009" file="../arrange_flowers/flower1/part_009.obj"/>
+    <mesh name="flower_part_010" file="../arrange_flowers/flower1/part_010.obj"/>
+    <mesh name="flower_part_011" file="../arrange_flowers/flower1/part_011.obj"/>
+    <mesh name="flower_part_012" file="../arrange_flowers/flower1/part_012.obj"/>
+    <mesh name="flower_part_013" file="../arrange_flowers/flower1/part_013.obj"/>
+    <mesh name="flower_part_014" file="../arrange_flowers/flower1/part_014.obj"/>
+    <mesh name="flower_part_015" file="../arrange_flowers/flower1/part_015.obj"/>
+    <mesh name="flower_part_016" file="../arrange_flowers/flower1/part_016.obj"/>
+    <mesh name="flower_part_017" file="../arrange_flowers/flower1/part_017.obj"/>
+    <mesh name="flower_part_018" file="../arrange_flowers/flower1/part_018.obj"/>
+    <mesh name="flower_part_019" file="../arrange_flowers/flower1/part_019.obj"/>
+    <mesh name="flower_part_020" file="../arrange_flowers/flower1/part_020.obj"/>
+    <mesh name="flower_part_021" file="../arrange_flowers/flower1/part_021.obj"/>
+    <mesh name="flower_part_022" file="../arrange_flowers/flower1/part_022.obj"/>
+    <mesh name="flower_part_023" file="../arrange_flowers/flower1/part_023.obj"/>
+    <mesh name="flower_part_024" file="../arrange_flowers/flower1/part_024.obj"/>
+    <mesh name="flower_part_025" file="../arrange_flowers/flower1/part_025.obj"/>
+
+    <material name="vase_mat" rgba="0.9 0.9 0.9 0.3" specular="0.5" shininess="0.5"/>
+    <material name="vase2_mat" rgba="0.9 0.9 0.9 0.3" specular="0.5" shininess="0.5"/>
+    <material name="flower_mat" rgba="0.8 0.2 0.2 1" specular="0.5" shininess="0.5"/>
+    <material name="stem_mat" rgba="0.25 0.60 0.20 1" specular="0.2" shininess="0.3"/>
+  </asset>
+
+  <worldbody>
+    <light name="demo_light" pos="0 0 1.5" dir="0 0 -1"/>
+
+    <!-- Floor plane below the P7 mount (mount box bottom at z=-0.4). -->
+    <body name="ground" pos="0 0 -0.5">
+      <geom name="floor" size="0 0 0.05" type="plane" material="groundplane" contype="1"/>
+    </body>
+
+    <!-- table: center z=0.03, half-height=0.03 → top surface z=0.06 -->
+    <body name="table" pos="0 0 0.03">
+      <geom name="table_top" type="box" size="0.28 0.22 0.03" rgba="0.6 0.45 0.3 1"
+            contype="1" conaffinity="1"/>
+    </body>
+
+    <!-- vase (static). body z=0.13, opening top ≈ z=0.20 -->
+    <body name="vase" pos="0 0.15 0.13">
+      <geom name="vase_vis_000" type="mesh" mesh="vase_part_000" material="vase_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase_vis_001" type="mesh" mesh="vase_part_001" material="vase_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase_vis_002" type="mesh" mesh="vase_part_002" material="vase_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase_vis_003" type="mesh" mesh="vase_part_003" material="vase_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase_vis_004" type="mesh" mesh="vase_part_004" material="vase_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase_vis_005" type="mesh" mesh="vase_part_005" material="vase_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase_vis_006" type="mesh" mesh="vase_part_006" material="vase_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase_vis_007" type="mesh" mesh="vase_part_007" material="vase_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase_vis_008" type="mesh" mesh="vase_part_008" material="vase_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase_vis_009" type="mesh" mesh="vase_part_009" material="vase_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase_vis_010" type="mesh" mesh="vase_part_010" material="vase_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase_vis_011" type="mesh" mesh="vase_part_011" material="vase_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase_vis_012" type="mesh" mesh="vase_part_012" material="vase_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase_vis_013" type="mesh" mesh="vase_part_013" material="vase_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase_vis_014" type="mesh" mesh="vase_part_014" material="vase_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase_vis_015" type="mesh" mesh="vase_part_015" material="vase_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase_vis_016" type="mesh" mesh="vase_part_016" material="vase_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase_vis_017" type="mesh" mesh="vase_part_017" material="vase_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase_vis_018" type="mesh" mesh="vase_part_018" material="vase_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase_vis_019" type="mesh" mesh="vase_part_019" material="vase_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase_vis_020" type="mesh" mesh="vase_part_020" material="vase_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase_vis_021" type="mesh" mesh="vase_part_021" material="vase_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase_vis_022" type="mesh" mesh="vase_part_022" material="vase_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase_vis_023" type="mesh" mesh="vase_part_023" material="vase_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase_vis_024" type="mesh" mesh="vase_part_024" material="vase_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase_vis_025" type="mesh" mesh="vase_part_025" material="vase_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase_vis_026" type="mesh" mesh="vase_part_026" material="vase_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase_vis_027" type="mesh" mesh="vase_part_027" material="vase_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase_vis_028" type="mesh" mesh="vase_part_028" material="vase_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase_vis_029" type="mesh" mesh="vase_part_029" material="vase_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase_vis_030" type="mesh" mesh="vase_part_030" material="vase_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase_vis_031" type="mesh" mesh="vase_part_031" material="vase_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase_vis_032" type="mesh" mesh="vase_part_032" material="vase_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase_vis_033" type="mesh" mesh="vase_part_033" material="vase_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase_vis_034" type="mesh" mesh="vase_part_034" material="vase_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase_vis_035" type="mesh" mesh="vase_part_035" material="vase_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase_vis_036" type="mesh" mesh="vase_part_036" material="vase_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase_vis_037" type="mesh" mesh="vase_part_037" material="vase_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase_vis_038" type="mesh" mesh="vase_part_038" material="vase_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase_vis_039" type="mesh" mesh="vase_part_039" material="vase_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase_vis_040" type="mesh" mesh="vase_part_040" material="vase_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase_vis_041" type="mesh" mesh="vase_part_041" material="vase_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase_vis_042" type="mesh" mesh="vase_part_042" material="vase_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase_vis_043" type="mesh" mesh="vase_part_043" material="vase_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase_vis_044" type="mesh" mesh="vase_part_044" material="vase_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase_vis_045" type="mesh" mesh="vase_part_045" material="vase_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase_vis_046" type="mesh" mesh="vase_part_046" material="vase_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase_vis_047" type="mesh" mesh="vase_part_047" material="vase_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase_vis_048" type="mesh" mesh="vase_part_048" material="vase_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase_vis_049" type="mesh" mesh="vase_part_049" material="vase_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase_vis_050" type="mesh" mesh="vase_part_050" material="vase_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase_vis_051" type="mesh" mesh="vase_part_051" material="vase_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase_vis_052" type="mesh" mesh="vase_part_052" material="vase_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase_vis_053" type="mesh" mesh="vase_part_053" material="vase_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase_vis_054" type="mesh" mesh="vase_part_054" material="vase_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase_vis_055" type="mesh" mesh="vase_part_055" material="vase_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase_vis_056" type="mesh" mesh="vase_part_056" material="vase_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <site name="vase_site" pos="0 0 0" size="0.004" rgba="0 0 1 0"/>
+    </body>
+
+    <!-- vase2 (static). Same size class as vase. -->
+    <body name="vase2" pos="0 -0.10 0.13">
+      <geom name="vase2_vis_000" type="mesh" mesh="vase2_part_000" material="vase2_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase2_vis_001" type="mesh" mesh="vase2_part_001" material="vase2_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase2_vis_002" type="mesh" mesh="vase2_part_002" material="vase2_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase2_vis_003" type="mesh" mesh="vase2_part_003" material="vase2_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase2_vis_004" type="mesh" mesh="vase2_part_004" material="vase2_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase2_vis_005" type="mesh" mesh="vase2_part_005" material="vase2_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase2_vis_006" type="mesh" mesh="vase2_part_006" material="vase2_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase2_vis_007" type="mesh" mesh="vase2_part_007" material="vase2_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase2_vis_008" type="mesh" mesh="vase2_part_008" material="vase2_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase2_vis_009" type="mesh" mesh="vase2_part_009" material="vase2_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase2_vis_010" type="mesh" mesh="vase2_part_010" material="vase2_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase2_vis_011" type="mesh" mesh="vase2_part_011" material="vase2_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase2_vis_012" type="mesh" mesh="vase2_part_012" material="vase2_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase2_vis_013" type="mesh" mesh="vase2_part_013" material="vase2_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase2_vis_014" type="mesh" mesh="vase2_part_014" material="vase2_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase2_vis_015" type="mesh" mesh="vase2_part_015" material="vase2_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase2_vis_016" type="mesh" mesh="vase2_part_016" material="vase2_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase2_vis_017" type="mesh" mesh="vase2_part_017" material="vase2_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase2_vis_018" type="mesh" mesh="vase2_part_018" material="vase2_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase2_vis_019" type="mesh" mesh="vase2_part_019" material="vase2_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase2_vis_020" type="mesh" mesh="vase2_part_020" material="vase2_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase2_vis_021" type="mesh" mesh="vase2_part_021" material="vase2_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase2_vis_022" type="mesh" mesh="vase2_part_022" material="vase2_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase2_vis_023" type="mesh" mesh="vase2_part_023" material="vase2_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase2_vis_024" type="mesh" mesh="vase2_part_024" material="vase2_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase2_vis_025" type="mesh" mesh="vase2_part_025" material="vase2_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase2_vis_026" type="mesh" mesh="vase2_part_026" material="vase2_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase2_vis_027" type="mesh" mesh="vase2_part_027" material="vase2_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase2_vis_028" type="mesh" mesh="vase2_part_028" material="vase2_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase2_vis_029" type="mesh" mesh="vase2_part_029" material="vase2_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase2_vis_030" type="mesh" mesh="vase2_part_030" material="vase2_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase2_vis_031" type="mesh" mesh="vase2_part_031" material="vase2_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase2_vis_032" type="mesh" mesh="vase2_part_032" material="vase2_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase2_vis_033" type="mesh" mesh="vase2_part_033" material="vase2_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase2_vis_034" type="mesh" mesh="vase2_part_034" material="vase2_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase2_vis_035" type="mesh" mesh="vase2_part_035" material="vase2_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase2_vis_036" type="mesh" mesh="vase2_part_036" material="vase2_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase2_vis_037" type="mesh" mesh="vase2_part_037" material="vase2_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase2_vis_038" type="mesh" mesh="vase2_part_038" material="vase2_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase2_vis_039" type="mesh" mesh="vase2_part_039" material="vase2_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase2_vis_040" type="mesh" mesh="vase2_part_040" material="vase2_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase2_vis_041" type="mesh" mesh="vase2_part_041" material="vase2_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase2_vis_042" type="mesh" mesh="vase2_part_042" material="vase2_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase2_vis_043" type="mesh" mesh="vase2_part_043" material="vase2_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase2_vis_044" type="mesh" mesh="vase2_part_044" material="vase2_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase2_vis_045" type="mesh" mesh="vase2_part_045" material="vase2_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase2_vis_046" type="mesh" mesh="vase2_part_046" material="vase2_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase2_vis_047" type="mesh" mesh="vase2_part_047" material="vase2_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase2_vis_048" type="mesh" mesh="vase2_part_048" material="vase2_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase2_vis_049" type="mesh" mesh="vase2_part_049" material="vase2_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase2_vis_050" type="mesh" mesh="vase2_part_050" material="vase2_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase2_vis_051" type="mesh" mesh="vase2_part_051" material="vase2_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase2_vis_052" type="mesh" mesh="vase2_part_052" material="vase2_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase2_vis_053" type="mesh" mesh="vase2_part_053" material="vase2_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase2_vis_054" type="mesh" mesh="vase2_part_054" material="vase2_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase2_vis_055" type="mesh" mesh="vase2_part_055" material="vase2_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase2_vis_056" type="mesh" mesh="vase2_part_056" material="vase2_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase2_vis_057" type="mesh" mesh="vase2_part_057" material="vase2_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase2_vis_058" type="mesh" mesh="vase2_part_058" material="vase2_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase2_vis_059" type="mesh" mesh="vase2_part_059" material="vase2_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase2_vis_060" type="mesh" mesh="vase2_part_060" material="vase2_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase2_vis_061" type="mesh" mesh="vase2_part_061" material="vase2_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase2_vis_062" type="mesh" mesh="vase2_part_062" material="vase2_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <geom name="vase2_vis_063" type="mesh" mesh="vase2_part_063" material="vase2_mat" density="10" contype="1" conaffinity="1" group="1"/>
+      <site name="vase2_site" pos="0 0 0" size="0.004" rgba="0 0 1 0"/>
+      <!-- Drop target: ~7cm above vase2 body origin = at the opening rim. -->
+      <site name="vase2_drop_site" pos="0 0 0.07" size="0.006" rgba="1 1 0 1"/>
+    </body>
+
+    <!-- flower body.
+         - Uses the original rose mesh for visuals (non-colliding, so
+           the gripper never has to clash with petals).
+         - Body at the SAME offset from the vase as the original
+           demo_p7_xf9600.xml: vase at (0, 0.15, 0.13), flower body at
+           (-0.005, 0.065, 0.20). The mesh's baked vertex offsets then
+           place the visual rose stem right at the vase center
+           (world x=0, y=0.15). Do NOT re-center the body — the mesh
+           is designed around this offset.
+         - The invisible stem capsule is offset in LOCAL frame by
+           (+0.005, +0.085) so it overlaps the rose stem mesh in world
+           (both sit at world x=0, y=0.15). Capsule top extends ~8cm
+           above the vase rim so the grasp site sits in free air well
+           clear of the vase mouth. -->
+    <body name="flower" pos="-0.005 0.070 0.20">
+      <freejoint name="flower_joint"/>
+
+      <!-- Rose mesh with full collision (contype=1, conaffinity=1).
+           This is both the visual and the physics body — gripper
+           contacts the mesh directly for grasp detection. -->
+      <geom name="flower_vis_000" type="mesh" mesh="flower_part_000" material="flower_mat" density="0" contype="0" conaffinity="0" group="1"/>
+      <geom name="flower_vis_001" type="mesh" mesh="flower_part_001" material="flower_mat" density="0" contype="0" conaffinity="0" group="1"/>
+      <geom name="flower_vis_002" type="mesh" mesh="flower_part_002" material="flower_mat" density="0" contype="0" conaffinity="0" group="1"/>
+      <geom name="flower_vis_003" type="mesh" mesh="flower_part_003" material="flower_mat" density="0" contype="0" conaffinity="0" group="1"/>
+      <geom name="flower_vis_004" type="mesh" mesh="flower_part_004" material="flower_mat" density="0" contype="0" conaffinity="0" group="1"/>
+      <geom name="flower_vis_005" type="mesh" mesh="flower_part_005" material="flower_mat" density="0" contype="0" conaffinity="0" group="1"/>
+      <geom name="flower_vis_006" type="mesh" mesh="flower_part_006" material="flower_mat" density="0" contype="0" conaffinity="0" group="1"/>
+      <geom name="flower_vis_007" type="mesh" mesh="flower_part_007" material="flower_mat" density="0" contype="0" conaffinity="0" group="1"/>
+      <geom name="flower_vis_008" type="mesh" mesh="flower_part_008" material="flower_mat" density="0" contype="0" conaffinity="0" group="1"/>
+      <geom name="flower_vis_009" type="mesh" mesh="flower_part_009" material="flower_mat" density="0" contype="0" conaffinity="0" group="1"/>
+      <geom name="flower_vis_010" type="mesh" mesh="flower_part_010" material="flower_mat" density="0" contype="0" conaffinity="0" group="1"/>
+      <geom name="flower_vis_011" type="mesh" mesh="flower_part_011" material="flower_mat" density="0" contype="0" conaffinity="0" group="1"/>
+      <geom name="flower_vis_012" type="mesh" mesh="flower_part_012" material="flower_mat" density="0" contype="0" conaffinity="0" group="1"/>
+      <geom name="flower_vis_013" type="mesh" mesh="flower_part_013" material="flower_mat" density="0" contype="0" conaffinity="0" group="1"/>
+      <geom name="flower_vis_014" type="mesh" mesh="flower_part_014" material="flower_mat" density="0" contype="0" conaffinity="0" group="1"/>
+      <geom name="flower_vis_015" type="mesh" mesh="flower_part_015" material="flower_mat" density="0" contype="0" conaffinity="0" group="1"/>
+      <geom name="flower_vis_016" type="mesh" mesh="flower_part_016" material="flower_mat" density="0" contype="0" conaffinity="0" group="1"/>
+      <geom name="flower_vis_017" type="mesh" mesh="flower_part_017" material="flower_mat" density="0" contype="0" conaffinity="0" group="1"/>
+      <geom name="flower_vis_018" type="mesh" mesh="flower_part_018" material="flower_mat" density="0" contype="0" conaffinity="0" group="1"/>
+      <geom name="flower_vis_019" type="mesh" mesh="flower_part_019" material="flower_mat" density="0" contype="0" conaffinity="0" group="1"/>
+      <geom name="flower_vis_020" type="mesh" mesh="flower_part_020" material="flower_mat" density="0" contype="0" conaffinity="0" group="1"/>
+      <geom name="flower_vis_021" type="mesh" mesh="flower_part_021" material="flower_mat" density="0" contype="0" conaffinity="0" group="1"/>
+      <geom name="flower_vis_022" type="mesh" mesh="flower_part_022" material="flower_mat" density="0" contype="0" conaffinity="0" group="1"/>
+      <geom name="flower_vis_023" type="mesh" mesh="flower_part_023" material="flower_mat" density="0" contype="0" conaffinity="0" group="1"/>
+      <geom name="flower_vis_024" type="mesh" mesh="flower_part_024" material="flower_mat" density="0" contype="0" conaffinity="0" group="1"/>
+      <geom name="flower_vis_025" type="mesh" mesh="flower_part_025" material="flower_mat" density="0" contype="0" conaffinity="0" group="1"/>
+
+      <geom name="flower_stem_col"
+            type="capsule"
+            fromto="0.005 0.085 0.025 0.005 0.085 -0.115"
+            size="0.009"
+            material="stem_mat"
+            density="150"
+            contype="1"
+            conaffinity="1"/>
+
+      <!-- Grasp target site. Adjust pos to wherever the gripper should
+           end up in the flower body's local frame. -->
+      <site name="flower_grasp_site" pos="0.005 0.085 0.01" size="0.006" rgba="0 1 0 1"/>
+      <site name="flower_site" pos="0 0 0" size="0.004" rgba="0 0 1 0"/>
+    </body>
+
+    <!-- Cameras (same framing as demo_p7_xf9600.xml). -->
+    <camera name="env1_cam" pos="0 -0.8 0.5" xyaxes="1 0 0 0 0.447 0.894" fovy="45"/>
+    <camera name="env0_cam" pos="0.9 0 0.5" xyaxes="0 1 0 -0.406 0 0.914" fovy="45"/>
+  </worldbody>
+
+  <keyframe>
+    <!-- qpos layout: arm(7) + gripper(9) + flower freejoint(7) = 23.
+         Arm home qpos reused from demo_p7_xf9600.xml (works well for
+         the arrange_flowers workspace and avoids singular configs).
+         Flower freejoint puts the stem inside vase opening. -->
+    <key name="home"
+         qpos="0.0016582 -0.305293 -0.00983217 0.166931 1.59943 -0.107997 -0.00103546
+               0.00014663 -0.026352 -0.0498527 0.00981475 -0.0176664 0.0111485 -0.0117531 -0.013083 0.0108253
+               -0.005 0.070 0.20 1 0 0 0"
+         ctrl="0 0 0 0 1.4835 0 0 0"/>
+  </keyframe>
+</mujoco>

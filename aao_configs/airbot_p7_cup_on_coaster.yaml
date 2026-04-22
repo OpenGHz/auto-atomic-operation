@@ -1,0 +1,141 @@
+defaults:
+  - basis_p7_xf9600
+  - _self_
+
+# airbot_p7 + xf9600 版本的 cup_on_coaster 任务。
+#
+# 移植自 cup_on_coaster_gs.yaml（robotiq 浮空夹爪，basis_mocap_eef），
+# 移植套路与 open_door_airbot_play → open_door_p7_ik 完全一致：
+#   1. defaults 换到 basis_p7_xf9600（P7 + xf9600，固定基座）。
+#   2. 删掉浮空夹爪专属字段：randomization.arm.base/eef、gaussian_render、
+#      robotiq_gs / gs_mixin 继承链。
+#   3. 任务骨架严格沿用 cup_on_coaster.yaml 调过的数值（stage 名、object、
+#      operation、position 偏移、reference、placed_tolerance、eef.close
+#      全部原封保留）。
+#   4. pre_move / post_move 的每个 waypoint 都显式写出 orientation 四元数
+#      （源脚本仅在 pick 第一步给出，mocap 夹爪靠姿态继承；P7 解析 IK
+#       需要每步明确目标）。
+#   5. 容差、max_joint_delta、ik.joint_control_mode 直接对齐
+#      open_door_p7_ik.yaml：0.008 / 0.10 / 0.012，0.35，per_step_ik。
+#
+# 场景 XML：需要新建 assets/xmls/scenes/cup_on_coaster/demo_p7_xf9600.xml
+# （参考 arrange_flowers/demo_p7_xf9600.xml：<include> P7 机器人；
+#  <worldbody> 拷贝 cup_on_coaster/demo.xml 的 table / cup / coaster /
+#  cameras；<keyframe> 写 P7 arm(7) + xf9600(9) + cup freejoint(7) = 23
+#  的 qpos 布局）。
+scene_name: cup_on_coaster
+task_name: airbot_p7_cup_on_coaster
+# model_name 继承自 basis_p7_xf9600 → demo_p7_xf9600
+max_updates: 650
+
+env:
+  sim_freq: 1000
+  update_freq: 100
+  mask_objects: ["cup", "coaster"]
+  operations: ["pick", "place"]
+  viewer:
+    # 沿用 cup_on_coaster_gs.yaml 的观察视角
+    lookat: [0.45, 0.05, 0.08]
+    distance: 0.8
+    azimuth: 135
+    elevation: -28
+    step_delay: 0.005
+    hold_seconds: 0.5
+
+task:
+  # cup / coaster 随机化范围原封沿用 cup_on_coaster.yaml，不做收窄：
+  # 若 P7 基座位置按此范围够不到，则改基座位置（demo_p7_xf9600.xml 里
+  # 的 p7_mount pos），不改采样区域 —— 与 open_door_p7_ik 同思路。
+  randomization:
+    cup:
+      x: [0.15, 0.25]
+      y: [-0.1, 0]
+      collision_radius: 0.04
+      reference: absolute_world
+    coaster:
+      x: [0.20, 0.30]
+      y: [0.05, 0.1]
+      collision_radius: 0.04
+      reference: absolute_world
+
+  stages:
+    # --- Stage 1: 从上方垂直下压夹取 cup ---
+    - name: pick_cup
+      object: cup
+      operation: pick
+      operator: arm
+      param:
+        pre_move:
+          # 1. cup 中心正上方 0.12 m（cup_on_coaster.yaml 原值）。
+          #    pitch=90° 夹爪指向下方。
+          - position: [0.0, 0.0, 0.12]
+            orientation: [0.0, 0.70710678, 0.0, 0.70710678]
+            reference: object_world
+            max_linear_step: 0.04
+            max_angular_step: 0.35
+          # 2. 下降到 cup 中心上方 0.006 m（指尖夹住盒体上缘，
+          #    cup_on_coaster.yaml 原值），姿态沿用上一步。
+          - position: [0.0, 0.0, 0.008]
+            orientation: [0.0, 0.70710678, 0.0, 0.70710678]
+            reference: object_world
+            max_linear_step: 0.04
+            max_angular_step: 0.2
+        eef:
+          close: true
+        post_move:
+          # 3. 夹紧后向上抬 0.10 m（cup_on_coaster.yaml 原值）。
+          #    eef_world 快照解耦被夹 cup 的微动对 IK 目标的拖拽。
+          - position: [0.0, 0.0, 0.05]
+            orientation: [0.0, 0.70710678, 0.0, 0.70710678]
+            reference: eef_world
+            max_linear_step: 0.02
+            max_angular_step: 0.1
+
+    # --- Stage 2: 把 cup 放到 coaster 上方并松爪 ---
+    - name: place_cup
+      object: coaster
+      operation: place
+      operator: arm
+      param:
+        pre_move:
+          # 1. coaster 正上方 0.10 m 巡航点（cup_on_coaster.yaml 原值）。
+          - position: [0.0, 0.0, 0.10]
+            orientation: [0.0, 0.70710678, 0.0, 0.70710678]
+            reference: object_world
+            max_linear_step: 0.05
+            max_angular_step: 0.25
+          # 2. 下降到 coaster 中心上方 0.04 m（cup_on_coaster.yaml 原值）。
+          #    coaster 顶 z=0.08、杯中心目标 z≈0.105，此偏移让杯底距
+          #    coaster 顶 ~0.5cm，松爪后靠重力坐落。
+          - position: [0.0, 0.0, 0.04]
+            orientation: [0.0, 0.70710678, 0.0, 0.70710678]
+            reference: object_world
+            max_linear_step: 0.05
+            max_angular_step: 0.2
+        eef:
+          close: false
+        post_move:
+          # 3. 松爪后退离 0.18 m（cup_on_coaster.yaml 原值，同样保持
+          #    object_world 参考）。
+          - position: [0.0, 0.0, 0.18]
+            orientation: [0.0, 0.70710678, 0.0, 0.70710678]
+            reference: object_world
+            max_linear_step: 0.05
+            max_angular_step: 0.25
+        # placed_tolerance 原封沿用 cup_on_coaster.yaml —— null 表示
+        # 跳过该轴校验，接受任意姿态只要位置满足外层 tolerance 即可。
+        placed_tolerance:
+          position: [null, null, null]
+          orientation: [null, null, null]
+
+task_operators:
+  arm:
+    control:
+      timeout_steps: 220
+      cartesian_max_linear_step: 0.025
+      cartesian_max_angular_step: 0.3
+      tolerance:
+        position: 0.008
+        orientation: 0.10
+        eef: 0.001
+    max_joint_delta: 0.35

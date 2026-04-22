@@ -1,0 +1,112 @@
+<?xml version="1.0" encoding="utf-8"?>
+<mujoco model="p7_xf9600 cup_on_coaster">
+  <!-- P7 机器人 XML：挂载位置已针对本场景调至 (-0.10, 0.06, 0.10)
+       （在桌面 x∈[0.12, 0.78] 前方、pedestal 无交叠，详见该 XML 注释）。 -->
+  <include file="../../robots/p7_arm_with_xf9600_cup_on_coaster.xml"/>
+
+  <statistic center="0.35 0.03 0.15" extent="1"/>
+
+  <option timestep="0.001"
+          iterations="5"
+          ls_iterations="8"
+          integrator="implicitfast"
+          noslip_iterations="2">
+    <flag eulerdamp="disable"/>
+  </option>
+
+  <custom>
+    <numeric data="1000" name="max_contact_points"/>
+  </custom>
+
+  <visual>
+    <headlight diffuse=".8 .8 .8" ambient=".2 .2 .2" specular="1 1 1"/>
+    <rgba force="1 0 0 1"/>
+    <global azimuth="-40" elevation="-30"/>
+    <map force="0.01" znear="0.001"/>
+    <quality shadowsize="8192"/>
+    <scale contactwidth="0.075"
+           contactheight="0.025"
+           forcewidth="0.05"
+           com="0.05"
+           framewidth="0.01"
+           framelength="0.2"/>
+  </visual>
+
+  <asset>
+    <texture type="skybox" builtin="gradient" rgb1="1 1 1" rgb2="1 1 1" width="800" height="800"/>
+    <texture type="2d" name="groundplane" builtin="checker" mark="edge"
+             rgb1="1 1 1" rgb2="1 1 1" markrgb="0 0 0" width="300" height="300"/>
+    <material name="groundplane" texture="groundplane" texuniform="true" texrepeat="5 5" reflectance="0"/>
+
+    <!-- meshdir 由 p7_arm_with_xf9600_cup_on_coaster.xml 的 compiler 继承：
+         = assets/meshes/p7_arm，需用 ../cup_on_coaster/... 跳出到场景网格目录。 -->
+    <mesh name="cup_mesh"     file="../cup_on_coaster/blue_water_cup/blue_water_cup.obj"/>
+    <mesh name="coaster_mesh" file="../cup_on_coaster/coaster/coaster.obj"/>
+
+    <material name="cup_mat"     rgba="0.1 0.45 0.85 0.85" specular="0.5" shininess="0.5"/>
+    <material name="coaster_mat" rgba="0.65 0.45 0.3 1"    reflectance="0.15"/>
+  </asset>
+
+  <worldbody>
+    <light name="demo_light" pos="0 0 1.5" dir="0 0 -1"/>
+
+    <!-- Floor plane below the P7 mount (pedestal bottom at z=-0.90). -->
+    <body name="ground" pos="0 0 -0.95">
+      <geom name="floor" size="0 0 0.05" type="plane" material="groundplane" contype="1"/>
+    </body>
+
+    <!-- 大桌面（几何沿用 cup_on_coaster/demo_gs.xml）：
+         center=(0.45, 0.06, 0.0642)，half-size=(0.33, 0.525, 0.01)
+         → top surface z=0.0742，x∈[0.12, 0.78]，y∈[-0.465, 0.585]。
+         注意：geom 必须命名 `table_top`（不能用 `table`），否则与机器人 XML
+         里 p7_mount 下那块叫 `table` 的 pedestal geom 重名，MuJoCo 报
+         "repeated name 'table' in geom"。 -->
+    <geom name="table_top" pos="0.45 0.06 0.0642" size="0.33 0.525 0.01" type="box"
+          contype="1" conaffinity="1" rgba="0.6 0.45 0.3 1"/>
+
+    <!-- CUP（dynamic，freejoint）：
+         几何沿用 demo_gs.xml：box 半尺寸 (0.03, 0.03, 0.04)、pos 偏移 (0, 0, 0.005)。
+         mesh visual 不参与碰撞（contype=0），只供渲染/可视化。 -->
+    <body name="cup" pos="0.45 0.15 0.12">
+      <freejoint name="cup_joint"/>
+      <geom name="cup_col" type="box" size="0.03 0.03 0.04"
+            mass="0.005" friction="1.2 0.05 0.01" pos="0 0 0.005"
+            rgba="0 0 0 0" contype="1" conaffinity="1"/>
+      <geom name="cup_vis" type="mesh" mesh="cup_mesh" material="cup_mat"
+            quat="0.490144 -0.86997 -0.0468224 0.0267941" density="0"
+            contype="0" conaffinity="0" group="1"/>
+      <site name="cup_site" pos="0 0 0" size="0.004" rgba="1 0 0 0"/>
+    </body>
+
+    <!-- COASTER（static，无 freejoint）：作为稳定放置目标。
+         box 半尺寸 (0.05, 0.05, 0.005)。 -->
+    <body name="coaster" pos="0.45 -0.05 0.08">
+      <geom name="coaster_col" type="box" size="0.05 0.05 0.005"
+            mass="0.05" rgba="0 0 0 0" contype="1" conaffinity="1"/>
+      <geom name="coaster_vis" type="mesh" mesh="coaster_mesh" material="coaster_mat"
+            quat="0.941624 0.302989 -0.0408287 -0.140976" density="0"
+            contype="0" conaffinity="0" group="1"/>
+      <site name="coaster_site" pos="0 0 0" size="0.004" rgba="0 1 0 0"/>
+    </body>
+
+    <!-- Cameras：与 demo_gs.xml 一致，保持与 GS 背景重建的外参对齐，
+         方便切回 GS 渲染时复用同一套视角。 -->
+    <camera name="env1_cam" pos="1.15 0.022 0.7"
+            xyaxes="-0.029 1.000 0.000 -0.488 -0.014 0.872" fovy="43.365"/>
+    <camera name="env0_cam" pos="0.488 1.0 0.6"
+            xyaxes="-0.9994 0.0338 0.0000 -0.0107 -0.3168 0.9484" fovy="43.365"/>
+  </worldbody>
+
+  <keyframe>
+    <!-- qpos 布局：P7 arm(7) + xf9600 gripper(9) + cup freejoint(7) = 23。
+         - 臂 home qpos 直接沿用 arrange_flowers/demo_p7_xf9600.xml 的 home
+           （经 arrange_flowers 多次跑通验证，可作 cup_on_coaster 初始姿态）。
+         - xf9600 手指 qpos 保持默认“半张开”状态。
+         - cup freejoint pos 与上面 body pos (0.45, 0.15, 0.12) 一致，quat=单位。 -->
+    <key name="home"
+         qpos="0.0016582 -0.305293 -0.00983217 0.166931 1.59943 -0.107997 -0.00103546
+               0.00014663 -0.026352 -0.0498527 0.00981475 -0.0176664 0.0111485 -0.0117531 -0.013083 0.0108253
+               0.45 0.15 0.12 1 0 0 0"
+         ctrl="0 0 0 0 1.4835 0 0 0"/>
+  </keyframe>
+</mujoco>

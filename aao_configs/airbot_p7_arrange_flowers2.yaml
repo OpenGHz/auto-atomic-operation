@@ -1,0 +1,168 @@
+defaults:
+  - basis_p7_xf9600
+  - _self_
+
+# Rebuild #2 of the arrange_flowers task for airbot_p7 + xf9600.
+#
+# Design choices distilled from docs/task-configuration and
+# docs/ik-motion-control/ik_control.md:
+#
+#   1. scene XML (demo1.xml) carries a `flower_grasp_site` on the flower
+#      body and a `vase2_drop_site` on vase2. YAML uses `stage.site` to
+#      anchor pose references on those sites — no hand-math for offsets.
+#   2. pre_move uses `reference: object_world` (tracks site position but
+#      world-axis-aligned so rotation stays simple).
+#   3. post_move uses `reference: eef_world` — snapshotted at action
+#      start, decoupled from the held flower's motion. Prevents the
+#      "target chases the gripper" feedback loop that blocked the old
+#      post-grasp lift and crashed the IK.
+#   4. Flower collision is a single thin stem capsule in the scene XML;
+#      the decorative head is contype=0, so the gripper descending
+#      vertically cannot push the flower and trigger contact-driven IK
+#      explosions.
+#   5. Orientation given as quaternion (xyzw) for pitch=90° yaw=0°:
+#      gripper points straight down, fingers along world +x. No euler
+#      gimbal-lock ambiguity ever reaches the IK solver.
+#   6. joint_control_mode: solve_once_interpolate — solves once per
+#      waypoint and interpolates joints, dramatically reducing the
+#      analytical-IK branch-flipping that "flung the arm".
+#
+# scene_name + model_name:
+scene_name: arrange_flowers
+task_name: airbot_p7_arrangeflowers2
+model_name: demo1    # assets/xmls/scenes/arrange_flowers/demo1.xml
+
+env:
+  sim_freq: 1000
+  update_freq: 100
+  mask_objects: ["flower", "vase2"]
+  operations: ["pick", "place"]
+  viewer:
+    lookat: [0.0, 0.0, 0.15]
+    distance: 1.0
+    azimuth: 135
+    elevation: -25
+    step_delay: 0.005
+    hold_seconds: 0.5
+
+task:
+  # P7 mount at (-0.45, 0.075, 0.10), table top at z=0.06.
+  # Keep objects in x ∈ [-0.15, 0.05] and |y| ∈ [0.08, 0.15] so the
+  # worst-case reach is ~0.45m (well inside P7 working envelope) and
+  # neither vase overlaps the arm base footprint.
+  randomization:
+    vase:
+      # Default in XML: (0, 0.15, 0.13). Keep range close so rose mesh
+      # stays visually inside vase after randomization.
+      reference: absolute_world
+      x: [-0.08, 0.05]
+      y: [0.12, 0.18]
+      collision_radius: 0.01
+    flower:
+      # Carries with vase, preserving the XML offset (−0.005, −0.085) so
+      # the rose stem always lands dead centre of the vase.
+      reference: vase
+      x: [-0.005, -0.005]
+      y: [-0.085, -0.085]
+      z: [0.09, 0.09]
+      collision_radius: 0.01
+    vase2:
+      # Default in XML: (0, −0.10, 0.13). y range stays negative so vase
+      # and vase2 never overlap in the reach corridor.
+      reference: absolute_world
+      x: [-0.08, 0.05]
+      y: [-0.13, -0.07]
+      collision_radius: 0.06
+
+  stages:
+    # ------------------------------------------------------------------
+    # Stage 1: pick the flower by its stem (mid-stem grasp site).
+    # ------------------------------------------------------------------
+    - name: pick_flower
+      object: flower
+      site: flower_grasp_site   # anchor pose refs on this site
+      operation: pick
+      operator: arm
+      param:
+        pre_move:
+          # 1. 18 cm above grasp site, world-frame +z offset, gripper
+          #    pointing straight down.
+          - position: [0.0, 0.0, 0.18]
+            reference: object_world
+            orientation: [0.0, 0.7071067811865475, 0.0, 0.7071067811865475]
+            max_linear_step: 0.04
+            max_angular_step: 0.22
+          # 2. Down to grasp site (= mid-stem). Same orientation → pure
+          #    vertical descent, xf9600 fingers wrap around stem capsule.
+          - position: [0.0, 0.0, 0.0]
+            reference: object_world
+            orientation: [0.0, 0.7071067811865475, 0.0, 0.7071067811865475]
+            max_linear_step: 0.02
+            max_angular_step: 0.2
+        eef:
+          close: true
+        post_move:
+          # Snapshot-lift 25 cm straight up using eef_world. Target is
+          # frozen at the instant the gripper closes, so the now-gripped
+          # flower can't drag the IK anywhere.
+          - position: [0.0, 0.0, 0.25]
+            reference: eef_world
+            orientation: [0.0, 0.7071067811865475, 0.0, 0.7071067811865475]
+            max_linear_step: 0.03
+            max_angular_step: 0.2
+
+    # ------------------------------------------------------------------
+    # Stage 2: place the flower into vase2, releasing above the opening
+    # so the stem drops cleanly inside by gravity.
+    # ------------------------------------------------------------------
+    - name: place_flower
+      object: vase2
+      site: vase2_drop_site     # drop target is at vase2 opening rim
+      operation: place
+      operator: arm
+      param:
+        pre_move:
+          # 1. 18 cm above the drop site.
+          - position: [0.0, 0.0, 0.18]
+            reference: object_world
+            orientation: [0.0, 0.7071067811865475, 0.0, 0.7071067811865475]
+            max_linear_step: 0.05
+            max_angular_step: 0.22
+          # 2. Just above the opening: drop the stem from ~3 cm above
+          #    so gravity seats it without jamming against the rim.
+          - position: [0.0, 0.0, 0.03]
+            reference: object_world
+            orientation: [0.0, 0.7071067811865475, 0.0, 0.7071067811865475]
+            max_linear_step: 0.03
+            max_angular_step: 0.2
+        eef:
+          close: false
+        post_move:
+          # Snapshot-retreat 20 cm up with gripper open.
+          - position: [0.0, 0.0, 0.20]
+            reference: eef_world
+            orientation: [0.0, 0.7071067811865475, 0.0, 0.7071067811865475]
+            max_linear_step: 0.03
+            max_angular_step: 0.2
+
+task_operators:
+  arm:
+    control:
+      # Moderate cartesian step. Docs advise "远距离大、近距离小"; these
+      # defaults apply when a waypoint omits its own max_linear_step.
+      cartesian_max_linear_step: 0.025
+      cartesian_max_angular_step: 0.25
+      # Tolerances loose enough that analytical IK on P7 can always
+      # reach within a couple of control ticks — avoids the prior
+      # "stuck just outside tolerance forever" failure mode.
+      tolerance:
+        position: 0.02
+        orientation: 0.2
+        eef: 0.02
+    max_joint_delta: 0.5
+    ik:
+      # solve_once_interpolate (per docs): one IK solve per waypoint,
+      # then interpolate joints. Eliminates the per-step analytical-IK
+      # branch flip that caused the wrist to snap upward mid-descent.
+      joint_control_mode: solve_once_interpolate
+      joint_interp_speed: 0.08
