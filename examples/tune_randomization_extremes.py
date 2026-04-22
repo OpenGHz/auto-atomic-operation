@@ -448,15 +448,44 @@ class RandomizationInspector:
             lines.append("")
         self._set_state_text("\n".join(lines).rstrip() + "\n")
 
+    @staticmethod
+    def _sampled_pose_key(target: RandomizationTarget) -> Optional[str]:
+        prefix, _, name = target.key.partition(":")
+        if prefix == "object":
+            return name
+        if prefix == "operator-base":
+            return f"{name}.base"
+        if prefix == "operator-eef":
+            return f"{name}.eef"
+        return None
+
+    def _sorted_targets_for_apply(self) -> List[RandomizationTarget]:
+        """Order targets so entity-name-referenced entries resolve after their
+        referents (delta-carry depends on the referenced pose being sampled)."""
+        try:
+            entity_order = self.backend._randomization_order()
+        except Exception:
+            return list(self.targets)
+        order_index = {name: idx for idx, name in enumerate(entity_order)}
+
+        def sort_key(target: RandomizationTarget) -> tuple:
+            _, _, entity = target.key.partition(":")
+            # within one operator entity, base must be applied before eef so
+            # that an eef referencing "<name>.base" sees the sampled base.
+            attr_priority = 0 if target.key.startswith("operator-base:") else 1
+            return (order_index.get(entity, len(order_index)), attr_priority)
+
+        return sorted(self.targets, key=sort_key)
+
     def _apply_case(self, case: ExtremeCase) -> None:
         for target in self.targets:
             target.apply_pose(target.get_default_pose())
-        for target in self.targets:
-            offsets = case.offsets_by_target.get(target.key)
-            if not offsets:
-                continue
+        sampled_poses: Dict[str, PoseState] = {}
+        for target in self._sorted_targets_for_apply():
+            offsets = case.offsets_by_target.get(target.key) or {}
+            reference = target.rand_range.reference
             if (
-                target.rand_range.reference == RandomizationReference.ABSOLUTE_BASE
+                reference == RandomizationReference.ABSOLUTE_BASE
                 and target.get_base_pose is not None
             ):
                 base_world = target.get_base_pose()
@@ -469,15 +498,27 @@ class RandomizationInspector:
                     offsets,
                     target.rand_range,
                 )
-                target.apply_pose(compose_pose(base_world, sampled_in_base))
-            else:
-                target.apply_pose(
-                    _with_offsets(
-                        target.get_default_pose(),
-                        offsets,
-                        target.rand_range,
-                    )
+                sampled_pose = compose_pose(base_world, sampled_in_base)
+            elif isinstance(reference, RandomizationReference):
+                sampled_pose = _with_offsets(
+                    target.get_default_pose(),
+                    offsets,
+                    target.rand_range,
                 )
+            else:
+                # Entity-name reference: carry the referenced entity's delta
+                # onto this target's default pose so the entry follows its
+                # referent even when it has no offsets of its own.
+                base_pose = self.backend._resolve_reference_base_pose(
+                    reference,
+                    sampled_poses,
+                    target.get_default_pose(),
+                )
+                sampled_pose = _with_offsets(base_pose, offsets, target.rand_range)
+            target.apply_pose(sampled_pose)
+            sample_key = self._sampled_pose_key(target)
+            if sample_key is not None:
+                sampled_poses[sample_key] = sampled_pose
         self.env.refresh_viewer()
         self.case_var.set(case.name)
         self.desc_var.set(case.description)
