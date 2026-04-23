@@ -48,6 +48,10 @@
 - **Task Tuning**
   - [Open Door Tuning](task-tuning/open_door_tuning.md)
 
+- **Troubleshooting**
+  - [MuJoCo EGL 渲染初始化失败](troubleshooting/mujoco-egl-troubleshooting.md)
+  - [P7 厚门推不开](troubleshooting/open-door-p7-thick-door.md)
+
 - **Assets & Infrastructure**
   - [HuggingFace LFS Migration](assets-infrastructure/hf_lfs.md)
   - [HF Binary Upload Fix](assets-infrastructure/huggingface-binary-upload-fix.md)
