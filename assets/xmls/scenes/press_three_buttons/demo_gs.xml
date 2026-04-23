@@ -1,5 +1,4 @@
 <mujoco model="press_three_buttons_gs">
-  <include file="../../robots/robotiq.xml"/>
   <compiler meshdir="../../../meshes"/>
 
   <visual>
@@ -84,15 +83,4 @@
             xyaxes="-0.9994 0.0338 0.0000 -0.0107 -0.3168 0.9484" fovy="45"/>
   </worldbody>
 
-  <keyframe>
-    <!-- 6 Robotiq floating-base joints (x, y, z, rot_z, rot_y, rot_x)
-         + 6 gripper finger joints.
-         Arm starts above the table centre (0.45, 0.06) at z=0.45. -->
-    <key
-      qpos="
-        0.45 0.06 0.45 1 0 0 0
-        0.00522882 0.00541525 0.00562153 0.00529892 0.00548528 0.00569143"
-      ctrl="0"
-    />
-  </keyframe>
 </mujoco>

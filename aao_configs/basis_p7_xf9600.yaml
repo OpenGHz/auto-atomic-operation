@@ -2,9 +2,33 @@ defaults:
   - basis_xf9600
   - _self_
 
-model_name: demo_p7_xf9600
-
 env:
+  # Inject the P7 arm + XF9600 gripper into the composable scene.
+  robot_paths:
+    - ${assets_dir}/xmls/robots/p7_arm_with_xf9600.xml
+  # Home pose at reset — mirrors the <key name="home"> previously embedded
+  # in assets/xmls/scenes/open_door/demo_p7_xf9600.xml. 7 P7 arm hinges +
+  # 9 XF9600 linkage joints (near-zero rest values). Door/handle hinges
+  # default to 0 via qpos0, so they are omitted here.
+  initial_joint_positions:
+    # P7 arm (7 hinges)
+    joint1:  0.0016582
+    joint2: -0.305293
+    joint3: -0.00983217
+    joint4:  0.166931
+    joint5:  1.59943
+    joint6: -0.107997
+    joint7: -0.00103546
+    # XF9600 parallel-linkage gripper (1 slide + 8 hinges, rest values)
+    xfg_clawj:  0.00014663
+    xfg_l11j:  -0.026352
+    xfg_l61j:  -0.0498527
+    xfg_l21j:   0.00981475
+    xfg_l23j:  -0.0176664
+    xfg_l31j:   0.0111485
+    xfg_l41j:  -0.0117531
+    xfg_l51j:  -0.013083
+    xfg_l53j:   0.0108253
   operators:
     arm:
       arm_actuators:

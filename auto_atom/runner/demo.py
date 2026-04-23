@@ -40,7 +40,7 @@ def main(cfg: DictConfig) -> None:
 
     rounds = int(cfg.get("rounds", 1))
     use_input = bool(cfg.get("use_input", False))
-    max_updates = int(cfg.get("max_updates", 300))
+    max_updates = int(cfg.get("max_updates", 600))
     perf_count = bool(cfg.get("perf_count", False))
     _last_obs = [None]  # mutable container to hold observation across steps
 

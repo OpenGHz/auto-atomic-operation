@@ -4,7 +4,6 @@
 assets_dir: assets
 robot_gs_dir: ${assets_dir}/gs/robots/airbot_play
 eef_gs_dir: ${assets_dir}/gs/robots/airbot_g2p
-model_name: demo_gs_airbot_play
 
 env:
   gaussian_render:

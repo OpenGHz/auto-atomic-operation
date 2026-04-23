@@ -1,5 +1,4 @@
 <mujoco model="stack_color_blocks_gs">
-  <include file="../../robots/robotiq.xml"/>
   <compiler meshdir="../../../meshes"/>
 
   <visual>
@@ -89,17 +88,4 @@
             xyaxes="-0.9994 0.0338 0.0000 -0.0107 -0.3168 0.9484" fovy="43.36"/>
   </worldbody>
 
-  <keyframe>
-    <!-- 6 Robotiq floating-base joints + 6 gripper finger joints
-         + cube_blue_gs freejoint (7) + cube_yellow_gs freejoint (7) + cube_orange_gs freejoint (7) -->
-    <key
-      qpos="
-        0.45 0.06 0.45 1 0 0 0
-        0.00522882 0.00541525 0.00562153 0.00529892 0.00548528 0.00569143
-        0.497741 -0.100448 0.0791  1 0 0 0
-        0.5145    0.0267   0.0791  1 0 0 0
-        0.523     0.1418   0.0791  1 0 0 0"
-      ctrl="0"
-    />
-  </keyframe>
 </mujoco>

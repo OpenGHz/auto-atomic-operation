@@ -41,7 +41,7 @@ _ASSETS = Path(__file__).resolve().parents[1] / "assets" / "xmls"
 _ROBOT_CONFIGS: list[dict] = [
     {
         "id": "xf9600_airbot_play",
-        "scene_xml": _ASSETS / "scenes" / "open_door" / "demo_airbot_play.xml",
+        "scene_xml": _ASSETS / "scenes" / "open_door" / "demo.xml",
         "actuator": "xfg_claw_joint",
         "left_pad": "xfg_left_finger_pad_upper",
         "right_pad": "xfg_right_finger_pad_upper",
@@ -417,7 +417,7 @@ def test_apply_joint_action_round_trip(cfg: dict) -> None:
 _MAPPER_CONFIGS: list[dict] = [
     {
         "id": "xf9600_airbot_play",
-        "scene_xml": _ASSETS / "scenes" / "open_door" / "demo_airbot_play.xml",
+        "scene_xml": _ASSETS / "scenes" / "open_door" / "demo.xml",
         "actuator": "xfg_claw_joint",
         "left_pad": "xfg_left_finger_pad_upper",
         "right_pad": "xfg_right_finger_pad_upper",
@@ -511,7 +511,7 @@ def test_framework_with_finger_distance_mapper() -> None:
     """When eef_mapper is configured, capture_observation should report
     finger distances instead of raw qpos, and apply_joint_action should
     accept finger distances as input."""
-    scene = _ASSETS / "scenes" / "open_door" / "demo_airbot_play.xml"
+    scene = _ASSETS / "scenes" / "open_door" / "demo.xml"
     if not scene.exists():
         pytest.skip(f"Scene XML not found: {scene}")
 

@@ -6,6 +6,9 @@ scene_name: open_close_drawer
 task_name: open_drawer
 
 env:
+  # Task-specific arm home — gripper horizontal, facing the drawer.
+  initial_joint_positions:
+    robotiq_freejoint: [0.0, -0.2, 0.15, 0.7071408, 0.7070727, 0.0, 0.0]
   mask_objects: ["handle"]
   operations: ["pull"]
   viewer:

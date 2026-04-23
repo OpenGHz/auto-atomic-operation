@@ -7,6 +7,8 @@ task_name: close_drawer
 
 env:
   initial_joint_positions:
+    # Task-specific arm home — gripper horizontal, facing the drawer.
+    robotiq_freejoint: [0.0, -0.2, 0.15, 0.7071408, 0.7070727, 0.0, 0.0]
     drawer_slide: -0.12
   mask_objects: ["handle"]
   operations: ["pull"]

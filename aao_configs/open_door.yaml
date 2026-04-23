@@ -6,6 +6,12 @@ scene_name: open_door
 task_name: open_door
 
 env:
+  # Task-specific arm home — gripper facing the door handle. Shifted for the
+  # consolidated demo.xml: door frame is at world (1.54, 0.1, -1.0) vs the
+  # legacy robotiq scene's (1.49, 0.1, 0.0), so the arm home moves +0.05 x
+  # and -1.0 z to keep the same relative pose to the handle.
+  initial_joint_positions:
+    robotiq_freejoint: [1.285, 0.3155, -0.195, 0.5, 0.5, -0.5, -0.5]
   mask_objects: ["handle_lever_body", "handle_body_phys"]
   operations: ["pick", "push"]
   viewer:

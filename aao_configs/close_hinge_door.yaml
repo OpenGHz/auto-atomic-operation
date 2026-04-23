@@ -7,6 +7,8 @@ task_name: close_hinge_door
 
 env:
   initial_joint_positions:
+    # Task-specific arm home — gripper horizontal, facing the hinge-door handle.
+    robotiq_freejoint: [-0.435, -0.117, 0.5575, 0.7071408, 0.7070727, 0.0, 0.0]
     hinge_joint_1: -1.3
   update_freq: 10
   mask_objects: ["handle"]

@@ -1,5 +1,4 @@
 <mujoco model="arrange_flowers_gs">
-  <include file="../../robots/robotiq.xml"/>
   <compiler meshdir="../../../meshes"/>
 
   <visual>
@@ -351,13 +350,4 @@
     <camera name="env0_cam" pos="0.488 1.0 0.6" xyaxes="-0.9994 0.0338 0.0000 -0.0107 -0.3168 0.9484" fovy="43.36"/>
   </worldbody>
 
-  <keyframe>
-    <!-- 6 Robotiq floating-base joints + 6 gripper finger joints
-         + flower freejoint (7)
-         Flower freejoint pos matches outer body position. -->
-    <key qpos="
-        0.45 0.15 0.45 1 0 0 0
-        0.00522882 0.00541525 0.00562153 0.00529892 0.00548528 0.00569143
-        0.546549 0.212547 0.192837  1 0 0 0" ctrl="0" />
-  </keyframe>
 </mujoco>

@@ -2,11 +2,15 @@ defaults:
   - basis
 
 env:
-  # Home pose at reset; mirrors the qpos from the legacy <keyframe> in
-  # assets/xmls/scenes/*/demo.xml. For scenes that still embed a <keyframe>,
-  # these values duplicate the keyframe and are no-ops. For composed scenes
-  # (scene XML is robot-less, robot injected via env.robot_paths) this is
-  # the sole source of the gripper's home pose.
+  # Inject the Robotiq 2F-85 mocap gripper into every task that inherits this
+  # base. Scene XMLs are kept robot-less so the same scene can host different
+  # robots just by swapping ``robot_paths``.
+  robot_paths:
+    - ${assets_dir}/xmls/robots/robotiq.xml
+  # Home pose at reset. The freejoint entry is the default "arm suspended 0.4m
+  # above the floor" pose shared by most tasks; tasks that need a different
+  # home (open_door, open/close_drawer, open/close_hinge_door) override
+  # ``robotiq_freejoint`` in their own yaml.
   initial_joint_positions:
     # freejoint: pos(xyz) + quat(wxyz) — arm hangs 0.4m above the floor.
     robotiq_freejoint: [0.0, 0.0, 0.4, 1.0, 0.0, 0.0, 0.0]

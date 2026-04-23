@@ -3,7 +3,6 @@ defaults:
   - _self_
 
 scene_name: open_door
-model_name: demo_gs_airbot_play
 task_name: open_door_airbot_play
 door_side: front
 

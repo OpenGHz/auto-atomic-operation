@@ -68,7 +68,7 @@ Example: Franka in [`aao_configs/pick_and_place_franka.yaml`](../aao_configs/pic
 
 - The config inherits [`aao_configs/basis_franka.yaml`](../aao_configs/basis_franka.yaml), where `arm_actuators` is non-empty.
 - This makes the operator a joint-mode arm.
-- If `initial_state.base_pose` is omitted, the base pose defaults to the robot root body pose from the loaded XML, such as [`assets/xmls/scenes/pick_and_place/demo_franka.xml`](../assets/xmls/scenes/pick_and_place/demo_franka.xml) and the included robot XML.
+- If `initial_state.base_pose` is omitted, the base pose defaults to the robot root body pose from the loaded XML, such as [`assets/xmls/scenes/pick_and_place/demo.xml`](../assets/xmls/scenes/pick_and_place/demo.xml) and the included robot XML.
 
 Practical implication:
 
@@ -114,7 +114,7 @@ This means the default is not a separately stored YAML value. It is the EEF pose
 Example: [`aao_configs/pick_and_place_franka.yaml`](../aao_configs/pick_and_place_franka.yaml)
 
 - The Franka EEF site is `gripper`, configured in [`aao_configs/basis_franka.yaml`](../aao_configs/basis_franka.yaml).
-- The scene XML defines a `home` keyframe in [`assets/xmls/scenes/pick_and_place/demo_franka.xml`](../assets/xmls/scenes/pick_and_place/demo_franka.xml).
+- The scene XML defines a `home` keyframe in [`assets/xmls/scenes/pick_and_place/demo.xml`](../assets/xmls/scenes/pick_and_place/demo.xml).
 - If `initial_state.arm` is omitted, the default home EEF pose is whatever pose the `gripper` site has under that initial model state.
 
 Practical implication:

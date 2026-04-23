@@ -4,12 +4,14 @@ defaults:
 
 scene_name: open_door
 task_name: open_door_p7_ik
+# FIXME: now only works for this scene
+model_name: demo_p7_xf9600
 
 env:
   sim_freq: 1000
   update_freq: 100
-  mask_objects: ["handle_lever_body"]
-  operations: ["push"]
+  mask_objects: [ "handle_lever_body" ]
+  operations: [ "push" ]
   pre_step_callbacks:
     - _target_: auto_atom.callbacks.door_latch.DoorLatchCallback
       door_joint: door_hinge
@@ -19,7 +21,7 @@ env:
       unlock_threshold: 0.12
       lock_zone: 0.05
   viewer:
-    lookat: [1.25, 0.15, -0.2]
+    lookat: [ 1.25, 0.15, -0.2 ]
     distance: 1.8
     azimuth: 30
     elevation: -15
@@ -35,15 +37,15 @@ task:
       param:
         pre_move:
           # 1. Approach: ~14cm in front of handle (relative to handle_body_phys)
-          - position: [-0.14, 0.0955, -0.015]
+          - position: [ -0.14, 0.0955, -0.015 ]
             reference: object_world
-            orientation: [0.68997457, 0.19902274, -0.20541703, 0.66492774]
+            orientation: [ 0.68997457, 0.19902274, -0.20541703, 0.66492774 ]
             max_linear_step: 0.04
             max_angular_step: 0.25
           # 2. Grasp position: ~7cm in front of handle
-          - position: [-0.07, 0.1155, -0.015]
+          - position: [ -0.07, 0.1155, -0.015 ]
             reference: object_world
-            orientation: [0.68997457, 0.19902274, -0.20541703, 0.66492774]
+            orientation: [ 0.68997457, 0.19902274, -0.20541703, 0.66492774 ]
             max_linear_step: 0.04
             max_angular_step: 0.2
         eef:
@@ -54,7 +56,7 @@ task:
           #    Positive angle = press handle down = unlock
           - arc:
               pivot: handle_hinge
-              axis: [-1, 0, 0]
+              axis: [ -1, 0, 0 ]
               angle: 0.45
               absolute: true
               max_step: 0.15
@@ -65,7 +67,7 @@ task:
           #    -0.35 rad ≈ 20° — within P7 arm reachable workspace
           - arc:
               pivot: door_hinge
-              axis: [0, 0, 1]
+              axis: [ 0, 0, 1 ]
               angle: 0.35
               absolute: true
               max_step: 0.15

@@ -1,5 +1,4 @@
 <mujoco model="hang_toothbrush_cup">
-  <include file="../../robots/robotiq.xml"/>
   <compiler meshdir="../../../meshes"/>
 
   <visual>
@@ -185,15 +184,4 @@
     <camera name="env0_cam" pos="0.9 0 0.5" xyaxes="0 1 0 -0.406 0 0.914" fovy="45"/>
   </worldbody>
 
-  <keyframe>
-    <!-- Robotiq freejoint (7) + gripper finger joints (6)
-         + toothbrush_cup freejoint (7) -->
-    <key
-      qpos="
-        0 0 0.4 1 0 0 0
-        0.00522882 0.00541525 0.00562153 0.00529892 0.00548528 0.00569143
-        0.0 -0.05 0.085  1 0 0 0"
-      ctrl="0"
-    />
-  </keyframe>
 </mujoco>

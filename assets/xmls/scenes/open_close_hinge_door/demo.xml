@@ -1,5 +1,4 @@
 <mujoco model="open_close_hinge_door_demo">
-  <include file="../../robots/robotiq.xml"/>
 
   <visual>
     <map znear="0.001"/>
@@ -179,10 +178,4 @@
   <!-- qpos: robotiq freejoint (7) + 6 gripper joints + 6 drawer slides + 5 hinge joints = 24 values -->
   <!-- Robotiq starts in front of door_1 handle: handle world pos ~(-0.235, -0.117, 0.5575) -->
   <!-- Gripper horizontal with rot_x=pi/2: quat=(0.7071, 0.7071, 0, 0), points +X toward cabinet -->
-  <keyframe>
-    <key
-      qpos="-0.435 -0.117 0.5575 0.7071408 0.7070727 0 0 0.00522882 0.00541525 0.00562153 0.00529892 0.00548528 0.00569143  0 0 0 0 0 0  0 0 0 0 0"
-      ctrl="0"
-    />
-  </keyframe>
 </mujoco>

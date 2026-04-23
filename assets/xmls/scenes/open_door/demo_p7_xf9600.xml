@@ -1,6 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <mujoco model="p7_xf9600 door scene">
-  <include file="../../robots/p7_arm_with_xf9600.xml"/>
 
   <statistic center="0.3 0 0.4" extent="1"/>
 

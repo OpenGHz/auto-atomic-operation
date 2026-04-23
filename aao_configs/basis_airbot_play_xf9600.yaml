@@ -2,9 +2,13 @@ defaults:
   - basis_xf9600
   - _self_
 
-model_name: demo_airbot_play
-
 env:
+  # Inject the Airbot Play arm + XF9600 gripper into the composable scene.
+  robot_paths:
+    - ${assets_dir}/xmls/robots/airbot_play_with_xf9600.xml
+  # Home pose is all-zero (matches the legacy <key name="home"> qpos)
+  # so no initial_joint_positions entries are needed for the arm; qpos0
+  # defaults suffice. Task-specific homes can still override.
   operators:
     arm:
       arm_actuators:
