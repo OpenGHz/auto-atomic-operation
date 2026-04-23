@@ -92,15 +92,7 @@
             conaffinity="1"/>
 
       <body name="door_body_phys" pos="0.840000000 0.000000000 0.000000000">
-        <joint name="door_hinge"
-               type="hinge"
-               pos="0 0 0"
-               axis="0 0 1"
-               limited="true"
-               range="-1.57 1.57 "
-               damping="0.15"
-               frictionloss="0.01"
-               armature="0.001"/>
+        <joint name="door_hinge" type="hinge" pos="0 0 0" axis="0 0 1" limited="true" range="-1.57 1.57 " damping="5.0" frictionloss="5.0" armature="0.05"/>
 
         <inertial pos="-0.420000000 0.000000000 0.815000000"
                   mass="6.0"
@@ -160,17 +152,7 @@
                       mass="0.10"
                       diaginertia="0.0001 0.0001 0.0001"/>
 
-            <joint name="handle_hinge"
-                   type="hinge"
-                   pos="0 0 0"
-                   axis="0 1 0"
-                   limited="true"
-                   range="-0.20 0.80"
-                   damping="0.4"
-                   frictionloss="0.02"
-                   armature="0.0005"
-                   springref="0"
-                   stiffness="2.0"/>
+            <joint name="handle_hinge" type="hinge" pos="0 0 0" axis="0 1 0" limited="true" range="-0.20 0.80" damping="0.4" frictionloss="0.02" armature="0.0005" springref="0" stiffness="0.5"/>
 
             <geom name="handle_lever_front_geom"
                   type="capsule"
@@ -231,12 +213,4 @@
 
   </worldbody>
 
-  <keyframe>
-    <key name="home"
-         qpos="0.0016582 -0.305293 -0.00983217 0.166931 1.59943 -0.107997 -0.00103546 0.00014663 -0.026352 -0.0498527 0.00981475 -0.0176664 0.0111485 -0.0117531 -0.013083 0.0108253 2.81815e-23 0.0292232"
-         ctrl="0 0 0 0 1.4835 0 0 0"/>
-    <key name="grasp"
-         qpos="-0.059215 -0.877112 -0.000104264 -0.202598 -1.57239 -0.0156502 -0.000109044 1.68627e-06 -0.00718067 -0.00435189 0.000325658 -0.00127154 -0.000682713 -0.00122389 -0.000188927 -0.00063801 -0.00139023 0.0491925"
-         ctrl="-0.05934 -0.87723 0 -0.2025 -1.57251 -0.015708 0 0"/>
-  </keyframe>
 </mujoco>
