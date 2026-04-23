@@ -1,0 +1,38 @@
+# Shared Airbot Play + XF9600 gripper GS body gaussians config.
+# Include via Hydra defaults in any *_gs.yaml that uses this robot.
+
+assets_dir: assets
+robot_gs_dir: ${assets_dir}/gs/robots/airbot_play
+eef_gs_dir: ${assets_dir}/gs/robots/airbot_g2p
+
+env:
+  gaussian_render:
+    body_gaussians:
+      arm_base: ${robot_gs_dir}/arm_base.ply
+      link1: ${robot_gs_dir}/link1.ply
+      link2: ${robot_gs_dir}/link2.ply
+      link3: ${robot_gs_dir}/link3.ply
+      link4: ${robot_gs_dir}/link4.ply
+      link5: ${robot_gs_dir}/link5.ply
+      link6: ${robot_gs_dir}/link6.ply
+      # XF9600 gripper (assets/gs/robots/airbot_g2p)
+      xfg_base_link: ${eef_gs_dir}/base_link.ply
+      xfg_claw: ${eef_gs_dir}/claw.ply
+      xfg_l11: ${eef_gs_dir}/l11.ply
+      xfg_l12: ${eef_gs_dir}/l12.ply
+      xfg_l21: ${eef_gs_dir}/l21.ply
+      xfg_l22: ${eef_gs_dir}/l22.ply
+      xfg_l23: ${eef_gs_dir}/l23.ply
+      xfg_l31: ${eef_gs_dir}/l31.ply
+      xfg_l32: ${eef_gs_dir}/l32.ply
+      xfg_l41: ${eef_gs_dir}/l41.ply
+      xfg_l42: ${eef_gs_dir}/l42.ply
+      xfg_l51: ${eef_gs_dir}/l51.ply
+      xfg_l52: ${eef_gs_dir}/l52.ply
+      xfg_l53: ${eef_gs_dir}/l53.ply
+      xfg_l61: ${eef_gs_dir}/l61.ply
+      xfg_l62: ${eef_gs_dir}/l62.ply
+      xfg_left_tactile: ${eef_gs_dir}/left_tactile.ply
+      xfg_right_tactile: ${eef_gs_dir}/right_tactile.ply
+      xfg_left_cam: ${eef_gs_dir}/left_cam.ply
+      xfg_right_cam: ${eef_gs_dir}/right_cam.ply

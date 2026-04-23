@@ -1,0 +1,242 @@
+<?xml version="1.0" encoding="utf-8"?>
+<mujoco model="p7_xf9600 door scene">
+
+  <statistic center="0.3 0 0.4" extent="1"/>
+
+  <option timestep="0.001"
+          iterations="5"
+          ls_iterations="8"
+          integrator="implicitfast"
+          noslip_iterations="2">
+    <flag eulerdamp="disable"/>
+  </option>
+
+  <custom>
+    <numeric data="12" name="max_contact_points"/>
+  </custom>
+
+  <visual>
+    <headlight diffuse=".8 .8 .8" ambient=".2 .2 .2" specular="1 1 1"/>
+    <rgba force="1 0 0 1"/>
+    <global azimuth="-40" elevation="-30"/>
+    <map force="0.01"/>
+    <quality shadowsize="8192"/>
+    <scale contactwidth="0.075"
+           contactheight="0.025"
+           forcewidth="0.05"
+           com="0.05"
+           framewidth="0.01"
+           framelength="0.2"/>
+  </visual>
+
+  <asset>
+    <texture type="skybox"
+             builtin="gradient"
+             rgb1="1 1 1"
+             rgb2="1 1 1"
+             width="800"
+             height="800"/>
+    <texture type="2d"
+             name="groundplane"
+             builtin="checker"
+             mark="edge"
+             rgb1="1 1 1"
+             rgb2="1 1 1"
+             markrgb="0 0 0"
+             width="300"
+             height="300"/>
+    <material name="groundplane"
+              texture="groundplane"
+              texuniform="true"
+              texrepeat="5 5"
+              reflectance="0"/>
+  </asset>
+
+  <worldbody>
+    <light pos="0 0 1.5" dir="0 0 -1" directional="true"/>
+
+    <body name="ground" pos="1 0 -1">
+      <geom name="floor"
+            size="0 0 0.05"
+            type="plane"
+            material="groundplane"
+            contype="1"/>
+    </body>
+    <camera name="env1_cam" pos="0.814 -0.615 0.495" xyaxes="0.858 -0.513 0.000 0.251 0.420 0.872" fovy="50"/>
+    <camera name="env0_cam" pos="1.147 2.181 -0.092" xyaxes="-0.996 -0.093 -0.000 0.004 -0.046 0.999" fovy="50"/>
+    <!-- <camera name="topside" pos="0.814 -0.615 0.495" xyaxes="0.858 -0.513 0.000 0.251 0.420 0.872"/> -->
+
+    <body name="door_frame_physics"
+          pos="1.490000000 0.100000000 -1.000000000"
+          quat="0.707106781 0.000000000 0.000000000 0.707106781">
+      <geom name="door_frame_physics_left_geom"
+            type="box"
+            pos="0.000000000 0.000000000 0.830000000"
+            size="0.025000000 0.025000000 0.830000000"
+            rgba="0.35 0.25 0.15 1"
+            contype="1"
+            conaffinity="1"/>
+      <geom name="door_frame_physics_right_geom"
+            type="box"
+            pos="0.900000000 0.000000000 0.830000000"
+            size="0.025000000 0.025000000 0.830000000"
+            rgba="0.35 0.25 0.15 1"
+            contype="1"
+            conaffinity="1"/>
+      <geom name="door_frame_physics_top_geom"
+            type="box"
+            pos="0.450000000 0.000000000 1.655000000"
+            size="0.475000000 0.025000000 0.025000000"
+            rgba="0.35 0.25 0.15 1"
+            contype="1"
+            conaffinity="1"/>
+
+      <body name="door_body_phys" pos="0.840000000 0.000000000 0.000000000">
+        <joint name="door_hinge"
+               type="hinge"
+               pos="0 0 0"
+               axis="0 0 1"
+               limited="true"
+               range="-1.57 1.57 "
+               damping="0.15"
+               frictionloss="0.01"
+               armature="0.001"/>
+
+        <inertial pos="-0.420000000 0.000000000 0.815000000"
+                  mass="6.0"
+                  diaginertia="0.2 0.2 0.2"/>
+
+        <geom name="door_panel_geom"
+              type="box"
+              pos="-0.390000000 0.000000000 0.815000000"
+              size="0.410000000 0.015000000 0.805000000"
+              rgba="0.65 0.50 0.35 1"
+              density="350"
+              contype="1"
+              conaffinity="1"
+              friction="0.8 0.1 0.1"/>
+
+        <site name="door_push_site"
+              pos="-0.729500000 0.022000000 0.825000000"
+              size="0.012"
+              rgba="0.2 0.2 1 1"/>
+
+        <body name="handle_body_phys" pos="-0.719500000 0.000000000 0.825000000">
+          <inertial pos="0 0 0"
+                    mass="0.05"
+                    diaginertia="0.00005 0.00005 0.00005"/>
+
+          <geom name="handle_spindle_geom"
+                type="cylinder"
+                fromto="0 -0.042 0 0 0.042 0"
+                size="0.010"
+                rgba="0.55 0.55 0.55 1"
+                contype="1"
+                conaffinity="1"/>
+
+          <geom name="handle_plate_front_geom"
+                type="box"
+                pos="0 0.054 0"
+                size="0.032 0.022 0.102"
+                rgba="0.70 0.82 0.85 0.95"
+                contype="1"
+                conaffinity="1"/>
+
+          <geom name="handle_plate_back_geom"
+                type="box"
+                pos="0 -0.054 0"
+                size="0.032 0.022 0.102"
+                rgba="0.70 0.82 0.85 0.95"
+                contype="1"
+                conaffinity="1"/>
+
+          <site name="handle_axis_site"
+                pos="0 0 0"
+                size="0.010"
+                rgba="1 1 0 0.8"/>
+
+          <body name="handle_lever_body" pos="0 0 -0.02">
+            <inertial pos="0.08 0 0"
+                      mass="0.10"
+                      diaginertia="0.0001 0.0001 0.0001"/>
+
+            <joint name="handle_hinge"
+                   type="hinge"
+                   pos="0 0 0"
+                   axis="0 1 0"
+                   limited="true"
+                   range="-0.20 0.80"
+                   damping="0.4"
+                   frictionloss="0.02"
+                   armature="0.0005"
+                   springref="0"
+                   stiffness="2.0"/>
+
+            <geom name="handle_lever_front_geom"
+                  type="capsule"
+                  fromto="0.010 0.080 0 0.175 0.080 0"
+                  size="0.012"
+                  rgba="0.50 0.90 0.95 1"
+                  contype="1"
+                  conaffinity="1"/>
+
+            <geom name="handle_lever_back_geom"
+                  type="capsule"
+                  fromto="0.010 -0.080 0 0.135 -0.080 0"
+                  size="0.010"
+                  rgba="0.50 0.90 0.95 1"
+                  contype="1"
+                  conaffinity="1"/>
+
+            <site name="handle_front_tip_site"
+                  pos="0.175 0.080 0.000"
+                  size="0.010"
+                  rgba="1 0.4 0.2 1"/>
+
+            <site name="handle_grasp_site"
+                  pos="0.095000000 0.055000000 0.000000000"
+                  size="0.012"
+                  rgba="1 0.2 0.2 1"/>
+
+            <site name="handle_press_site"
+                  pos="0.095000000 0.080000000 0.000000000"
+                  size="0.012"
+                  rgba="0.2 1 0.2 1"/>
+
+            <body name="handle_gs_frame"
+                  pos="0.270651190 1.595000000 0.058962200"
+                  quat="0.023543636 -0.014802135 0.716127885 -0.697414831"/>
+          </body>
+        </body>
+
+        <body name="door_gs_frame"
+              pos="-0.448848810 1.595000000 0.863962200"
+              quat="0.023543636 -0.014802135 0.716127885 -0.697414831">
+          <body name="door_body" pos="0 0 0"/>
+        </body>
+      </body>
+    </body>
+
+    <body name="mocap_target"
+          mocap="true"
+          pos="1.560000000 0.315500000 -0.175000000"
+          quat="1 0 0 0">
+      <geom name="mocap_target_box"
+            type="box"
+            size="0.03 0.02 0.04"
+            rgba="1 0 0 0.20"
+            contype="0"
+            conaffinity="0"/>
+    </body>
+
+  </worldbody>
+
+  <keyframe>
+    <key name="home"
+         qpos="0.0016582 -0.305293 -0.00983217 0.166931 1.59943 -0.107997 -0.00103546 0.00014663 -0.026352 -0.0498527 0.00981475 -0.0176664 0.0111485 -0.0117531 -0.013083 0.0108253 2.81815e-23 0.0292232"
+         ctrl="0 0 0 0 1.4835 0 0 0"/>
+    <key name="grasp"
+         qpos="-0.059215 -0.877112 -0.000104264 -0.202598 -1.57239 -0.0156502 -0.000109044 1.68627e-06 -0.00718067 -0.00435189 0.000325658 -0.00127154 -0.000682713 -0.00122389 -0.000188927 -0.00063801 -0.00139023 0.0491925"
+         ctrl="-0.05934 -0.87723 0 -0.2025 -1.57251 -0.015708 0 0"/>
+  </keyframe>
+</mujoco>

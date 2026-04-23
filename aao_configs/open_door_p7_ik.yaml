@@ -4,6 +4,8 @@ defaults:
 
 scene_name: open_door
 task_name: open_door_p7_ik
+# FIXME: now only works for this scene
+model_name: demo_p7_xf9600
 
 env:
   sim_freq: 1000

@@ -5,11 +5,6 @@ defaults:
 scene_name: pick_and_place
 
 env:
-  # pick_and_place/demo.xml is a composable (robot-less) scene — inject robotiq
-  # at load time. Legacy scenes still embed <include file="robots/robotiq.xml"/>
-  # and keep robot_paths=[] from basis.yaml.
-  robot_paths:
-    - ${assets_dir}/xmls/robots/robotiq.xml
   mask_objects: ["source_block", "target_pedestal"]
   operations: ["pick", "place"]
   viewer:
