@@ -1,0 +1,58 @@
+defaults:
+  - basis
+
+env:
+  # Inject the XF9600 mocap gripper into every task that inherits this base.
+  # Scene XMLs stay robot-less so the same scene can host different robots by
+  # swapping ``robot_paths``.
+  robot_paths:
+    - ${assets_dir}/xmls/robots/xf9600_mocap.xml
+  # Home pose at reset. Arm hangs 0.4m above the floor; gripper fully open
+  # (clawj = 0). Tasks can override ``xf9600_freejoint`` for task-specific homes.
+  initial_joint_positions:
+    # freejoint: pos(xyz) + quat(wxyz) — gripper hangs 0.4m above the floor.
+    xf9600_freejoint: [0.0, 0.0, 0.4, 1.0, 0.0, 0.0, 0.0]
+    # Single gripper drive joint (range 0..0.02, 0 = fully open).
+    xfg_clawj: 0.0
+  # XF9600 exposes its wrist camera as ``xfg_wrist_cam`` (attach prefix); the
+  # basis camera list references ``wrist_cam`` and has to be overridden.
+  cameras:
+    - name: xfg_wrist_cam
+      width: ${cam_width}
+      height: ${cam_height}
+      enable_color: ${enable_color}
+      enable_depth: ${enable_depth}
+      enable_mask: ${enable_mask}
+      enable_heat_map: ${enable_heat_map}
+      parent_frame: eef_pose
+      is_static: false
+    - name: env1_cam
+      width: ${cam_width}
+      height: ${cam_height}
+      enable_color: ${enable_color}
+      enable_depth: ${enable_depth}
+      enable_mask: ${enable_mask}
+      enable_heat_map: ${enable_heat_map}
+      is_static: true
+    - name: env0_cam
+      width: ${cam_width}
+      height: ${cam_height}
+      enable_color: ${enable_color}
+      enable_depth: ${enable_depth}
+      enable_mask: ${enable_mask}
+      enable_heat_map: ${enable_heat_map}
+      is_static: true
+  operators:
+    arm:
+      arm_actuators: []
+      eef_actuators: [xfg_claw_joint]
+      eef_output_name: gripper
+      pose_site: eef_pose
+      root_body: xf9600_interface
+      mocap_body: xf9600_mocap
+      freejoint: xf9600_freejoint
+      imu_acc: imu_acc
+      imu_gyro: imu_gyro
+      imu_quat: imu_quat
+      pose_sensor_pos: global_gripper_pos
+      pose_sensor_quat: global_gripper_quat

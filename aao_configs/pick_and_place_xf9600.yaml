@@ -1,0 +1,71 @@
+defaults:
+  - basis_mocap_eef_xf9600
+  - _self_
+
+scene_name: pick_and_place
+
+env:
+  # XF9600 fingers have a stiff 4-bar linkage (solref -400000 -2500). Running
+  # at basis.yaml's 600 Hz produces numerical instabilities when the gripper
+  # moves fast; 1200 Hz (0.833 ms) keeps the constraints stable.
+  sim_freq: 1200
+  mask_objects: ["source_block", "target_pedestal"]
+  operations: ["pick", "place"]
+  viewer:
+    lookat: [0.04, 0.0, 0.1]
+    distance: 0.55
+    azimuth: 135
+    elevation: -28
+    step_delay: 0.03
+    hold_seconds: 1.0
+
+task:
+  randomization:
+    source_block:
+      x: [-0.03, 0.03]
+      y: [-0.03, 0.03]
+      collision_radius: 0.04
+  stages:
+    - name: pick_source
+      object: source_block
+      operation: pick
+      operator: arm
+      param:
+        pre_move:
+          - position: [0.0, 0.0, 0.12]
+            # Top-down grasp with XF9600's flipped-z eef_pose site: eef_pose
+            # rest orientation has x_eef = -x_world, y_eef = -y_world,
+            # z_eef = +z_world. This world target (xyzw, 180° around
+            # (1,0,-1)/√2) puts x_eef = -z_world (approach down).
+            orientation: [0.70710678, 0.0, -0.70710678, 0.0]
+            reference: object_world
+          # XF9600's 4-bar linkage makes the fingertips swing down in an arc
+          # as they close (not parallel). Hold the eef clearly above the block
+          # so the pads land on the block sides during the close, not on the
+          # table.
+          - position: [0.0, 0.0, 0.045]
+            reference: object_world
+        post_move:
+          - position: [0.0, 0.0, 0.2]
+            reference: eef_world
+        eef:
+          close: true
+    - name: place_source
+      object: target_pedestal
+      operation: place
+      operator: arm
+      param:
+        pre_move:
+          - position: [0.0, 0.0, 0.15]
+            reference: object_world
+          # XF9600 pads grip the block near its top, so the eef sits ~0.04 m
+          # above the block center. To land the block on the pedestal (top at
+          # z=0.14, block half-height 0.018) we need eef ≈ pedestal.z + 0.10
+          # (block center at 0.16, eef ≈ 0.20).
+          - position: [0.0, 0.0, 0.10]
+            reference: object_world
+        post_move:
+          - position: [0.0, 0.0, 0.18]
+            reference: object_world
+        eef:
+          close: false

@@ -1,0 +1,63 @@
+<mujoco model="xf9600 mocap">
+  <compiler angle="radian" autolimits="true"/>
+  <!-- Match the solver/integrator the XF9600 gripper was tuned with. The
+       parent <option> is used when a child model is attached, so without
+       this the default Euler/100-iter solver fails to converge the gripper's
+       very stiff 4-bar equality constraints (solref="-400000 -2500"). -->
+  <option integrator="implicitfast" iterations="80" noslip_iterations="1"/>
+
+  <asset>
+    <!-- Load the standalone XF9600 gripper as a nested model so this wrapper
+         stays thin. The gripper keeps its own compiler/meshdir/assets and
+         only the mocap+freejoint scaffolding lives here. -->
+    <model name="xf9600_gripper" file="xf9600_gripper.xml"/>
+  </asset>
+
+  <worldbody>
+    <!-- Mocap body: kinematic target driven by code -->
+    <body name="xf9600_mocap" mocap="true">
+      <geom type="box" size="0.01 0.01 0.01" rgba="0 1 0 0" contype="0" conaffinity="0"/>
+    </body>
+
+    <!-- Physical body tracked via weld constraint -->
+    <body name="xf9600_interface" gravcomp="1" pos="0 0 0">
+      <freejoint name="xf9600_freejoint"/>
+      <inertial mass="0.1" pos="0 0 0" diaginertia="0.01 0.01 0.01"/>
+
+      <!-- IMU site sits at the interface origin so imu_quat reflects the
+           commanded mocap orientation directly. -->
+      <site name="imu"/>
+
+      <!-- Grasping frame. XF9600 fingertips sit at x_base ≈ -0.10. Site
+           rotation is R_z(180°) in base_link frame:
+             x_eef = -x of base_link (gripper approach direction)
+             y_eef = -y of base_link
+             z_eef = +z of base_link  (z_eef flipped relative to the earlier
+                                      R_y(180°) convention)
+           This preserves x_eef along the approach axis (as in robotiq) while
+           flipping the z direction. The top-down grasp ``orientation`` in
+           task yamls becomes ``[0.707, 0, -0.707, 0]`` (xyzw). -->
+      <site name="eef_pose" pos="-0.10 0 0" quat="0 0 0 1"/>
+      <site name="gripper"  pos="-0.10 0 0" quat="0 0 0 1"/>
+
+      <!-- Attach the full XF9600 gripper (base_link + fingers + cameras +
+           tactile sensors) under this interface body. -->
+      <attach model="xf9600_gripper" prefix="xfg_"/>
+    </body>
+  </worldbody>
+
+  <equality>
+    <weld body1="xf9600_mocap" body2="xf9600_interface" solref="0.3 1" solimp="0.95 0.99 0.001"/>
+  </equality>
+
+  <sensor>
+    <!-- Global eef pose sensors (consumed by the arm operator) -->
+    <framepos  objtype="site" objname="eef_pose" name="global_gripper_pos"/>
+    <framequat objtype="site" objname="eef_pose" name="global_gripper_quat"/>
+
+    <!-- IMU sensors attached to the interface body -->
+    <accelerometer site="imu" name="imu_acc"/>
+    <gyro          site="imu" name="imu_gyro"/>
+    <framequat     objtype="site" objname="imu" name="imu_quat"/>
+  </sensor>
+</mujoco>

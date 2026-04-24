@@ -281,9 +281,12 @@ class MujocoOperatorHandler(OperatorHandler):
             if int(model.geom_bodyid[gid]) not in operator_bodies:
                 continue
             name = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_GEOM, gid) or ""
-            if name.startswith("left_"):
+            # Match both unprefixed (``left_finger_pad``) and prefixed
+            # (``xfg_left_finger_pad_upper``) names, so grasp detection works
+            # when a gripper model is attached under an ``<attach prefix=...>``.
+            if name.startswith("left_") or "_left_" in name:
                 mapping[gid] = "left"
-            elif name.startswith("right_"):
+            elif name.startswith("right_") or "_right_" in name:
                 mapping[gid] = "right"
         if self._left_right_geom_cache is None:
             self._left_right_geom_cache = {}
@@ -1916,6 +1919,7 @@ def build_mujoco_backend(
 
     extra = handler_kwargs or {}
     operator_handlers: Dict[str, MujocoOperatorHandler] = {}
+    env_op_bindings = getattr(env.envs[0], "_operators", {}) if env.envs else {}
     for operator in operator_configs:
         op_extra = operator.model_extra or {}
         ik_extra = (
@@ -1927,6 +1931,42 @@ def build_mujoco_backend(
             else {}
         )
         control_cfg = MujocoControlConfig.model_validate(control_extra)
+        # Inherit per-operator body/site/actuator names from the env's
+        # OperatorBinding. This keeps the handler in sync with the env
+        # (which already auto-registered the operator using these names).
+        # Explicit handler_kwargs still take precedence.
+        binding = env_op_bindings.get(operator.name)
+        binding_defaults: Dict[str, Any] = {}
+        if binding is not None:
+            if binding.root_body:
+                binding_defaults["root_body_name"] = binding.root_body
+            if binding.pose_site:
+                binding_defaults["eef_site_name"] = binding.pose_site
+            if binding.mocap_body:
+                binding_defaults["mocap_body_name"] = binding.mocap_body
+            if binding.freejoint:
+                binding_defaults["freejoint_name"] = binding.freejoint
+        # Auto-detect the EEF actuator index and its ctrlrange so open/close
+        # targets match the physical actuator limits (robotiq's 0/0.82 doesn't
+        # carry over to, e.g., XF9600 which uses 0/0.02).
+        eef_aidx = env.envs[0]._op_eef_aidx.get(operator.name, np.array([]))
+        if len(eef_aidx) > 0:
+            ctrl_idx = int(eef_aidx[0])
+            binding_defaults.setdefault("eef_ctrl_index", ctrl_idx)
+            low, high = env.envs[0].model.actuator_ctrlrange[ctrl_idx]
+            binding_defaults.setdefault("eef_open_value", float(low))
+            binding_defaults.setdefault("eef_close_value", float(high))
+            # Clamp the eef tolerance so it's meaningful for narrow-travel
+            # grippers (XF9600 has close=0.02; the default 0.03 tolerance would
+            # treat a fully-open gripper as "reached" on the first step and
+            # bypass the actual grasp).
+            ctrl_span = float(high) - float(low)
+            if ctrl_span > 0:
+                control_extra = dict(control_extra)
+                tol_block = control_extra.setdefault("tolerance", {})
+                if isinstance(tol_block, dict) and "eef" not in tol_block:
+                    tol_block["eef"] = min(0.03, max(1e-4, ctrl_span * 0.2))
+                    control_cfg = MujocoControlConfig.model_validate(control_extra)
         operator_handlers[operator.name] = MujocoOperatorHandler(
             operator_name=operator.name,
             env=env,
@@ -1954,14 +1994,17 @@ def build_mujoco_backend(
                 )
             ),
             **{
-                k: v
-                for k, v in extra.items()
-                if k
-                not in {
-                    "joint_control_mode",
-                    "joint_interp_speed",
-                    "max_joint_delta",
-                }
+                **binding_defaults,
+                **{
+                    k: v
+                    for k, v in extra.items()
+                    if k
+                    not in {
+                        "joint_control_mode",
+                        "joint_interp_speed",
+                        "max_joint_delta",
+                    }
+                },
             },
         )
 
