@@ -757,7 +757,7 @@ def _select_transform_reset_message_index(
         if jump_indices.size > 0:
             before_index = int(jump_indices[0])
             selected_index = before_index + 1
-            logger.info(
+            logger.debug(
                 f"[transform_reset] topic={tr.topic!r} selector='first_jump' "
                 f"selected_index={selected_index} differs from first frame; "
                 f"jump_from={before_index} jump_to={selected_index} "
@@ -1300,7 +1300,7 @@ def _apply_joint_clip_to_mcap_demo(
         if bounds.max is not None:
             col = np.minimum(col, bounds.max)
         mcap_demo.joint[:, idx] = col
-        logger.info(
+        logger.debug(
             f"[joint_clip] '{name}': "
             f"raw range=[{before_min:.4f}, {before_max:.4f}] -> "
             f"clipped range=[{float(np.min(col)):.4f}, {float(np.max(col)):.4f}] "
