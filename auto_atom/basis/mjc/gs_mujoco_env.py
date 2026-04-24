@@ -1356,6 +1356,10 @@ class BatchedGSUnifiedMujocoEnv(BatchedUnifiedMujocoEnv):
     _virtual_batch_size: int = 0
 
     def __init__(self, config: Optional[GSEnvConfig] = None, **kwargs) -> None:
+        if not torch.cuda.is_available():
+            raise RuntimeError(
+                "BatchedGSUnifiedMujocoEnv requires CUDA for Gaussian Splatting rendering, but no CUDA device is available."
+            )
         if config is None:
             config = GSEnvConfig.model_validate(kwargs)
 
