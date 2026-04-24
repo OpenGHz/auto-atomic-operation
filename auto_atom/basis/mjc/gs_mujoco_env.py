@@ -1435,7 +1435,7 @@ class BatchedGSUnifiedMujocoEnv(BatchedUnifiedMujocoEnv):
             bg_str = " + background" if background_ply else ""
 
         n_bodies = len(self._gs_body_gaussians)
-        self.envs[0].get_logger().debug(
+        self.envs[0].get_logger().info(
             f"Batched GS renderer initialised with {n_bodies} body gaussian(s){bg_str}"
         )
 
