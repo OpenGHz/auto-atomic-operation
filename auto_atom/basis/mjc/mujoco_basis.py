@@ -72,6 +72,20 @@ class CameraSpec(BaseModel, frozen=True):
     or re-rendered every frame (dynamic).  Set to ``False`` for moving cameras
     such as hand-mounted cameras whose viewpoint changes each timestep."""
 
+    @property
+    def has_native_output(self) -> bool:
+        """Whether any native MuJoCo render output is requested for this camera.
+
+        When False (e.g. every channel has been reassigned to GS rendering) the
+        env can skip allocating a ``mujoco.Renderer`` for this camera entirely.
+        """
+        return (
+            self.enable_color
+            or self.enable_depth
+            or self.enable_mask
+            or self.enable_heat_map
+        )
+
 
 class ViewerConfig(BaseModel, frozen=True):
     model_config = ConfigDict(validate_assignment=True, extra="forbid")
@@ -416,11 +430,12 @@ class MujocoBasis:
                         f"Camera '{name}' not found in the Mujoco model. Available cameras: {[mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_CAMERA, i) for i in range(self.model.ncam)]}"
                     )
                 self._camera_ids[name] = cam_id
-                self._renderers[name] = mujoco.Renderer(
-                    self.model,
-                    height=spec.height,
-                    width=spec.width,
-                )
+                if spec.has_native_output:
+                    self._renderers[name] = mujoco.Renderer(
+                        self.model,
+                        height=spec.height,
+                        width=spec.width,
+                    )
 
         # _camera_parent_frame: cam_name -> ("site"|"body", obj_id, frame_name)
         self._camera_parent_frame: dict[str, tuple[str, int, str]] = {}
