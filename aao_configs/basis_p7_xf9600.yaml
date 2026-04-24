@@ -20,7 +20,6 @@ env:
     joint6: -0.107997
     joint7: -0.00103546
     # XF9600 parallel-linkage gripper (1 slide + 8 hinges, rest values)
-<<<<<<< HEAD
     eef_clawj:  0.00014663
     eef_l11j:  -0.026352
     eef_l61j:  -0.0498527
@@ -30,17 +29,6 @@ env:
     eef_l41j:  -0.0117531
     eef_l51j:  -0.013083
     eef_l53j:   0.0108253
-=======
-    xfg_clawj:  0.00014663
-    xfg_l11j:  -0.026352
-    xfg_l61j:  -0.0498527
-    xfg_l21j:   0.00981475
-    xfg_l23j:  -0.0176664
-    xfg_l31j:   0.0111485
-    xfg_l41j:  -0.0117531
-    xfg_l51j:  -0.013083
-    xfg_l53j:   0.0108253
->>>>>>> 2329dd7 (Remove deprecated XML scene files and update references)
   operators:
     arm:
       arm_actuators:
