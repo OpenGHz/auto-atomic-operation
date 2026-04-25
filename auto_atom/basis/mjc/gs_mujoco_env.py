@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import glob as _glob
 import hashlib
+import logging
 from collections import OrderedDict
 from pathlib import Path
 from typing import Any, Dict, Optional, Set
@@ -815,6 +816,8 @@ class GSEnvConfig(EnvConfig):
     to_numpy: bool = True
     """Whether to convert GS renderer output to numpy arrays.
     Defaults to True for consistency with all other observation data types."""
+    warmup: bool = False
+    """Whether to perform a warmup (reset and capture the first observation) on environment initialization. Can help reduce outliers in the first few frames of the first episode, which may be important for some use cases."""
 
     @model_validator(mode="after")
     def setup_gs_cameras(self):
@@ -939,6 +942,11 @@ class GSUnifiedMujocoEnv(UnifiedMujocoEnv):
         self._gs_mask_renderers = self._build_gs_mask_renderers(
             dict(self._gs_body_gaussians)
         )
+        if config.warmup:
+            self.get_logger().info("Performing GS renderer warmup...")
+            self.reset()
+            self.capture_observation()
+            self.get_logger().info("GS renderer warmup complete.")
 
     def _make_combined_gs_renderer(
         self, background_ply: str | None
@@ -1441,9 +1449,14 @@ class BatchedGSUnifiedMujocoEnv(BatchedUnifiedMujocoEnv):
             bg_str = " + background" if background_ply else ""
 
         n_bodies = len(self._gs_body_gaussians)
-        self.envs[0].get_logger().info(
-            f"Batched GS renderer initialised with {n_bodies} body gaussian(s){bg_str}"
+        self.get_logger().info(
+            f"GS renderer initialised with {n_bodies} body gaussian(s){bg_str}"
         )
+        if config.warmup:
+            self.get_logger().info("Performing GS renderer warmup...")
+            self.reset()
+            self.capture_observation()
+            self.get_logger().info("GS renderer warmup complete.")
 
     # ------------------------------------------------------------------
     # shared-physics step-like overrides (run the single physics env once)
@@ -2508,3 +2521,6 @@ class BatchedGSUnifiedMujocoEnv(BatchedUnifiedMujocoEnv):
         self._gs_mask_renderers = {}
         self._bg_cache.clear()
         super().close()
+
+    def get_logger(self):
+        return logging.getLogger(self.__class__.__name__)
