@@ -56,10 +56,10 @@ class ReplayScriptConfig(DataReplayConfig):
     """Replay settings including video/gif output options."""
 
     steps_per_action: int = Field(default=1)
-    camera: str = Field(default="env1_cam")
+    camera: str | list[str] = Field(default="env1_cam")
     fps: int = Field(default=25)
     gif_width: int = Field(default=320)
-    save_gif: bool = Field(default=True)
+    save_gif: bool = Field(default=False)
     save_mp4: bool = Field(default=False)
 
 
@@ -102,26 +102,36 @@ def _extract_frame(obs: dict[str, dict], camera_key: str) -> np.ndarray | None:
     return frame[0] if frame.ndim >= 4 else frame
 
 
-def make_observation_getter(frames: list[np.ndarray], camera: str) -> tuple:
-    """Build an observation_getter that captures camera frames as a side effect."""
-    state: dict[str, str | None] = {"camera_key": None, "camera_name": None}
+def make_observation_getter(
+    frames_by_camera: dict[str, list[np.ndarray]], cameras: list[str]
+) -> tuple:
+    """Build an observation_getter that captures camera frames as a side effect.
+
+    ``frames_by_camera`` is keyed by the requested camera name; the resolved
+    camera key/name is cached after the first observation.
+    """
+    resolved: dict[str, dict[str, str | None]] = {
+        cam: {"camera_key": None, "camera_name": None} for cam in cameras
+    }
 
     def observation_getter(context: ExecutionContext) -> dict:
         obs = context.backend.env.capture_observation()
-        if state["camera_key"] is None:
-            cam_name, cam_key = _resolve_camera(obs, camera)
-            if cam_key is None:
-                raise RuntimeError(
-                    f"No usable camera found for '{camera}'. "
-                    f"Available keys: {list(obs.keys())}"
-                )
-            state["camera_key"] = cam_key
-            state["camera_name"] = cam_name
-            if cam_name != camera:
-                print(f"Camera '{camera}' not found, using '{cam_name}' instead.")
-        frame = _extract_frame(obs, state["camera_key"])
-        if frame is not None:
-            frames.append(frame)
+        for cam in cameras:
+            state = resolved[cam]
+            if state["camera_key"] is None:
+                cam_name, cam_key = _resolve_camera(obs, cam)
+                if cam_key is None:
+                    raise RuntimeError(
+                        f"No usable camera found for '{cam}'. "
+                        f"Available keys: {list(obs.keys())}"
+                    )
+                state["camera_key"] = cam_key
+                state["camera_name"] = cam_name
+                if cam_name != cam:
+                    print(f"Camera '{cam}' not found, using '{cam_name}' instead.")
+            frame = _extract_frame(obs, state["camera_key"])
+            if frame is not None:
+                frames_by_camera[cam].append(frame)
         return obs
 
     return observation_getter
@@ -149,8 +159,12 @@ def main(cfg: DictConfig) -> None:
     project_root = hydra.utils.get_original_cwd()
     video_dir = os.path.join(project_root, "outputs", "records", "videos")
     os.makedirs(video_dir, exist_ok=True)
-    mp4_path = os.path.join(video_dir, f"{demo_name}_replay.mp4")
-    gif_path = os.path.join(video_dir, f"{demo_name}_replay.gif")
+
+    cameras = (
+        [script_cfg.camera]
+        if isinstance(script_cfg.camera, str)
+        else list(script_cfg.camera)
+    )
 
     # --- Set replay overrides on DictConfig ---
     with open_dict(cfg):
@@ -160,8 +174,8 @@ def main(cfg: DictConfig) -> None:
         cfg.replay.demo_dir = os.path.join(project_root, "outputs", "records", "demos")
 
     # --- Camera frame capture ---
-    frames: list[np.ndarray] = []
-    observation_getter = make_observation_getter(frames, script_cfg.camera)
+    frames_by_camera: dict[str, list[np.ndarray]] = {cam: [] for cam in cameras}
+    observation_getter = make_observation_getter(frames_by_camera, cameras)
 
     # --- Run replay via DataReplayRunner ---
     runner = DataReplayRunner(
@@ -179,9 +193,12 @@ def main(cfg: DictConfig) -> None:
             f"steps_per_action: {spa}"
         )
 
+        capture_frames = script_cfg.save_gif or script_cfg.save_mp4
         updates_used = 0
         for step in range(max_updates):
             update = runner.update()
+            if capture_frames:
+                runner.get_observation()
             updates_used += 1
             print(f"Replay step {step}: {update.stage_name}")
             if bool(np.all(update.done)):
@@ -198,27 +215,41 @@ def main(cfg: DictConfig) -> None:
     finally:
         runner.close()
 
-    # --- Save video ---
-    if not frames:
+    # --- Save video (one file per camera) ---
+    total_frames = sum(len(fs) for fs in frames_by_camera.values())
+    if total_frames == 0:
         print("No frames captured during replay.")
         return
 
-    if script_cfg.save_mp4:
-        iio.imwrite(mp4_path, frames, fps=script_cfg.fps, codec="libx264", quality=8)
-        print(f"Saved replay MP4 ({len(frames)} frames): {mp4_path}")
+    suffix_per_cam = len(cameras) > 1
+    for cam, frames in frames_by_camera.items():
+        if not frames:
+            print(f"No frames captured for camera '{cam}'.")
+            continue
 
-    if script_cfg.save_gif:
-        h, w = frames[0].shape[:2]
-        gif_height = int(script_cfg.gif_width * h / w)
-        gif_frames = [
-            np.array(Image.fromarray(f).resize((script_cfg.gif_width, gif_height)))
-            for f in frames
-        ]
-        gif_fps = min(script_cfg.fps, 15)
-        iio.imwrite(gif_path, gif_frames, fps=gif_fps, loop=0)
-        print(
-            f"Saved replay GIF ({len(gif_frames)} frames @ {gif_fps} fps): {gif_path}"
-        )
+        cam_tag = f"_{cam}" if suffix_per_cam else ""
+        mp4_path = os.path.join(video_dir, f"{demo_name}{cam_tag}_replay.mp4")
+        gif_path = os.path.join(video_dir, f"{demo_name}{cam_tag}_replay.gif")
+
+        if script_cfg.save_mp4:
+            iio.imwrite(
+                mp4_path, frames, fps=script_cfg.fps, codec="libx264", quality=8
+            )
+            print(f"Saved replay MP4 ({len(frames)} frames): {mp4_path}")
+
+        if script_cfg.save_gif:
+            h, w = frames[0].shape[:2]
+            gif_height = int(script_cfg.gif_width * h / w)
+            gif_frames = [
+                np.array(Image.fromarray(f).resize((script_cfg.gif_width, gif_height)))
+                for f in frames
+            ]
+            gif_fps = min(script_cfg.fps, 15)
+            iio.imwrite(gif_path, gif_frames, fps=gif_fps, loop=0)
+            print(
+                f"Saved replay GIF ({len(gif_frames)} frames @ {gif_fps} fps): "
+                f"{gif_path}"
+            )
 
 
 if __name__ == "__main__":
