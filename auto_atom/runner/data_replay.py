@@ -1421,7 +1421,7 @@ def _apply_transform_resets(
             if off_identity
             else (f" (+offset pos={off_pos.tolist()} quat={off_quat.tolist()})")
         )
-        logger.info(
+        logger.debug(
             f"[transform_reset] topic={tr.topic!r} "
             f"selector={tr.message_selector!r} "
             f"selected_index={selected_index} "
@@ -1622,7 +1622,7 @@ class DataReplayRunner(RunnerBase):
 
         self._action_step += 1
         # print(f"action={self._current_action}")
-        # input("Press Enter to continue to the next step...")
+        input("Press Enter to continue to the next step...")
         task_update = evaluator.update(self._current_action, env_mask)
 
         # Defer done for successful envs until replay data is exhausted.
