@@ -1622,7 +1622,7 @@ class DataReplayRunner(RunnerBase):
 
         self._action_step += 1
         # print(f"action={self._current_action}")
-        input("Press Enter to continue to the next step...")
+        # input("Press Enter to continue to the next step...")
         task_update = evaluator.update(self._current_action, env_mask)
 
         # Defer done for successful envs until replay data is exhausted.
