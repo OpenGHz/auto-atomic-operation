@@ -21,7 +21,7 @@ env:
     # (7-float form: [x, y, z, qx, qy, qz, qw])
     background_transform:
       [
-        -0.105,
+        -0.005,
         0.491151190,
         -0.1360378,
         -0.51684557,
