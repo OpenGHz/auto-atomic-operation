@@ -108,8 +108,9 @@ defaults are recorded, so:
 
 For fixed-base arms such as Franka, keep `initial_state.base_pose` aligned with
 the robot root body pose in XML unless you intentionally want to shift the
-whole robot base from YAML. See [Tune Initial State](../tools/tune_initial_state.md) for
-a full breakdown of `base_pose`, `arm`, and `eef`.
+whole robot base from YAML. Use
+[Tune Randomization Extremes](../tools/tune_randomization_extremes.md) to
+inspect the YAML-defined default state and the randomization ranges around it.
 
 ### Fields
 

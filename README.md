@@ -210,7 +210,7 @@ Configuration files related to 3D GS end with `_gs.yaml` and are run in the same
 - **[Execution Completion Flow](docs/execution_completion_flow.md)** — how `pre_move`, `eef`, and `post_move` decide they are done, how that feeds into stage success/failure, and a flowchart of the control path
 - **[Panel XML Assembly](docs/panel_xml_assembly.md)** — generate a final MuJoCo panel XML from a panel base XML, a 2-D YAML layout, and per-slot object XMLs
 - **[Policy Evaluation](docs/policy_evaluation.md)** — evaluate an external policy model with `PolicyEvaluator`, reuse `TaskUpdate` / `ExecutionRecord` / `ExecutionSummary`, and connect policy outputs to environment actions
-- **[Tune Initial State](docs/tune_initial_state.md)** — interactive tkinter + MuJoCo viewer tool for tuning operator base pose, EEF pose, and gripper before writing the values into task YAML
+- **[Tune Randomization Extremes](docs/tools/tune_randomization_extremes.md)** — interactive tkinter + MuJoCo viewer tool for inspecting YAML-defined default state and randomization extremes
 - **[Benchmark Suite](docs/skills/bench.md)** — run the benchmark suite and generate performance plots/analysis for task-level and environment-level loops
 - **[XML / Mesh / GS Migration Notes](docs/skills/xml_mesh_gs_migration_notes.md)** — if you want to migrate your own XML, mesh, or Gaussian assets into this project's normalized asset layout, use this as the reference checklist
 

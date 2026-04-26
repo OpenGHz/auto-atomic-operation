@@ -39,7 +39,6 @@
   - [Data Replay](tools/mcap_data_replay.md)
   - [Policy Evaluation](tools/policy_evaluation.md)
   - [Panel XML Assembly](tools/panel_xml_assembly.md)
-  - [Tune Initial State](tools/tune_initial_state.md)
   - [Tune Randomization Extremes](tools/tune_randomization_extremes.md)
   - [Save Rendering](tools/save_rendering.md)
   - [Visualize PLY](tools/visualize_ply.md)
