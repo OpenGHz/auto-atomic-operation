@@ -172,6 +172,29 @@ mask 循环中每个 object 都调用 `batch_update_gaussians(body_pos, body_qua
 3. **task-level vs env-level 一致性**: task-level 的 obs 开销 ≈ env-level capture + ~10-18ms (runner 逻辑 + CUDA 同步开销)，两组数据吻合
 4. **warmup 重要性**: 首次 capture_observation 触发 gsplat CUDA JIT 编译（耗时数十秒），必须排除在计时之外。task-level 和 env-level 均已实现 warmup 机制
 
+### 启用 env 内置 warmup
+
+`GSEnvConfig`（以及 `BatchedGSUnifiedMujocoEnv`）支持一个开关式的 warmup，会在初始化结尾自动跑一次 `reset() + capture_observation()`，用于：
+
+- 提前触发 `gsplat` 的 CUDA JIT 编译（第一次渲染耗时数十秒）
+- 消除前若干帧 observation 的离群值，降低首帧抖动
+
+```yaml
+env:
+  gaussian_render:
+    warmup: true
+```
+
+默认 `false`。开启后初始化日志中会出现：
+
+```
+GS renderer initialised with N body gaussian(s)[ + background]
+Performing GS renderer warmup...
+GS renderer warmup complete.
+```
+
+任何对首帧延迟敏感的脚本（数据采集、policy eval、bench）建议显式开启；在 bench 计时时 warmup 仍应排除在计时区间之外。
+
 ---
 
 ## 场景间对比 (open_door vs cup_on_coaster, 2026-04-19)

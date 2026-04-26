@@ -4,6 +4,7 @@
 
 - **Task Configuration**
   - [Action Space](task-configuration/action_space.md)
+  - [Scene Composition](task-configuration/scene_composition.md)
   - [Pose Randomization](task-configuration/randomization.md)
   - [Stages & Waypoints](task-configuration/stages_and_waypoints.md)
   - [Execution Completion Flow](task-configuration/execution_completion_flow.md)
@@ -39,7 +40,9 @@
   - [Data Replay](tools/mcap_data_replay.md)
   - [Policy Evaluation](tools/policy_evaluation.md)
   - [Panel XML Assembly](tools/panel_xml_assembly.md)
+  - [View Scene](tools/view_scene.md)
   - [Tune Randomization Extremes](tools/tune_randomization_extremes.md)
+  - [Tune GS Body Mirror](tools/tune_gs_body_mirror.md)
   - [Save Rendering](tools/save_rendering.md)
   - [Visualize PLY](tools/visualize_ply.md)
   - [Benchmark Suite](tools/bench.md)

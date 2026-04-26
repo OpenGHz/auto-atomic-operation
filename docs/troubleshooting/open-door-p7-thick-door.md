@@ -2,7 +2,7 @@
 
 ## 现象
 
-`open_door_p7_ik` 默认使用 `assets/xmls/scenes/open_door/demo_p7_xf9600.xml` 时可以完成开门。
+`open_door_p7_ik` 默认使用 `assets/xmls/scenes/open_door/demo.xml`（场景，不含机器人）+ `assets/xmls/robots/p7_arm_with_xf9600.xml`（通过 `env.robot_paths` 在加载时注入）时可以完成开门。
 
 但如果把门板碰撞几何从:
 
@@ -74,11 +74,11 @@ aao_demo --config-name open_door_p7_ik
 - 推门是基于抓取点快照的直推
 - 整条轨迹对门板尺寸变化更鲁棒
 
-而 `open_door_p7_ik` 的轨迹和接触关系更依赖当前 `demo_p7_xf9600.xml` 里的几何余量，因此更容易被门板宽高变化击穿。
+而 `open_door_p7_ik` 的轨迹和接触关系更依赖当前 `demo.xml` 里的几何余量，因此更容易被门板宽高变化击穿。
 
 ## 直接原因
 
-原始 `demo_p7_xf9600.xml` 里的薄门大致保留了如下净空：
+原始 `demo.xml`（P7+XF9600 默认基线）里的薄门大致保留了如下净空：
 
 - 左右各约 `15 mm`
 - 上下各约 `10 mm`
@@ -99,7 +99,7 @@ aao_demo --config-name open_door_p7_ik
 
 不要只改 `door_panel_geom`，而是同时调整门框开口，保持厚门场景仍有足够碰撞余量。
 
-本仓库最终采用的修复在 `assets/xmls/scenes/open_door/demo_p7_xf9600.xml`：
+本仓库最终采用的修复在 `assets/xmls/scenes/open_door/demo.xml`（场景已与 P7+XF9600 注入式机器人解耦，不再有单独的 `demo_p7_xf9600.xml`）：
 
 - 门板改为厚门尺寸：`0.420 0.020 0.815`
 - 左右门框外移，顶部横梁抬高
