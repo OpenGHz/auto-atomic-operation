@@ -1,7 +1,14 @@
 from enum import Enum
 from typing import Dict, List, Optional, Tuple, Union
 
-from pydantic import BaseModel, ConfigDict, Field, ImportString, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ImportString,
+    field_validator,
+    model_validator,
+)
 
 Position = Tuple[float, float, float]
 """A 3D position represented as a tuple of three floats (x, y, z)."""
@@ -133,12 +140,14 @@ class PoseReference(str, Enum):
     """The pose reference is automatically determined based on the context of the operation. For example, if an object is specified in the stage configuration, the reference will be set to OBJECT_WORLD; if no object is specified, the reference will be set to BASE."""
 
 
-class ArcControlConfig(BaseModel, extra="forbid"):
+class ArcControlConfig(BaseModel):
     """Configuration for arc (revolute) movement around a pivot axis.
 
     When attached to a ``PoseControlConfig``, the end-effector traces an arc
     around ``pivot`` instead of moving in a straight line.  The ``position``,
     ``orientation``, and ``rotation`` fields of the parent config are ignored."""
+
+    model_config = ConfigDict(extra="forbid")
 
     pivot: Union[Position, str]
     """Pivot point for the arc.  Either explicit ``(x, y, z)`` coordinates in the
@@ -158,14 +167,35 @@ class ArcControlConfig(BaseModel, extra="forbid"):
     max_step: float = 0.2
     """Maximum arc sub-step in radians (~11.5 deg).  Smaller values produce smoother
     arcs at the cost of more waypoints."""
+    reverse: bool = False
+    """When True, the arc is traced in the opposite direction around the axis.
+
+    Implemented as ``axis → -axis`` (rather than ``angle → -angle``) so the
+    behaviour is correct in both relative and absolute modes:
+
+    - Relative: negating the axis is mathematically equivalent to negating
+      the angle, so the rotation direction flips as expected.
+    - Absolute: ``angle`` is the target joint value, not a rotation amount.
+      Negating ``angle`` would change the goal (e.g. +0.45 → -0.45) and the
+      runtime would chase an unreachable target. Flipping the axis preserves
+      the goal while reversing the world-frame rotation direction."""
+
+    @model_validator(mode="after")
+    def validate_reverse(self):
+        """If reverse is True, negate the axis to reverse the rotation direction."""
+        if self.reverse:
+            self.axis = tuple(-v for v in self.axis)
+        return self
 
 
-class WaypointToleranceConfig(BaseModel, extra="forbid"):
+class WaypointToleranceConfig(BaseModel):
     """Per-waypoint tolerance override. When set on a waypoint, these values
     take precedence over the operator-level tolerance for that waypoint only.
 
     Position tolerance can be a single float (L2 norm) or a list of three
     floats ``[x, y, z]`` for per-axis tolerance checking."""
+
+    model_config = ConfigDict(extra="forbid")
 
     position: Optional[Union[float, List[float]]] = None
     """Position tolerance. A scalar applies as an L2-norm threshold;
@@ -174,9 +204,11 @@ class WaypointToleranceConfig(BaseModel, extra="forbid"):
     """Orientation tolerance in radians (quaternion angular distance)."""
 
 
-class PlacedToleranceConfig(BaseModel, extra="forbid"):
+class PlacedToleranceConfig(BaseModel):
     """Tolerance for the PLACED post-condition. Each dimension can be null
     to skip checking that dimension."""
+
+    model_config = ConfigDict(extra="forbid")
 
     position: Optional[Union[float, List[Optional[float]]]] = [None, None, None]
     """Position tolerance. Scalar = L2-norm threshold. List ``[x, y, z]`` =
@@ -355,8 +387,10 @@ class PoseControlConfig(BaseModel):
     at the start of each episode."""
 
 
-class EefControlConfig(BaseModel, extra="forbid"):
+class EefControlConfig(BaseModel):
     """Configuration for the end-effector control"""
+
+    model_config = ConfigDict(extra="forbid")
 
     close: bool
     """Whether to close the end-effector. True for closing the end-effector, False for opening the end-effector. This will set the end-effector joint positions to the lower limit or upper limit defined in the environment model."""

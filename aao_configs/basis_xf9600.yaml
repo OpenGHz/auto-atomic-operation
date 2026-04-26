@@ -31,15 +31,23 @@ env:
       enable_heat_map: ${enable_heat_map}
       parent_frame: eef_pose
       is_static: false
-    - name: env1_cam
-      width: ${cam_width}
-      height: ${cam_height}
-      enable_color: ${enable_color}
-      enable_depth: ${enable_depth}
-      enable_mask: ${enable_mask}
-      enable_heat_map: ${enable_heat_map}
-      is_static: true
-    - name: env0_cam
+    # - name: env0_cam
+    #   width: ${cam_width}
+    #   height: ${cam_height}
+    #   enable_color: ${enable_color}
+    #   enable_depth: ${enable_depth}
+    #   enable_mask: ${enable_mask}
+    #   enable_heat_map: ${enable_heat_map}
+    #   is_static: true
+    # - name: env1_cam
+    #   width: ${cam_width}
+    #   height: ${cam_height}
+    #   enable_color: ${enable_color}
+    #   enable_depth: ${enable_depth}
+    #   enable_mask: ${enable_mask}
+    #   enable_heat_map: ${enable_heat_map}
+    #   is_static: true
+    - name: env2_cam
       width: ${cam_width}
       height: ${cam_height}
       enable_color: ${enable_color}

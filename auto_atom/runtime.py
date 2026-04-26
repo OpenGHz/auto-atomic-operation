@@ -733,6 +733,34 @@ class TaskRunner:
             "action_index": active.action_index,
             **result.details[env_index],
         }
+        if (
+            action.kind == "pose"
+            and action.pose is not None
+            and action.pose.arc is not None
+        ):
+            arc_cfg = action.pose.arc
+            arc_info: Dict[str, Any] = {
+                "pivot": arc_cfg.pivot
+                if isinstance(arc_cfg.pivot, str)
+                else [float(v) for v in arc_cfg.pivot],
+                "axis": [float(v) for v in arc_cfg.axis],
+                "angle": float(arc_cfg.angle),
+                "absolute": bool(arc_cfg.absolute),
+            }
+            if arc_cfg.absolute and isinstance(arc_cfg.pivot, str):
+                try:
+                    current_joint = float(
+                        context.backend.get_joint_angle(arc_cfg.pivot, env_index)
+                    )
+                    arc_info["current_joint_angle"] = current_joint
+                    arc_info["target_joint_angle"] = float(arc_cfg.angle)
+                    arc_info["delta_joint_angle"] = float(arc_cfg.angle) - current_joint
+                except (KeyError, NotImplementedError):
+                    pass
+            elif action.arc_cumulative_angle is not None:
+                arc_info["cumulative_angle"] = float(action.arc_cumulative_angle)
+            details["action"] = "arc"
+            details["arc"] = arc_info
 
         if signal == ControlSignal.RUNNING:
             phase, phase_step = self._action_phase(active.actions, active.action_index)

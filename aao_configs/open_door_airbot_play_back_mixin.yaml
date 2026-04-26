@@ -17,6 +17,7 @@
 # through the door centre.
 
 door_side: back
+reverse: true
 
 task:
   initial_pose:
@@ -24,3 +25,10 @@ task:
     door_frame_physics:
       position: [ 1.54, 1.0, -1 ]
       orientation: [ 0.0, 0.0, -0.7071067811865475, 0.7071067811865476 ]
+
+task_operators:
+  arm:
+    initial_state:
+      base_pose:
+        position: [ 1.0, 0.8, -0.48 ] # should match the XML `link0` pose
+        orientation: [ 0, 0, 0, 1 ]

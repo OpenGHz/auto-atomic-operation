@@ -5,6 +5,7 @@ defaults:
 scene_name: open_door
 task_name: open_door_airbot_play
 door_side: front
+reverse: false
 
 replay:
   # scene_joint_topic: /scene/door/joint_states
@@ -116,7 +117,7 @@ task:
             max_angular_step: 0.2
             randomization:
               x: [ -0.02, 0.00 ]
-              y: [ -0, 0.02 ]
+              y: [ -0.02, 0.0 ]
               z: [ -0.01, 0.01 ]
         eef:
           close: true
@@ -130,6 +131,7 @@ task:
               angle: 0.45
               absolute: true
               max_step: 0.15
+              reverse: ${reverse}
             reference: world
           # 4. Push door open (arc around door_hinge)
           #    World axis = [0,0,-1] (same as local axis)
@@ -172,7 +174,3 @@ task_operators:
       eef_type: none
       joint_control_mode: per_step_ik
     max_joint_delta: 0.35
-    # initial_state:
-    #   base_pose:
-    #     position: [-0.25, -0.06, 0.0]  # should match the XML `link0` pose
-    #     orientation: [0, 0, 0, 1]
