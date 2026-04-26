@@ -5,7 +5,7 @@
 - **Task Configuration**
   - [Action Space](/task-configuration/action_space.md)
   - [Scene Composition](/task-configuration/scene_composition.md)
-  - [Pose Randomization](/task-configuration/randomization.md)
+  - [Randomization](/task-configuration/randomization.md)
   - [Stages & Waypoints](/task-configuration/stages_and_waypoints.md)
   - [Execution Completion Flow](/task-configuration/execution_completion_flow.md)
   - [sim_freq & update_freq](/task-configuration/sim_freq_update_freq.md)
