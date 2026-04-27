@@ -1567,6 +1567,7 @@ class DataReplayRunner(RunnerBase):
         base_topic: Optional[str] = None,
         scene_joint_topic: Optional[str] = None,
         mode: Optional[str] = None,
+        load: bool = False,
     ) -> None:
         """Change the demo data source.  Takes effect on the next ``reset()``.
 
@@ -1588,7 +1589,15 @@ class DataReplayRunner(RunnerBase):
         if mode is not None:
             rcfg.mode = mode
         # Mark policy as stale so _load_demo() runs on next reset().
-        self._policy = None
+        if load:
+            try:
+                self._load_demo()
+            except Exception as e:
+                logger.error("Failed to load demo data: %s", e)
+                return False
+        else:
+            self._policy = None
+        return True
 
     def reset(self, env_mask: Optional[np.ndarray] = None) -> TaskUpdate:
         evaluator = self._require_evaluator()
