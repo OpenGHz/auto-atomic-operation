@@ -1,0 +1,132 @@
+defaults:
+  - basis_p7_xf9600_composable
+  - gs_mixin
+  - _self_
+
+scene_name: wipe_the_table
+task_name: airbot_p7_wipe_the_table_gs
+model_name: demo_gs
+
+env:
+  sim_freq: 1200
+  cameras:
+    - name: xfg_wrist_cam
+      width: ${cam_width}
+      height: ${cam_height}
+      enable_color: ${enable_color}
+      enable_depth: ${enable_depth}
+      enable_mask: ${enable_mask}
+      enable_heat_map: ${enable_heat_map}
+      parent_frame: eef_pose
+      is_static: false
+    - name: env1_cam
+      width: ${cam_width}
+      height: ${cam_height}
+      enable_color: ${enable_color}
+      enable_depth: ${enable_depth}
+      enable_mask: ${enable_mask}
+      enable_heat_map: ${enable_heat_map}
+      is_static: true
+    - name: env0_cam
+      width: ${cam_width}
+      height: ${cam_height}
+      enable_color: ${enable_color}
+      enable_depth: ${enable_depth}
+      enable_mask: ${enable_mask}
+      enable_heat_map: ${enable_heat_map}
+      is_static: true
+  mask_objects: ["blue_duck", "white_box"]
+  operations: ["pick", "place"]
+  viewer:
+    lookat: [0.45, 0.0, 0.1]
+    distance: 1.0
+    azimuth: 135
+    elevation: -28
+  gaussian_render:
+    body_gaussians:
+      blue_duck_gs: ${gs_dir}/blue_duck.ply
+      dog_gs: ${gs_dir}/dog.ply
+      white_box_gs: ${gs_dir}/box.ply
+
+task:
+  randomization:
+    blue_duck:
+      x: [0.56, 0.64]
+      y: [0.08, 0.14]
+      collision_radius: 0.04
+      reference: absolute_world
+
+  stages:
+    - name: pick_blue_duck
+      object: blue_duck
+      operation: pick
+      operator: arm
+      param:
+        pre_move:
+          - position: [0.0, 0.0, 0.14]
+            orientation: [0.70710678, 0.0, -0.70710678, 0.0]
+            reference: object_world
+            max_linear_step: 0.04
+            max_angular_step: 0.35
+          - position: [0.0, 0.0, 0.01]
+            orientation: [0.70710678, 0.0, -0.70710678, 0.0]
+            reference: object_world
+            max_linear_step: 0.02
+            max_angular_step: 0.2
+        eef:
+          close: true
+        post_move:
+          - position: [0.0, 0.0, 0.18]
+            orientation: [0.70710678, 0.0, -0.70710678, 0.0]
+            reference: eef_world
+            max_linear_step: 0.02
+            max_angular_step: 0.2
+
+    - name: place_blue_duck_in_box
+      object: white_box
+      operation: place
+      operator: arm
+      param:
+        pre_move:
+          - position: [0.0, 0.05, 0.18]
+            orientation: [0.70710678, 0.0, -0.70710678, 0.0]
+            reference: object_world
+            max_linear_step: 0.3
+            max_angular_step: 0.25
+            tolerance:
+              position: 0.045
+              orientation: 0.4
+          - position: [0.0, 0.05, 0.13]
+            orientation: [0.70710678, 0.0, -0.70710678, 0.0]
+            reference: object_world
+            max_linear_step: 0.3
+            max_angular_step: 0.2
+            tolerance:
+              position: 0.025
+              orientation: 0.25
+        eef:
+          close: false
+        post_move:
+          - position: [0.0, 0.05, 0.18]
+            orientation: [0.70710678, 0.0, -0.70710678, 0.0]
+            reference: object_world
+            max_linear_step: 0.3
+            max_angular_step: 0.25
+
+task_operators:
+  arm:
+    initial_state:
+      base_pose:
+        position: [0.90, 0.05, 0.15]
+        orientation: [0.0, 0.0, -1, 0]
+    control:
+      timeout_steps: 220
+      cartesian_max_linear_step: 0.025
+      cartesian_max_angular_step: 0.3
+      tolerance:
+        position: 0.008
+        orientation: 0.10
+        eef: 0.001
+    max_joint_delta: 0.35
+    ik:
+      joint_control_mode: per_step_ik

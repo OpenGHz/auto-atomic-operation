@@ -1,0 +1,10 @@
+defaults:
+  - basis_p7_xf9600
+  - _self_
+
+env:
+  # Composable P7 + XF9600 robot XML for robot-less task scenes.
+  # It avoids generic geom names such as "table" so task scenes can keep
+  # their own table geom names without MuJoCo name collisions.
+  robot_paths:
+    - ${assets_dir}/xmls/robots/p7_arm_with_xf9600_composable.xml
