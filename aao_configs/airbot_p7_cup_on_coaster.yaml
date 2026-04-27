@@ -25,10 +25,39 @@ defaults:
 #  的 qpos 布局）。
 scene_name: cup_on_coaster
 task_name: airbot_p7_cup_on_coaster
-# model_name 继承自 basis_p7_xf9600 → demo_p7_xf9600
+model_name: demo_p7_xf9600
 max_updates: 650
 
 env:
+  # 场景 XML 已经 <include> 了 P7 机器人,清空避免重复注入
+  robot_paths: []
+  # 场景 XML 只定义了 env0_cam / env1_cam,覆盖 basis_xf9600 的 env2_cam
+  cameras:
+    - name: xfg_wrist_cam
+      width: ${cam_width}
+      height: ${cam_height}
+      enable_color: ${enable_color}
+      enable_depth: ${enable_depth}
+      enable_mask: ${enable_mask}
+      enable_heat_map: ${enable_heat_map}
+      parent_frame: eef_pose
+      is_static: false
+    - name: env0_cam
+      width: ${cam_width}
+      height: ${cam_height}
+      enable_color: ${enable_color}
+      enable_depth: ${enable_depth}
+      enable_mask: ${enable_mask}
+      enable_heat_map: ${enable_heat_map}
+      is_static: true
+    - name: env1_cam
+      width: ${cam_width}
+      height: ${cam_height}
+      enable_color: ${enable_color}
+      enable_depth: ${enable_depth}
+      enable_mask: ${enable_mask}
+      enable_heat_map: ${enable_heat_map}
+      is_static: true
   sim_freq: 1000
   update_freq: 100
   mask_objects: ["cup", "coaster"]
@@ -68,14 +97,14 @@ task:
         pre_move:
           # 1. cup 中心正上方 0.12 m（cup_on_coaster.yaml 原值）。
           #    pitch=90° 夹爪指向下方。
-          - position: [0.0, 0.0, 0.12]
+          - position: [0.0, 0.0, 0.20]
             orientation: [0.0, 0.70710678, 0.0, 0.70710678]
             reference: object_world
             max_linear_step: 0.04
             max_angular_step: 0.35
-          # 2. 下降到 cup 中心上方 0.006 m（指尖夹住盒体上缘，
-          #    cup_on_coaster.yaml 原值），姿态沿用上一步。
-          - position: [0.0, 0.0, 0.008]
+          # 2. 下降到 cup 中心上方 0.04 m（即贴近杯顶 z=0.045）。
+          #    eef 在杯顶,夹爪指尖往下抓杯身上缘,掌部高于杯顶不再穿模。
+          - position: [0.0, 0.0, 0.04]
             orientation: [0.0, 0.70710678, 0.0, 0.70710678]
             reference: object_world
             max_linear_step: 0.04
@@ -105,8 +134,8 @@ task:
             max_linear_step: 0.05
             max_angular_step: 0.25
           # 2. 下降到 coaster 中心上方 0.04 m（cup_on_coaster.yaml 原值）。
-          #    coaster 顶 z=0.08、杯中心目标 z≈0.105，此偏移让杯底距
-          #    coaster 顶 ~0.5cm，松爪后靠重力坐落。
+          #    coaster 顶 z=0.085、cup_col 半高 0.04 + body 内 +0.005 偏移
+          #    → 杯 body 落点 z≈0.12，松爪后靠重力坐落。
           - position: [0.0, 0.0, 0.04]
             orientation: [0.0, 0.70710678, 0.0, 0.70710678]
             reference: object_world

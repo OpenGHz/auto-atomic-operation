@@ -65,11 +65,14 @@
           contype="1" conaffinity="1" rgba="0.6 0.45 0.3 1"/>
 
     <!-- CUP（dynamic，freejoint）：
-         几何沿用 demo_gs.xml：box 半尺寸 (0.03, 0.03, 0.04)、pos 偏移 (0, 0, 0.005)。
-         mesh visual 不参与碰撞（contype=0），只供渲染/可视化。 -->
+         cup_col 用圆柱贴 visual mesh 实测尺寸（直径≈7.5cm、高≈8.5cm），
+         避免 box 与杯壁不齐导致夹爪视觉穿模：
+           radius=0.038（接近实测 3.84cm 半径，留 ~0.2cm 抓取间隙）
+           half_height=0.04（实测 4.25cm 略缩，避免抬起时碰桌沿）
+         pos 偏移 (0,0,0.005) 与 demo_gs.xml 对齐。 -->
     <body name="cup" pos="0.45 0.15 0.12">
       <freejoint name="cup_joint"/>
-      <geom name="cup_col" type="box" size="0.03 0.03 0.04"
+      <geom name="cup_col" type="cylinder" size="0.038 0.04"
             mass="0.005" friction="1.2 0.05 0.01" pos="0 0 0.005"
             rgba="0 0 0 0" contype="1" conaffinity="1"/>
       <geom name="cup_vis" type="mesh" mesh="cup_mesh" material="cup_mat"
