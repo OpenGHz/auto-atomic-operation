@@ -1,0 +1,113 @@
+defaults:
+  - basis_p7_xf9600_composable
+  - gs_mixin
+  - _self_
+
+scene_name: press_three_buttons
+task_name: airbot_p7_press_pink_button
+model_name: demo_gs
+
+object_name: button_pink
+
+env:
+  sim_freq: 1200
+  mask_objects: ["${object_name}"]
+  operations: ["press"]
+  cameras:
+    - name: xfg_wrist_cam
+      width: ${cam_width}
+      height: ${cam_height}
+      enable_color: ${enable_color}
+      enable_depth: ${enable_depth}
+      enable_mask: ${enable_mask}
+      enable_heat_map: ${enable_heat_map}
+      parent_frame: eef_pose
+      is_static: false
+    - name: env1_cam
+      width: ${cam_width}
+      height: ${cam_height}
+      enable_color: ${enable_color}
+      enable_depth: ${enable_depth}
+      enable_mask: ${enable_mask}
+      enable_heat_map: ${enable_heat_map}
+      is_static: true
+    - name: env0_cam
+      width: ${cam_width}
+      height: ${cam_height}
+      enable_color: ${enable_color}
+      enable_depth: ${enable_depth}
+      enable_mask: ${enable_mask}
+      enable_heat_map: ${enable_heat_map}
+      is_static: true
+  viewer:
+    lookat: [0.53, 0.13, 0.1]
+    distance: 0.8
+    azimuth: 135
+    elevation: -28
+    step_delay: 0.03
+    hold_seconds: 1.0
+  gaussian_render:
+    body_gaussians:
+      button_blue_gs: ${gs_dir}/button_blue.ply
+      button_green_gs: ${gs_dir}/button_green.ply
+      button_pink_gs: ${gs_dir}/button_pink.ply
+
+task:
+  randomization:
+    button_pink:
+      x: [0.49, 0.57]
+      y: [0.09, 0.16]
+      reference: absolute_world
+      collision_radius: 0.05
+
+  stages:
+    - name: press_pink_button
+      object: ${object_name}
+      operation: press
+      operator: arm
+      param:
+        pre_move:
+          - position: [0.0, 0.0, 0.15]
+            orientation: [0.70710678, 0.0, -0.70710678, 0.0]
+            reference: object_world
+            max_linear_step: 0.08
+            max_angular_step: 0.35
+            tolerance:
+              position: 0.02
+              orientation: 0.20
+          - position: [0.0, 0.0, 0.05]
+            orientation: [0.70710678, 0.0, -0.70710678, 0.0]
+            reference: object_world
+            max_linear_step: 0.03
+            max_angular_step: 0.2
+            tolerance:
+              position: 0.02
+              orientation: 0.15
+        eef:
+          close: true
+          joint_positions: [0.014]
+        post_move:
+          - position: [0.0, 0.0, 0.15]
+            orientation: [0.70710678, 0.0, -0.70710678, 0.0]
+            reference: object_world
+            max_linear_step: 0.08
+            max_angular_step: 0.25
+
+task_operators:
+  arm:
+    initial_state:
+      base_pose:
+        position: [0.90, 0.05, 0.15]
+        orientation: [0.0, 0.0, -1, 0]
+      eef: 0.012
+    control:
+      timeout_steps: 220
+      cartesian_max_linear_step: 0.025
+      cartesian_max_angular_step: 0.3
+      tolerance:
+        position: 0.008
+        orientation: 0.10
+        eef: 0.001
+    max_joint_delta: 0.35
+    ik:
+      joint_control_mode: per_step_ik
