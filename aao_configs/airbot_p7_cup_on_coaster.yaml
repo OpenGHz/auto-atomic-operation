@@ -136,7 +136,7 @@ task:
           # 2. 下降到 coaster 中心上方 0.04 m（cup_on_coaster.yaml 原值）。
           #    coaster 顶 z=0.085、cup_col 半高 0.04 + body 内 +0.005 偏移
           #    → 杯 body 落点 z≈0.12，松爪后靠重力坐落。
-          - position: [0.0, 0.0, 0.04]
+          - position: [0.0, 0.0, 0.07]
             orientation: [0.0, 0.70710678, 0.0, 0.70710678]
             reference: object_world
             max_linear_step: 0.05
