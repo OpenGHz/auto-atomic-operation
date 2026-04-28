@@ -1,0 +1,703 @@
+<mujoco model="airbot_g2p">
+
+  <compiler angle="radian" balanceinertia="true" meshdir="../../meshes/airbot_g2p"/>
+
+  <default>
+    <default class="uni_gripper">
+      <joint type="hinge" axis="0 0 1" stiffness="0.0" damping="0.01" frictionloss="0.01"/>
+      <default class="visual">
+        <geom contype="0" conaffinity="0" group="2" />
+      </default>
+      <default class="collision">
+        <geom contype="0" conaffinity="1" group="3" />
+      </default>
+      <default class="claw_joint">
+        <joint type="slide" axis="0 0 1" range="0 0.0115" damping="0.5" frictionloss="0.5" armature="0.02" actuatorfrcrange="-100 100"/>
+        <position kp="10000" kv="5" ctrlrange="0 0.0115" forcerange="-100 100" />
+      </default>
+    </default>
+  </default>
+
+  <actuator>
+    <position name="claw_joint" joint="umi_clawj" class="claw_joint" />
+  </actuator>
+
+  <equality>
+    <connect body2="umi_l21" body1="umi_l11" anchor="-0.014765 -0.0061643 0" solimp="0.9995 0.9999 0.001 0.5 2" solref="0.001 0.999"/>
+    <connect body2="umi_l51" body1="umi_l61" anchor="0.0061643 0 -0.014765"  solimp="0.9995 0.9999 0.001 0.5 2" solref="0.001 0.999"/>
+    <connect body2="umi_l23" body1="umi_l31" anchor="-0.038526  0.034925 0"  solimp="0.9995 0.9999 0.001 0.5 2" solref="0.001 0.999"/>
+    <connect body2="umi_l53" body1="umi_l41" anchor="-0.038526 -0.034925 0"  solimp="0.9995 0.9999 0.001 0.5 2" solref="0.001 0.999"/>
+  </equality>
+
+  <worldbody>
+    <!-- <body name="box" mocap="true">
+      <geom type="box" size="0.015 0.015 0.03" pos="-0.13 0 0" rgba="0 1 1 0.5" solref="0.001 0.999"/>
+    </body>
+
+    <body name="cylinder" mocap="true">
+      <geom type="cylinder" size="0.02 0.03" pos="-0.2 0 0" rgba="1 0 1 0.5" solref="0.001 0.999"/>
+    </body> -->
+
+    <body name="umi_base_link" childclass="uni_gripper">
+      <geom type="mesh" mesh="umi_base_link_umi_base_link" class="visual" />
+      <body name="umi_claw" pos="-0.063854 0 0" quat="0 0.7071 0 -0.7071">
+        <inertial pos="1.72857680877488E-19 0.000985871808844788 -0.00892158442881765" mass="0.00612521919010523" diaginertia="3.1389196795603e-06 3.42495472150248e-07 3.01797047872505e-06" />
+        <joint name="umi_clawj" class="claw_joint"/>
+        <geom type="mesh" mesh="umi_claw_umi_claw" class="visual" />
+        <geom type="mesh" class="collision" mesh="umi_claw_part1" />
+        <geom type="mesh" class="collision" mesh="umi_claw_part2" />
+        <geom type="mesh" class="collision" mesh="umi_claw_part3" />
+        <geom type="mesh" class="collision" mesh="umi_claw_part4" />
+        <geom type="mesh" class="collision" mesh="umi_claw_part5" />
+        <geom type="mesh" class="collision" mesh="umi_claw_part6" />
+        <geom type="mesh" class="collision" mesh="umi_claw_part7" />
+        <geom type="mesh" class="collision" mesh="umi_claw_part8" />
+        <geom type="mesh" class="collision" mesh="umi_claw_part9" />
+        <geom type="mesh" class="collision" mesh="umi_claw_part10" />
+        <geom type="mesh" class="collision" mesh="umi_claw_part11" />
+        <geom type="mesh" class="collision" mesh="umi_claw_part12" />
+        <geom type="mesh" class="collision" mesh="umi_claw_part13" />
+        <geom type="mesh" class="collision" mesh="umi_claw_part14" />
+        <geom type="mesh" class="collision" mesh="umi_claw_part15" />
+        <geom type="mesh" class="collision" mesh="umi_claw_part16" />
+        <geom type="mesh" class="collision" mesh="umi_claw_part17" />
+        <geom type="mesh" class="collision" mesh="umi_claw_part18" />
+        <geom type="mesh" class="collision" mesh="umi_claw_part19" />
+        <geom type="mesh" class="collision" mesh="umi_claw_part20" />
+        <geom type="mesh" class="collision" mesh="umi_claw_part21" />
+        <geom type="mesh" class="collision" mesh="umi_claw_part22" />
+        <geom type="mesh" class="collision" mesh="umi_claw_part23" />
+        <geom type="mesh" class="collision" mesh="umi_claw_part24" />
+        <geom type="mesh" class="collision" mesh="umi_claw_part25" />
+        <body name="umi_l11" pos="0 -0.035 -0.02064" quat="0 0.7071 0 -0.7071">
+          <inertial pos="-0.00537458872836099 -0.00224386367500688 -0.00157641838617586" mass="0.00246666182359979" diaginertia="7.02337538613654e-08 1.39800820557279e-07 1.30810899440451e-07" />
+          <joint name="umi_l11j"/>
+          <geom type="mesh" mesh="umi_l11_umi_l11" class="visual" />
+          <geom type="mesh" class="collision" mesh="umi_l11_part1" />
+          <geom type="mesh" class="collision" mesh="umi_l11_part2" />
+          <geom type="mesh" class="collision" mesh="umi_l11_part3" />
+          <geom type="mesh" class="collision" mesh="umi_l11_part4" />
+          <geom type="mesh" class="collision" mesh="umi_l11_part5" />
+          <geom type="mesh" class="collision" mesh="umi_l11_part6" />
+          <geom type="mesh" class="collision" mesh="umi_l11_part7" />
+          <geom type="mesh" class="collision" mesh="umi_l11_part8" />
+          <geom type="mesh" class="collision" mesh="umi_l11_part9" />
+          <geom type="mesh" class="collision" mesh="umi_l11_part10" />
+          <geom type="mesh" class="collision" mesh="umi_l11_part11" />
+          <geom type="mesh" class="collision" mesh="umi_l11_part12" />
+          <geom type="mesh" class="collision" mesh="umi_l11_part13" />
+          <geom type="mesh" class="collision" mesh="umi_l11_part14" />
+          <geom type="mesh" class="collision" mesh="umi_l11_part15" />
+          <geom type="mesh" class="collision" mesh="umi_l11_part16" />
+          <geom type="mesh" class="collision" mesh="umi_l11_part17" />
+          <geom type="mesh" class="collision" mesh="umi_l11_part18" />
+          <geom type="mesh" class="collision" mesh="umi_l11_part19" />
+          <geom type="mesh" class="collision" mesh="umi_l11_part20" />
+          <geom type="mesh" class="collision" mesh="umi_l11_part21" />
+          <body name="umi_l12" pos="-0.014765 -0.0061643 0">
+            <inertial pos="-6.93889390390723E-18 0 0.00759770946866485" mass="0.000664107554227654" diaginertia="2.49014910300519e-08 2.49014910300519e-08 4.07997808541246e-09" />
+            <geom type="mesh" mesh="umi_l12_umi_l12" class="visual"/>
+          </body>
+        </body>
+        <body name="umi_l61" pos="0 0.035 -0.02064" quat="0 0.7071 -0.7071 0">
+          <inertial pos="0.00214877849947542 0.0011257028177322 -0.00514683705238363" mass="0.00246666182359979" diaginertia="1.39800820557279e-07 1.30810899440451e-07 7.02337538613654e-08" />
+          <joint name="umi_l61j" type="hinge" axis="0 -1 0" />
+          <geom type="mesh" mesh="umi_l61_umi_l61" class="visual" />
+          <geom type="mesh" class="collision" mesh="umi_l61_part1" />
+          <geom type="mesh" class="collision" mesh="umi_l61_part2" />
+          <geom type="mesh" class="collision" mesh="umi_l61_part3" />
+          <geom type="mesh" class="collision" mesh="umi_l61_part4" />
+          <geom type="mesh" class="collision" mesh="umi_l61_part5" />
+          <geom type="mesh" class="collision" mesh="umi_l61_part6" />
+          <geom type="mesh" class="collision" mesh="umi_l61_part7" />
+          <geom type="mesh" class="collision" mesh="umi_l61_part8" />
+          <geom type="mesh" class="collision" mesh="umi_l61_part9" />
+          <geom type="mesh" class="collision" mesh="umi_l61_part10" />
+          <geom type="mesh" class="collision" mesh="umi_l61_part11" />
+          <geom type="mesh" class="collision" mesh="umi_l61_part12" />
+          <geom type="mesh" class="collision" mesh="umi_l61_part13" />
+          <geom type="mesh" class="collision" mesh="umi_l61_part14" />
+          <geom type="mesh" class="collision" mesh="umi_l61_part15" />
+          <geom type="mesh" class="collision" mesh="umi_l61_part16" />
+          <geom type="mesh" class="collision" mesh="umi_l61_part17" />
+          <geom type="mesh" class="collision" mesh="umi_l61_part18" />
+          <geom type="mesh" class="collision" mesh="umi_l61_part19" />
+          <geom type="mesh" class="collision" mesh="umi_l61_part20" />
+          <geom type="mesh" class="collision" mesh="umi_l61_part21" />
+          <geom type="mesh" class="collision" mesh="umi_l61_part22" />
+          <body name="umi_l62" pos="0.0061643 0 -0.014765" quat="0.5 0.5 -0.5 0.5">
+            <inertial pos="-2.05798454666617E-10 3.44224995729725E-11 -1.71705574329043E-18" mass="0.000863284528465247" diaginertia="1.81862706123832e-08 1.81862706123832e-08 4.93896805672025e-09" />
+            <geom type="mesh" mesh="umi_l62_umi_l62" class="visual"/>
+          </body>
+        </body>
+      </body>
+      <body name="umi_l21" pos="-0.056 0.017 0">
+        <inertial pos="-0.00416957563501984 0.0187173688931795 0.000382375112201131" mass="0.00594457787007538" diaginertia="6.27801333480363e-07 2.82155569211584e-07 5.53880218130755e-07" />
+        <joint name="umi_l21j"/>
+        <geom type="mesh" mesh="umi_l21_umi_l21" class="visual" />
+        <geom type="mesh" class="collision" mesh="umi_l21_part1" />
+        <geom type="mesh" class="collision" mesh="umi_l21_part2" />
+        <geom type="mesh" class="collision" mesh="umi_l21_part3" />
+        <geom type="mesh" class="collision" mesh="umi_l21_part4" />
+        <geom type="mesh" class="collision" mesh="umi_l21_part5" />
+        <geom type="mesh" class="collision" mesh="umi_l21_part6" />
+        <geom type="mesh" class="collision" mesh="umi_l21_part7" />
+        <geom type="mesh" class="collision" mesh="umi_l21_part8" />
+        <geom type="mesh" class="collision" mesh="umi_l21_part9" />
+        <geom type="mesh" class="collision" mesh="umi_l21_part10" />
+        <geom type="mesh" class="collision" mesh="umi_l21_part11" />
+        <geom type="mesh" class="collision" mesh="umi_l21_part12" />
+        <geom type="mesh" class="collision" mesh="umi_l21_part13" />
+        <geom type="mesh" class="collision" mesh="umi_l21_part14" />
+        <geom type="mesh" class="collision" mesh="umi_l21_part15" />
+        <geom type="mesh" class="collision" mesh="umi_l21_part16" />
+        <geom type="mesh" class="collision" mesh="umi_l21_part17" />
+        <geom type="mesh" class="collision" mesh="umi_l21_part18" />
+        <geom type="mesh" class="collision" mesh="umi_l21_part19" />
+        <geom type="mesh" class="collision" mesh="umi_l21_part20" />
+        <geom type="mesh" class="collision" mesh="umi_l21_part21" />
+        <geom type="mesh" class="collision" mesh="umi_l21_part22" />
+        <geom type="mesh" class="collision" mesh="umi_l21_part23" />
+        <geom type="mesh" class="collision" mesh="umi_l21_part24" />
+        <geom type="mesh" class="collision" mesh="umi_l21_part25" />
+        <geom type="mesh" class="collision" mesh="umi_l21_part26" />
+        <geom type="mesh" class="collision" mesh="umi_l21_part27" />
+        <geom type="mesh" class="collision" mesh="umi_l21_part28" />
+        <geom type="mesh" class="collision" mesh="umi_l21_part29" />
+        <geom type="mesh" class="collision" mesh="umi_l21_part30" />
+        <geom type="mesh" class="collision" mesh="umi_l21_part31" />
+        <geom type="mesh" class="collision" mesh="umi_l21_part32" />
+        <geom type="mesh" class="collision" mesh="umi_l21_part33" />
+        <geom type="mesh" class="collision" mesh="umi_l21_part34" />
+        <geom type="mesh" class="collision" mesh="umi_l21_part35" />
+        <geom type="mesh" class="collision" mesh="umi_l21_part36" />
+        <geom type="mesh" class="collision" mesh="umi_l21_part37" />
+        <geom type="mesh" class="collision" mesh="umi_l21_part38" />
+        <body name="umi_l22" pos="-0.0049468 0.029589 0">
+          <inertial pos="-0.0172704880548737 0.00175620035567216 -2.37712305101902E-10" mass="0.00488468979884358" diaginertia="2.80187879594549e-07 7.36097276078515e-07 6.79236570018327e-07" />
+          <joint name="umi_l22j"/>
+          <geom type="mesh" mesh="umi_l22_umi_l22" class="visual" />
+          <geom type="mesh" class="collision" mesh="umi_l22_part1" />
+          <geom type="mesh" class="collision" mesh="umi_l22_part2" />
+          <geom type="mesh" class="collision" mesh="umi_l22_part3" />
+          <geom type="mesh" class="collision" mesh="umi_l22_part4" />
+          <geom type="mesh" class="collision" mesh="umi_l22_part5" />
+          <geom type="mesh" class="collision" mesh="umi_l22_part6" />
+          <geom type="mesh" class="collision" mesh="umi_l22_part7" />
+          <geom type="mesh" class="collision" mesh="umi_l22_part8" />
+          <geom type="mesh" class="collision" mesh="umi_l22_part9" />
+          <geom type="mesh" class="collision" mesh="umi_l22_part10" />
+          <geom type="mesh" class="collision" mesh="umi_l22_part11" />
+          <geom type="mesh" class="collision" mesh="umi_l22_part12" />
+          <geom type="mesh" class="collision" mesh="umi_l22_part13" />
+          <geom type="mesh" class="collision" mesh="umi_l22_part14" />
+          <geom type="mesh" class="collision" mesh="umi_l22_part15" />
+          <geom type="mesh" class="collision" mesh="umi_l22_part16" />
+          <geom type="mesh" class="collision" mesh="umi_l22_part17" />
+          <geom type="mesh" class="collision" mesh="umi_l22_part18" />
+          <geom type="mesh" class="collision" mesh="umi_l22_part19" />
+          <geom type="mesh" class="collision" mesh="umi_l22_part20" />
+          <geom type="mesh" class="collision" mesh="umi_l22_part21" />
+          <geom type="mesh" class="collision" mesh="umi_l22_part22" />
+          <geom type="mesh" class="collision" mesh="umi_l22_part23" />
+          <geom type="mesh" class="collision" mesh="umi_l22_part24" />
+          <geom type="mesh" class="collision" mesh="umi_l22_part25" />
+          <geom type="mesh" class="collision" mesh="umi_l22_part26" />
+          <geom type="mesh" class="collision" mesh="umi_l22_part27" />
+          <geom type="mesh" class="collision" mesh="umi_l22_part28" />
+          <geom type="mesh" class="collision" mesh="umi_l22_part29" />
+          <geom pos="-0.033579 0.0053357 0" type="mesh" mesh="umi_l23_umi_l23" class="visual" />
+          <geom pos="-0.033579 0.0053357 0" type="mesh" class="collision" mesh="umi_l23_part1" />
+          <geom pos="-0.033579 0.0053357 0" type="mesh" class="collision" mesh="umi_l23_part2" />
+          <body name="umi_l23" pos="-0.033579 0.0053357 0">
+            <inertial pos="-0.0159217565270541 -0.00945346311103879 1.05031580111178E-05" mass="0.00577276345206399" diaginertia="1.97058542235207e-07 3.7261746491129e-07 3.18455013222174e-07" />
+            <joint name="umi_l23j" range="-0.5 0.1"/>
+            <geom type="mesh" mesh="umi_right_tactile_umi_right_tactile" class="visual" />
+            <geom name="right_finger_pad_upper" contype="1" type="box" size="0.0055 0.0067 0.009" pos="-0.0165 -0.0095 0" class="collision" rgba="1 0 0 1"/>
+            <geom contype="1" type="cylinder" size="0.0055 0.01" pos="-0.03 -0.0115 0" quat="0.707 0 0.707 0" class="collision" rgba="1 0 0 1"/>
+            <geom contype="1" type="box" size="0.01 0.002 0.005" pos="-0.03 -0.0075 0" class="collision" rgba="1 0 0 1"/>
+            <body name="right_tactile" pos="-0.0165 -0.0095 0" quat="0.4999981633974483 0.49999999999662686 -0.49999999999662686 0.5000018366025516" gravcomp="1">
+              <inertial pos="7.44670002401661E-05 0.00784747372261869 0.00195692056024735" quat="1 0 0 0" mass="0.000814180541801484" diaginertia="1.77999294668352e-08 8.5777623786915e-09 2.12505762180111e-08"/>
+              <attach model="tactile_sensor" prefix="finger1_"/>
+            </body>
+          </body>
+        </body>
+      </body>
+      <body name="umi_l31" pos="-0.061 0.007 0">
+        <inertial pos="-0.0166184402077773 0.021699376365335 0.00110582008816793" mass="0.00972458644499129" diaginertia="1.2045194710605e-06 1.66571490280433e-06 2.23380623190573e-06" />
+        <joint name="umi_l31j"/>
+        <geom type="mesh" mesh="umi_l31_umi_l31" class="visual" />
+        <geom type="mesh" class="collision" mesh="umi_l31_part1" />
+        <geom type="mesh" class="collision" mesh="umi_l31_part2" />
+        <geom type="mesh" class="collision" mesh="umi_l31_part3" />
+        <geom type="mesh" class="collision" mesh="umi_l31_part4" />
+        <geom type="mesh" class="collision" mesh="umi_l31_part5" />
+        <geom type="mesh" class="collision" mesh="umi_l31_part6" />
+        <geom type="mesh" class="collision" mesh="umi_l31_part7" />
+        <geom type="mesh" class="collision" mesh="umi_l31_part8" />
+        <geom type="mesh" class="collision" mesh="umi_l31_part9" />
+        <geom type="mesh" class="collision" mesh="umi_l31_part10" />
+        <geom type="mesh" class="collision" mesh="umi_l31_part11" />
+        <geom type="mesh" class="collision" mesh="umi_l31_part12" />
+        <geom type="mesh" class="collision" mesh="umi_l31_part13" />
+        <geom type="mesh" class="collision" mesh="umi_l31_part14" />
+        <geom type="mesh" class="collision" mesh="umi_l31_part15" />
+        <geom type="mesh" class="collision" mesh="umi_l31_part16" />
+        <geom type="mesh" class="collision" mesh="umi_l31_part17" />
+        <geom type="mesh" class="collision" mesh="umi_l31_part18" />
+        <geom type="mesh" class="collision" mesh="umi_l31_part19" />
+        <geom type="mesh" class="collision" mesh="umi_l31_part20" />
+        <geom type="mesh" class="collision" mesh="umi_l31_part21" />
+        <geom type="mesh" class="collision" mesh="umi_l31_part22" />
+        <body name="umi_l32" pos="-0.038526 0.034925 0">
+          <inertial pos="3.52495810318487E-15 -3.47638584585752E-15 -0.00609523382216466" mass="0.000770194927495154" diaginertia="8.0483296726046e-08 8.06688998615518e-08 3.67575156185476e-09" />
+          <geom type="mesh" mesh="umi_l32_umi_l32" class="visual" />
+        </body>
+      </body>
+      <body name="umi_l41" pos="-0.061 -0.007 0">
+        <inertial pos="-0.0166184402077773 -0.021699376365335 0.00108034355237884" mass="0.00972458644499129" diaginertia="1.2045194710605e-06 1.66571490280433e-06 2.23380623190573e-06" />
+        <joint name="umi_l41j"/>
+        <geom type="mesh" mesh="umi_l41_umi_l41" class="visual" />
+        <geom type="mesh" class="collision" mesh="umi_l41_part1" />
+        <geom type="mesh" class="collision" mesh="umi_l41_part2" />
+        <geom type="mesh" class="collision" mesh="umi_l41_part3" />
+        <geom type="mesh" class="collision" mesh="umi_l41_part4" />
+        <geom type="mesh" class="collision" mesh="umi_l41_part5" />
+        <geom type="mesh" class="collision" mesh="umi_l41_part6" />
+        <geom type="mesh" class="collision" mesh="umi_l41_part7" />
+        <geom type="mesh" class="collision" mesh="umi_l41_part8" />
+        <geom type="mesh" class="collision" mesh="umi_l41_part9" />
+        <geom type="mesh" class="collision" mesh="umi_l41_part10" />
+        <geom type="mesh" class="collision" mesh="umi_l41_part11" />
+        <geom type="mesh" class="collision" mesh="umi_l41_part12" />
+        <geom type="mesh" class="collision" mesh="umi_l41_part13" />
+        <geom type="mesh" class="collision" mesh="umi_l41_part14" />
+        <geom type="mesh" class="collision" mesh="umi_l41_part15" />
+        <geom type="mesh" class="collision" mesh="umi_l41_part16" />
+        <geom type="mesh" class="collision" mesh="umi_l41_part17" />
+        <geom type="mesh" class="collision" mesh="umi_l41_part18" />
+        <geom type="mesh" class="collision" mesh="umi_l41_part19" />
+        <geom type="mesh" class="collision" mesh="umi_l41_part20" />
+        <geom type="mesh" class="collision" mesh="umi_l41_part21" />
+        <geom type="mesh" class="collision" mesh="umi_l41_part22" />
+        <geom type="mesh" class="collision" mesh="umi_l41_part23" />
+        <geom type="mesh" class="collision" mesh="umi_l41_part24" />
+        <geom type="mesh" class="collision" mesh="umi_l41_part25" />
+        <geom type="mesh" class="collision" mesh="umi_l41_part26" />
+        <geom type="mesh" class="collision" mesh="umi_l41_part27" />
+        <body name="umi_l42" pos="-0.038526 -0.034925 0">
+          <inertial pos="9.14129882900738E-14 1.33455746453848E-13 0.00497933455962353" mass="0.000942800311068684" diaginertia="8.16118523654204e-08 8.17974555009262e-08 5.741006643566e-09" />
+          <geom type="mesh" mesh="umi_l42_umi_l42" class="visual" />
+        </body>
+      </body>
+      <body name="umi_l51" pos="-0.056 -0.017 0">
+        <inertial pos="-0.0042057177277853 -0.0192009837700829 0.0018127637934395" mass="0.00622209757021668" diaginertia="6.29841383084643e-07 2.84087777335319e-07 5.57176979154117e-07" />
+        <joint name="umi_l51j"/>
+        <geom type="mesh" mesh="umi_l51_umi_l51" class="visual" />
+        <geom type="mesh" class="collision" mesh="umi_l51_part1" />
+        <geom type="mesh" class="collision" mesh="umi_l51_part2" />
+        <geom type="mesh" class="collision" mesh="umi_l51_part3" />
+        <geom type="mesh" class="collision" mesh="umi_l51_part4" />
+        <geom type="mesh" class="collision" mesh="umi_l51_part5" />
+        <geom type="mesh" class="collision" mesh="umi_l51_part6" />
+        <geom type="mesh" class="collision" mesh="umi_l51_part7" />
+        <geom type="mesh" class="collision" mesh="umi_l51_part8" />
+        <geom type="mesh" class="collision" mesh="umi_l51_part9" />
+        <geom type="mesh" class="collision" mesh="umi_l51_part10" />
+        <geom type="mesh" class="collision" mesh="umi_l51_part11" />
+        <geom type="mesh" class="collision" mesh="umi_l51_part12" />
+        <geom type="mesh" class="collision" mesh="umi_l51_part13" />
+        <geom type="mesh" class="collision" mesh="umi_l51_part14" />
+        <geom type="mesh" class="collision" mesh="umi_l51_part15" />
+        <geom type="mesh" class="collision" mesh="umi_l51_part16" />
+        <geom type="mesh" class="collision" mesh="umi_l51_part17" />
+        <geom type="mesh" class="collision" mesh="umi_l51_part18" />
+        <geom type="mesh" class="collision" mesh="umi_l51_part19" />
+        <geom type="mesh" class="collision" mesh="umi_l51_part20" />
+        <geom type="mesh" class="collision" mesh="umi_l51_part21" />
+        <geom type="mesh" class="collision" mesh="umi_l51_part22" />
+        <geom type="mesh" class="collision" mesh="umi_l51_part23" />
+        <geom type="mesh" class="collision" mesh="umi_l51_part24" />
+        <geom type="mesh" class="collision" mesh="umi_l51_part25" />
+        <geom type="mesh" class="collision" mesh="umi_l51_part26" />
+        <geom type="mesh" class="collision" mesh="umi_l51_part27" />
+        <geom type="mesh" class="collision" mesh="umi_l51_part28" />
+        <geom type="mesh" class="collision" mesh="umi_l51_part29" />
+        <geom type="mesh" class="collision" mesh="umi_l51_part30" />
+        <geom type="mesh" class="collision" mesh="umi_l51_part31" />
+        <geom type="mesh" class="collision" mesh="umi_l51_part32" />
+        <geom type="mesh" class="collision" mesh="umi_l51_part33" />
+        <geom type="mesh" class="collision" mesh="umi_l51_part34" />
+        <geom type="mesh" class="collision" mesh="umi_l51_part35" />
+        <geom type="mesh" class="collision" mesh="umi_l51_part36" />
+        <geom type="mesh" class="collision" mesh="umi_l51_part37" />
+        <geom type="mesh" class="collision" mesh="umi_l51_part38" />
+        <geom type="mesh" class="collision" mesh="umi_l51_part39" />
+        <geom type="mesh" class="collision" mesh="umi_l51_part40" />
+        <geom type="mesh" class="collision" mesh="umi_l51_part41" />
+        <geom type="mesh" class="collision" mesh="umi_l51_part42" />
+        <geom type="mesh" class="collision" mesh="umi_l51_part43" />
+        <geom type="mesh" class="collision" mesh="umi_l51_part44" />
+        <geom type="mesh" class="collision" mesh="umi_l51_part45" />
+        <geom type="mesh" class="collision" mesh="umi_l51_part46" />
+        <geom type="mesh" class="collision" mesh="umi_l51_part47" />
+        <geom type="mesh" class="collision" mesh="umi_l51_part48" />
+        <geom type="mesh" class="collision" mesh="umi_l51_part49" />
+        <geom type="mesh" class="collision" mesh="umi_l51_part50" />
+        <geom type="mesh" class="collision" mesh="umi_l51_part51" />
+        <geom type="mesh" class="collision" mesh="umi_l51_part52" />
+        <geom type="mesh" class="collision" mesh="umi_l51_part53" />
+        <geom type="mesh" class="collision" mesh="umi_l51_part54" />
+        <body name="umi_l52" pos="-0.0049468 -0.029589 0">
+          <inertial pos="-0.017270488058613 -0.00175620035154723 2.37712305210281E-10" mass="0.00488468979884358" diaginertia="2.80187879594549e-07 7.36097276078515e-07 6.79236570018327e-07" />
+          <joint name="umi_l52j"/>
+          <geom type="mesh" mesh="umi_l52_umi_l52" class="visual" />
+          <geom type="mesh" class="collision" mesh="umi_l52_part1" />
+          <geom type="mesh" class="collision" mesh="umi_l52_part2" />
+          <geom type="mesh" class="collision" mesh="umi_l52_part3" />
+          <geom type="mesh" class="collision" mesh="umi_l52_part4" />
+          <geom type="mesh" class="collision" mesh="umi_l52_part5" />
+          <geom type="mesh" class="collision" mesh="umi_l52_part6" />
+          <geom type="mesh" class="collision" mesh="umi_l52_part7" />
+          <geom type="mesh" class="collision" mesh="umi_l52_part8" />
+          <geom type="mesh" class="collision" mesh="umi_l52_part9" />
+          <geom type="mesh" class="collision" mesh="umi_l52_part10" />
+          <geom type="mesh" class="collision" mesh="umi_l52_part11" />
+          <geom type="mesh" class="collision" mesh="umi_l52_part12" />
+          <geom type="mesh" class="collision" mesh="umi_l52_part13" />
+          <geom type="mesh" class="collision" mesh="umi_l52_part14" />
+          <geom type="mesh" class="collision" mesh="umi_l52_part15" />
+          <geom type="mesh" class="collision" mesh="umi_l52_part16" />
+          <geom type="mesh" class="collision" mesh="umi_l52_part17" />
+          <geom type="mesh" class="collision" mesh="umi_l52_part18" />
+          <geom type="mesh" class="collision" mesh="umi_l52_part19" />
+          <geom type="mesh" class="collision" mesh="umi_l52_part20" />
+          <geom type="mesh" class="collision" mesh="umi_l52_part21" />
+          <geom type="mesh" class="collision" mesh="umi_l52_part22" />
+          <geom type="mesh" class="collision" mesh="umi_l52_part23" />
+          <geom type="mesh" class="collision" mesh="umi_l52_part24" />
+          <geom type="mesh" class="collision" mesh="umi_l52_part25" />
+          <geom type="mesh" class="collision" mesh="umi_l52_part26" />
+          <geom type="mesh" class="collision" mesh="umi_l52_part27" />
+          <geom type="mesh" class="collision" mesh="umi_l52_part28" />
+          <geom type="mesh" class="collision" mesh="umi_l52_part29" />
+          <geom type="mesh" class="collision" mesh="umi_l52_part30" />
+          <geom pos="-0.033579 -0.0053357 0" type="mesh" mesh="umi_l53_umi_l53" class="visual"/>
+          <geom pos="-0.033579 -0.0053357 0" type="mesh" class="collision" mesh="umi_l53_part1" />
+          <geom pos="-0.033579 -0.0053357 0" type="mesh" class="collision" mesh="umi_l53_part2" />
+          <body name="umi_l53" pos="-0.033579 -0.0053357 0">
+            <inertial pos="-0.0159217565270564 0.0094534631110406 -1.05031580111171E-05" mass="0.00577276345206399" diaginertia="1.97058542235207e-07 3.7261746491129e-07 3.18455013222174e-07" />
+            <joint name="umi_l53j" range="-0.5 0.1"/>
+            <geom type="mesh" mesh="umi_left_tactile_umi_left_tactile" class="visual"/>
+            <geom name="left_finger_pad_upper" contype="1" type="box" size="0.0055 0.0067 0.009" pos="-0.0165 0.0095 0" class="collision" rgba="1 0 0 1"/>
+            <geom contype="1" type="cylinder" size="0.0055 0.01" pos="-0.03 0.0115 0" quat="0.707 0 0.707 0" class="collision" rgba="1 0 0 1"/>
+            <geom contype="1" type="box" size="0.01 0.002 0.005" pos="-0.03 0.0075 0" class="collision" rgba="1 0 0 1"/>
+            <body name="left_tactile" pos="-0.0165 0.0095 0" quat="0.4999981633974483 -0.49999999999662686 0.49999999999662686 0.5000018366025516" gravcomp="1">
+              <inertial pos="7.44670002401705E-05 0.00784747372261869 0.00195692056024735" quat="1 0 0 0" mass="0.000814180541801481" diaginertia="1.77999294668351e-08 8.57776237869146e-09 2.1250576218011e-08"/>
+              <attach model="tactile_sensor" prefix="finger0_"/>
+            </body>
+          </body>
+        </body>
+      </body>
+      <body name="wrist_cam" pos="-0.0675 0 0.0325" euler="1.5708 1.5708 0" gravcomp="1">
+        <camera name="wrist_cam" mode="fixed" fovy="102.89" resolution="640 480" pos="0 0 0" euler="-0.052359876 0 0"/>
+        <site name="wrist_cam_site" size="0.005" rgba="1 0 0 1" pos="0 0 0" euler="-0.052359876 0 0"/>
+      </body>
+    </body>
+  </worldbody>
+
+  <asset>
+    <model name="tactile_sensor" file="../sensors/xf9600_tactile_sensor.xml"/>
+    <mesh name="umi_base_link_umi_base_link" file="umi_base_link.STL" />
+    <mesh name="umi_claw_umi_claw" file="umi_claw.STL" />
+    <mesh name="umi_l11_umi_l11" file="umi_l11.STL" />
+    <mesh name="umi_l12_umi_l12" file="umi_l12.STL" />
+    <mesh name="umi_l61_umi_l61" file="umi_l61.STL" />
+    <mesh name="umi_l62_umi_l62" file="umi_l62.STL" />
+    <mesh name="umi_l21_umi_l21" file="umi_l21.STL" />
+    <mesh name="umi_l22_umi_l22" file="umi_l22.STL" />
+    <mesh name="umi_l23_umi_l23" file="umi_l23.STL" />
+    <mesh name="umi_right_tactile_umi_right_tactile" file="umi_right_tactile.STL" />
+    <mesh name="umi_l31_umi_l31" file="umi_l31.STL" />
+    <mesh name="umi_l32_umi_l32" file="umi_l32.STL" />
+    <mesh name="umi_l41_umi_l41" file="umi_l41.STL" />
+    <mesh name="umi_l42_umi_l42" file="umi_l42.STL" />
+    <mesh name="umi_l51_umi_l51" file="umi_l51.STL" />
+    <mesh name="umi_l52_umi_l52" file="umi_l52.STL" />
+    <mesh name="umi_l53_umi_l53" file="umi_l53.STL" />
+    <mesh name="umi_left_tactile_umi_left_tactile" file="umi_left_tactile.STL" />
+    <mesh name="umi_l21_part1" file="umi_l21_parts/umi_l21_part1.stl" />
+    <mesh name="umi_l21_part2" file="umi_l21_parts/umi_l21_part2.stl" />
+    <mesh name="umi_l21_part3" file="umi_l21_parts/umi_l21_part3.stl" />
+    <mesh name="umi_l21_part4" file="umi_l21_parts/umi_l21_part4.stl" />
+    <mesh name="umi_l21_part5" file="umi_l21_parts/umi_l21_part5.stl" />
+    <mesh name="umi_l21_part6" file="umi_l21_parts/umi_l21_part6.stl" />
+    <mesh name="umi_l21_part7" file="umi_l21_parts/umi_l21_part7.stl" />
+    <mesh name="umi_l21_part8" file="umi_l21_parts/umi_l21_part8.stl" />
+    <mesh name="umi_l21_part9" file="umi_l21_parts/umi_l21_part9.stl" />
+    <mesh name="umi_l21_part10" file="umi_l21_parts/umi_l21_part10.stl" />
+    <mesh name="umi_l21_part11" file="umi_l21_parts/umi_l21_part11.stl" />
+    <mesh name="umi_l21_part12" file="umi_l21_parts/umi_l21_part12.stl" />
+    <mesh name="umi_l21_part13" file="umi_l21_parts/umi_l21_part13.stl" />
+    <mesh name="umi_l21_part14" file="umi_l21_parts/umi_l21_part14.stl" />
+    <mesh name="umi_l21_part15" file="umi_l21_parts/umi_l21_part15.stl" />
+    <mesh name="umi_l21_part16" file="umi_l21_parts/umi_l21_part16.stl" />
+    <mesh name="umi_l21_part17" file="umi_l21_parts/umi_l21_part17.stl" />
+    <mesh name="umi_l21_part18" file="umi_l21_parts/umi_l21_part18.stl" />
+    <mesh name="umi_l21_part19" file="umi_l21_parts/umi_l21_part19.stl" />
+    <mesh name="umi_l21_part20" file="umi_l21_parts/umi_l21_part20.stl" />
+    <mesh name="umi_l21_part21" file="umi_l21_parts/umi_l21_part21.stl" inertia="shell" />
+    <mesh name="umi_l21_part22" file="umi_l21_parts/umi_l21_part22.stl" />
+    <mesh name="umi_l21_part23" file="umi_l21_parts/umi_l21_part23.stl" />
+    <mesh name="umi_l21_part24" file="umi_l21_parts/umi_l21_part24.stl" />
+    <mesh name="umi_l21_part25" file="umi_l21_parts/umi_l21_part25.stl" />
+    <mesh name="umi_l21_part26" file="umi_l21_parts/umi_l21_part26.stl" />
+    <mesh name="umi_l21_part27" file="umi_l21_parts/umi_l21_part27.stl" />
+    <mesh name="umi_l21_part28" file="umi_l21_parts/umi_l21_part28.stl" />
+    <mesh name="umi_l21_part29" file="umi_l21_parts/umi_l21_part29.stl" />
+    <mesh name="umi_l21_part30" file="umi_l21_parts/umi_l21_part30.stl" />
+    <mesh name="umi_l21_part31" file="umi_l21_parts/umi_l21_part31.stl" />
+    <mesh name="umi_l21_part32" file="umi_l21_parts/umi_l21_part32.stl" />
+    <mesh name="umi_l21_part33" file="umi_l21_parts/umi_l21_part33.stl" inertia="shell" />
+    <mesh name="umi_l21_part34" file="umi_l21_parts/umi_l21_part34.stl" />
+    <mesh name="umi_l21_part35" file="umi_l21_parts/umi_l21_part35.stl" />
+    <mesh name="umi_l21_part36" file="umi_l21_parts/umi_l21_part36.stl" />
+    <mesh name="umi_l21_part37" file="umi_l21_parts/umi_l21_part37.stl" inertia="shell" />
+    <mesh name="umi_l21_part38" file="umi_l21_parts/umi_l21_part38.stl" />
+    <mesh name="umi_claw_part1" file="umi_claw_parts/umi_claw_part1.stl" />
+    <mesh name="umi_claw_part2" file="umi_claw_parts/umi_claw_part2.stl" />
+    <mesh name="umi_claw_part3" file="umi_claw_parts/umi_claw_part3.stl" />
+    <mesh name="umi_claw_part4" file="umi_claw_parts/umi_claw_part4.stl" />
+    <mesh name="umi_claw_part5" file="umi_claw_parts/umi_claw_part5.stl" />
+    <mesh name="umi_claw_part6" file="umi_claw_parts/umi_claw_part6.stl" />
+    <mesh name="umi_claw_part7" file="umi_claw_parts/umi_claw_part7.stl" />
+    <mesh name="umi_claw_part8" file="umi_claw_parts/umi_claw_part8.stl" />
+    <mesh name="umi_claw_part9" file="umi_claw_parts/umi_claw_part9.stl" />
+    <mesh name="umi_claw_part10" file="umi_claw_parts/umi_claw_part10.stl" />
+    <mesh name="umi_claw_part11" file="umi_claw_parts/umi_claw_part11.stl" />
+    <mesh name="umi_claw_part12" file="umi_claw_parts/umi_claw_part12.stl" />
+    <mesh name="umi_claw_part13" file="umi_claw_parts/umi_claw_part13.stl" />
+    <mesh name="umi_claw_part14" file="umi_claw_parts/umi_claw_part14.stl" />
+    <mesh name="umi_claw_part15" file="umi_claw_parts/umi_claw_part15.stl" />
+    <mesh name="umi_claw_part16" file="umi_claw_parts/umi_claw_part16.stl" />
+    <mesh name="umi_claw_part17" file="umi_claw_parts/umi_claw_part17.stl" />
+    <mesh name="umi_claw_part18" file="umi_claw_parts/umi_claw_part18.stl" inertia="shell" />
+    <mesh name="umi_claw_part19" file="umi_claw_parts/umi_claw_part19.stl" />
+    <mesh name="umi_claw_part20" file="umi_claw_parts/umi_claw_part20.stl" />
+    <mesh name="umi_claw_part21" file="umi_claw_parts/umi_claw_part21.stl" />
+    <mesh name="umi_claw_part22" file="umi_claw_parts/umi_claw_part22.stl" />
+    <mesh name="umi_claw_part23" file="umi_claw_parts/umi_claw_part23.stl" />
+    <mesh name="umi_claw_part24" file="umi_claw_parts/umi_claw_part24.stl" />
+    <mesh name="umi_claw_part25" file="umi_claw_parts/umi_claw_part25.stl" />
+    <mesh name="umi_l51_part1" file="umi_l51_parts/umi_l51_part1.stl" />
+    <mesh name="umi_l51_part2" file="umi_l51_parts/umi_l51_part2.stl" />
+    <mesh name="umi_l51_part3" file="umi_l51_parts/umi_l51_part3.stl" />
+    <mesh name="umi_l51_part4" file="umi_l51_parts/umi_l51_part4.stl" />
+    <mesh name="umi_l51_part5" file="umi_l51_parts/umi_l51_part5.stl" />
+    <mesh name="umi_l51_part6" file="umi_l51_parts/umi_l51_part6.stl" />
+    <mesh name="umi_l51_part7" file="umi_l51_parts/umi_l51_part7.stl" />
+    <mesh name="umi_l51_part8" file="umi_l51_parts/umi_l51_part8.stl" />
+    <mesh name="umi_l51_part9" file="umi_l51_parts/umi_l51_part9.stl" />
+    <mesh name="umi_l51_part10" file="umi_l51_parts/umi_l51_part10.stl" />
+    <mesh name="umi_l51_part11" file="umi_l51_parts/umi_l51_part11.stl" />
+    <mesh name="umi_l51_part12" file="umi_l51_parts/umi_l51_part12.stl" />
+    <mesh name="umi_l51_part13" file="umi_l51_parts/umi_l51_part13.stl" />
+    <mesh name="umi_l51_part14" file="umi_l51_parts/umi_l51_part14.stl" inertia="shell" />
+    <mesh name="umi_l51_part15" file="umi_l51_parts/umi_l51_part15.stl" />
+    <mesh name="umi_l51_part16" file="umi_l51_parts/umi_l51_part16.stl" />
+    <mesh name="umi_l51_part17" file="umi_l51_parts/umi_l51_part17.stl" />
+    <mesh name="umi_l51_part18" file="umi_l51_parts/umi_l51_part18.stl" />
+    <mesh name="umi_l51_part19" file="umi_l51_parts/umi_l51_part19.stl" inertia="shell" />
+    <mesh name="umi_l51_part20" file="umi_l51_parts/umi_l51_part20.stl" />
+    <mesh name="umi_l51_part21" file="umi_l51_parts/umi_l51_part21.stl" inertia="shell" />
+    <mesh name="umi_l51_part22" file="umi_l51_parts/umi_l51_part22.stl" />
+    <mesh name="umi_l51_part23" file="umi_l51_parts/umi_l51_part23.stl" />
+    <mesh name="umi_l51_part24" file="umi_l51_parts/umi_l51_part24.stl" />
+    <mesh name="umi_l51_part25" file="umi_l51_parts/umi_l51_part25.stl" />
+    <mesh name="umi_l51_part26" file="umi_l51_parts/umi_l51_part26.stl" inertia="shell" />
+    <mesh name="umi_l51_part27" file="umi_l51_parts/umi_l51_part27.stl" />
+    <mesh name="umi_l51_part28" file="umi_l51_parts/umi_l51_part28.stl" />
+    <mesh name="umi_l51_part29" file="umi_l51_parts/umi_l51_part29.stl" />
+    <mesh name="umi_l51_part30" file="umi_l51_parts/umi_l51_part30.stl" />
+    <mesh name="umi_l51_part31" file="umi_l51_parts/umi_l51_part31.stl" />
+    <mesh name="umi_l51_part32" file="umi_l51_parts/umi_l51_part32.stl" />
+    <mesh name="umi_l51_part33" file="umi_l51_parts/umi_l51_part33.stl" inertia="shell" />
+    <mesh name="umi_l51_part34" file="umi_l51_parts/umi_l51_part34.stl" />
+    <mesh name="umi_l51_part35" file="umi_l51_parts/umi_l51_part35.stl" inertia="shell" />
+    <mesh name="umi_l51_part36" file="umi_l51_parts/umi_l51_part36.stl" />
+    <mesh name="umi_l51_part37" file="umi_l51_parts/umi_l51_part37.stl" />
+    <mesh name="umi_l51_part38" file="umi_l51_parts/umi_l51_part38.stl" inertia="shell" />
+    <mesh name="umi_l51_part39" file="umi_l51_parts/umi_l51_part39.stl" />
+    <mesh name="umi_l51_part40" file="umi_l51_parts/umi_l51_part40.stl" />
+    <mesh name="umi_l51_part41" file="umi_l51_parts/umi_l51_part41.stl" />
+    <mesh name="umi_l51_part42" file="umi_l51_parts/umi_l51_part42.stl" />
+    <mesh name="umi_l51_part43" file="umi_l51_parts/umi_l51_part43.stl" />
+    <mesh name="umi_l51_part44" file="umi_l51_parts/umi_l51_part44.stl" />
+    <mesh name="umi_l51_part45" file="umi_l51_parts/umi_l51_part45.stl" />
+    <mesh name="umi_l51_part46" file="umi_l51_parts/umi_l51_part46.stl" />
+    <mesh name="umi_l51_part47" file="umi_l51_parts/umi_l51_part47.stl" />
+    <mesh name="umi_l51_part48" file="umi_l51_parts/umi_l51_part48.stl" />
+    <mesh name="umi_l51_part49" file="umi_l51_parts/umi_l51_part49.stl" />
+    <mesh name="umi_l51_part50" file="umi_l51_parts/umi_l51_part50.stl" />
+    <mesh name="umi_l51_part51" file="umi_l51_parts/umi_l51_part51.stl" />
+    <mesh name="umi_l51_part52" file="umi_l51_parts/umi_l51_part52.stl" />
+    <mesh name="umi_l51_part53" file="umi_l51_parts/umi_l51_part53.stl" />
+    <mesh name="umi_l51_part54" file="umi_l51_parts/umi_l51_part54.stl" />
+    <mesh name="umi_l52_part1" file="umi_l52_parts/umi_l52_part1.stl" />
+    <mesh name="umi_l52_part2" file="umi_l52_parts/umi_l52_part2.stl" />
+    <mesh name="umi_l52_part3" file="umi_l52_parts/umi_l52_part3.stl" />
+    <mesh name="umi_l52_part4" file="umi_l52_parts/umi_l52_part4.stl" />
+    <mesh name="umi_l52_part5" file="umi_l52_parts/umi_l52_part5.stl" />
+    <mesh name="umi_l52_part6" file="umi_l52_parts/umi_l52_part6.stl" />
+    <mesh name="umi_l52_part7" file="umi_l52_parts/umi_l52_part7.stl" />
+    <mesh name="umi_l52_part8" file="umi_l52_parts/umi_l52_part8.stl" />
+    <mesh name="umi_l52_part9" file="umi_l52_parts/umi_l52_part9.stl" />
+    <mesh name="umi_l52_part10" file="umi_l52_parts/umi_l52_part10.stl" />
+    <mesh name="umi_l52_part11" file="umi_l52_parts/umi_l52_part11.stl" />
+    <mesh name="umi_l52_part12" file="umi_l52_parts/umi_l52_part12.stl" />
+    <mesh name="umi_l52_part13" file="umi_l52_parts/umi_l52_part13.stl" />
+    <mesh name="umi_l52_part14" file="umi_l52_parts/umi_l52_part14.stl" />
+    <mesh name="umi_l52_part15" file="umi_l52_parts/umi_l52_part15.stl" />
+    <mesh name="umi_l52_part16" file="umi_l52_parts/umi_l52_part16.stl" />
+    <mesh name="umi_l52_part17" file="umi_l52_parts/umi_l52_part17.stl" />
+    <mesh name="umi_l52_part18" file="umi_l52_parts/umi_l52_part18.stl" />
+    <mesh name="umi_l52_part19" file="umi_l52_parts/umi_l52_part19.stl" />
+    <mesh name="umi_l52_part20" file="umi_l52_parts/umi_l52_part20.stl" />
+    <mesh name="umi_l52_part21" file="umi_l52_parts/umi_l52_part21.stl" />
+    <mesh name="umi_l52_part22" file="umi_l52_parts/umi_l52_part22.stl" />
+    <mesh name="umi_l52_part23" file="umi_l52_parts/umi_l52_part23.stl" />
+    <mesh name="umi_l52_part24" file="umi_l52_parts/umi_l52_part24.stl" />
+    <mesh name="umi_l52_part25" file="umi_l52_parts/umi_l52_part25.stl" inertia="shell" />
+    <mesh name="umi_l52_part26" file="umi_l52_parts/umi_l52_part26.stl" />
+    <mesh name="umi_l52_part27" file="umi_l52_parts/umi_l52_part27.stl" />
+    <mesh name="umi_l52_part28" file="umi_l52_parts/umi_l52_part28.stl" />
+    <mesh name="umi_l52_part29" file="umi_l52_parts/umi_l52_part29.stl" />
+    <mesh name="umi_l52_part30" file="umi_l52_parts/umi_l52_part30.stl" />
+    <mesh name="umi_l31_part1" file="umi_l31_parts/umi_l31_part1.stl" />
+    <mesh name="umi_l31_part2" file="umi_l31_parts/umi_l31_part2.stl" />
+    <mesh name="umi_l31_part3" file="umi_l31_parts/umi_l31_part3.stl" />
+    <mesh name="umi_l31_part4" file="umi_l31_parts/umi_l31_part4.stl" />
+    <mesh name="umi_l31_part5" file="umi_l31_parts/umi_l31_part5.stl" />
+    <mesh name="umi_l31_part6" file="umi_l31_parts/umi_l31_part6.stl" />
+    <mesh name="umi_l31_part7" file="umi_l31_parts/umi_l31_part7.stl" />
+    <mesh name="umi_l31_part8" file="umi_l31_parts/umi_l31_part8.stl" />
+    <mesh name="umi_l31_part9" file="umi_l31_parts/umi_l31_part9.stl" />
+    <mesh name="umi_l31_part10" file="umi_l31_parts/umi_l31_part10.stl" />
+    <mesh name="umi_l31_part11" file="umi_l31_parts/umi_l31_part11.stl" />
+    <mesh name="umi_l31_part12" file="umi_l31_parts/umi_l31_part12.stl" />
+    <mesh name="umi_l31_part13" file="umi_l31_parts/umi_l31_part13.stl" />
+    <mesh name="umi_l31_part14" file="umi_l31_parts/umi_l31_part14.stl" />
+    <mesh name="umi_l31_part15" file="umi_l31_parts/umi_l31_part15.stl" />
+    <mesh name="umi_l31_part16" file="umi_l31_parts/umi_l31_part16.stl" inertia="shell" />
+    <mesh name="umi_l31_part17" file="umi_l31_parts/umi_l31_part17.stl" />
+    <mesh name="umi_l31_part18" file="umi_l31_parts/umi_l31_part18.stl" />
+    <mesh name="umi_l31_part19" file="umi_l31_parts/umi_l31_part19.stl" />
+    <mesh name="umi_l31_part20" file="umi_l31_parts/umi_l31_part20.stl" />
+    <mesh name="umi_l31_part21" file="umi_l31_parts/umi_l31_part21.stl" />
+    <mesh name="umi_l31_part22" file="umi_l31_parts/umi_l31_part22.stl" />
+    <mesh name="umi_l23_part1" file="umi_l23_parts/umi_l23_part1.stl" />
+    <mesh name="umi_l23_part2" file="umi_l23_parts/umi_l23_part2.stl" />
+    <mesh name="umi_l11_part1" file="umi_l11_parts/umi_l11_part1.stl" />
+    <mesh name="umi_l11_part2" file="umi_l11_parts/umi_l11_part2.stl" />
+    <mesh name="umi_l11_part3" file="umi_l11_parts/umi_l11_part3.stl" />
+    <mesh name="umi_l11_part4" file="umi_l11_parts/umi_l11_part4.stl" />
+    <mesh name="umi_l11_part5" file="umi_l11_parts/umi_l11_part5.stl" />
+    <mesh name="umi_l11_part6" file="umi_l11_parts/umi_l11_part6.stl" />
+    <mesh name="umi_l11_part7" file="umi_l11_parts/umi_l11_part7.stl" />
+    <mesh name="umi_l11_part8" file="umi_l11_parts/umi_l11_part8.stl" />
+    <mesh name="umi_l11_part9" file="umi_l11_parts/umi_l11_part9.stl" />
+    <mesh name="umi_l11_part10" file="umi_l11_parts/umi_l11_part10.stl" />
+    <mesh name="umi_l11_part11" file="umi_l11_parts/umi_l11_part11.stl" />
+    <mesh name="umi_l11_part12" file="umi_l11_parts/umi_l11_part12.stl" inertia="shell" />
+    <mesh name="umi_l11_part13" file="umi_l11_parts/umi_l11_part13.stl" />
+    <mesh name="umi_l11_part14" file="umi_l11_parts/umi_l11_part14.stl" />
+    <mesh name="umi_l11_part15" file="umi_l11_parts/umi_l11_part15.stl" />
+    <mesh name="umi_l11_part16" file="umi_l11_parts/umi_l11_part16.stl" />
+    <mesh name="umi_l11_part17" file="umi_l11_parts/umi_l11_part17.stl" />
+    <mesh name="umi_l11_part18" file="umi_l11_parts/umi_l11_part18.stl" />
+    <mesh name="umi_l11_part19" file="umi_l11_parts/umi_l11_part19.stl" />
+    <mesh name="umi_l11_part20" file="umi_l11_parts/umi_l11_part20.stl" />
+    <mesh name="umi_l11_part21" file="umi_l11_parts/umi_l11_part21.stl" />
+    <mesh name="umi_l61_part1" file="umi_l61_parts/umi_l61_part1.stl" />
+    <mesh name="umi_l61_part2" file="umi_l61_parts/umi_l61_part2.stl" inertia="shell" />
+    <mesh name="umi_l61_part3" file="umi_l61_parts/umi_l61_part3.stl" inertia="shell" />
+    <mesh name="umi_l61_part4" file="umi_l61_parts/umi_l61_part4.stl" inertia="shell" />
+    <mesh name="umi_l61_part5" file="umi_l61_parts/umi_l61_part5.stl" />
+    <mesh name="umi_l61_part6" file="umi_l61_parts/umi_l61_part6.stl" />
+    <mesh name="umi_l61_part7" file="umi_l61_parts/umi_l61_part7.stl" inertia="shell" />
+    <mesh name="umi_l61_part8" file="umi_l61_parts/umi_l61_part8.stl" />
+    <mesh name="umi_l61_part9" file="umi_l61_parts/umi_l61_part9.stl" />
+    <mesh name="umi_l61_part10" file="umi_l61_parts/umi_l61_part10.stl" />
+    <mesh name="umi_l61_part11" file="umi_l61_parts/umi_l61_part11.stl" />
+    <mesh name="umi_l61_part12" file="umi_l61_parts/umi_l61_part12.stl" inertia="shell" />
+    <mesh name="umi_l61_part13" file="umi_l61_parts/umi_l61_part13.stl" inertia="shell" />
+    <mesh name="umi_l61_part14" file="umi_l61_parts/umi_l61_part14.stl" />
+    <mesh name="umi_l61_part15" file="umi_l61_parts/umi_l61_part15.stl" inertia="shell" />
+    <mesh name="umi_l61_part16" file="umi_l61_parts/umi_l61_part16.stl" />
+    <mesh name="umi_l61_part17" file="umi_l61_parts/umi_l61_part17.stl" />
+    <mesh name="umi_l61_part18" file="umi_l61_parts/umi_l61_part18.stl" />
+    <mesh name="umi_l61_part19" file="umi_l61_parts/umi_l61_part19.stl" />
+    <mesh name="umi_l61_part20" file="umi_l61_parts/umi_l61_part20.stl" />
+    <mesh name="umi_l61_part21" file="umi_l61_parts/umi_l61_part21.stl" />
+    <mesh name="umi_l61_part22" file="umi_l61_parts/umi_l61_part22.stl" />
+    <mesh name="umi_l22_part1" file="umi_l22_parts/umi_l22_part1.stl" />
+    <mesh name="umi_l22_part2" file="umi_l22_parts/umi_l22_part2.stl" />
+    <mesh name="umi_l22_part3" file="umi_l22_parts/umi_l22_part3.stl" />
+    <mesh name="umi_l22_part4" file="umi_l22_parts/umi_l22_part4.stl" />
+    <mesh name="umi_l22_part5" file="umi_l22_parts/umi_l22_part5.stl" />
+    <mesh name="umi_l22_part6" file="umi_l22_parts/umi_l22_part6.stl" />
+    <mesh name="umi_l22_part7" file="umi_l22_parts/umi_l22_part7.stl" />
+    <mesh name="umi_l22_part8" file="umi_l22_parts/umi_l22_part8.stl" />
+    <mesh name="umi_l22_part9" file="umi_l22_parts/umi_l22_part9.stl" />
+    <mesh name="umi_l22_part10" file="umi_l22_parts/umi_l22_part10.stl" />
+    <mesh name="umi_l22_part11" file="umi_l22_parts/umi_l22_part11.stl" />
+    <mesh name="umi_l22_part12" file="umi_l22_parts/umi_l22_part12.stl" />
+    <mesh name="umi_l22_part13" file="umi_l22_parts/umi_l22_part13.stl" />
+    <mesh name="umi_l22_part14" file="umi_l22_parts/umi_l22_part14.stl" />
+    <mesh name="umi_l22_part15" file="umi_l22_parts/umi_l22_part15.stl" />
+    <mesh name="umi_l22_part16" file="umi_l22_parts/umi_l22_part16.stl" />
+    <mesh name="umi_l22_part17" file="umi_l22_parts/umi_l22_part17.stl" />
+    <mesh name="umi_l22_part18" file="umi_l22_parts/umi_l22_part18.stl" />
+    <mesh name="umi_l22_part19" file="umi_l22_parts/umi_l22_part19.stl" />
+    <mesh name="umi_l22_part20" file="umi_l22_parts/umi_l22_part20.stl" />
+    <mesh name="umi_l22_part21" file="umi_l22_parts/umi_l22_part21.stl" />
+    <mesh name="umi_l22_part22" file="umi_l22_parts/umi_l22_part22.stl" />
+    <mesh name="umi_l22_part23" file="umi_l22_parts/umi_l22_part23.stl" />
+    <mesh name="umi_l22_part24" file="umi_l22_parts/umi_l22_part24.stl" />
+    <mesh name="umi_l22_part25" file="umi_l22_parts/umi_l22_part25.stl" />
+    <mesh name="umi_l22_part26" file="umi_l22_parts/umi_l22_part26.stl" />
+    <mesh name="umi_l22_part27" file="umi_l22_parts/umi_l22_part27.stl" />
+    <mesh name="umi_l22_part28" file="umi_l22_parts/umi_l22_part28.stl" />
+    <mesh name="umi_l22_part29" file="umi_l22_parts/umi_l22_part29.stl" />
+    <mesh name="umi_l53_part1" file="umi_l53_parts/umi_l53_part1.stl" />
+    <mesh name="umi_l53_part2" file="umi_l53_parts/umi_l53_part2.stl" />
+    <mesh name="umi_l41_part1" file="umi_l41_parts/umi_l41_part1.stl" />
+    <mesh name="umi_l41_part2" file="umi_l41_parts/umi_l41_part2.stl" />
+    <mesh name="umi_l41_part3" file="umi_l41_parts/umi_l41_part3.stl" />
+    <mesh name="umi_l41_part4" file="umi_l41_parts/umi_l41_part4.stl" />
+    <mesh name="umi_l41_part5" file="umi_l41_parts/umi_l41_part5.stl" />
+    <mesh name="umi_l41_part6" file="umi_l41_parts/umi_l41_part6.stl" />
+    <mesh name="umi_l41_part7" file="umi_l41_parts/umi_l41_part7.stl" />
+    <mesh name="umi_l41_part8" file="umi_l41_parts/umi_l41_part8.stl" />
+    <mesh name="umi_l41_part9" file="umi_l41_parts/umi_l41_part9.stl" />
+    <mesh name="umi_l41_part10" file="umi_l41_parts/umi_l41_part10.stl" />
+    <mesh name="umi_l41_part11" file="umi_l41_parts/umi_l41_part11.stl" />
+    <mesh name="umi_l41_part12" file="umi_l41_parts/umi_l41_part12.stl" />
+    <mesh name="umi_l41_part13" file="umi_l41_parts/umi_l41_part13.stl" />
+    <mesh name="umi_l41_part14" file="umi_l41_parts/umi_l41_part14.stl" />
+    <mesh name="umi_l41_part15" file="umi_l41_parts/umi_l41_part15.stl" />
+    <mesh name="umi_l41_part16" file="umi_l41_parts/umi_l41_part16.stl" />
+    <mesh name="umi_l41_part17" file="umi_l41_parts/umi_l41_part17.stl" />
+    <mesh name="umi_l41_part18" file="umi_l41_parts/umi_l41_part18.stl" inertia="shell" />
+    <mesh name="umi_l41_part19" file="umi_l41_parts/umi_l41_part19.stl" />
+    <mesh name="umi_l41_part20" file="umi_l41_parts/umi_l41_part20.stl" />
+    <mesh name="umi_l41_part21" file="umi_l41_parts/umi_l41_part21.stl" />
+    <mesh name="umi_l41_part22" file="umi_l41_parts/umi_l41_part22.stl" />
+    <mesh name="umi_l41_part23" file="umi_l41_parts/umi_l41_part23.stl" inertia="shell" />
+    <mesh name="umi_l41_part24" file="umi_l41_parts/umi_l41_part24.stl" />
+    <mesh name="umi_l41_part25" file="umi_l41_parts/umi_l41_part25.stl" />
+    <mesh name="umi_l41_part26" file="umi_l41_parts/umi_l41_part26.stl" />
+    <mesh name="umi_l41_part27" file="umi_l41_parts/umi_l41_part27.stl" />
+  </asset>
+
+</mujoco>

@@ -1,0 +1,176 @@
+defaults:
+  - basis_airbot_play_g2p
+  - _self_
+
+scene_name: open_door
+task_name: open_door_airbot_play
+door_side: front
+reverse: false
+
+replay:
+  # scene_joint_topic: /scene/door/joint_states
+  # Generic transform-driven scene reset: use the recorded
+  # base_link → handle_grasp_point transform to position the arm's
+  # operator base so the simulated handle matches its recorded relative
+  # pose.  Activated automatically when +replay.mcap_path is set.
+  #
+  # `offset` is a post-hoc calibration tweak: position is added in the
+  # world frame, orientation is right-multiplied (local-frame rotation).
+  # Use 3 floats for intrinsic XYZ euler (radians) or 4 floats for an
+  # xyzw quaternion.  Default identity → no adjustment.
+  transform_resets:
+    - topic: /robot/right_arm/base_handle/transform
+      parent:
+        kind: operator_base
+        name: arm
+      child:
+        kind: site
+        name: handle_grasp_${door_side}_site
+      move: parent
+      # Some recordings begin with a stale transform from the previous task.
+      # Pick the first frame after the transform jumps into the current one.
+      message_selector: first_jump
+      use_orientation: false
+      offset:
+        # Expressed in the movable entity's (operator_base) local frame.
+        # -x means "pull back from the handle" regardless of which side.
+        position: [ -0.03, -0.04, 0.0 ]
+        orientation: [ 0.0, 0.0, 0.0, 1.0 ]
+
+  # Per-actuator clamp for the recorded trajectory.  In kinematic replay
+  # the gripper command is applied to qpos directly with no contact
+  # resolution, so a fully-closed recording (~0 mm) drives the simulated
+  # fingers through the handle.  The handle spindle is a cylinder of
+  # diameter 0.02 m, so we floor the finger distance at 0.02 m so the
+  # fingers stop on the handle surface.
+  #
+  # Optional per-joint replay multipliers for mirroring / axis flipping.
+  # Only the first N actuator columns are scaled; unspecified trailing
+  # joints keep a factor of 1.0.
+  # joint_axis_scale: [1, 1, -1, 1, 1, 1]
+  joint_clip:
+    eef_claw_joint:
+      min: 0.02
+
+env:
+  sim_freq: 1000
+  update_freq: 100
+  mask_objects: [ "handle_lever_body" ]
+  operations: [ "push" ]
+  pre_step_callbacks:
+    - _target_: auto_atom.callbacks.door_latch.DoorLatchCallback
+      door_joint: door_hinge
+      handle_joint: handle_hinge
+      kp: 80.0
+      kd: 8.0
+      unlock_threshold: 0.12
+      lock_zone: 0.05
+  viewer:
+    lookat: [ 1.25, 0.15, -0.2 ]
+    distance: 1.8
+    azimuth: 30
+    elevation: -15
+    step_delay: 0.005
+    hold_seconds: 0.5
+
+task:
+  # This task is sensitive to base placement, so keep base randomization tight.
+  randomization:
+    arm:
+      base:
+        x: [ 0.01, 0.10 ]
+        y: [ -0.1, 0.10 ]
+        z: [ -0.1, 0.10 ]
+      eef:
+        x: [ 0.05, 0.10 ]
+        y: [ -0.1, 0.10 ]
+        z: [ 0.05, 0.15 ]
+        # roll: [-0.005, 0.005]
+        # pitch: [-0.005, 0.005]
+        # yaw: [-0.005, 0.005]
+  stages:
+    - name: grasp_and_open
+      object: handle_body_phys
+      # `site` re-bases `reference: object_world` waypoints onto the grasp
+      # point instead of the handle body origin. `object` is still used for
+      # contact / GS mask / set_pose / randomization.
+      site: handle_grasp_${door_side}_site
+      operation: push
+      operator: arm
+      param:
+        pre_move:
+          # Use `reference: object` (full site pose) so that when
+          # `door_side` is switched to `back`, the site's 180°-z rotation
+          # mirrors both the local offsets and the grasp orientation
+          # automatically. For the front site the site frame is world-
+          # aligned, so behavior matches the previous object_world setup.
+          # 1. Approach: ~4.5cm in front of grasp site (site-local -x)
+          - position: [ -0.045, 0.0, 0.0 ]
+            reference: object
+            orientation: [ 0.71328438, -0.02933355, 0.00430715, 0.70024737 ]
+            max_linear_step: 0.04
+            max_angular_step: 0.25
+          # 2. Grasp position: at the grasp site (0.5cm overshoot to ensure contact)
+          - position: [ 0.005, 0.0, 0.0 ]
+            reference: object
+            max_linear_step: 0.04
+            max_angular_step: 0.2
+            randomization:
+              x: [ -0.02, 0.00 ]
+              y: [ -0.02, 0.0 ]
+              z: [ -0.01, 0.01 ]
+        eef:
+          close: true
+        post_move:
+          # 3. Rotate handle to unlock (arc around handle_hinge)
+          #    World axis = [-1,0,0] (local Y becomes world -X after door frame 90deg rotation)
+          #    Positive angle = press handle down = unlock
+          - arc:
+              pivot: handle_hinge
+              axis: [ -1, 0, 0 ]
+              angle: 0.45
+              absolute: true
+              max_step: 0.15
+              reverse: ${reverse}
+            reference: world
+          # 4. Push door open (arc around door_hinge)
+          #    World axis = [0,0,-1] (same as local axis)
+          #    Negative angle = open door
+          #    -0.35 rad ≈ 20° — within reachable workspace
+          # - arc:
+          #     pivot: door_hinge
+          #     axis: [0, 0, -1]
+          #     angle: -0.25
+          #     absolute: true
+          #     max_step: 0.15
+          #   reference: world
+          # NOTE: Because the robotic arm and the door handle interact, the robotic arm may not be able to accurately reach the given target pose due to the influence of elasticity. There are two methods: one is to adjust the target pose, for example, the handle has an upward elasticity, so the target z can be raised, which reduces the force and improves the control accuracy, but will affect the control trajectory; the other is to adjust the tolerance, for example, increase the tolerance in the z direction, so that the trajectory remains unchanged, but the control accuracy is sacrificed.
+          # Final push in site-local frame so the +x direction auto-mirrors
+          # with the 180°-z back site (pushes toward the door from either side).
+          # `static: true` snapshots the site pose at action start — required
+          # because the gripper rigidly holds the handle, so a tracking
+          # reference would move with the gripper and never close the gap.
+          - position: [ 0.2, 0.0, 0.03 ]
+            reference: object
+            static: true
+            # orientation: [-0.19902274, 0.68997457, -0.66492774, -0.20541703]
+            max_linear_step: 0.02
+            max_angular_step: 0.3
+            tolerance:
+              position: [ 0.01, 0.02, 0.02 ]
+
+task_operators:
+  arm:
+    control:
+      adaptive_step_scaling: false
+      cartesian_max_linear_step: 0.025
+      cartesian_max_angular_step: 0.3
+      tolerance:
+        position: 0.008
+        orientation: 0.10
+        eef: 0.012
+    ik:
+      arm_type: play_short
+      eef_type: none
+      joint_control_mode: per_step_ik
+    max_joint_delta: 0.35
