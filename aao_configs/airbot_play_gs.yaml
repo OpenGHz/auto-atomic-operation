@@ -1,0 +1,16 @@
+# Shared Airbot Play + XF9600 gripper GS body gaussians config.
+# Include via Hydra defaults in any *_gs.yaml that uses this robot.
+
+assets_dir: assets
+robot_gs_dir: ${assets_dir}/gs/robots/airbot_play
+
+env:
+  gaussian_render:
+    body_gaussians:
+      arm_base: ${robot_gs_dir}/arm_base.ply
+      link1: ${robot_gs_dir}/link1.ply
+      link2: ${robot_gs_dir}/link2.ply
+      link3: ${robot_gs_dir}/link3.ply
+      link4: ${robot_gs_dir}/link4.ply
+      link5: ${robot_gs_dir}/link5.ply
+      link6: ${robot_gs_dir}/link6.ply

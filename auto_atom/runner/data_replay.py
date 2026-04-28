@@ -164,7 +164,7 @@ class DataReplayConfig(BaseModel):
     directly into MuJoCo ``qpos``. This is intended for passive articulated
     scene elements such as doors and handles that are not operator actuators.
     """
-    joint_name_mapping: Dict[str, str] = {"gripper": "xfg_claw_joint"}
+    joint_name_mapping: Dict[str, str] = {"gripper": "eef_claw_joint"}
     joint_axis_scale: List[float] = Field(default_factory=list)
     """Per-joint multipliers applied to recorded joint/ctrl data after
     column reordering. Only the first ``N`` columns are scaled, where

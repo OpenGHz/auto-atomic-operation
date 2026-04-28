@@ -1,6 +1,7 @@
 defaults:
-  - open_door_airbot_play
-  - airbot_play_xf9600_gs
+  - open_door_airbot_play_g2p
+  - airbot_play_gs
+  - airbot_g2p_gs
   - _self_
 
 door_name: door0
