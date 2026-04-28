@@ -1,5 +1,5 @@
 defaults:
-  - basis_p7_xf9600_composable
+  - basis_p7_xf9600
   - gs_mixin
   - _self_
 
