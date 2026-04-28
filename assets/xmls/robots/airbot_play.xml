@@ -1,5 +1,5 @@
 <mujoco model="airbot_play">
-  <compiler angle="radian" meshdir="../../../meshes/airbot_play" autolimits="true"/>
+  <compiler angle="radian" meshdir="../../meshes/airbot_play" autolimits="true"/>
 
   <default>
     <default class="airbot_play">

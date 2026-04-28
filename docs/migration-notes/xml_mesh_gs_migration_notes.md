@@ -73,7 +73,7 @@ When a robot XML is included by a scene XML:
 Example:
 
 ```xml
-<compiler angle="radian" meshdir="../../../meshes/example_robot" autolimits="true"/>
+<compiler angle="radian" meshdir="../../meshes/example_robot" autolimits="true"/>
 ```
 
 The exact number of `..` segments depends on the project layout.
