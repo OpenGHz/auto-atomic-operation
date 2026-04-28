@@ -11,9 +11,13 @@ Usage::
     python examples/view_scene.py --config-name pick_and_place
     python examples/view_scene.py --config-name open_door_airbot_play_back_gs
     python examples/view_scene.py --config-name open_door_p7_ik
+    python examples/view_scene.py --debug --config-name open_door_p7_ik
 """
 
 from __future__ import annotations
+
+import sys
+import traceback
 
 import hydra
 import mujoco
@@ -30,6 +34,29 @@ from auto_atom.utils.scene_loader import load_scene
 
 # Joint qpos widths by mjtJoint enum value: free=7, ball=4, slide=1, hinge=1.
 _QPOS_WIDTH = {0: 7, 1: 4, 2: 1, 3: 1}
+_DEBUG = False
+
+
+def _strip_debug_arg(argv: list[str]) -> bool:
+    """Consume this script's --debug flag before Hydra parses argv."""
+    debug = False
+    stripped: list[str] = []
+    hydra_separator_seen = False
+    for arg in argv:
+        if arg == "--":
+            hydra_separator_seen = True
+            stripped.append(arg)
+        elif not hydra_separator_seen and arg == "--debug":
+            debug = True
+        else:
+            stripped.append(arg)
+    argv[:] = stripped
+    return debug
+
+
+def _print_debug_exception(context: str) -> None:
+    print(f"[debug] {context} failed; full traceback:", file=sys.stderr, flush=True)
+    traceback.print_exc(file=sys.stderr)
 
 
 def _to_container(value):
@@ -257,24 +284,43 @@ def main(cfg: DictConfig) -> None:
         f"{len(overrides['op_bases'])} operator base(s)"
     )
 
+    if _DEBUG:
+        print("[debug] preflight build before launching viewer...", flush=True)
+        try:
+            m, d = _build(overrides)
+            print(
+                f"[debug] preflight ok: nq={m.nq} nv={m.nv} nu={m.nu} "
+                f"nbody={m.nbody} ngeom={m.ngeom}",
+                flush=True,
+            )
+            del m, d
+        except Exception:
+            _print_debug_exception("preflight build")
+            raise
+
     def loader() -> tuple[mujoco.MjModel, mujoco.MjData]:
-        # Re-compose the Hydra config from disk so the reload button picks up
-        # YAML edits (initial_pose, base_pose, robot_paths, joint_positions, ...),
-        # then rebuild the model. ``load_scene`` already re-reads the scene/robot
-        # XML files from disk so XML edits also flow through.
-        if GlobalHydra.instance().is_initialized():
-            GlobalHydra.instance().clear()
-        with initialize_config_dir(version_base=None, config_dir=config_dir):
-            cfg_now = compose(config_name=config_name)
-        ov = _extract_overrides(cfg_now)
-        m, d = _build(ov)
-        print(
-            f"[info] model  : nq={m.nq} nv={m.nv} nu={m.nu} "
-            f"nbody={m.nbody} ngeom={m.ngeom}  "
-            f"(robots={ov['robot_paths']}, ijp={len(ov['ijp'])}, "
-            f"body_pose={len(ov['initial_pose'])}, op_base={len(ov['op_bases'])})"
-        )
-        return m, d
+        try:
+            # Re-compose the Hydra config from disk so the reload button picks up
+            # YAML edits (initial_pose, base_pose, robot_paths, joint_positions, ...),
+            # then rebuild the model. ``load_scene`` already re-reads the scene/robot
+            # XML files from disk so XML edits also flow through.
+            if GlobalHydra.instance().is_initialized():
+                GlobalHydra.instance().clear()
+            with initialize_config_dir(version_base=None, config_dir=config_dir):
+                cfg_now = compose(config_name=config_name)
+            ov = _extract_overrides(cfg_now)
+            m, d = _build(ov)
+            print(
+                f"[info] model  : nq={m.nq} nv={m.nv} nu={m.nu} "
+                f"nbody={m.nbody} ngeom={m.ngeom}  "
+                f"(robots={ov['robot_paths']}, ijp={len(ov['ijp'])}, "
+                f"body_pose={len(ov['initial_pose'])}, op_base={len(ov['op_bases'])})"
+            )
+            return m, d
+        except Exception:
+            if _DEBUG:
+                _print_debug_exception("viewer loader")
+            raise
 
     print(
         "[info] launching viewer (close the window to exit; reload button"
@@ -284,4 +330,5 @@ def main(cfg: DictConfig) -> None:
 
 
 if __name__ == "__main__":
+    _DEBUG = _strip_debug_arg(sys.argv)
     main()

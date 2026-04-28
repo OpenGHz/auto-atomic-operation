@@ -12,6 +12,7 @@ Since scene XMLs no longer embed their robot include or `<key name="home">`, ope
 python examples/view_scene.py --config-name pick_and_place
 python examples/view_scene.py --config-name open_door_airbot_play_back_gs
 python examples/view_scene.py --config-name open_door_p7_ik
+python examples/view_scene.py --debug --config-name open_door_p7_ik
 ```
 
 The default config is `pick_and_place`. Any Hydra override can be appended after `--`:
@@ -57,6 +58,10 @@ On startup and on every reload the script prints:
 ```
 
 Use these counters to confirm that the expected robot was injected and that all overrides were honoured.
+
+Pass `--debug` before Hydra arguments to preflight-build the model and print
+full loader tracebacks to the terminal. This is useful for errors that MuJoCo's
+viewer would otherwise show only inside the GUI.
 
 ## Related
 
