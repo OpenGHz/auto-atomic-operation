@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
-class SimEntityRef(BaseModel):
+class SimEntityRef(BaseModel, frozen=True):
     """Reference to a simulation entity whose world pose can be queried
     (and, for kinds that support it, updated).
 
@@ -40,7 +40,7 @@ class SimEntityRef(BaseModel):
         ``env.override_operator_base_pose``.
     """
 
-    model_config = ConfigDict(validate_assignment=True)
+    model_config = ConfigDict(validate_assignment=True, extra="forbid")
 
     kind: Literal["site", "body", "operator_base"]
     name: str
@@ -48,7 +48,7 @@ class SimEntityRef(BaseModel):
     ``kind == 'operator_base'``."""
 
 
-class PoseOffset(BaseModel):
+class PoseOffset(BaseModel, frozen=True):
     """Small calibration tweak added to a computed pose.
 
     ``position`` is an additive offset in the world frame. ``orientation``
@@ -57,7 +57,7 @@ class PoseOffset(BaseModel):
     so an unset offset is a no-op.
     """
 
-    model_config = ConfigDict(validate_assignment=True)
+    model_config = ConfigDict(validate_assignment=True, extra="forbid")
 
     position: List[float] = Field(default_factory=lambda: [0.0, 0.0, 0.0])
     """Translation added to the computed position (x, y, z), expressed in
@@ -73,7 +73,7 @@ class PoseOffset(BaseModel):
     euler, radians).  Default is identity."""
 
 
-class TransformResetConfig(BaseModel):
+class TransformResetConfig(BaseModel, frozen=True):
     """Generic scene-reset rule driven by a recorded ``TransformStamped``.
 
     Reads a selected ``geometry_msgs/TransformStamped`` on ``topic`` from the
@@ -86,7 +86,7 @@ class TransformResetConfig(BaseModel):
     fine calibration.
     """
 
-    model_config = ConfigDict(validate_assignment=True)
+    model_config = ConfigDict(validate_assignment=True, extra="forbid")
 
     topic: str
     """Topic in the MCAP containing geometry_msgs/TransformStamped messages to use for this reset."""
@@ -122,14 +122,14 @@ class TransformResetConfig(BaseModel):
     pose.  Default is identity (no adjustment)."""
 
 
-class JointClipBounds(BaseModel):
+class JointClipBounds(BaseModel, frozen=True):
     """Optional ``[min, max]`` clamp applied to one actuator's recorded
     trajectory.  Either bound may be omitted to leave that side
     unclipped.  Values are in the actuator's user-facing units (e.g.
     finger distance in metres for an EEF behind a
     :class:`FingerDistanceMapper`)."""
 
-    model_config = ConfigDict(validate_assignment=True)
+    model_config = ConfigDict(validate_assignment=True, extra="forbid")
 
     min: Optional[float] = None
     max: Optional[float] = None
@@ -138,7 +138,7 @@ class JointClipBounds(BaseModel):
 class DataReplayConfig(BaseModel):
     """Replay-specific settings (subset of the original ``ReplayConfig``)."""
 
-    model_config = ConfigDict(validate_assignment=True)
+    model_config = ConfigDict(validate_assignment=True, extra="forbid")
 
     demo_name: str | None = Field(default=None)
     mode: str = Field(default="pose")
