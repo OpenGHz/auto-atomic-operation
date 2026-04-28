@@ -13,11 +13,11 @@ env:
     # freejoint: pos(xyz) + quat(wxyz) — gripper hangs 0.4m above the floor.
     xf9600_freejoint: [0.0, 0.0, 0.4, 1.0, 0.0, 0.0, 0.0]
     # Single gripper drive joint (range 0..0.02, 0 = fully open).
-    xfg_clawj: 0.0
-  # XF9600 exposes its wrist camera as ``xfg_wrist_cam`` (attach prefix); the
+    eef_clawj: 0.0
+  # XF9600 exposes its wrist camera as ``eef_wrist_cam`` (attach prefix); the
   # basis camera list references ``wrist_cam`` and has to be overridden.
   cameras:
-    - name: xfg_wrist_cam
+    - name: eef_wrist_cam
       width: ${cam_width}
       height: ${cam_height}
       enable_color: ${enable_color}
@@ -45,7 +45,7 @@ env:
   operators:
     arm:
       arm_actuators: []
-      eef_actuators: [xfg_claw_joint]
+      eef_actuators: [eef_claw_joint]
       eef_output_name: gripper
       pose_site: eef_pose
       root_body: xf9600_interface

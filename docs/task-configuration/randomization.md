@@ -21,7 +21,7 @@ env:
     joint4: 1.981
     joint5: 1.110
     joint6: 0.408
-    xfg_claw_joint: 0.01        # gripper partially closed
+    eef_claw_joint: 0.01        # gripper partially closed
 ```
 
 ### Semantics

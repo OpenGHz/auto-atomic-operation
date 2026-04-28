@@ -73,14 +73,14 @@
 
   <contact>
     <exclude body1="link5" body2="link6"/>
-    <exclude body1="link6" body2="xfg_base_link"/>
-    <exclude body1="link6" body2="xfg_claw"/>
-    <exclude body1="link6" body2="xfg_l11"/>
-    <exclude body1="link6" body2="xfg_l61"/>
-    <exclude body1="link6" body2="xfg_l21"/>
-    <exclude body1="link6" body2="xfg_l31"/>
-    <exclude body1="link6" body2="xfg_l41"/>
-    <exclude body1="link6" body2="xfg_l51"/>
+    <exclude body1="link6" body2="eef_base_link"/>
+    <exclude body1="link6" body2="eef_claw"/>
+    <exclude body1="link6" body2="eef_l11"/>
+    <exclude body1="link6" body2="eef_l61"/>
+    <exclude body1="link6" body2="eef_l21"/>
+    <exclude body1="link6" body2="eef_l31"/>
+    <exclude body1="link6" body2="eef_l41"/>
+    <exclude body1="link6" body2="eef_l51"/>
   </contact>
 
   <worldbody>
@@ -127,7 +127,7 @@
                       <site name="endpoint" pos="0 0 0" quat="0 0 0 1" size="0.008" type="sphere" rgba="1 0 0 1"/>
                       <site name="eef_pose" pos="0 0 0" quat="0 0 0 1" size="0.008" type="sphere" rgba="0 0 1 1"/>
                     </body>
-                    <attach model="xf9600_gripper" prefix="xfg_"/>
+                    <attach model="xf9600_gripper" prefix="eef_"/>
                   </body>
                 </body>
               </body>
@@ -145,21 +145,21 @@
     <jointpos name="joint4_pos" joint="joint4"/>
     <jointpos name="joint5_pos" joint="joint5"/>
     <jointpos name="joint6_pos" joint="joint6"/>
-    <jointpos name="gripper_pos" joint="xfg_clawj"/>
+    <jointpos name="gripper_pos" joint="eef_clawj"/>
     <jointvel name="joint1_vel" joint="joint1"/>
     <jointvel name="joint2_vel" joint="joint2"/>
     <jointvel name="joint3_vel" joint="joint3"/>
     <jointvel name="joint4_vel" joint="joint4"/>
     <jointvel name="joint5_vel" joint="joint5"/>
     <jointvel name="joint6_vel" joint="joint6"/>
-    <jointvel name="gripper_vel" joint="xfg_clawj"/>
+    <jointvel name="gripper_vel" joint="eef_clawj"/>
     <jointactuatorfrc name="joint1_torque" joint="joint1"/>
     <jointactuatorfrc name="joint2_torque" joint="joint2"/>
     <jointactuatorfrc name="joint3_torque" joint="joint3"/>
     <jointactuatorfrc name="joint4_torque" joint="joint4"/>
     <jointactuatorfrc name="joint5_torque" joint="joint5"/>
     <jointactuatorfrc name="joint6_torque" joint="joint6"/>
-    <jointactuatorfrc name="gripper_torque" joint="xfg_clawj"/>
+    <jointactuatorfrc name="gripper_torque" joint="eef_clawj"/>
     <framepos name="endpoint_pos" objtype="site" objname="endpoint" reftype="site" refname="armbase"/>
     <framequat name="endpoint_quat" objtype="site" objname="endpoint" reftype="site" refname="armbase"/>
     <framelinvel name="endpoint_vel" objtype="site" objname="endpoint" reftype="site" refname="armbase"/>

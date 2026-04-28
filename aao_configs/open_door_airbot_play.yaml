@@ -49,7 +49,7 @@ replay:
   # joints keep a factor of 1.0.
   # joint_axis_scale: [1, 1, -1, 1, 1, 1]
   joint_clip:
-    xfg_claw_joint:
+    eef_claw_joint:
       min: 0.02
 
 env:

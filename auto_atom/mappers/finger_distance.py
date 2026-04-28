@@ -13,9 +13,9 @@ Configure in YAML via Hydra ``_target_``::
         arm:
           eef_mapper:
             _target_: auto_atom.mappers.finger_distance.FingerDistanceMapper
-            left_pad_geom: xfg_left_finger_pad_upper
-            right_pad_geom: xfg_right_finger_pad_upper
-            actuator_name: xfg_claw_joint
+            left_pad_geom: eef_left_finger_pad_upper
+            right_pad_geom: eef_right_finger_pad_upper
+            actuator_name: eef_claw_joint
 """
 
 from __future__ import annotations

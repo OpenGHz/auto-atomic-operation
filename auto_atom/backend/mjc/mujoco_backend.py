@@ -282,7 +282,7 @@ class MujocoOperatorHandler(OperatorHandler):
                 continue
             name = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_GEOM, gid) or ""
             # Match both unprefixed (``left_finger_pad``) and prefixed
-            # (``xfg_left_finger_pad_upper``) names, so grasp detection works
+            # (``eef_left_finger_pad_upper``) names, so grasp detection works
             # when a gripper model is attached under an ``<attach prefix=...>``.
             if name.startswith("left_") or "_left_" in name:
                 mapping[gid] = "left"

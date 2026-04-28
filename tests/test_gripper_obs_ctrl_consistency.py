@@ -42,9 +42,9 @@ _ROBOT_CONFIGS: list[dict] = [
     {
         "id": "xf9600_airbot_play",
         "scene_xml": _ASSETS / "scenes" / "open_door" / "demo.xml",
-        "actuator": "xfg_claw_joint",
-        "left_pad": "xfg_left_finger_pad_upper",
-        "right_pad": "xfg_right_finger_pad_upper",
+        "actuator": "eef_claw_joint",
+        "left_pad": "eef_left_finger_pad_upper",
+        "right_pad": "eef_right_finger_pad_upper",
         "ctrl_range": (0.0, 0.02),
         # ctrl 0 → open, ctrl 0.02 → closed
         "open_is_min": True,
@@ -227,7 +227,7 @@ def _framework_operator_config(cfg: dict) -> tuple[dict, str]:
                     "joint5",
                     "joint6",
                 ],
-                "eef_actuators": ["xfg_claw_joint"],
+                "eef_actuators": ["eef_claw_joint"],
                 "eef_output_name": "gripper",
             }
         }, "gripper"
@@ -418,9 +418,9 @@ _MAPPER_CONFIGS: list[dict] = [
     {
         "id": "xf9600_airbot_play",
         "scene_xml": _ASSETS / "scenes" / "open_door" / "demo.xml",
-        "actuator": "xfg_claw_joint",
-        "left_pad": "xfg_left_finger_pad_upper",
-        "right_pad": "xfg_right_finger_pad_upper",
+        "actuator": "eef_claw_joint",
+        "left_pad": "eef_left_finger_pad_upper",
+        "right_pad": "eef_right_finger_pad_upper",
         "ctrl_range": (0.0, 0.02),
     },
     {
@@ -520,9 +520,9 @@ def test_framework_with_finger_distance_mapper() -> None:
     from auto_atom.mappers.finger_distance import FingerDistanceMapper
 
     mapper = FingerDistanceMapper(
-        left_pad_geom="xfg_left_finger_pad_upper",
-        right_pad_geom="xfg_right_finger_pad_upper",
-        actuator_name="xfg_claw_joint",
+        left_pad_geom="eef_left_finger_pad_upper",
+        right_pad_geom="eef_right_finger_pad_upper",
+        actuator_name="eef_claw_joint",
     )
     operators = {
         "arm": {
@@ -534,7 +534,7 @@ def test_framework_with_finger_distance_mapper() -> None:
                 "joint5",
                 "joint6",
             ],
-            "eef_actuators": ["xfg_claw_joint"],
+            "eef_actuators": ["eef_claw_joint"],
             "eef_output_name": "gripper",
             "eef_mapper": mapper,
         }
@@ -555,7 +555,7 @@ def test_framework_with_finger_distance_mapper() -> None:
         # Command gripper ctrl=0.01 (raw) and step to converge.
         _hold_all_joints(env.model, env.data)
         aid = mujoco.mj_name2id(
-            env.model, mujoco.mjtObj.mjOBJ_ACTUATOR, "xfg_claw_joint"
+            env.model, mujoco.mjtObj.mjOBJ_ACTUATOR, "eef_claw_joint"
         )
         ctrl = np.array(env.data.ctrl, dtype=np.float64)
         ctrl[aid] = 0.01
@@ -587,10 +587,10 @@ def test_framework_with_finger_distance_mapper() -> None:
 
         # The actual finger distance for reference:
         lid = mujoco.mj_name2id(
-            env.model, mujoco.mjtObj.mjOBJ_GEOM, "xfg_left_finger_pad_upper"
+            env.model, mujoco.mjtObj.mjOBJ_GEOM, "eef_left_finger_pad_upper"
         )
         rid = mujoco.mj_name2id(
-            env.model, mujoco.mjtObj.mjOBJ_GEOM, "xfg_right_finger_pad_upper"
+            env.model, mujoco.mjtObj.mjOBJ_GEOM, "eef_right_finger_pad_upper"
         )
         actual_dist = float(
             np.linalg.norm(env.data.geom_xpos[lid] - env.data.geom_xpos[rid])

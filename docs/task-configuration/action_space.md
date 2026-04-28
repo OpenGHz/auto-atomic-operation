@@ -74,7 +74,7 @@ env.apply_pose_action("arm", positions, orientations, grippers, env_mask=mask)
 
 ### Mocap Robot (basis_mocap_eef_xf9600 / XFG-9600)
 
-`arm_actuators: []`, `eef_actuators: [xfg_claw_joint]`
+`arm_actuators: []`, `eef_actuators: [eef_claw_joint]`
 
 - Robot XML: `assets/xmls/robots/xf9600_mocap.xml` (mocap-driven floating XF9600 gripper)
 - Used by `pick_and_place_xf9600` and any other task that pairs mocap-style EEF control with the XF9600 gripper.
@@ -82,7 +82,7 @@ env.apply_pose_action("arm", positions, orientations, grippers, env_mask=mask)
 
 ### Joint-Mode Robot (basis_p7_xf9600 / Panda + XFG-9600)
 
-`arm_actuators: [joint1..joint7]`, `eef_actuators: [xfg_claw_joint]`
+`arm_actuators: [joint1..joint7]`, `eef_actuators: [eef_claw_joint]`
 
 - `apply_joint_action`: action = `[j1..j7, gripper]` (8 dims)
 - `apply_pose_action`: arm via IK, gripper via `gripper` param

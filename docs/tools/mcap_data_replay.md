@@ -50,7 +50,7 @@ All replay settings live under the `replay` key in Hydra overrides
 | `gripper_topic`       | `str`           | `/robot/right_gripper/joint_state`     | ROS2 topic for gripper joint states |
 | `base_topic`          | `str \| None`   | `None`                                 | Optional ROS2 `geometry_msgs/PoseStamped` topic for the operator base pose in world frame |
 | `scene_joint_topic`   | `str \| None`   | `None`                                 | Optional ROS2 `sensor_msgs/JointState` topic for passive scene joints such as doors / handles |
-| `joint_name_mapping`  | `dict`          | `{"gripper": "xfg_claw_joint"}`        | Maps mcap joint names to YAML actuator names |
+| `joint_name_mapping`  | `dict`          | `{"gripper": "eef_claw_joint"}`        | Maps mcap joint names to YAML actuator names |
 | `joint_axis_scale`    | `list[float]`   | `[]`                                   | Per-joint replay multipliers applied to the first `N` actuator columns after reordering; useful for mirroring by negating selected axes |
 | `joint_clip`          | `dict[str, {min, max}]` | `{}`                            | Per-actuator `[min, max]` clamp applied to the recorded trajectory once at demo-load time (after column reordering). Values are in the actuator's user-facing units (e.g. finger distance for an `eef_mapper`). Either bound can be omitted. |
 | `transform_resets`    | `list[TransformResetConfig]` | `[]`                      | Scene-reset rules driven by recorded `geometry_msgs/TransformStamped` MCAP topics; see "Transform Resets" below |
@@ -161,7 +161,7 @@ grasped object's thickness:
 ```yaml
 replay:
   joint_clip:
-    xfg_claw_joint:
+    eef_claw_joint:
       min: 0.015        # finger distance in metres (with eef_mapper)
 ```
 

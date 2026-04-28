@@ -42,7 +42,7 @@
 
       <!-- Attach the full XF9600 gripper (base_link + fingers + cameras +
            tactile sensors) under this interface body. -->
-      <attach model="xf9600_gripper" prefix="xfg_"/>
+      <attach model="xf9600_gripper" prefix="eef_"/>
     </body>
   </worldbody>
 
