@@ -191,6 +191,8 @@ class DataReplayConfig(BaseModel):
     where the recorded command can drive joints into geometry that
     real-world contact would have stopped — e.g. a gripper closing
     further than the grasped object's thickness."""
+    load_on_initialize: bool = True
+    """Whether to load the demonstration data during runner initialization."""
 
 
 class DataReplayTaskFileConfig(TaskFileConfig):
@@ -1555,7 +1557,8 @@ class DataReplayRunner(RunnerBase):
         ).from_config(config)
 
         # --- Load initial demo data ---
-        self._load_demo()
+        if self._replay_cfg.load_on_initialize:
+            self._load_demo()
         return self
 
     def set_demo_path(
