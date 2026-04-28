@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <mujoco model="p7_arm">
-  <compiler angle="radian" balanceinertia="true" meshdir="../../../meshes/p7_arm"/>
+  <compiler angle="radian" balanceinertia="true" meshdir="../../meshes/p7_arm"/>
   <option timestep="0.002" gravity="0 0 -9.81" integrator="implicitfast" iterations="100" cone="elliptic"/>
 
   <default>
@@ -37,7 +37,7 @@
 
   <worldbody>
     <body name="p7_mount" pos="1 0.4 -0.3">
-      <geom name="table" pos="0 0 -0.5" size="0.15 0.2 0.5" type="box" contype="1"/>
+      <geom name="table_robot" pos="0 0 -0.5" size="0.15 0.2 0.5" type="box" contype="1"/>
 
       <geom type="mesh" rgba="0.75294 0.75294 0.75294 1" mesh="base_link" contype="0" conaffinity="0"/>
 
