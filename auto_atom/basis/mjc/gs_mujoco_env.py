@@ -38,6 +38,7 @@ When ``gaussian_render`` is set:
 
 from __future__ import annotations
 
+import gc
 import glob as _glob
 import hashlib
 import logging
@@ -890,28 +891,47 @@ class GSUnifiedMujocoEnv(UnifiedMujocoEnv):
     def __init__(self, config: GSEnvConfig) -> None:
         super().__init__(config)
         self.config: GSEnvConfig
-        gs_cfg = config.gaussian_render
-        self._gs_background_source_ply = gs_cfg.background_ply
-        self._is_multi_bg = gs_cfg.is_multi_background()
-        self._gs_body_gaussians = gs_cfg.resolved_body_gaussians()
-        self._gs_renderer: GSRendererMuJoCo | None = None
-        fg_cfg = BatchSplatConfig(
-            body_gaussians=dict(self._gs_body_gaussians),
-            background_ply=None,
-            minibatch=self.config.gaussian_render.minibatch,
-        )
-        self._fg_gs_renderer = MjxBatchSplatRenderer(fg_cfg, self.model)
-        self._bg_gs_renderer: MjxBatchSplatRenderer | None = None
+        self._pending_gs_config: GaussianRenderConfig | None = None
+        self._bg_rng = np.random.default_rng()
+        self._setup_gs_render_state()
+        if config.warmup:
+            self.get_logger().info("Performing GS renderer warmup...")
+            self.reset()
+            self.capture_observation()
+            self.get_logger().info("GS renderer warmup complete.")
 
-        # Multi-background state: parallel lists of per-bg renderers, plus the
-        # index of the currently active bg. ``_gs_renderer`` / ``_bg_gs_renderer``
-        # are re-pointed into these lists on reset.
+    def _setup_gs_render_state(self) -> None:
+        """(Re)build all GS renderers from ``self.config.gaussian_render``.
+
+        Old renderers are dereferenced before new ones are constructed so the
+        GPU memory they hold is reclaimed by GC before the new allocation,
+        avoiding a transient 2× VRAM peak.
+        """
+        gs_cfg = self.config.gaussian_render
+        # Drop old GPU-backed renderers first (no explicit close on these
+        # classes — relies on GC). Force a collection so device memory is
+        # actually freed before the new allocations below.
+        self._gs_renderer: GSRendererMuJoCo | None = None
+        self._bg_gs_renderer: MjxBatchSplatRenderer | None = None
         self._gs_renderers_list: list[GSRendererMuJoCo] = []
         self._bg_gs_renderers_list: list[MjxBatchSplatRenderer | None] = []
         self._bg_source_plys: list[str] = []
         self._active_bg_idx: int = 0
-        self._bg_rng = np.random.default_rng()
+        self._fg_gs_renderer = None
+        self._gs_mask_renderers = {}
+        gc.collect()
 
+        self._gs_background_source_ply = gs_cfg.background_ply
+        self._is_multi_bg = gs_cfg.is_multi_background()
+        self._gs_body_gaussians = gs_cfg.resolved_body_gaussians()
+        self._fg_gs_renderer = MjxBatchSplatRenderer(
+            BatchSplatConfig(
+                body_gaussians=dict(self._gs_body_gaussians),
+                background_ply=None,
+                minibatch=gs_cfg.minibatch,
+            ),
+            self.model,
+        )
         if self._is_multi_bg:
             self._bg_source_plys = gs_cfg.resolved_background_plys()
             for bg_ply in self._bg_source_plys:
@@ -942,11 +962,23 @@ class GSUnifiedMujocoEnv(UnifiedMujocoEnv):
         self._gs_mask_renderers = self._build_gs_mask_renderers(
             dict(self._gs_body_gaussians)
         )
-        if config.warmup:
-            self.get_logger().info("Performing GS renderer warmup...")
-            self.reset()
-            self.capture_observation()
-            self.get_logger().info("GS renderer warmup complete.")
+
+    def update_gaussian_render(
+        self,
+        config: GaussianRenderConfig | None = None,
+        **kwargs,
+    ) -> None:
+        """Stage a new Gaussian render config; takes effect on next ``reset()``.
+
+        Pass a full ``GaussianRenderConfig`` via ``config``, kwargs to patch
+        the current config's fields, or both (kwargs override).
+        """
+        base = config if config is not None else self.config.gaussian_render
+        if not isinstance(base, GaussianRenderConfig):
+            base = GaussianRenderConfig.model_validate(base)
+        if kwargs:
+            base = base.model_copy(update=kwargs)
+        self._pending_gs_config = base
 
     def _make_combined_gs_renderer(
         self, background_ply: str | None
@@ -981,6 +1013,10 @@ class GSUnifiedMujocoEnv(UnifiedMujocoEnv):
         return self._active_bg_idx
 
     def reset(self) -> None:
+        if self._pending_gs_config is not None:
+            object.__setattr__(self.config, "gaussian_render", self._pending_gs_config)
+            self._pending_gs_config = None
+            self._setup_gs_render_state()
         super().reset()
         if (
             self._is_multi_bg
@@ -1343,6 +1379,7 @@ class GSUnifiedMujocoEnv(UnifiedMujocoEnv):
         self._gs_renderers_list = []
         self._bg_gs_renderers_list = []
         self._gs_mask_renderers = {}
+        self._pending_gs_config = None
         super().close()
 
 
@@ -1395,32 +1432,8 @@ class BatchedGSUnifiedMujocoEnv(BatchedUnifiedMujocoEnv):
         else:
             super().__init__(config, **kwargs)
 
-        self._gs_background_source = gs_cfg.background_ply
-        self._is_multi_bg = gs_cfg.is_multi_background()
-        self._gs_body_gaussians = gs_cfg.resolved_body_gaussians()
-
-        # Single shared foreground renderer
-        self._fg_gs_renderer = MjxBatchSplatRenderer(
-            BatchSplatConfig(
-                body_gaussians=dict(self._gs_body_gaussians),
-                background_ply=None,
-                minibatch=self.config.gaussian_render.minibatch,
-            ),
-            self.envs[0].model,
-        )
-
-        # List of background renderers, one per unique PLY. Empty when no bg.
-        self._bg_gs_renderers: list[MjxBatchSplatRenderer] = []
-        self._bg_source_plys: list[str] = []
-        # Per-env mapping env_idx -> index into ``_bg_gs_renderers``.
-        self._env_bg_idx: np.ndarray = np.zeros(self.batch_size, dtype=np.int64)
+        self._pending_gs_config: GaussianRenderConfig | None = None
         self._bg_rng = np.random.default_rng()
-
-        # Per-object mask renderers (shared) — build via env[0] which has
-        # .model, .get_logger(), and .config.mask_objects needed by the builder.
-        self._gs_mask_renderers = self._build_shared_mask_renderers(
-            dict(self._gs_body_gaussians)
-        )
 
         # Cache camera specs from env[0] (homogeneous)
         self._camera_specs = self.envs[0]._camera_specs
@@ -1430,6 +1443,50 @@ class BatchedGSUnifiedMujocoEnv(BatchedUnifiedMujocoEnv):
         self._bg_cache: dict[
             tuple[tuple[int, ...], int, int], tuple[torch.Tensor, torch.Tensor]
         ] = {}
+
+        self._setup_gs_render_state()
+
+        if config.warmup:
+            self.get_logger().info("Performing GS renderer warmup...")
+            self.reset()
+            self.capture_observation()
+            self.get_logger().info("GS renderer warmup complete.")
+
+    def _setup_gs_render_state(self) -> None:
+        """(Re)build all GS renderers from ``self.config.gaussian_render``.
+
+        Old renderers are dereferenced before new ones are constructed so the
+        GPU memory they hold is reclaimed by GC before the new allocation,
+        avoiding a transient 2× VRAM peak.
+        """
+        gs_cfg = self.config.gaussian_render
+        # Drop old GPU-backed renderers first (no explicit close on these
+        # classes — relies on GC). Force a collection so device memory is
+        # actually freed before the new allocations below.
+        self._fg_gs_renderer = None
+        self._bg_gs_renderers: list[MjxBatchSplatRenderer] = []
+        self._bg_source_plys: list[str] = []
+        self._env_bg_idx: np.ndarray = np.zeros(self.batch_size, dtype=np.int64)
+        self._bg_cache.clear()
+        self._gs_mask_renderers = {}
+        gc.collect()
+
+        self._gs_background_source = gs_cfg.background_ply
+        self._is_multi_bg = gs_cfg.is_multi_background()
+        self._gs_body_gaussians = gs_cfg.resolved_body_gaussians()
+
+        self._fg_gs_renderer = MjxBatchSplatRenderer(
+            BatchSplatConfig(
+                body_gaussians=dict(self._gs_body_gaussians),
+                background_ply=None,
+                minibatch=gs_cfg.minibatch,
+            ),
+            self.envs[0].model,
+        )
+
+        self._gs_mask_renderers = self._build_shared_mask_renderers(
+            dict(self._gs_body_gaussians)
+        )
 
         if self._is_multi_bg:
             self._bg_source_plys = gs_cfg.resolved_background_plys()
@@ -1452,11 +1509,23 @@ class BatchedGSUnifiedMujocoEnv(BatchedUnifiedMujocoEnv):
         self.get_logger().info(
             f"GS renderer initialised with {n_bodies} body gaussian(s){bg_str}"
         )
-        if config.warmup:
-            self.get_logger().info("Performing GS renderer warmup...")
-            self.reset()
-            self.capture_observation()
-            self.get_logger().info("GS renderer warmup complete.")
+
+    def update_gaussian_render(
+        self,
+        config: GaussianRenderConfig | None = None,
+        **kwargs,
+    ) -> None:
+        """Stage a new Gaussian render config; takes effect on next ``reset()``.
+
+        Pass a full ``GaussianRenderConfig`` via ``config``, kwargs to patch
+        the current config's fields, or both (kwargs override).
+        """
+        base = config if config is not None else self.config.gaussian_render
+        if not isinstance(base, GaussianRenderConfig):
+            base = GaussianRenderConfig.model_validate(base)
+        if kwargs:
+            base = base.model_copy(update=kwargs)
+        self._pending_gs_config = base
 
     # ------------------------------------------------------------------
     # shared-physics step-like overrides (run the single physics env once)
@@ -1566,6 +1635,14 @@ class BatchedGSUnifiedMujocoEnv(BatchedUnifiedMujocoEnv):
         return self._env_bg_idx
 
     def reset(self, env_mask: np.ndarray | None = None) -> None:
+        if self._pending_gs_config is not None:
+            object.__setattr__(self.config, "gaussian_render", self._pending_gs_config)
+            self._pending_gs_config = None
+            # import time
+            # start = time.perf_counter()
+            self._setup_gs_render_state()
+            # print(f"GS render state setup took {time.perf_counter() - start:.3f} seconds")
+
         if self._share_physics:
             # Partial per-env resets aren't meaningful when physics is shared;
             # reset the single replica iff any virtual env asked for it.
@@ -2520,6 +2597,7 @@ class BatchedGSUnifiedMujocoEnv(BatchedUnifiedMujocoEnv):
         self._bg_gs_renderers = []
         self._gs_mask_renderers = {}
         self._bg_cache.clear()
+        self._pending_gs_config = None
         super().close()
 
     def get_logger(self):
