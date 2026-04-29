@@ -1,0 +1,47 @@
+defaults:
+  - basis_xf9600
+  - _self_
+
+env:
+  # Inject the P7 arm + G2P gripper into the composable scene.
+  robot_paths:
+    - ${assets_dir}/xmls/robots/p7_arm_with_g2p.xml
+  # Home pose at reset mirrors basis_p7_xf9600 for the 7 P7 arm hinges.
+  # G2P passive linkage joints default from qpos0; only the driven claw slide
+  # is opened explicitly.
+  initial_joint_positions:
+    # P7 arm (7 hinges)
+    joint1:  0.0016582
+    joint2: -0.305293
+    joint3: -0.00983217
+    joint4:  0.166931
+    joint5:  1.59943
+    joint6: -0.107997
+    joint7: -0.00103546
+    # G2P gripper drive joint (0 = open, range 0..0.0115)
+    eef_umi_clawj: 0.0
+  operators:
+    arm:
+      arm_actuators:
+        - joint1
+        - joint2
+        - joint3
+        - joint4
+        - joint5
+        - joint6
+        - joint7
+      eef_actuators: [eef_claw_joint]
+      eef_output_name: gripper
+      eef_mapper:
+        _target_: auto_atom.mappers.finger_distance.FingerDistanceMapper
+        left_pad_geom: eef_left_finger_pad_upper
+        right_pad_geom: eef_right_finger_pad_upper
+        actuator_name: eef_claw_joint
+      pose_site: eef_pose
+      root_body: p7_mount
+      ik_factory: auto_atom.backend.mjc.ik.p7_analytical_ik_solver.P7AnalyticalIKSolver
+      ik_params:
+        flange_site_name: tool_site
+        tcp_site_name: eef_pose
+
+backend: auto_atom.backend.mjc.ik.p7_analytical_ik_solver.build_p7_xf9600_backend
