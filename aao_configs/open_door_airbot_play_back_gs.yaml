@@ -31,3 +31,9 @@ env:
         orientation: [ 0.0299934939, 0.9973503928, 0.0247500697, 0.0614818533 ]
         position: [ 0.000000, 0.000000, 0.040000 ]
         share_center_with: door_body
+      lock_gs_frame:
+        body_quat: [ 0.023543636, -0.014802135, 0.716127885, -0.697414831 ]
+        body_axis: [ 1, 0, 0 ]
+        orientation: [ 0.0299934939, 0.9973503928, 0.0247500697, 0.0614818533 ]
+        position: [ 0.000000, 0.000000, 0.040000 ]
+        share_center_with: door_body
