@@ -1,5 +1,5 @@
 defaults:
-  - basis_p7_xf9600
+  - basis_p7_g2p
   - gs_mixin
   - _self_
 
@@ -14,7 +14,7 @@ env:
   mask_objects: ["${object_name}"]
   operations: ["press"]
   cameras:
-    - name: xfg_wrist_cam
+    - name: eef_wrist_cam
       width: ${cam_width}
       height: ${cam_height}
       enable_color: ${enable_color}
@@ -75,7 +75,7 @@ task:
             tolerance:
               position: 0.02
               orientation: 0.20
-          - position: [0.0, 0.0, 0.05]
+          - position: [0.0, 0.0, 0.02]
             orientation: [0.70710678, 0.0, -0.70710678, 0.0]
             reference: object_world
             max_linear_step: 0.03
@@ -85,9 +85,9 @@ task:
               orientation: 0.15
         eef:
           close: true
-          joint_positions: [0.014]
+          joint_positions: [0.01]
         post_move:
-          - position: [0.0, 0.0, 0.15]
+          - position: [0.0, 0.0, 0.10]
             orientation: [0.70710678, 0.0, -0.70710678, 0.0]
             reference: object_world
             max_linear_step: 0.08
