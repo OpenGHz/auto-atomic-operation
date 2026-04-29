@@ -1,5 +1,5 @@
 defaults:
-  - basis_p7_xf9600
+  - basis_p7_g2p
   - gs_mixin
   - _self_
 
@@ -10,7 +10,7 @@ model_name: demo_gs
 env:
   sim_freq: 1200
   cameras:
-    - name: xfg_wrist_cam
+    - name: eef_wrist_cam
       width: ${cam_width}
       height: ${cam_height}
       enable_color: ${enable_color}
@@ -52,7 +52,7 @@ task:
   randomization:
     blue_duck:
       x: [0.56, 0.64]
-      y: [0.08, 0.14]
+      y: [0.1, 0.2]
       collision_radius: 0.04
       reference: absolute_world
 
@@ -68,7 +68,7 @@ task:
             reference: object_world
             max_linear_step: 0.04
             max_angular_step: 0.35
-          - position: [0.0, 0.0, 0.01]
+          - position: [0.0, 0.0, 0.001]
             orientation: [0.70710678, 0.0, -0.70710678, 0.0]
             reference: object_world
             max_linear_step: 0.02
@@ -76,7 +76,7 @@ task:
         eef:
           close: true
         post_move:
-          - position: [0.0, 0.0, 0.18]
+          - position: [0.0, 0.0, 0.22]
             orientation: [0.70710678, 0.0, -0.70710678, 0.0]
             reference: eef_world
             max_linear_step: 0.02
@@ -88,18 +88,18 @@ task:
       operator: arm
       param:
         pre_move:
-          - position: [0.0, 0.05, 0.18]
+          - position: [0.0, 0.08, 0.22]
             orientation: [0.70710678, 0.0, -0.70710678, 0.0]
             reference: object_world
-            max_linear_step: 0.3
+            max_linear_step: 0.05
             max_angular_step: 0.25
             tolerance:
               position: 0.045
               orientation: 0.4
-          - position: [0.0, 0.05, 0.13]
+          - position: [0.0, 0.08, 0.15]
             orientation: [0.70710678, 0.0, -0.70710678, 0.0]
             reference: object_world
-            max_linear_step: 0.3
+            max_linear_step: 0.05
             max_angular_step: 0.2
             tolerance:
               position: 0.025
@@ -107,20 +107,20 @@ task:
         eef:
           close: false
         post_move:
-          - position: [0.0, 0.05, 0.18]
+          - position: [0.0, 0.08, 0.15]
             orientation: [0.70710678, 0.0, -0.70710678, 0.0]
             reference: object_world
-            max_linear_step: 0.3
+            max_linear_step: 0.05
             max_angular_step: 0.25
 
 task_operators:
   arm:
     initial_state:
       base_pose:
-        position: [0.90, 0.05, 0.15]
+        position: [0.90, 0.05, 0.20]
         orientation: [0.0, 0.0, -1, 0]
     control:
-      timeout_steps: 220
+      timeout_steps: 320
       cartesian_max_linear_step: 0.025
       cartesian_max_angular_step: 0.3
       tolerance:
