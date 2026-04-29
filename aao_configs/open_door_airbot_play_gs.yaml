@@ -14,7 +14,7 @@ env:
   _target_: auto_atom.basis.mjc.gs_mujoco_env.BatchedGSUnifiedMujocoEnv
   gaussian_render:
     body_gaussians:
-      door_body: ${gs_dir}/${door_name}_${knob_name}.ply
+      door_body: ${gs_dir}/${door_name}.ply
       handle_gs_frame: ${gs_dir}/real_${knob_name}.ply
       lock_gs_frame: ${gs_dir}/real_${lock_name}.ply
       # bg_gs_frame: ${assets_dir}/gs/backgrounds/door_bg/${bg3dgs_name}.ply
