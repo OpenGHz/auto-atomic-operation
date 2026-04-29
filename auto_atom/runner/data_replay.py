@@ -1665,6 +1665,9 @@ class DataReplayRunner(RunnerBase):
     def get_observation(self) -> Any:
         return self._require_evaluator().get_observation()
 
+    def get_env(self) -> Any:
+        return self._require_evaluator().get_env()
+
     def summarize(
         self,
         update: Optional[TaskUpdate] = None,

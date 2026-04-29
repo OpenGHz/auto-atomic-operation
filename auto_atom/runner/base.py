@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Optional
+from typing import Any, Optional
 
 import numpy as np
 
@@ -31,6 +31,11 @@ class RunnerBase(ABC):
     @abstractmethod
     def update(self, env_mask: Optional[np.ndarray] = None) -> TaskUpdate:
         """Advance execution by one step for selected environments."""
+        ...
+
+    @abstractmethod
+    def get_env(self) -> Any:
+        """Return the underlying environment object managed by this runner."""
         ...
 
     @abstractmethod

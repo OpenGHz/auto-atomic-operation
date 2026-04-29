@@ -19,6 +19,7 @@ from .framework import (
 )
 from .runtime import (
     ControlSignal,
+    EnvProtocol,
     ExecutionContext,
     ExecutionRecord,
     ExecutionSummary,
@@ -324,6 +325,10 @@ class PolicyEvaluator:
             "No observation_getter was provided and backend.env does not expose "
             "capture_observation()."
         )
+
+    def get_env(self) -> EnvProtocol:
+        """Return the underlying environment object managed by this evaluator."""
+        return self._require_context().backend.env
 
     def update(self, action: Any, env_mask: Optional[np.ndarray] = None) -> TaskUpdate:
         context = self._require_context()

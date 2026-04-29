@@ -46,7 +46,7 @@ def main(cfg: DictConfig) -> None:
 
     def _step_fn(_step, _update):
         if perf_count:
-            _last_obs[0] = runner._context.backend.env.capture_observation()
+            _last_obs[0] = runner.get_env().capture_observation()
         return runner.update()
 
     try:

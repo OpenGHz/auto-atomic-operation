@@ -667,6 +667,10 @@ class TaskRunner:
         # self._set_interest_focus()
         return self._build_task_update()
 
+    def get_env(self) -> EnvProtocol:
+        """Return the underlying environment object managed by this runner."""
+        return self._require_context().backend.env
+
     def close(self) -> None:
         if self._context is None:
             return
