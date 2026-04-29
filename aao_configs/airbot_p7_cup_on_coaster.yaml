@@ -1,5 +1,5 @@
 defaults:
-  - basis_p7_xf9600
+  - basis_p7_g2p
   - _self_
 
 
@@ -11,7 +11,7 @@ max_updates: 650
 env:
   # demo.xml 只定义了 env0_cam / env1_cam,覆盖 basis_xf9600 的 env2_cam
   cameras:
-    - name: xfg_wrist_cam
+    - name: eef_wrist_cam
       width: ${cam_width}
       height: ${cam_height}
       enable_color: ${enable_color}
@@ -81,7 +81,7 @@ task:
             max_angular_step: 0.35
           # 2. 下降到 cup 中心上方 0.04 m（即贴近杯顶 z=0.045）。
           #    eef 在杯顶,夹爪指尖往下抓杯身上缘,掌部高于杯顶不再穿模。
-          - position: [0.0, 0.0, 0.04]
+          - position: [0.0, 0.0, 0.01]
             orientation: [0.70710678, 0.0, -0.70710678, 0.0]
             reference: object_world
             max_linear_step: 0.04
@@ -91,7 +91,7 @@ task:
         post_move:
           # 3. 夹紧后向上抬 0.10 m（cup_on_coaster.yaml 原值）。
           #    eef_world 快照解耦被夹 cup 的微动对 IK 目标的拖拽。
-          - position: [0.0, 0.0, 0.05]
+          - position: [0.0, 0.0, 0.03]
             orientation: [0.70710678, 0.0, -0.70710678, 0.0]
             reference: eef_world
             max_linear_step: 0.02
