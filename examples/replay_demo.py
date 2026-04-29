@@ -167,9 +167,12 @@ def main(cfg: DictConfig) -> None:
     )
 
     # --- Set replay overrides on DictConfig ---
+    script_only_keys = ("camera", "fps", "gif_width", "save_gif", "save_mp4")
     with open_dict(cfg):
         if "replay" not in cfg:
             cfg.replay = {}
+        for key in script_only_keys:
+            cfg.replay.pop(key, None)
         cfg.replay.demo_name = demo_name
         cfg.replay.demo_dir = os.path.join(project_root, "outputs", "records", "demos")
 
