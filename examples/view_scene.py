@@ -6,10 +6,15 @@ This script reads a Hydra task config, composes the scene with the robot(s)
 declared under ``env.robot_paths``, applies ``env.initial_joint_positions``
 as the home pose, and hands the model to ``mujoco.viewer.launch``.
 
+When the config carries a ``gaussian_render`` section, the script switches
+to a passive viewer and opens a second OpenCV window that re-renders the
+scene with Gaussian Splatting from the same free-camera pose as the MuJoCo
+viewer (synced live as you orbit / pan / zoom).
+
 Usage::
 
     python examples/view_scene.py --config-name pick_and_place
-    python examples/view_scene.py --config-name open_door_airbot_play_back_gs
+    python examples/view_scene.py --config-name open_door_airbot_play_gs
     python examples/view_scene.py --config-name open_door_p7_ik
     python examples/view_scene.py --debug --config-name open_door_p7_ik
 """
@@ -17,6 +22,7 @@ Usage::
 from __future__ import annotations
 
 import sys
+import time
 import traceback
 
 import hydra
@@ -257,6 +263,97 @@ def _build(overrides: dict) -> tuple[mujoco.MjModel, mujoco.MjData]:
     return m, d
 
 
+def _maybe_gs_config(cfg: DictConfig):
+    """Return a ``GaussianRenderConfig`` if the task config requests GS rendering.
+
+    Detection is content-based (looks for ``env.gaussian_render`` with at least
+    one body gaussian or a background ply), so it works whether the task uses
+    the GS env target directly or composes GS into a non-GS env.
+    """
+    env_cfg = cfg.get("env", {})
+    gs_node = env_cfg.get("gaussian_render", None)
+    if gs_node is None:
+        return None
+    gs_dict = OmegaConf.to_container(gs_node, resolve=True) or {}
+    if not (gs_dict.get("body_gaussians") or gs_dict.get("background_ply")):
+        return None
+    from auto_atom.basis.mjc.gs_mujoco_env import GaussianRenderConfig
+
+    return GaussianRenderConfig.model_validate(gs_dict)
+
+
+def _build_gs_renderer(gs_cfg, model: mujoco.MjModel):
+    """Build a ``GSRendererMuJoCo`` covering body PLYs + a single background.
+
+    Multi-background configs (list / glob) only get their first entry here —
+    the viewer is for previewing geometry alignment, not for sweeping bgs.
+    """
+    from gaussian_renderer import GSRendererMuJoCo
+
+    combined = dict(gs_cfg.resolved_body_gaussians())
+    if gs_cfg.is_multi_background():
+        bgs = gs_cfg.resolved_background_plys()
+        if bgs:
+            combined["background"] = bgs[0]
+    else:
+        bg = gs_cfg.resolved_background_ply()
+        if bg:
+            combined["background"] = bg
+    return GSRendererMuJoCo(combined, model)
+
+
+def _run_gs_synced_viewer(
+    model: mujoco.MjModel,
+    data: mujoco.MjData,
+    gs_cfg,
+    width: int = 640,
+    height: int = 480,
+) -> None:
+    """Passive MuJoCo viewer + cv2 window showing the GS render of the same
+    free-camera pose, refreshed every step."""
+    import cv2
+    import torch
+
+    gs_renderer = _build_gs_renderer(gs_cfg, model)
+    win = "GS view (synced with MuJoCo viewer)"
+    cv2.namedWindow(win, cv2.WINDOW_NORMAL)
+    cv2.resizeWindow(win, width, height)
+    print(
+        "[info] GS sync: orbit/pan/zoom in the MuJoCo viewer to drive the GS"
+        f" view (size {width}x{height}). ESC in the GS window to close it;"
+        " close the MuJoCo viewer to exit."
+    )
+
+    with mujoco.viewer.launch_passive(model, data) as v:
+        while v.is_running():
+            step_start = time.time()
+            mujoco.mj_step(model, data)
+            v.sync()
+            try:
+                gs_renderer.update_gaussians(data)
+                results = gs_renderer.render(
+                    model, data, [-1], width, height, free_camera=v.cam
+                )
+                rgb_t, _depth = results[-1]
+                rgb = rgb_t.clamp(0.0, 1.0).mul(255).to(torch.uint8).cpu().numpy()
+                bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+                cv2.imshow(win, bgr)
+            except Exception as e:
+                if _DEBUG:
+                    _print_debug_exception("GS render")
+                else:
+                    print(f"[warn] GS render error: {e}")
+            if (cv2.waitKey(1) & 0xFF) == 27:
+                break  # ESC exits both windows
+            if cv2.getWindowProperty(win, cv2.WND_PROP_VISIBLE) < 1:
+                break  # GS window closed via X
+            elapsed = time.time() - step_start
+            sleep_for = float(model.opt.timestep) - elapsed
+            if sleep_for > 0:
+                time.sleep(sleep_for)
+    cv2.destroyAllWindows()
+
+
 @hydra.main(
     config_path=str(get_config_dir()),
     config_name="pick_and_place",
@@ -297,6 +394,22 @@ def main(cfg: DictConfig) -> None:
         except Exception:
             _print_debug_exception("preflight build")
             raise
+
+    gs_cfg = _maybe_gs_config(cfg)
+    if gs_cfg is not None:
+        # GS path: build once (no reload button) and run a passive viewer
+        # whose free-camera state drives a synced GS render in a cv2 window.
+        m, d = _build(overrides)
+        print(
+            f"[info] model  : nq={m.nq} nv={m.nv} nu={m.nu} "
+            f"nbody={m.nbody} ngeom={m.ngeom}"
+        )
+        print(
+            f"[info] gs     : {len(gs_cfg.body_gaussians)} body gaussian(s), "
+            f"background_ply={'list/glob' if gs_cfg.is_multi_background() else gs_cfg.background_ply!r}"
+        )
+        _run_gs_synced_viewer(m, d, gs_cfg)
+        return
 
     def loader() -> tuple[mujoco.MjModel, mujoco.MjData]:
         try:
