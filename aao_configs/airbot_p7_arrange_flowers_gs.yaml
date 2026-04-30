@@ -1,0 +1,154 @@
+defaults:
+  - basis_p7_g2p
+  - gs_mixin
+  - _self_
+
+scene_name: arrange_flowers
+task_name: airbot_p7_arrange_flowers_gs
+model_name: demo_gs
+
+env:
+  sim_freq: 1200
+  update_freq: 15
+  mask_objects: ["flower", "vase2"]
+  operations: ["pick", "place"]
+  cameras:
+    - name: eef_wrist_cam
+      width: ${cam_width}
+      height: ${cam_height}
+      enable_color: ${enable_color}
+      enable_depth: ${enable_depth}
+      enable_mask: ${enable_mask}
+      enable_heat_map: ${enable_heat_map}
+      parent_frame: eef_pose
+      is_static: false
+    - name: env1_cam
+      width: ${cam_width}
+      height: ${cam_height}
+      enable_color: ${enable_color}
+      enable_depth: ${enable_depth}
+      enable_mask: ${enable_mask}
+      enable_heat_map: ${enable_heat_map}
+      is_static: true
+    - name: env0_cam
+      width: ${cam_width}
+      height: ${cam_height}
+      enable_color: ${enable_color}
+      enable_depth: ${enable_depth}
+      enable_mask: ${enable_mask}
+      enable_heat_map: ${enable_heat_map}
+      is_static: true
+  viewer:
+    lookat: [0.5, 0.08, 0.13]
+    distance: 0.8
+    azimuth: 135
+    elevation: -28
+    step_delay: 0.03
+    hold_seconds: 1.0
+  gaussian_render:
+    body_gaussians:
+      vase_gs: ${gs_dir}/vase.ply
+      vase2_gs: ${gs_dir}/vase2.ply
+      flower_gs: ${gs_dir}/flower1.ply
+
+task:
+  randomization:
+    arm:
+      eef:
+        collision_radius: 0.0
+    vase:
+      x: [0.50, 0.54]
+      y: [0.20, 0.25]
+      collision_radius: 0.025
+      reference: absolute_world
+    flower:
+      x: [-0.00, 0.00]
+      y: [-0.00, 0.00]
+      collision_radius: 0.025
+      reference: vase
+    vase2:
+      x: [0.45, 0.50]
+      y: [0.1, 0.13]
+      collision_radius: 0.015
+      reference: absolute_world
+
+  stages:
+    - name: pick_flower
+      object: flower
+      operation: pick
+      operator: arm
+      param:
+        pre_move:
+          - position: [-0.025, -0.02, 0.135]
+            rotation: [0.0, 1.5708, 0.7853]
+            reference: object_world
+            static: true
+            max_linear_step: 0.08
+            max_angular_step: 0.35
+            tolerance:
+              position: 0.03
+              orientation: 0.35
+          - position: [-0.025, -0.02, 0.025]
+            reference: object_world
+            static: true
+            max_linear_step: 0.04
+            max_angular_step: 0.25
+            tolerance:
+              position: 0.02
+              orientation: 0.25
+        eef:
+          close: true
+          joint_positions: [0.02]
+        post_move:
+          - position: [0.0, 0.0, 0.20]
+            reference: eef_world
+            max_linear_step: 0.08
+            max_angular_step: 0.25
+            tolerance:
+              position: 0.02
+              orientation: 0.25
+
+    - name: place_flower
+      object: vase2
+      operation: place
+      operator: arm
+      param:
+        pre_move:
+          - position: [0.05, 0.0, 0.20]
+            reference: object_world
+            max_linear_step: 0.08
+            max_angular_step: 0.25
+            tolerance:
+              position: 0.04
+              orientation: 0.35
+          - position: [0.05, 0.0, 0.12]
+            reference: object_world
+            max_linear_step: 0.08
+            max_angular_step: 0.2
+            tolerance:
+              position: 0.04
+              orientation: 0.35
+        eef:
+          close: false
+        placed_tolerance:
+          position: [0.09, 0.09, null]
+          orientation: [null, null, null]
+
+task_operators:
+  arm:
+    initial_state:
+      base_pose:
+        position: [0.85, 0.15, 0.3]
+        orientation: [0.0, 0.0, -1, 0]
+      eef: 0.0
+    control:
+      timeout_steps: 400
+      cartesian_max_linear_step: 0.02
+      cartesian_max_angular_step: 0.3
+      tolerance:
+        position: 0.03
+        orientation: 0.10
+        eef: 0.001
+    max_joint_delta: 0.35
+    ik:
+      joint_control_mode: per_step_ik
