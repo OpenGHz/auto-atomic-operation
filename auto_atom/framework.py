@@ -342,11 +342,11 @@ class PoseControlConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    position: Position = Field(default_factory=tuple)
+    position: Optional[Position] = None
     """The target position for the pose control. The position is represented as a tuple of three floats (x, y, z)."""
-    orientation: Orientation = Field(default_factory=tuple)
+    orientation: Optional[Orientation] = None
     """The target orientation for the pose control. The orientation is represented as a quaternion in `xyzw` order."""
-    rotation: Rotation = Field(default_factory=tuple)
+    rotation: Optional[Rotation] = None
     """The target rotation for the pose control. The rotation is represented as Euler angles in `rpy` order."""
     reference: PoseReference = PoseReference.AUTO
     """The reference frame for the pose control."""
