@@ -274,3 +274,8 @@ export CUDA_VISIBLE_DEVICES=0 TASK_NAME=cup_on_coaster && airdc --name aao_confi
 其中，`CUDA_VISIBLE_DEVICES`指定使用的GPU设备，`TASK_NAME`指定要采集的任务名称，`managers.auto_atom.task.seed`设置每个并行采集实例的随机种子（这里使用GPU ID作为种子），`dataset.directory`指定每个实例的数据保存目录，用任务名和GPU ID区分。另外，通过`+managers/auto_atom/aao_configs/env=gl`指定使用`EGL`渲染环境进行采集，避免无头环境下`OpenGL`报错。
 
 如遇渲染问题，可参考[MuJoCo渲染问题排查](../troubleshooting/mujoco-egl-troubleshooting.md)进行排查。
+
+
+### 模型训练
+
+参考：https://github.com/OpenGHz/MCAP-DataLoader#integration-with-lerobot-training
