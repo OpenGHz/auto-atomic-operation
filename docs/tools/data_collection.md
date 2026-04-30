@@ -257,14 +257,14 @@ ln -s <path_to_auto_atomic_operation>/aao_configs airbot_ie/configs/managers/aut
 示例命令如下：
 
 ```bash
-airdc --name aao_config dataset.directory=aao_data managers/auto_atom/task=pick_and_place
+airdc --name aao_config dataset.directory=aao_data managers/auto_atom/task=pick_and_place sample_limit.rounds=100
 ```
 
 其中：
 - `--name`指定`aao_config`基础配置文件进行采集。
 - `dataset.directory=aao_data`指定采集的数据将被保存到`aao_data`目录下。
 - `managers/auto_atom/task=pick_and_place`指定使用`pick_and_place`任务的流程管理器进行采集。
-
+- `sample_limit.rounds=100`指定采集100轮，每轮包含一个完整的任务执行过程。
 在多卡无头服务器环境下，可参考如下命令进行同任务并行数采：
 
 ```bash
