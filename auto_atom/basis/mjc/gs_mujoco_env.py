@@ -1514,11 +1514,6 @@ class BatchedGSUnifiedMujocoEnv(BatchedUnifiedMujocoEnv):
         self.get_logger().info(
             f"GS renderer initialised with {n_bodies} body gaussian(s){bg_str}"
         )
-        if config.warmup:
-            self.get_logger().info("Performing GS renderer warmup...")
-            self.reset()
-            self.capture_observation()
-            self.get_logger().info("GS renderer warmup complete.")
 
     def update_gaussian_render(
         self,
