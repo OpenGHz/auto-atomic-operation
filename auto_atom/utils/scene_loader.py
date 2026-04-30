@@ -60,6 +60,13 @@ def _absolutize_asset_paths(root: ET.Element, source_dir: Path) -> None:
         f = model.get("file")
         if f:
             model.set("file", _abs(source_dir, f))
+    # <include file=...> is also resolved relative to the XML that authored it.
+    # Robot XMLs are later inlined into a temporary scene XML, so relative
+    # includes would otherwise be looked up beside the scene instead.
+    for include in root.iter("include"):
+        f = include.get("file")
+        if f:
+            include.set("file", _abs(source_dir, f))
 
 
 def compose_scene_xml(scene_xml: Path, robot_xmls: Iterable[Path] = ()) -> str:
