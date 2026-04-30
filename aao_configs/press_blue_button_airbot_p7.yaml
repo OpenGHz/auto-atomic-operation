@@ -1,0 +1,91 @@
+defaults:
+  - basis_p7_g2p
+  - gs_mixin
+  - _self_
+
+scene_name: press_three_buttons
+task_name: airbot_p7_press_blue_button
+model_name: demo_gs
+
+object_name: button_blue
+
+env:
+  sim_freq: 1200
+  mask_objects: ["${object_name}"]
+  operations: ["press"]
+  cameras:
+    - name: eef_wrist_cam
+      width: ${cam_width}
+      height: ${cam_height}
+      enable_color: ${enable_color}
+      enable_depth: ${enable_depth}
+      enable_mask: ${enable_mask}
+      enable_heat_map: ${enable_heat_map}
+      parent_frame: eef_pose
+      is_static: false
+    - name: env1_cam
+      width: ${cam_width}
+      height: ${cam_height}
+      enable_color: ${enable_color}
+      enable_depth: ${enable_depth}
+      enable_mask: ${enable_mask}
+      enable_heat_map: ${enable_heat_map}
+      is_static: true
+    - name: env0_cam
+      width: ${cam_width}
+      height: ${cam_height}
+      enable_color: ${enable_color}
+      enable_depth: ${enable_depth}
+      enable_mask: ${enable_mask}
+      enable_heat_map: ${enable_heat_map}
+      is_static: true
+  viewer:
+    lookat: [0.45, 0.02, 0.1]
+    distance: 0.8
+    azimuth: 135
+    elevation: -28
+    step_delay: 0.03
+    hold_seconds: 1.0
+  gaussian_render:
+    body_gaussians:
+      button_blue_gs: ${gs_dir}/button_blue.ply
+      button_green_gs: ${gs_dir}/button_green.ply
+      button_pink_gs: ${gs_dir}/button_pink.ply
+
+task:
+  randomization:
+    button_blue:
+      x: [0.40, 0.48]
+      y: [-0.02, 0.06]
+      reference: absolute_world
+      collision_radius: 0.05
+
+  stages:
+    - name: press_blue_button
+      object: ${object_name}
+      operation: press
+      operator: arm
+      param:
+        pre_move:
+          - position: [0.0, 0.0, 0.12]
+            orientation: [0.70710678, 0.0, -0.70710678, 0.0]
+            reference: object_world
+          - position: [0.0, 0.0, 0.038]
+            reference: object_world
+            tolerance:
+              position: [0.015, 0.015, 0.025]
+              orientation: 0.12
+        eef:
+          close: true
+          joint_positions: [0.01]
+        post_move:
+          - position: [0.0, 0.0, 0.12]
+            reference: object_world
+
+task_operators:
+  arm:
+    initial_state:
+      base_pose:
+        position: [0.90, 0.05, 0.15]
+        orientation: [0.0, 0.0, -1, 0]
+      eef: 0.01075

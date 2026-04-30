@@ -12,8 +12,8 @@
         <geom contype="0" conaffinity="1" group="3" />
       </default>
       <default class="claw_joint">
-        <joint type="slide" axis="0 0 1" range="0 0.0115" damping="0.5" frictionloss="0.5" armature="0.02" actuatorfrcrange="-100 100"/>
-        <position kp="10000" kv="5" ctrlrange="0 0.0115" forcerange="-100 100" />
+        <joint type="slide" axis="0 0 1" range="0 0.01075" damping="0.5" frictionloss="0.5" armature="0.02" actuatorfrcrange="-100 100"/>
+        <position kp="10000" kv="5" ctrlrange="0 0.01075" forcerange="-100 100" />
       </default>
     </default>
   </default>
@@ -27,6 +27,11 @@
     <connect body2="umi_l51" body1="umi_l61" anchor="0.0061643 0 -0.014765"  solimp="0.9995 0.9999 0.001 0.5 2" solref="0.001 0.999"/>
     <connect body2="umi_l23" body1="umi_l31" anchor="-0.038526  0.034925 0"  solimp="0.9995 0.9999 0.001 0.5 2" solref="0.001 0.999"/>
     <connect body2="umi_l53" body1="umi_l41" anchor="-0.038526 -0.034925 0"  solimp="0.9995 0.9999 0.001 0.5 2" solref="0.001 0.999"/>
+    <joint joint1="umi_l11j" joint2="umi_l61j" polycoef="0 1 0 0 0" solimp="0.9995 0.9999 0.001 0.5 2" solref="0.001 0.999"/>
+    <joint joint1="umi_l21j" joint2="umi_l51j" polycoef="0 -1 0 0 0" solimp="0.9995 0.9999 0.001 0.5 2" solref="0.001 0.999"/>
+    <joint joint1="umi_l21j" joint2="umi_l23j" polycoef="0 -1 0 0 0" solimp="0.9995 0.9999 0.001 0.5 2" solref="0.001 0.999"/>
+    <joint joint1="umi_l23j" joint2="umi_l53j" polycoef="0 -1 0 0 0" solimp="0.9995 0.9999 0.001 0.5 2" solref="0.001 0.999"/>
+    <joint joint1="umi_l31j" joint2="umi_l41j" polycoef="0 -1 0 0 0" solimp="0.9995 0.9999 0.001 0.5 2" solref="0.001 0.999"/>
   </equality>
 
   <worldbody>
@@ -175,7 +180,6 @@
         <geom type="mesh" class="collision" mesh="umi_l21_part38" />
         <body name="umi_l22" pos="-0.0049468 0.029589 0">
           <inertial pos="-0.0172704880548737 0.00175620035567216 -2.37712305101902E-10" mass="0.00488468979884358" diaginertia="2.80187879594549e-07 7.36097276078515e-07 6.79236570018327e-07" />
-          <joint name="umi_l22j"/>
           <geom type="mesh" mesh="umi_l22_umi_l22" class="visual" />
           <geom type="mesh" class="collision" mesh="umi_l22_part1" />
           <geom type="mesh" class="collision" mesh="umi_l22_part2" />
@@ -211,9 +215,9 @@
           <geom pos="-0.033579 0.0053357 0" type="mesh" class="collision" mesh="umi_l23_part2" />
           <body name="umi_l23" pos="-0.033579 0.0053357 0">
             <inertial pos="-0.0159217565270541 -0.00945346311103879 1.05031580111178E-05" mass="0.00577276345206399" diaginertia="1.97058542235207e-07 3.7261746491129e-07 3.18455013222174e-07" />
-            <joint name="umi_l23j" range="-0.5 0.1"/>
+            <joint name="umi_l23j" range="-1.28 1.28"/>
             <geom type="mesh" mesh="umi_right_tactile_umi_right_tactile" class="visual" />
-            <geom name="right_finger_pad_upper" contype="1" type="box" size="0.0055 0.0067 0.009" pos="-0.0165 -0.0095 0" class="collision" rgba="1 0 0 1"/>
+            <geom name="right_finger_pad_upper" contype="1" type="box" size="0.0055 0.0067 0.009" pos="-0.0165 -0.0095 0" class="collision" rgba="1 0 0 1" condim="4" friction="3 0.02 0.001" solref="0.008 1" solimp="0.95 0.99 0.001"/>
             <geom contype="1" type="cylinder" size="0.0055 0.01" pos="-0.03 -0.0115 0" quat="0.707 0 0.707 0" class="collision" rgba="1 0 0 1"/>
             <geom contype="1" type="box" size="0.01 0.002 0.005" pos="-0.03 -0.0075 0" class="collision" rgba="1 0 0 1"/>
             <body name="right_tactile" pos="-0.0165 -0.0095 0" quat="0.4999981633974483 0.49999999999662686 -0.49999999999662686 0.5000018366025516" gravcomp="1">
@@ -350,7 +354,6 @@
         <geom type="mesh" class="collision" mesh="umi_l51_part54" />
         <body name="umi_l52" pos="-0.0049468 -0.029589 0">
           <inertial pos="-0.017270488058613 -0.00175620035154723 2.37712305210281E-10" mass="0.00488468979884358" diaginertia="2.80187879594549e-07 7.36097276078515e-07 6.79236570018327e-07" />
-          <joint name="umi_l52j"/>
           <geom type="mesh" mesh="umi_l52_umi_l52" class="visual" />
           <geom type="mesh" class="collision" mesh="umi_l52_part1" />
           <geom type="mesh" class="collision" mesh="umi_l52_part2" />
@@ -387,9 +390,9 @@
           <geom pos="-0.033579 -0.0053357 0" type="mesh" class="collision" mesh="umi_l53_part2" />
           <body name="umi_l53" pos="-0.033579 -0.0053357 0">
             <inertial pos="-0.0159217565270564 0.0094534631110406 -1.05031580111171E-05" mass="0.00577276345206399" diaginertia="1.97058542235207e-07 3.7261746491129e-07 3.18455013222174e-07" />
-            <joint name="umi_l53j" range="-0.5 0.1"/>
+            <joint name="umi_l53j" range="-1.28 1.28"/>
             <geom type="mesh" mesh="umi_left_tactile_umi_left_tactile" class="visual"/>
-            <geom name="left_finger_pad_upper" contype="1" type="box" size="0.0055 0.0067 0.009" pos="-0.0165 0.0095 0" class="collision" rgba="1 0 0 1"/>
+            <geom name="left_finger_pad_upper" contype="1" type="box" size="0.0055 0.0067 0.009" pos="-0.0165 0.0095 0" class="collision" rgba="1 0 0 1" condim="4" friction="3 0.02 0.001" solref="0.008 1" solimp="0.95 0.99 0.001"/>
             <geom contype="1" type="cylinder" size="0.0055 0.01" pos="-0.03 0.0115 0" quat="0.707 0 0.707 0" class="collision" rgba="1 0 0 1"/>
             <geom contype="1" type="box" size="0.01 0.002 0.005" pos="-0.03 0.0075 0" class="collision" rgba="1 0 0 1"/>
             <body name="left_tactile" pos="-0.0165 0.0095 0" quat="0.4999981633974483 -0.49999999999662686 0.49999999999662686 0.5000018366025516" gravcomp="1">
