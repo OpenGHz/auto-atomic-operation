@@ -3,7 +3,6 @@
 hydra:
   job:
     env_set:
-      cuda_device: ${oc.env:CUDA_VISIBLE_DEVICES}
       # set environment variables for Graphics Library
       EGL_VISIBLE_DEVICES: ${oc.env:CUDA_VISIBLE_DEVICES}
       MUJOCO_EGL_DEVICE_ID: ${oc.env:CUDA_VISIBLE_DEVICES}

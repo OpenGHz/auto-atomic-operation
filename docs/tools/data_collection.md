@@ -223,11 +223,15 @@ If GS masks are generated with the same `alpha + scene_depth` logic as the third
 git clone --depth 1 https://github.com/OpenGHz/AIRBOT-Data-Collection.git airdc -b develop
 ```
 
-```bash
-pip install -e ./airdc"[assis]"
+```
+cd airdc
 ```
 
-将`auto-atomic-operation`软链接到`third_party`目录下：
+```bash
+pip install -e ."[assis]"
+```
+
+Link`auto-atomic-operation` to `third_party`:
 
 ```bash
 mkdir -p third_party
@@ -253,21 +257,20 @@ ln -s <path_to_auto_atomic_operation>/aao_configs airbot_ie/configs/managers/aut
 示例命令如下：
 
 ```bash
-airdc demonstrators=mujoco/basis dataset.directory=mujoco visualizer=null managers=auto_atom/pick_and_place demonstrator.component.viewer=null
+airdc --name aao_config dataset.directory=aao_data managers/auto_atom/task=pick_and_place
 ```
 
 其中：
-- `demonstrators=mujoco`指定使用`MuJoCo`示教器进行数据采集。
-- `dataset.directory=mujoco`指定采集的数据将被保存到`mujoco`目录下。
-- `visualizer=null`不对相机的图像进行可视化。
-- `managers=auto_atom/pick_and_place`指定使用`pick_and_place`任务的流程管理器进行采集。
-- `demonstrator.component.viewer=null`不启动mujoco viewer。
+- `--name`指定`aao_config`基础配置文件进行采集。
+- `dataset.directory=aao_data`指定采集的数据将被保存到`aao_data`目录下。
+- `managers/auto_atom/task=pick_and_place`指定使用`pick_and_place`任务的流程管理器进行采集。
 
-
-只启动环境，不运行流程，可以使用以下命令：
+在多卡无头服务器环境下，可参考如下命令进行同任务并行数采：
 
 ```bash
-airdc demonstrators=mujoco/basis dataset.directory=mujoco managers=auto_atom/pick_and_place managers.auto_atom=null
+export CUDA_VISIBLE_DEVICES=0 TASK_NAME=cup_on_coaster && airdc --name aao_config +managers/auto_atom/aao_configs/env=gl managers/auto_atom/task=$TASK_NAME managers.auto_atom.task.seed=$CUDA_VISIBLE_DEVICES dataset.directory=${TASK_NAME}/$CUDA_VISIBLE_DEVICES/env
 ```
 
-这将启动环境并保持空闲，等待用户通过其他命令来控制流程的运行。
+其中，`CUDA_VISIBLE_DEVICES`指定使用的GPU设备，`TASK_NAME`指定要采集的任务名称，`managers.auto_atom.task.seed`设置每个并行采集实例的随机种子（这里使用GPU ID作为种子），`dataset.directory`指定每个实例的数据保存目录，用任务名和GPU ID区分。另外，通过`+managers/auto_atom/aao_configs/env=gl`指定使用`EGL`渲染环境进行采集，避免无头环境下`OpenGL`报错。
+
+如遇渲染问题，可参考[MuJoCo渲染问题排查](../troubleshooting/mujoco-egl-troubleshooting.md)进行排查。

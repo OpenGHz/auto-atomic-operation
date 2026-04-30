@@ -1,5 +1,6 @@
 defaults:
   - common_vars
+  - compatible_vars
 
 model_name: demo
 task_name: ${scene_name}
