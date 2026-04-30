@@ -25,6 +25,8 @@ gs = [
   "scipy",
   "plyfile",
   "natsort",
+  "einops",
+  "e3nn",
   "gaussian_renderer @ git+https://github.com/OpenGHz/GaussianRenderer.git",
 ]
 
