@@ -7,23 +7,34 @@ eef_gs_dir: ${assets_dir}/gs/robots/airbot_g2p
 env:
   gaussian_render:
     body_gaussians:
-      eef_umi_base_link: ${eef_gs_dir}/base_link.ply
-      eef_umi_claw: ${eef_gs_dir}/claw.ply
-      eef_umi_l11: ${eef_gs_dir}/l11.ply
-      eef_umi_l12: ${eef_gs_dir}/l12.ply
-      eef_umi_l21: ${eef_gs_dir}/l21.ply
-      eef_umi_l22: ${eef_gs_dir}/l22.ply
-      eef_umi_l23: ${eef_gs_dir}/l23.ply
-      eef_umi_l31: ${eef_gs_dir}/l31.ply
-      eef_umi_l32: ${eef_gs_dir}/l32.ply
-      eef_umi_l41: ${eef_gs_dir}/l41.ply
-      eef_umi_l42: ${eef_gs_dir}/l42.ply
-      eef_umi_l51: ${eef_gs_dir}/l51.ply
-      eef_umi_l52: ${eef_gs_dir}/l52.ply
-      eef_umi_l53: ${eef_gs_dir}/l53.ply
-      eef_umi_l61: ${eef_gs_dir}/l61.ply
-      eef_umi_l62: ${eef_gs_dir}/l62.ply
-      eef_left_tactile: ${eef_gs_dir}/left_tactile.ply
-      eef_right_tactile: ${eef_gs_dir}/right_tactile.ply
-      # eef_left_cam: ${eef_gs_dir}/left_cam.ply
-      # eef_right_cam: ${eef_gs_dir}/right_cam.ply
+      eef_umi_base_link: ${eef_gs_dir}/umi_base_link.ply
+      eef_umi_claw: ${eef_gs_dir}/umi_claw.ply
+      eef_umi_l11: ${eef_gs_dir}/umi_l11.ply
+      eef_umi_l12: ${eef_gs_dir}/umi_l12.ply
+      eef_umi_l21: ${eef_gs_dir}/umi_l21.ply
+      eef_umi_l22: ${eef_gs_dir}/umi_l22.ply
+      eef_umi_l23: ${eef_gs_dir}/umi_l23.ply
+      eef_umi_l31: ${eef_gs_dir}/umi_l31.ply
+      eef_umi_l32: ${eef_gs_dir}/umi_l32.ply
+      eef_umi_l41: ${eef_gs_dir}/umi_l41.ply
+      eef_umi_l42: ${eef_gs_dir}/umi_l42.ply
+      eef_umi_l51: ${eef_gs_dir}/umi_l51.ply
+      eef_umi_l52: ${eef_gs_dir}/umi_l52.ply
+      eef_umi_l53: ${eef_gs_dir}/umi_l53.ply
+      eef_umi_l61: ${eef_gs_dir}/umi_l61.ply
+      eef_umi_l62: ${eef_gs_dir}/umi_l62.ply
+      eef_left_tactile: ${eef_gs_dir}/umi_left_tactile.ply
+      eef_right_tactile: ${eef_gs_dir}/umi_right_tactile.ply
+      # eef_left_cam: ${eef_gs_dir}/umi_left_cam.ply
+      # eef_right_cam: ${eef_gs_dir}/umi_right_cam.ply
+      # Tactile PLYs are authored in the parent body's (umi_l23/umi_l53) local
+      # frame, but bound to right_tactile/left_tactile bodies which sit at a
+      # rigid offset inside their parent. Bake the inverse offset at load time
+      # so the runtime body pose puts them back where the visual mesh sits.
+    body_transforms:
+      eef_right_tactile:
+        position: [ 0.0, -0.0165, -0.0095 ]
+        orientation: [ -0.5, 0.5, -0.5, 0.5 ] # xyzw, conjugate of body quat
+      eef_left_tactile:
+        position: [ 0.0, -0.0165, -0.0095 ]
+        orientation: [ 0.5, -0.5, -0.5, 0.5 ] # xyzw, conjugate of body quat
