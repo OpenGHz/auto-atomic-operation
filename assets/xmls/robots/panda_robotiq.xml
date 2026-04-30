@@ -1,5 +1,5 @@
 <mujoco model="panda with robotiq gripper">
-  <compiler angle="radian" meshdir="../../../meshes" autolimits="true"/>
+  <compiler angle="radian" meshdir="../../meshes" autolimits="true"/>
   <option noslip_iterations="1"/>
 
   <!-- <statistic center="0.3 0 0.4" extent="1"/> -->

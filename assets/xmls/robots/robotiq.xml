@@ -1,5 +1,5 @@
 <mujoco model="robotiq mocap">
-  <compiler angle="radian" meshdir="../../../meshes" autolimits="true"/>
+  <compiler angle="radian" meshdir="../../meshes" autolimits="true"/>
   <option noslip_iterations="1"/>
 
   <include file="robotiq_assets.xml"/>

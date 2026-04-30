@@ -16,6 +16,45 @@ from typing import Iterable
 import mujoco
 
 
+def _expand_includes(elem: ET.Element, source_dir: Path) -> None:
+    """Recursively replace ``<include file=...>`` elements with the children
+    of the included file's ``<mujoco>`` root.
+
+    Include paths are resolved relative to the directory of the file the
+    include was authored in (``source_dir`` for the current level, the
+    included file's own directory for nested includes). Asset paths inside
+    the included content are left unchanged here; the caller's
+    ``_absolutize_asset_paths`` pass resolves them against the host's
+    compiler context, matching MuJoCo's textual-include semantics.
+    """
+    has_include = False
+    new_children: list[ET.Element] = []
+    for child in list(elem):
+        if child.tag == "include":
+            has_include = True
+            file_attr = child.get("file")
+            if file_attr is None:
+                continue
+            inc_path = (source_dir / file_attr).resolve()
+            if not inc_path.exists():
+                raise FileNotFoundError(f"included XML not found: {inc_path}")
+            inc_root = ET.parse(inc_path).getroot()
+            if inc_root.tag != "mujoco":
+                raise ValueError(
+                    f"included root must be <mujoco>, got <{inc_root.tag}>: {inc_path}"
+                )
+            _expand_includes(inc_root, inc_path.parent)
+            new_children.extend(list(inc_root))
+        else:
+            _expand_includes(child, source_dir)
+            new_children.append(child)
+    if has_include:
+        for child in list(elem):
+            elem.remove(child)
+        for child in new_children:
+            elem.append(child)
+
+
 def _absolutize_asset_paths(root: ET.Element, source_dir: Path) -> None:
     """In-place rewrite of relative <mesh>/<model>/<texture> file= and
     <compiler meshdir/texturedir/assetdir> attributes to absolute paths,
@@ -87,6 +126,7 @@ def compose_scene_xml(scene_xml: Path, robot_xmls: Iterable[Path] = ()) -> str:
             raise ValueError(
                 f"robot root must be <mujoco>, got <{robot_root.tag}>: {robot_path}"
             )
+        _expand_includes(robot_root, robot_path.parent)
         _absolutize_asset_paths(robot_root, robot_path.parent)
         # Inline robot's children into the scene root, preserving order.
         for child in list(robot_root):
