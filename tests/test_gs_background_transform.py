@@ -1,3 +1,4 @@
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -12,7 +13,9 @@ from auto_atom.basis.mjc.gs_mujoco_env import (
     GaussianRenderConfig,
     GSUnifiedMujocoEnv,
     _materialize_transformed_background_ply,
+    _merge_background_plys,
     _normalize_background_pose,
+    _sample_combinations,
     _sample_env_background_indices,
 )
 from auto_atom.basis.mjc.mujoco_env import BatchedUnifiedMujocoEnv, UnifiedMujocoEnv
@@ -275,3 +278,235 @@ def test_batched_gs_is_updated_broadcasts_shared_physics_result():
         BatchedGSUnifiedMujocoEnv.is_updated(env),
         np.array([False, False, False]),
     )
+
+
+# --- dict (parts) form of background_ply ---
+
+
+def _write_dummy_ply_with_offset(path, offset: float) -> None:
+    save_ply(
+        GaussianData(
+            xyz=np.array([[offset, 0.0, 0.0]], dtype=np.float32),
+            rot=np.array([[1.0, 0.0, 0.0, 0.0]], dtype=np.float32),
+            scale=np.ones((1, 3), dtype=np.float32),
+            opacity=np.full((1,), 0.5, dtype=np.float32),
+            sh=np.zeros((1, 3), dtype=np.float32),
+        ),
+        path,
+    )
+
+
+def test_dict_background_is_multi_background():
+    cfg = GaussianRenderConfig(
+        background_ply={"wall": "a.ply", "inside": "b.ply"},
+    )
+    assert cfg.is_multi_background() is True
+
+
+def test_merge_background_plys_concatenates(tmp_path):
+    a = tmp_path / "a.ply"
+    b = tmp_path / "b.ply"
+    _write_dummy_ply_with_offset(a, 1.0)
+    _write_dummy_ply_with_offset(b, 2.0)
+
+    merged_path = _merge_background_plys([str(a), str(b)])
+    merged = load_ply(merged_path)
+
+    assert merged.xyz.shape == (2, 3)
+    np.testing.assert_allclose(np.sort(merged.xyz[:, 0]), [1.0, 2.0])
+
+
+def test_merge_background_plys_single_returns_input(tmp_path):
+    a = tmp_path / "a.ply"
+    _write_dummy_ply_with_offset(a, 1.0)
+    assert _merge_background_plys([str(a)]) == str(a)
+
+
+def test_merge_background_plys_cached(tmp_path, monkeypatch):
+    import auto_atom.basis.mjc.gs_mujoco_env as gs_mod
+
+    a = tmp_path / "a.ply"
+    b = tmp_path / "b.ply"
+    _write_dummy_ply_with_offset(a, 1.0)
+    _write_dummy_ply_with_offset(b, 2.0)
+
+    first = _merge_background_plys([str(a), str(b)])
+
+    save_calls: list = []
+    real_save = gs_mod.save_ply
+
+    def _spy(*args, **kwargs):
+        save_calls.append((args, kwargs))
+        return real_save(*args, **kwargs)
+
+    monkeypatch.setattr(gs_mod, "save_ply", _spy)
+    second = _merge_background_plys([str(a), str(b)])
+
+    assert second == first
+    assert save_calls == []
+
+
+def test_sample_combinations_full_product_when_uncapped():
+    parts = [["w1", "w2"], ["i1"]]
+    combos = _sample_combinations(parts, cap=None, rng=np.random.default_rng(0))
+    assert combos == [("w1", "i1"), ("w2", "i1")]
+
+
+def test_sample_combinations_caps_without_replacement():
+    parts = [["a", "b", "c", "d"], ["1", "2"]]
+    combos = _sample_combinations(parts, cap=3, rng=np.random.default_rng(0))
+    assert len(combos) == 3
+    assert len(set(combos)) == 3  # no duplicates
+    for combo in combos:
+        assert combo[0] in {"a", "b", "c", "d"}
+        assert combo[1] in {"1", "2"}
+
+
+def test_sample_combinations_empty_part_raises():
+    with pytest.raises(ValueError, match="empty part"):
+        _sample_combinations([["a"], []], cap=None, rng=np.random.default_rng(0))
+
+
+def test_resolved_background_plys_dict_returns_merged_combos(tmp_path):
+    w1 = tmp_path / "wall1.ply"
+    w2 = tmp_path / "wall2.ply"
+    inside = tmp_path / "inside10.ply"
+    _write_dummy_ply_with_offset(w1, 1.0)
+    _write_dummy_ply_with_offset(w2, 2.0)
+    _write_dummy_ply_with_offset(inside, 10.0)
+
+    cfg = GaussianRenderConfig(
+        background_ply={
+            "wall": str(tmp_path / "wall*.ply"),
+            "inside": str(inside),
+        }
+    )
+    plys = cfg.resolved_background_plys()
+    assert len(plys) == 2  # full product 2x1
+
+    seen_walls = set()
+    for path in plys:
+        gd = load_ply(path)
+        # Each merged PLY has 2 gaussians (one wall + one inside).
+        assert gd.xyz.shape == (2, 3)
+        wall_x = float(min(gd.xyz[:, 0]))
+        inside_x = float(max(gd.xyz[:, 0]))
+        assert inside_x == 10.0
+        seen_walls.add(wall_x)
+    assert seen_walls == {1.0, 2.0}
+
+
+def test_resolved_background_plys_dict_max_combinations(tmp_path):
+    walls = [tmp_path / f"wall{i}.ply" for i in range(4)]
+    insides = [tmp_path / f"inside{i}.ply" for i in range(2)]
+    for i, p in enumerate(walls):
+        _write_dummy_ply_with_offset(p, float(i))
+    for i, p in enumerate(insides):
+        _write_dummy_ply_with_offset(p, 10.0 + i)
+
+    cfg = GaussianRenderConfig(
+        background_ply={
+            "wall": str(tmp_path / "wall*.ply"),
+            "inside": str(tmp_path / "inside*.ply"),
+        }
+    )
+    plys = cfg.resolved_background_plys(
+        max_combinations=3, rng=np.random.default_rng(42)
+    )
+    assert len(plys) == 3
+    # Cap < total product (4*2=8): must sample without replacement.
+    assert len(set(plys)) == 3
+
+
+def test_resolved_part_plys_part_name_default(tmp_path):
+    w0 = tmp_path / "wall0.ply"
+    w1 = tmp_path / "wall1.ply"
+    inside = tmp_path / "inside10.ply"
+    for p in (w0, w1, inside):
+        _write_dummy_ply_with_offset(p, 0.0)
+
+    cfg = GaussianRenderConfig(
+        background_ply={
+            "wall": str(tmp_path / "wall*.ply"),
+            "inside": str(inside),
+        },
+        background_transforms={
+            "wall": [5.0, 0.0, 0.0],  # applies to every wall* PLY
+            "inside": [0.0, 7.0, 0.0],  # applies to every inside PLY
+        },
+    )
+    parts = cfg._resolved_part_plys()
+    for path in parts["wall"]:
+        gd = load_ply(path)
+        np.testing.assert_allclose(gd.xyz[0], [5.0, 0.0, 0.0])
+    for path in parts["inside"]:
+        gd = load_ply(path)
+        np.testing.assert_allclose(gd.xyz[0], [0.0, 7.0, 0.0])
+
+
+def test_resolved_part_plys_per_ply_overrides_part_name(tmp_path):
+    w0 = tmp_path / "wall0.ply"
+    w1 = tmp_path / "wall1.ply"
+    for p in (w0, w1):
+        _write_dummy_ply_with_offset(p, 0.0)
+
+    cfg = GaussianRenderConfig(
+        background_ply={"wall": str(tmp_path / "wall*.ply")},
+        background_transforms={
+            "wall": [5.0, 0.0, 0.0],  # part-level default for the whole part
+            "wall1": [9.0, 0.0, 0.0],  # per-PLY override wins for wall1
+        },
+    )
+    parts = cfg._resolved_part_plys()
+    by_stem = {Path(p).stem.split("__")[0]: p for p in parts["wall"]}
+    np.testing.assert_allclose(load_ply(by_stem["wall0"]).xyz[0], [5.0, 0.0, 0.0])
+    np.testing.assert_allclose(load_ply(by_stem["wall1"]).xyz[0], [9.0, 0.0, 0.0])
+
+
+def test_resolved_part_plys_part_name_overrides_global_default(tmp_path):
+    w0 = tmp_path / "wall0.ply"
+    inside = tmp_path / "inside10.ply"
+    for p in (w0, inside):
+        _write_dummy_ply_with_offset(p, 0.0)
+
+    cfg = GaussianRenderConfig(
+        background_ply={"wall": str(w0), "inside": str(inside)},
+        background_transform=[1.0, 1.0, 1.0],  # global default
+        background_transforms={
+            "wall": [5.0, 0.0, 0.0],  # only overrides wall part
+        },
+    )
+    parts = cfg._resolved_part_plys()
+    np.testing.assert_allclose(load_ply(parts["wall"][0]).xyz[0], [5.0, 0.0, 0.0])
+    # inside falls back to the global default.
+    np.testing.assert_allclose(load_ply(parts["inside"][0]).xyz[0], [1.0, 1.0, 1.0])
+
+
+def test_resolved_part_plys_applies_per_ply_transform(tmp_path):
+    wall = tmp_path / "wall1.ply"
+    inside = tmp_path / "inside10.ply"
+    _write_dummy_ply_with_offset(wall, 0.0)
+    _write_dummy_ply_with_offset(inside, 0.0)
+
+    cfg = GaussianRenderConfig(
+        background_ply={"wall": str(wall), "inside": str(inside)},
+        background_transforms={
+            "wall1": [5.0, 0.0, 0.0],  # translate wall by +5x
+            "inside10": [0.0, 7.0, 0.0],  # translate inside by +7y
+        },
+    )
+    parts = cfg._resolved_part_plys()
+    wall_gd = load_ply(parts["wall"][0])
+    inside_gd = load_ply(parts["inside"][0])
+
+    np.testing.assert_allclose(wall_gd.xyz[0], [5.0, 0.0, 0.0])
+    np.testing.assert_allclose(inside_gd.xyz[0], [0.0, 7.0, 0.0])
+
+    # The merged combo reflects both transforms.
+    merged_paths = cfg.resolved_background_plys()
+    assert len(merged_paths) == 1
+    merged = load_ply(merged_paths[0])
+    xs = sorted(merged.xyz[:, 0].tolist())
+    ys = sorted(merged.xyz[:, 1].tolist())
+    assert xs == [0.0, 5.0]
+    assert ys == [0.0, 7.0]

@@ -357,7 +357,7 @@ env:
 
 Config validator 会强制要求：
 - `batch_size > 1`（否则退化为单 env，无意义）；
-- `background_ply` 为 list/glob（单背景会产生 N 张完全一样的观测，开 share_physics 无收益）。
+- `background_ply` 为多背景（list / glob / 部件字典；单背景会产生 N 张完全一样的观测，开 share_physics 无收益）。
 
 ### 对外 API 兼容性
 

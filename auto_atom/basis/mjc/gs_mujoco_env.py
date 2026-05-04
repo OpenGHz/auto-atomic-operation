@@ -41,14 +41,16 @@ from __future__ import annotations
 import gc
 import glob as _glob
 import hashlib
+import itertools
 import logging
 from collections import OrderedDict
 from pathlib import Path
-from typing import Any, Dict, Optional, Set
+from typing import Any, Dict, Optional, Sequence, Set
 
 import numpy as np
 import torch
 from gaussian_renderer import BatchSplatConfig, GSRendererMuJoCo, MjxBatchSplatRenderer
+from gaussian_renderer.core.gaussiandata import GaussianData
 from gaussian_renderer.core.util_gau import load_ply, save_ply
 from natsort import natsorted
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -74,6 +76,98 @@ def _expand_background_entry(entry: str) -> list[str]:
     if not matches:
         raise FileNotFoundError(f"background_ply glob matched no files: {entry}")
     return list(natsorted(matches))
+
+
+def _is_dict_background(value: Any) -> bool:
+    """Whether ``background_ply`` is the parts-dict form."""
+    return isinstance(value, dict)
+
+
+def _merge_background_plys(plys: Sequence[str]) -> str:
+    """Concatenate several PLYs into one merged background PLY (cached on disk).
+
+    Each combination of part PLYs becomes a single ``GaussianData`` whose
+    arrays are the concatenation of the sources along axis 0. Cached under
+    ``.cache/gs_background_combos/`` keyed by sha1 of the sorted absolute
+    source paths so re-runs reuse the merged file.
+    """
+    if not plys:
+        raise ValueError("_merge_background_plys requires at least one PLY")
+    if len(plys) == 1:
+        return plys[0]
+
+    abs_paths = [str(Path(p).expanduser().resolve()) for p in plys]
+    key_src = "|".join(sorted(abs_paths))
+    cache_key = hashlib.sha1(key_src.encode("utf-8")).hexdigest()[:12]
+    stems = "+".join(Path(p).stem for p in plys)
+    cache_dir = Path(".cache/gs_background_combos")
+    cache_path = cache_dir / f"{stems}__merged_{cache_key}.ply"
+    if cache_path.exists():
+        return str(cache_path)
+
+    parts = [load_ply(p) for p in plys]
+    # Reshape any (N, K, 3) SH arrays into the flat (N, K*3) form before
+    # measuring widths; ``save_ply`` writes flat layout, but ``load_ply``
+    # variants may return either shape.
+    sh_arrays = [
+        gd.sh.reshape(gd.sh.shape[0], -1) if gd.sh.ndim > 2 else gd.sh for gd in parts
+    ]
+    # Pad lower-SH-degree PLYs up to the max width with zeros on the trailing
+    # coefficients (DC stays in [:, :3]; missing higher-order bands contribute
+    # zero — no view-dependent effect from those points).
+    max_sh_dim = max(sh.shape[1] for sh in sh_arrays)
+    padded_sh: list[np.ndarray] = []
+    for p, sh in zip(plys, sh_arrays):
+        if sh.shape[1] == max_sh_dim:
+            padded_sh.append(sh)
+            continue
+        if (max_sh_dim - sh.shape[1]) % 3 != 0:
+            raise ValueError(
+                f"PLYs to merge have SH widths that aren't aligned to RGB "
+                f"triples: max={max_sh_dim}, got={sh.shape[1]} from {p}"
+            )
+        pad = np.zeros((sh.shape[0], max_sh_dim - sh.shape[1]), dtype=sh.dtype)
+        padded_sh.append(np.concatenate([sh, pad], axis=1))
+    merged = GaussianData(
+        xyz=np.concatenate([gd.xyz for gd in parts], axis=0),
+        rot=np.concatenate([gd.rot for gd in parts], axis=0),
+        scale=np.concatenate([gd.scale for gd in parts], axis=0),
+        opacity=np.concatenate([gd.opacity for gd in parts], axis=0),
+        sh=np.concatenate(padded_sh, axis=0),
+    )
+    save_ply(merged, cache_path)
+    return str(cache_path)
+
+
+def _sample_combinations(
+    part_plys: Sequence[Sequence[str]],
+    cap: int | None,
+    rng: np.random.Generator,
+) -> list[tuple[str, ...]]:
+    """Sample combinations from the cartesian product of per-part PLY lists.
+
+    When ``cap`` is ``None`` or ``cap >= total``, returns the full product in
+    deterministic order (``itertools.product``). Otherwise samples ``cap``
+    flat indices without replacement and decodes each via ``np.unravel_index``
+    to a per-part multi-index.
+    """
+    if not part_plys:
+        return []
+    sizes = [len(p) for p in part_plys]
+    if any(s == 0 for s in sizes):
+        raise ValueError(
+            "background_ply dict has an empty part; every part must expand to "
+            "at least one PLY"
+        )
+    total = int(np.prod(sizes))
+    if cap is None or cap >= total:
+        return [tuple(combo) for combo in itertools.product(*part_plys)]
+    flat_idx = rng.choice(total, size=cap, replace=False)
+    out: list[tuple[str, ...]] = []
+    for fi in flat_idx:
+        multi = np.unravel_index(int(fi), sizes)
+        out.append(tuple(part_plys[i][multi[i]] for i in range(len(part_plys))))
+    return out
 
 
 def create_image_data_batch(
@@ -553,10 +647,22 @@ class GaussianRenderConfig(BaseModel):
 
     body_gaussians: Dict[str, str] = Field(default_factory=dict)
     """Mapping from MuJoCo body name to PLY file path."""
-    background_ply: str | list[str] | None = None
-    """Optional background PLY, or a list of PLYs.
-    When a list is given, GS envs randomly assign one background initially and
-    optionally reassign backgrounds on each ``reset``."""
+    background_ply: str | list[str] | Dict[str, str | list[str]] | None = None
+    """Optional background PLY. Three accepted forms:
+
+    - ``str`` — single background PLY (or glob expanding to a pool).
+    - ``list[str]`` — pool of full-scene backgrounds; each env is assigned one
+      so backgrounds randomize across the batch.
+    - ``Dict[str, str | list[str]]`` — *parts* dict. Each value is a path or
+      glob expanding to a pool of PLYs for that part (e.g. ``wall``, ``inside``).
+      Each env's background is a *combination* — one PLY pulled from each part —
+      and the per-env combinations are sampled (without replacement when the
+      cartesian product is large enough) up to ``batch_size``. Per-part PLYs
+      are merged into a single combined PLY (cached on disk by hash) before
+      being handed to the renderer.
+
+    For the list and dict forms, GS envs randomly assign one background per env
+    initially and optionally reassign on each ``reset``."""
     randomize_background_on_reset: bool = False
     """Whether to reassign list-valued backgrounds on every ``reset``.
     When ``False``, multi-background envs keep the initial random assignment
@@ -587,8 +693,8 @@ class GaussianRenderConfig(BaseModel):
     share_physics: bool = False
     """In batched GS envs, share a single physics replica and foreground GS
     render across the whole batch; only the composited background differs per
-    env. Requires ``background_ply`` to be multi-valued (list/glob) and
-    ``batch_size > 1``. Validated on ``GSEnvConfig``."""
+    env. Requires ``background_ply`` to be multi-valued (list, glob, or parts
+    dict) and ``batch_size > 1``. Validated on ``GSEnvConfig``."""
 
     def resolved_body_gaussians(self) -> Dict[str, str]:
         """Return ``body_gaussians`` with any configured transforms / mirrors
@@ -697,21 +803,33 @@ class GaussianRenderConfig(BaseModel):
         """Return ``background_ply`` as a list (empty when unset).
 
         Entries may contain glob patterns (``*``, ``?``, ``[...]``); matches
-        are expanded with natural sort order.
+        are expanded with natural sort order. For the dict (parts) form this
+        flattens every part into a single combined list — callers that need
+        per-env *combinations* should use ``resolved_background_plys`` instead.
         """
         if self.background_ply is None:
             return []
-        entries = (
-            [self.background_ply]
-            if isinstance(self.background_ply, str)
-            else list(self.background_ply)
-        )
+        if _is_dict_background(self.background_ply):
+            entries: list[str] = []
+            for value in self.background_ply.values():
+                if isinstance(value, str):
+                    entries.append(value)
+                else:
+                    entries.extend(value)
+        else:
+            entries = (
+                [self.background_ply]
+                if isinstance(self.background_ply, str)
+                else list(self.background_ply)
+            )
         out: list[str] = []
         for entry in entries:
             out.extend(_expand_background_entry(entry))
         return out
 
     def is_multi_background(self) -> bool:
+        if _is_dict_background(self.background_ply):
+            return True
         if isinstance(self.background_ply, (list, tuple)):
             return True
         if isinstance(self.background_ply, str) and _has_glob(self.background_ply):
@@ -739,51 +857,120 @@ class GaussianRenderConfig(BaseModel):
     def resolved_background_ply(self) -> str | None:
         """Return a materialized single background path.
 
-        Raises when ``background_ply`` is a list; callers should use
-        ``resolved_background_plys`` in that case.
+        Raises when ``background_ply`` is a list or parts dict; callers should
+        use ``resolved_background_plys`` in that case.
         """
         if self.is_multi_background():
             raise ValueError(
-                "background_ply is a list; call resolved_background_plys() instead."
+                "background_ply is a list or dict; call "
+                "resolved_background_plys() instead."
             )
         return _materialize_transformed_background_ply(
             self.background_ply,
             self.resolved_background_transform(),
         )
 
-    def resolved_background_plys(self) -> list[str]:
-        """Return materialized bg paths for each entry in ``background_ply``.
+    def _per_ply_pose(
+        self, bg_ply: str, default_pose: BackgroundPose | None
+    ) -> BackgroundPose:
+        """Resolve a per-PLY pose from ``background_transforms``.
 
-        Pose resolution per entry (in order of precedence):
+        Key precedence (highest first):
 
-        1. ``background_transforms`` entry keyed by full path / file name /
-           stem (per-entry override).
-        2. The singular ``background_transform`` when set (applied as the
-           default to every entry — e.g. a shared world pose for a pool of
-           backgrounds captured in the same frame).
+        1. Per-PLY exact match — full path / ``str(Path)`` normalised path /
+           file name / stem.
+        2. ``default_pose`` (typically the part-name default in dict mode, or
+           the singular ``background_transform``).
         3. Identity.
         """
+        bg_path = Path(bg_ply)
+        for key in (bg_ply, str(bg_path), bg_path.name, bg_path.stem):
+            if key in self.background_transforms:
+                return _normalize_background_pose(self.background_transforms[key])
+        if default_pose is not None:
+            return default_pose
+        return (0.0, 0.0, 0.0), _IDENTITY_QUAT
+
+    def _resolved_part_plys(self) -> Dict[str, list[str]]:
+        """For the dict form of ``background_ply``: expand each part to a list
+        of PLY paths, baking in per-PLY pose transforms.
+
+        Per-PLY pose precedence inside a part:
+
+        1. ``background_transforms[<full path | str(Path) | file name | stem>]``
+           — single PLY override.
+        2. ``background_transforms[<part name>]`` — applied to every PLY in
+           that part (e.g. ``background_transforms.wall`` covers every
+           ``wall*.ply`` matched by the part's glob).
+        3. Singular ``background_transform`` — applied to every part PLY.
+        4. Identity.
+
+        Raises ``ValueError`` if ``background_ply`` is not a dict, or if any
+        part expands to zero PLYs.
+        """
+        if not _is_dict_background(self.background_ply):
+            raise ValueError(
+                "_resolved_part_plys is only valid when background_ply is a dict"
+            )
+        global_default: BackgroundPose | None = None
+        if self.background_transform is not None:
+            global_default = _normalize_background_pose(self.background_transform)
+
+        out: Dict[str, list[str]] = {}
+        for part, value in self.background_ply.items():
+            entries = [value] if isinstance(value, str) else list(value)
+            part_default: BackgroundPose | None = global_default
+            if part in self.background_transforms:
+                part_default = _normalize_background_pose(
+                    self.background_transforms[part]
+                )
+            part_plys: list[str] = []
+            for entry in entries:
+                for bg_ply in _expand_background_entry(entry):
+                    pose = self._per_ply_pose(bg_ply, part_default)
+                    materialized = _materialize_transformed_background_ply(bg_ply, pose)
+                    if materialized is not None:
+                        part_plys.append(materialized)
+            if not part_plys:
+                raise ValueError(f"background_ply part '{part}' expanded to zero PLYs")
+            out[part] = part_plys
+        return out
+
+    def resolved_background_plys(
+        self,
+        *,
+        max_combinations: int | None = None,
+        rng: np.random.Generator | None = None,
+    ) -> list[str]:
+        """Return materialized bg paths for ``background_ply``.
+
+        For ``str`` / ``list`` / glob forms: one path per pool entry, with
+        per-entry pose resolution (precedence: per-entry override in
+        ``background_transforms`` → singular ``background_transform`` →
+        identity).
+
+        For the dict (parts) form: each part is independently expanded and
+        per-PLY-transformed via ``_resolved_part_plys``; combinations are
+        sampled from the cartesian product of part lists (limited to
+        ``max_combinations`` without replacement when given) and each
+        combination is merged into a single PLY (cached on disk).
+        """
+        if _is_dict_background(self.background_ply):
+            parts = self._resolved_part_plys()
+            combos = _sample_combinations(
+                list(parts.values()),
+                max_combinations,
+                rng if rng is not None else np.random.default_rng(),
+            )
+            return [_merge_background_plys(list(combo)) for combo in combos]
+
         default_pose: BackgroundPose | None = None
         if self.background_transform is not None:
             default_pose = _normalize_background_pose(self.background_transform)
 
         out: list[str] = []
         for bg_ply in self._background_ply_list():
-            bg_path = Path(bg_ply)
-            pose: BackgroundPose | None = None
-            for key in (bg_ply, str(bg_path), bg_path.name, bg_path.stem):
-                if key in self.background_transforms:
-                    pose = _normalize_background_pose(self.background_transforms[key])
-                    break
-            if pose is None:
-                pose = (
-                    default_pose
-                    if default_pose is not None
-                    else (
-                        (0.0, 0.0, 0.0),
-                        _IDENTITY_QUAT,
-                    )
-                )
+            pose = self._per_ply_pose(bg_ply, default_pose)
             materialized = _materialize_transformed_background_ply(bg_ply, pose)
             if materialized is not None:
                 out.append(materialized)
@@ -876,8 +1063,9 @@ class GSEnvConfig(EnvConfig):
             if not self.gaussian_render.is_multi_background():
                 raise ValueError(
                     "gaussian_render.share_physics requires background_ply to "
-                    "be multi-valued (list or glob). A single background would "
-                    "produce identical observations across the batch."
+                    "be multi-valued (list, glob, or parts dict). A single "
+                    "background would produce identical observations across "
+                    "the batch."
                 )
         return self
 
@@ -933,7 +1121,12 @@ class GSUnifiedMujocoEnv(UnifiedMujocoEnv):
             self.model,
         )
         if self._is_multi_bg:
-            self._bg_source_plys = gs_cfg.resolved_background_plys()
+            # Single-env class: build all available combinations so that
+            # ``randomize_background_on_reset`` can meaningfully randomize.
+            self._bg_source_plys = gs_cfg.resolved_background_plys(
+                max_combinations=None,
+                rng=self._bg_rng,
+            )
             for bg_ply in self._bg_source_plys:
                 self._gs_renderers_list.append(self._make_combined_gs_renderer(bg_ply))
                 self._bg_gs_renderers_list.append(self._make_bg_renderer(bg_ply))
@@ -1030,8 +1223,8 @@ class GSUnifiedMujocoEnv(UnifiedMujocoEnv):
         if self._is_multi_bg:
             raise ValueError(
                 "set_background_transform is not supported when background_ply "
-                "is a list; use background_transforms in the config to set "
-                "per-background poses."
+                "is a list or parts dict; use background_transforms in the "
+                "config to set per-background (or per-part) poses."
             )
         pose = _normalize_background_pose(pose)
         background_ply = _materialize_transformed_background_ply(
@@ -1489,7 +1682,13 @@ class BatchedGSUnifiedMujocoEnv(BatchedUnifiedMujocoEnv):
         )
 
         if self._is_multi_bg:
-            self._bg_source_plys = gs_cfg.resolved_background_plys()
+            # Batched env: only materialize as many combinations as we have
+            # envs (cartesian-product sampling without replacement when the
+            # full product is larger than ``batch_size``).
+            self._bg_source_plys = gs_cfg.resolved_background_plys(
+                max_combinations=self.batch_size,
+                rng=self._bg_rng,
+            )
             self._bg_gs_renderers = [
                 self._make_bg_renderer(p) for p in self._bg_source_plys
             ]
@@ -1681,8 +1880,8 @@ class BatchedGSUnifiedMujocoEnv(BatchedUnifiedMujocoEnv):
         if self._is_multi_bg:
             raise ValueError(
                 "set_background_transform is not supported when background_ply "
-                "is a list; use background_transforms in the config to set "
-                "per-background poses."
+                "is a list or parts dict; use background_transforms in the "
+                "config to set per-background (or per-part) poses."
             )
         pose = _normalize_background_pose(pose)
         background_ply = _materialize_transformed_background_ply(

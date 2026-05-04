@@ -11,7 +11,7 @@
 
 ## 配置入口
 
-`env.gaussian_render.background_ply` 现在支持三种形式：
+`env.gaussian_render.background_ply` 当前支持四种形式：
 
 | 形式 | 含义 |
 | --- | --- |
@@ -19,6 +19,7 @@
 | `str` | 单个背景路径，所有环境共享 |
 | `str` 含 glob 元字符（`*`、`?`、`[...]`） | 单条字符串展开为多背景池 |
 | `list[str]` | 多背景池；列表中的任意一项也可以是 glob |
+| `Dict[str, str \| list[str]]` | **部件字典**：每个 key 是一个部件类别（如 `wall`、`inside`），每个值是该部件的路径或 glob。每个环境会拿到一个由各部件 PLY 各取一份的 *组合*，而不是从池子里整张挑一张 |
 
 示例：
 
@@ -48,22 +49,207 @@ env:
 
 如果 glob 一项都没匹配上，会在解析配置时抛 `FileNotFoundError: background_ply glob matched no files: <pattern>`，而不是静默忽略；这让缺少背景素材可以被尽早发现。
 
+## 部件字典（Dict）模式
+
+`list` / glob 模式假设每张背景 PLY 都是一张完整场景，每个环境从池子里整张挑一张。
+部件字典模式则把背景拆成若干 *部件*（例如墙面、室内陈设），各部件分别提供一份候选池，
+每个环境的背景是 *从每个部件各取一张 PLY 的组合*：
+
+```yaml
+env:
+  gaussian_render:
+    background_ply:
+      wall:   ${bg3dgs_dir}/${wall_name}.ply   # glob，N 张墙面
+      inside: ${bg3dgs_dir}/${inside_name}.ply  # 单张室内
+```
+
+实现要点：
+
+- 每个部件的值会单独走 `_expand_background_entry` 做 glob 展开。
+- 每个部件的 PLY 会先各自烤入 transform（见下文 *Transform 规则*），再做合并。
+- 一个 *组合* 是从每个部件各挑一张 PLY 的 tuple；它们会被 `_merge_background_plys`
+  拼成一张合并后的背景 PLY，落盘缓存到 `.cache/gs_background_combos/`，
+  缓存 key 是组合内源 PLY 绝对路径排序后的 sha1 前 12 位。
+- 合并要求所有部件 PLY 的 SH 阶数一致；不一致会抛 `ValueError` 提示具体形状。
+- 合并后的 PLY 路径列表喂给现有的多背景渲染管线（参见“Batched 环境的分配规则”），
+  也就是说 dict 模式 = list 模式的输入构造前置阶段，渲染层无差别。
+
+### 组合数控制
+
+dict 模式下的组合数 = 各部件候选数的笛卡尔积，单看 `wall` × `inside` 配比可能不大，
+但部件多了会爆。当前调用方按使用场景传 `max_combinations`：
+
+| 调用方 | `max_combinations` | 说明 |
+| --- | --- | --- |
+| `GSUnifiedMujocoEnv`（单环境） | `None`（不限） | 把所有可能组合都生成出来，`randomize_background_on_reset` 才有足够池子可以重抽 |
+| `BatchedGSUnifiedMujocoEnv`（批量环境） | `self.batch_size` | 只 materialize batch 实际能用上的组合数 |
+
+采样规则（`_sample_combinations`）：
+
+- 若 `max_combinations is None` 或 `>= 总组合数`：返回完整笛卡尔积，顺序按 `itertools.product` 决定；
+- 否则按 `np.random.Generator.choice(total, size=cap, replace=False)` 在扁平化索引上无放回采样，
+  再用 `np.unravel_index` 还原成各部件多维索引。
+
+### Transform 在哪一步生效
+
+部件字典模式下，`background_transform` / `background_transforms` 都按 *单 PLY* 烤入；
+每张部件 PLY 的 pose 解析按下列优先级（高 → 低）：
+
+1. `background_transforms[<完整路径 | str(Path) | 文件名 | stem>]` — 单 PLY 精确匹配；
+2. `background_transforms[<部件名>]` — 整批部件默认（如 `background_transforms.wall` 应用于
+   `wall*` 展开后的每一张 PLY）；
+3. 全局 `background_transform`；
+4. identity。
+
+这样 `wall` 和 `inside` 既可以靠部件名 key 整批指定不同的世界位姿，
+又能通过 stem key 给某张 `wall7.ply` 单独再调。
+
+合并出的组合 PLY 不再额外烤 transform——所有刚体变换都已经在部件 PLY 阶段烤完了。
+
+### 与 list 模式的并存关系
+
+`is_multi_background()` 对 dict 模式也返回 `True`，因此：
+
+- `share_physics` 校验、`set_background_transform` 运行时拦截、reset 重分配开关都自动覆盖 dict 模式；
+- `set_background_transform(...)` 在 dict 模式下同样禁用，错误信息已扩展为 “list or parts dict”。
+
 ## Transform 规则
 
 `background_transform` 和 `background_transforms` 的优先级如下：
 
 | 优先级 | 配置 | 行为 |
 | --- | --- | --- |
-| 1 | `background_transforms` | 按完整路径、字符串路径、文件名或 stem 匹配，给单个背景单独指定 transform |
-| 2 | `background_transform` | 默认 transform；当 `background_ply` 是 list 时会应用到每个背景 |
-| 3 | identity | 未配置时使用零平移和单位四元数 |
+| 1 | `background_transforms[<完整路径 / str(Path) / 文件名 / stem>]` | 单 PLY 精确匹配，给某张背景单独指定 transform |
+| 2 | `background_transforms[<部件名>]` | **仅部件字典模式**：按部件 key 匹配（如 `wall`、`inside`），整批部件 PLY 共享 |
+| 3 | `background_transform` | 全局默认 transform；list / 部件字典模式下会应用到每个背景 / 每张部件 PLY |
+| 4 | identity | 未配置时使用零平移和单位四元数 |
 
 `background_transform` 支持：
 
 - 长度 3：`[x, y, z]`
 - 长度 7：`[x, y, z, qx, qy, qz, qw]`
 
-当 `background_ply` 是 list 时，`set_background_transform(...)` 不支持运行时修改整组背景；需要通过配置里的 `background_transform` 或 `background_transforms` 设置。
+当 `background_ply` 是 list 或部件字典时，`set_background_transform(...)` 不支持运行时修改整组背景；需要通过配置里的 `background_transform` 或 `background_transforms` 设置。
+
+### `background_transforms` 配置示例
+
+`background_transforms` 是 `Dict[str, list]`，key 按下列顺序匹配（任一命中即生效）：
+完整字符串路径 → `str(Path(...))` 规范化路径 → 文件名（含扩展名）→ stem（不含扩展名）。
+所以对于 `${bg3dgs_dir}/door_bg.ply`，下面四个 key 等价：
+`"${bg3dgs_dir}/door_bg.ply"`、`"assets/gs/backgrounds/door_bg.ply"`、`"door_bg.ply"`、`"door_bg"`。
+日常用 stem 写最短，必要时再用全路径区分同名 PLY。
+
+#### 单背景：用 stem 给唯一背景设位姿
+
+```yaml
+env:
+  gaussian_render:
+    background_ply: ${assets_dir}/gs/backgrounds/door_bg.ply
+    background_transforms:
+      door_bg: [-0.105, 0.491151190, -0.1360378,
+                -0.51684557, 0.495912190, -0.47649889, 0.509794620]
+```
+
+等效写法（直接用 `background_transform`，仅当只有一张背景时简洁）：
+
+```yaml
+env:
+  gaussian_render:
+    background_ply: ${assets_dir}/gs/backgrounds/door_bg.ply
+    background_transform:
+      [-0.105, 0.491151190, -0.1360378,
+       -0.51684557, 0.495912190, -0.47649889, 0.509794620]
+```
+
+#### list / glob 模式：默认 + 个别覆盖
+
+`background_transform` 给整池一个共同位姿，`background_transforms` 给个别条目单独覆盖。
+
+```yaml
+env:
+  gaussian_render:
+    background_ply: ${bg3dgs_dir}/bg*.ply   # 14 张同帧采集的背景
+    background_transform:                   # 整池共用的世界位姿
+      [-0.105, 0.491151190, -0.1360378,
+       -0.51684557, 0.495912190, -0.47649889, 0.509794620]
+    background_transforms:
+      bg7: [3.185, 0.608849, -0.1360378,    # bg7 单独翻到门的另一侧
+            -0.495912, -0.516846, 0.509795, 0.476499]
+      bg11: [0.0, 0.0, 0.05]                # bg11 仅在 z 方向上抬 5cm（长度 3 = 纯平移）
+```
+
+#### 部件字典模式：按部件名整批指定（最常用）
+
+部件字典模式下，`background_transforms` 的 key 可以直接是部件名（如 `wall`、`inside`），
+此时该 key 的 transform 会应用到这一部件展开出来的 *所有* PLY；同部件内某张 PLY 仍然可以用
+stem / 文件名 key 继续覆盖（单 PLY 精确匹配优先级更高）。
+
+```yaml
+wall_name: wall*
+inside_name: inside10
+bg3dgs_dir: ${assets_dir}/gs/backgrounds/door_bg/
+
+env:
+  gaussian_render:
+    background_ply:
+      wall:   ${bg3dgs_dir}/${wall_name}.ply
+      inside: ${bg3dgs_dir}/${inside_name}.ply
+    background_transforms:
+      wall:                                   # 应用到 wall* 展开后的每一张
+        [-0.105, 0.491151, -0.136038,
+         -0.516846, 0.495912, -0.476499, 0.509795]
+      inside:                                 # 应用到 inside* 展开后的每一张
+        [3.185, 0.608849, -0.186038,
+         -0.495912, -0.516846, 0.509795, 0.476499]
+```
+
+如需对部件内某张 PLY 单独再调，加一条 stem key 即可（精确匹配优先于部件 key）：
+
+```yaml
+env:
+  gaussian_render:
+    background_ply:
+      wall: ${bg3dgs_dir}/wall*.ply
+    background_transforms:
+      wall:  [-0.105, 0.491151, -0.136038,    # 部件级默认
+              -0.516846, 0.495912, -0.476499, 0.509795]
+      wall7: [-0.105, 0.491151, -0.086038,    # wall7 单独抬高 5cm
+              -0.516846, 0.495912, -0.476499, 0.509795]
+```
+
+如果所有部件共用同一位姿，把它提到 `background_transform`：
+
+```yaml
+env:
+  gaussian_render:
+    background_ply:
+      wall:   ${bg3dgs_dir}/${wall_name}.ply
+      inside: ${bg3dgs_dir}/${inside_name}.ply
+    background_transform:                     # 全局默认，所有部件 PLY 共用
+      [-0.105, 0.491151, -0.136038,
+       -0.516846, 0.495912, -0.476499, 0.509795]
+```
+
+匹配优先级：单 PLY 精确匹配 (`stem` / 文件名 / 路径) → `background_transforms[<部件名>]`
+→ 全局 `background_transform` → identity。
+
+#### 同名 PLY：用完整路径消歧
+
+stem 不足以区分时退到完整路径。比如两个目录下都有 `bg0.ply`：
+
+```yaml
+env:
+  gaussian_render:
+    background_ply:
+      - assets/gs/backgrounds/door_bg/bg0.ply
+      - assets/gs/backgrounds/lab_bg/bg0.ply
+    background_transforms:
+      "assets/gs/backgrounds/door_bg/bg0.ply": [-0.105, 0.491151, -0.136038]
+      "assets/gs/backgrounds/lab_bg/bg0.ply":  [0.0, 0.0, 0.0,
+                                                 0.0, 0.0, 0.7071068, 0.7071068]
+```
+
+匹配顺序里完整路径排在 stem 之前，所以这两条 key 不会被同名的 stem `bg0` 错配。
 
 ## Reset 分配开关
 
@@ -82,7 +268,7 @@ env:
 | `false` | 初始化时随机分配一次背景；后续 `reset()` 保持这次分配 |
 | `true` | 初始化时随机分配一次背景；每次 `reset()` 后重新分配 |
 
-这个开关只影响 `background_ply` 为 list 的多背景模式。单背景模式下没有背景池可重新分配。
+这个开关影响所有多背景模式（list、glob、部件字典）。单背景模式下没有背景池可重新分配。
 
 ## Batched 环境的分配规则
 
@@ -178,22 +364,22 @@ batched GS 背景有 `_bg_cache`，用于静态相机复用背景渲染结果。
 
 ## Open Door 当前配置状态
 
-`aao_configs/open_door_airbot_play_gs.yaml` 当前使用 `door_bg` 目录下的多个背景：
+`aao_configs/open_door_airbot_play_gs.yaml` 当前已切到部件字典形式，分别给墙面和室内提供候选：
 
 ```yaml
+wall_name: wall*
+inside_name: inside10
 bg3dgs_dir: ${assets_dir}/gs/backgrounds/door_bg/
 
 env:
   gaussian_render:
     background_ply:
-      - ${bg3dgs_dir}/bg0.ply
-      - ${bg3dgs_dir}/bg1.ply
-      - ${bg3dgs_dir}/bg2.ply
-      - ${bg3dgs_dir}/bg3.ply
-      - ${bg3dgs_dir}/bg4.ply
-      - ${bg3dgs_dir}/bg5.ply
-      - ${bg3dgs_dir}/bg6.ply
+      wall:   ${bg3dgs_dir}/${wall_name}.ply
+      inside: ${bg3dgs_dir}/${inside_name}.ply
 ```
+
+每个环境的背景 = 一张 `wall*` PLY 与 `inside10.ply` 的组合（合并后落盘缓存到
+`.cache/gs_background_combos/`）。
 
 `aao_configs/test/open_the_door.yaml` 当前测试配置里：
 
@@ -202,7 +388,9 @@ env:
   batch_size: 3
 ```
 
-在 7 个背景、3 个环境的情况下，同一次分配会给 3 个环境分到互不重复的背景。
+在 batched 模式下，`BatchedGSUnifiedMujocoEnv` 会传 `max_combinations=batch_size=3`，
+即只 materialize 3 个 wall×inside 组合给 3 个环境用，无放回采样保证不重复（前提是
+笛卡尔积总数 ≥ batch_size）。
 
 如果保持默认 `randomize_background_on_reset: false`，这 3 个环境的背景会在初始化后固定。若希望每次 reset 都重新抽一组背景，需要显式配置：
 
@@ -221,3 +409,8 @@ env:
 - 背景数不足时允许重复。
 - 单环境 GS 在 reset 时是否根据开关重选背景。
 - batched GS 在 reset 时是否根据开关重分配背景。
+- 部件字典模式下 `is_multi_background` 返回 `True`。
+- `_merge_background_plys` 拼接结果点数 = 各部件点数之和；二次调用命中磁盘缓存（`save_ply` 不再被触发）；单元素直通源 PLY。
+- `_sample_combinations` 在不限和无放回采样两种情况下的行为。
+- `resolved_background_plys` 对 dict 输入返回笛卡尔积大小的合并 PLY 列表，`max_combinations` 截断时无重复。
+- `background_transforms` 按部件 PLY 路径 / 文件名 / stem 匹配后，先烤入再合并。
