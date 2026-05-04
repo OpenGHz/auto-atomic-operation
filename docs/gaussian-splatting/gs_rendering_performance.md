@@ -31,6 +31,128 @@ python examples/bench_env.py press_three_buttons_gs 10 --profile env.batch_size=
 
 ---
 
+## Benchmark (`open_door_airbot_play_back_gs`, 2026-05-04)
+
+> 测试硬件：NVIDIA GeForce RTX 3070 Laptop（8 GB）
+> 测试命令：`python examples/bench_env.py open_door_airbot_play_back_gs N env.batch_size=B`
+> bench 默认注入 `+env.viewer.disable=true +env.to_numpy=false +env.structured=false`，
+> 第一帧作为 warmup 不计入统计；测量 `capture_observation` 与 `update` 的纯环境时间。
+
+### 当前配置快照（不带 `+test=…` 覆盖）
+
+| 项 | 值 |
+|---|---|
+| `BatchedGSUnifiedMujocoEnv` | 默认 `share_physics=false` |
+| 相机 | 2 路：`eef_wrist_cam`（动态，挂在末端）+ `env2_cam`（静态） |
+| 分辨率 | 640 × 352 |
+| 单 GS 相机功能 | `enable_color=true`、`enable_depth=true`、`enable_heat_map=true`，binary `enable_mask=false` |
+| `mask_objects` | `["handle_lever_body"]` — 该物体没有 GS body 对应（启动日志：`Skipping GS mask renderer for 'handle_lever_body'`），所以最终 `_gs_mask_renderers` 为空，binary mask / heat_map 路径全部跳过 |
+| `gaussian_render.background_ply` | 部件字典：`wall: ${bg3dgs_dir}/wall*.ply`、`inside: ${bg3dgs_dir}/inside10.ply`（当前资产目录里 `wall*` 仅匹配 `wall10.ply`，所以笛卡尔积 = 1 × 1 = 1 个合并 PLY） |
+| 前景 GS 点数 | **653 633**（door 142 k + handle 12 k + lock 21 k + airbot_play 7 link ≈ 80 k + airbot_g2p 18 link ≈ 396 k） |
+| 背景 GS 点数 | **1 539 482**（合并后的 `wall+inside` 缓存到 `.cache/gs_background_combos/`） |
+| GPU 峰值显存（batch=2） | **1.52 GB** |
+
+### 渲染流程图（按当前配置裁剪）
+
+```
+capture_observation()
+│
+├─► super().capture_observation()            （父类 BatchedUnifiedMujocoEnv，串行 N 个 env）
+│   for env in self.envs (N):
+│     env.capture_observation()              MuJoCo 原生 obs：pose / joint / tactile
+│                                            （GS 相机的 color/depth/mask/heat_map 都已被
+│                                             setup_gs_cameras 关闭，原生通道不再渲染）
+│
+└─► _inject_batched_gs_renders(obs)          BatchedGSUnifiedMujocoEnv
+    │
+    ├─ body_pos, body_quat = np.stack(env.data.x{pos,quat})      （N, Nbody, 3/4）
+    ├─ fg_gsb = _fg_gs_renderer.batch_update_gaussians(body_pos, body_quat)
+    │                                                            ── 1 次 GPU 上传 + transform
+    │
+    ├─ 按 (H, W, is_static) 分组相机：
+    │   Group A: eef_wrist_cam   (352, 640, dynamic)   — 不缓存背景
+    │   Group B: env2_cam        (352, 640, static)    — 背景结果首帧后落 _bg_cache
+    │
+    └─ 对每个 group：
+        ├─ 收集 cam_pos, cam_xmat, fovy                          （N, Ncam, …）
+        │
+        ├─ _render_batched_multicam(...)
+        │   │
+        │   ├─ _get_cached_bg_multicam(use_cache=is_static)
+        │   │   │
+        │   │   ├─ static + 命中缓存 → 返回 (bg_rgb, bg_depth)
+        │   │   │
+        │   │   └─ 否则（动态相机 / 首帧 static）：
+        │   │      bg_gsb = bg.batch_update_gaussians(body_pos, body_quat)  ── 1 次
+        │   │      bg_rgb, bg_depth = bg.batch_env_render(bg_gsb, …)        ── 1 次光栅化
+        │   │      （len(_bg_gs_renderers)==1，走单背景快路径，无 scatter）
+        │   │
+        │   ├─ fg_rgb, fg_depth = _fg_gs_renderer.batch_env_render(
+        │   │       fg_gsb, cam_pos, cam_xmat, H, W, fovy, bg_imgs=bg_rgb)  ── 1 次光栅化
+        │   ├─ alphas = _fg_gs_renderer.rasterizations[1]
+        │   └─ full_depth = fg_depth * α + bg_depth * (1 − α)               GPU elementwise
+        │
+        └─ 分发：
+            color  → torch.clamp(0,1)·255 → uint8（保留在 GPU）
+            depth  → depth_max 截断
+            mask / heat_map：need_mask = cam ∈ gs_mask_set ∧ self._gs_mask_renderers
+                              → 此配置下 _gs_mask_renderers 为空 → 直接跳过
+```
+
+稳态每步光栅化总数 = `1 (Group A FG) + 1 (Group A BG, dynamic) + 1 (Group B FG)` = **3 次 `batch_env_render`** + 1 次首帧填 Group B 的 BG 缓存（之后被 `_bg_cache` 服务）。下面 torch.profiler 数据中 `_RasterizeToPixels` 调用次数 = 30 次 / 10 iter = 3 次/iter，正好对上。
+
+### 端到端 wall-clock 时间
+
+| batch_size | capture_observation (mean / std / min) | update (mean) | total | 频率 |
+|---|---|---|---|---|
+| 1 | **33.39 / 2.05 / 30.18 ms** | 0.90 ms | 34.29 ms | 29.16 Hz |
+| 2 | **43.67 / 1.13 / 41.85 ms** | 1.26 ms | 44.93 ms | 22.26 Hz |
+| 4 | **65.89 / 1.07 / 64.73 ms** | 2.24 ms | 68.13 ms | 14.68 Hz |
+
+`capture_observation` 在 batch_size 1 → 2 增加约 10 ms（前景 + 动态背景多渲一份），2 → 4 再增加约 22 ms（继续线性放大）；`update` 几乎随 N 线性。物理 update 占总耗时不到 4%，瓶颈仍在观测获取。
+
+### torch.profiler（batch_size=2，10 iter 计时窗口）
+
+| Kernel / op | self CUDA | 占 CUDA 总时 | 调用次数 | 单次均值 |
+|---|---|---|---|---|
+| `gsplat::rasterize_to_pixels_3dgs_fwd_kernel` (`_RasterizeToPixels`) | **255.4 ms** | **60.7 %** | 30 | 8.51 ms |
+| `aten::copy_`（含 H2D 上传 body_pos/body_quat/cam 等） | 65.4 ms | 15.5 % | 640 | 102 µs |
+| 元素级 `vectorized_elementwise_kernel`（α-blend 主成分） | 63.2 ms | 15.0 % | 340 | 186 µs |
+| `cub::DeviceRadixSortOnesweep`（gaussian sort by depth） | 25.4 ms | 6.0 % | 180 | 141 µs |
+| `gsplat::spherical_harmonics_fwd_kernel` (`_SphericalHarmonics`) | 15.6 ms | 3.7 % | 30 | 521 µs |
+| `gsplat::projection_ewa_3dgs_fused_fwd_kernel` (`_FullyFusedProjection`) | 8.3 ms | 2.0 % | 30 | 276 µs |
+| `gsplat::intersect_tile_kernel`（tile binning） | 7.2 ms | 1.7 % | 60 | 120 µs |
+
+CPU 侧 self time 中绝大头是 `cudaStreamSynchronize`（**326 ms / 290 calls**，占 CPU 总时 68.6 %），即 Python/CPU 大量时间在等 GPU 完成；`aten::copy_` 在 CPU 侧 231 ms 也是 sync 阻塞下的 H2D 拷贝。
+
+完整 trace（chrome://tracing 可视化）保存在 `outputs/bench/profiles/open_door_airbot_play_back_gs_b2/`；脚本：`examples/profile_gs_obs.py`。
+
+### 结论
+
+1. **光栅化主导**：`_RasterizeToPixels` 占 CUDA self time 60 %，是绝对主瓶颈。1.54 M 点的合并背景 + 65 万点前景 + 8.5 ms/call × 3 calls/iter，与端到端 ~44 ms 数量级吻合。要再大幅降时间，必须降点数（背景压缩 / 前景资产瘦身）或降分辨率，光走代码层面优化收益有限。
+2. **alpha-blend / depth 合成是第二档**：`fg*α + bg*(1−α)` 类 elementwise kernel 累计 63 ms（15 %）。当 BG 走缓存时这部分仍要做（不能消去）。
+3. **数据准备开销已经被压平**：先前 phase 2 的 `torch.as_tensor` 预转换 + `_bg_cache` 让 H2D 拷贝降到 102 µs/call，CPU 侧仍主要是同步阻塞而非数据准备。
+4. **mask / heat_map 路径在此配置下为空**：`mask_objects` 列了 `handle_lever_body`，但它没有对应 GS body，启动日志会打印 `Skipping GS mask renderer …`，导致 `_gs_mask_renderers` 为空、整条 mask 子流程被跳过。如果未来给该物体配 GS PLY，单帧时间会上来一档（多一次 `batch_update_gaussians` + 一次 `batch_env_render` × 物体数）。
+5. **`share_physics` 在该配置不适用**：`background_ply` 是部件字典，但 `wall*` 当前只匹配到 1 个文件，`is_multi_background()=True` 但 unique 背景数 = 1。`share_physics=true` 也跑得起来，只是各 env 物理状态相同、视觉相同，没有意义；如要利用 `share_physics`，需要先扩充 `wall*` / `inside*` 池子让笛卡尔积 > 1。
+6. **batch 缩放线性、显存友好**：1.52 GB（b=2）远低于 8 GB；瓶颈更早出现在前景 gaussian 的 batch 维上而不是显存。
+
+### 复现步骤
+
+```bash
+# 端到端 wall-clock
+python examples/bench_env.py open_door_airbot_play_back_gs 10 env.batch_size=2
+
+# torch.profiler trace（含 chrome://tracing 用的 JSON）
+python examples/profile_gs_obs.py open_door_airbot_play_back_gs 10 env.batch_size=2
+```
+
+`examples/profile_gs_obs.py` 内置 `wait=1, warmup=1, active=N` 的 schedule（见
+[torch.profiler.schedule](https://pytorch.org/docs/stable/profiler.html#torch.profiler.schedule)），
+排除 gsplat CUDA JIT 与首帧填缓存对均值的污染；trace 落到
+`outputs/bench/profiles/<config>_b<batch>/` 下，可 tensorboard 或 chrome://tracing 直接打开。
+
+---
+
 ## Phase 1: 早期优化 (已完成)
 
 ### 1. 合并 color + depth 为单次 FG 渲染
