@@ -678,6 +678,47 @@ class GaussianRenderConfig(BaseModel):
     background_transforms: Dict[str, list] = Field(default_factory=dict)
     """Per-background pose transforms keyed by full path, file name, or stem.
     Values: ``[x, y, z]`` or ``[x, y, z, qx, qy, qz, qw]``."""
+    background_transform_randomization: Dict[str, Dict[str, list]] = Field(
+        default_factory=dict
+    )
+    """Per-background *position-only* randomization ranges, sampled
+    independently per env (combination) at ``_setup_gs_render_state`` time
+    using the same ``_bg_rng`` used for background pool sampling.
+
+    Outer key matches by the same precedence as ``background_transforms``
+    (full path / ``str(Path)`` / file name / stem), plus the part name in
+    the dict (parts) form of ``background_ply``. Inner dict maps axis
+    ``'x'`` / ``'y'`` / ``'z'`` to a ``[low, high]`` range; a uniform offset
+    is drawn per axis and *added* to the deterministic base position
+    resolved from ``background_transforms`` / ``background_transform``.
+    Omitted axes default to no perturbation. Orientation is **not**
+    randomized.
+
+    Example (parts dict)::
+
+        background_ply:
+          wall:   ${bg3dgs_dir}/wall*.ply
+          inside: ${bg3dgs_dir}/inside*.ply
+        background_transforms:
+          wall:   [-0.035, 0.491151, -0.136038, ...]   # base 7-vec
+          inside: [ 0.300, 0.491151, -0.136038, ...]
+        background_transform_randomization:
+          wall:
+            x: [-0.05, 0.05]      # ± 5 cm along world X
+            z: [-0.02, 0.02]
+          inside:
+            x: [-0.10, 0.10]
+
+    Each env gets one merged background PLY whose wall / inside parts are
+    independently shifted by the sampled offsets. Sampled offsets are
+    baked into the cache file name via ``_materialize_transformed_background_ply``,
+    so distinct samples become distinct cache entries.
+
+    Note: randomization is sampled once per renderer at init time. Setting
+    ``randomize_background_on_reset=true`` re-shuffles which env uses which
+    pre-built renderer but does not re-sample the transform offsets — the
+    pool of distinct visual variants is fixed at init.
+    """
     body_transforms: Dict[str, BodyTransformSpec] = Field(default_factory=dict)
     """Per-body rigid transforms applied to ``body_gaussians`` PLYs at load time.
     Keys must match entries in ``body_gaussians``. Transformed PLYs are cached
@@ -695,6 +736,80 @@ class GaussianRenderConfig(BaseModel):
     render across the whole batch; only the composited background differs per
     env. Requires ``background_ply`` to be multi-valued (list, glob, or parts
     dict) and ``batch_size > 1``. Validated on ``GSEnvConfig``."""
+
+    @model_validator(mode="after")
+    def _validate_background_transform_randomization(
+        self,
+    ) -> "GaussianRenderConfig":
+        """Range entries must be ``[low, high]`` with ``low <= high``."""
+        for key, axis_dict in self.background_transform_randomization.items():
+            if not isinstance(axis_dict, dict):
+                raise ValueError(
+                    f"background_transform_randomization['{key}'] must be a "
+                    f"dict mapping axis -> [low, high]; got {type(axis_dict).__name__}"
+                )
+            for axis, rng in axis_dict.items():
+                if axis not in ("x", "y", "z"):
+                    raise ValueError(
+                        f"background_transform_randomization['{key}']: "
+                        f"unknown axis '{axis}' (expected 'x', 'y', or 'z')"
+                    )
+                rng_seq = list(rng)
+                if len(rng_seq) != 2:
+                    raise ValueError(
+                        f"background_transform_randomization['{key}']['{axis}'] "
+                        f"must be [low, high]; got length {len(rng_seq)}"
+                    )
+                lo, hi = float(rng_seq[0]), float(rng_seq[1])
+                if lo > hi:
+                    raise ValueError(
+                        f"background_transform_randomization['{key}']['{axis}'] "
+                        f"requires low <= high; got [{lo}, {hi}]"
+                    )
+        return self
+
+    def _randomization_for(self, *keys: str) -> Dict[str, list] | None:
+        """Look up ``background_transform_randomization`` by candidate keys
+        (in order); return the first match, or ``None`` when none configured."""
+        for k in keys:
+            if k in self.background_transform_randomization:
+                return self.background_transform_randomization[k]
+        return None
+
+    def _sample_position_offset(
+        self,
+        key_candidates: tuple[str, ...],
+        rng: np.random.Generator,
+    ) -> tuple[float, float, float]:
+        """Sample a uniform position offset for the first matching key.
+
+        Returns ``(0.0, 0.0, 0.0)`` when no entry matches.
+        """
+        cfg = self._randomization_for(*key_candidates)
+        if cfg is None:
+            return (0.0, 0.0, 0.0)
+        out = []
+        for axis in ("x", "y", "z"):
+            rng_pair = cfg.get(axis)
+            if rng_pair is None:
+                out.append(0.0)
+            else:
+                lo, hi = float(rng_pair[0]), float(rng_pair[1])
+                out.append(float(rng.uniform(lo, hi)))
+        return tuple(out)
+
+    @staticmethod
+    def _ply_key_candidates(bg_ply: str, part: str | None = None) -> tuple[str, ...]:
+        """Return the candidate keys (in precedence order: PLY-level → part)
+        used to look up per-PLY config in ``background_transforms`` /
+        ``background_transform_randomization``."""
+        bg_path = Path(bg_ply)
+        keys = (bg_ply, str(bg_path), bg_path.name, bg_path.stem)
+        return keys + ((part,) if part is not None else ())
+
+    def has_position_randomization(self) -> bool:
+        """Whether any entry of ``background_transform_randomization`` is set."""
+        return bool(self.background_transform_randomization)
 
     def resolved_body_gaussians(self) -> Dict[str, str]:
         """Return ``body_gaussians`` with any configured transforms / mirrors
@@ -947,20 +1062,29 @@ class GaussianRenderConfig(BaseModel):
         For ``str`` / ``list`` / glob forms: one path per pool entry, with
         per-entry pose resolution (precedence: per-entry override in
         ``background_transforms`` → singular ``background_transform`` →
-        identity).
+        identity). When ``background_transform_randomization`` matches an
+        entry, a uniform per-axis position offset is sampled and added
+        before baking, producing one randomly-perturbed PLY per pool entry.
 
         For the dict (parts) form: each part is independently expanded and
-        per-PLY-transformed via ``_resolved_part_plys``; combinations are
-        sampled from the cartesian product of part lists (limited to
-        ``max_combinations`` without replacement when given) and each
-        combination is merged into a single PLY (cached on disk).
+        per-PLY-transformed; combinations are sampled from the cartesian
+        product of part lists (limited to ``max_combinations`` without
+        replacement when given) and each combination is merged into a
+        single PLY (cached on disk). When ``background_transform_randomization``
+        is configured, ``max_combinations`` independent combos are drawn
+        regardless of the pool size, and each combo gets its own per-part
+        position offset baked in.
         """
+        rng_local = rng if rng is not None else np.random.default_rng()
+
         if _is_dict_background(self.background_ply):
+            if self.has_position_randomization():
+                return self._resolve_dict_with_position_randomization(
+                    max_combinations, rng_local
+                )
             parts = self._resolved_part_plys()
             combos = _sample_combinations(
-                list(parts.values()),
-                max_combinations,
-                rng if rng is not None else np.random.default_rng(),
+                list(parts.values()), max_combinations, rng_local
             )
             return [_merge_background_plys(list(combo)) for combo in combos]
 
@@ -971,9 +1095,126 @@ class GaussianRenderConfig(BaseModel):
         out: list[str] = []
         for bg_ply in self._background_ply_list():
             pose = self._per_ply_pose(bg_ply, default_pose)
+            if self.has_position_randomization():
+                offset = self._sample_position_offset(
+                    self._ply_key_candidates(bg_ply), rng_local
+                )
+                pose = (
+                    (
+                        pose[0][0] + offset[0],
+                        pose[0][1] + offset[1],
+                        pose[0][2] + offset[2],
+                    ),
+                    pose[1],
+                )
             materialized = _materialize_transformed_background_ply(bg_ply, pose)
             if materialized is not None:
                 out.append(materialized)
+        return out
+
+    def _resolve_dict_with_position_randomization(
+        self,
+        max_combinations: int | None,
+        rng: np.random.Generator,
+    ) -> list[str]:
+        """Resolve dict-mode combinations preferring distinct file tuples
+        before falling back to position randomization.
+
+        Two-stage strategy:
+
+        1. **Distinct file combos (no random offset).** Up to
+           ``min(max_combinations, cartesian_product_size)`` PLY tuples
+           are drawn from the cartesian product of the per-part pools
+           via ``_sample_combinations`` (without replacement when
+           batch size < total combos), and each tuple is baked using
+           only the deterministic transforms from
+           ``background_transforms`` / ``background_transform``.
+        2. **Overflow with randomization.** If ``max_combinations`` still
+           exceeds the cartesian product size, the remaining slots draw
+           PLY tuples *with* replacement and apply a per-part random
+           position offset (sampled via
+           ``background_transform_randomization``) so the overflow envs
+           remain visually distinct.
+
+        Result: when the file pool can cover the batch, no randomization
+        is applied at all (the configured ranges are silent). The ranges
+        only kick in to differentiate envs beyond what the file pool can
+        already supply.
+        """
+        # Expand each part to its raw PLY pool (no transforms baked yet).
+        part_pools: Dict[str, list[str]] = {}
+        for part, value in self.background_ply.items():
+            entries = [value] if isinstance(value, str) else list(value)
+            pool: list[str] = []
+            for entry in entries:
+                pool.extend(_expand_background_entry(entry))
+            if not pool:
+                raise ValueError(f"background_ply part '{part}' expanded to zero PLYs")
+            part_pools[part] = pool
+
+        global_default: BackgroundPose | None = None
+        if self.background_transform is not None:
+            global_default = _normalize_background_pose(self.background_transform)
+
+        # Resolve part-name defaults once.
+        part_defaults: Dict[str, BackgroundPose | None] = {}
+        for part in part_pools:
+            if part in self.background_transforms:
+                part_defaults[part] = _normalize_background_pose(
+                    self.background_transforms[part]
+                )
+            else:
+                part_defaults[part] = global_default
+
+        parts = list(part_pools.keys())
+        sizes = [len(part_pools[p]) for p in parts]
+        n_files = int(np.prod(sizes))
+        batch = max_combinations if max_combinations is not None else 1
+        n_distinct = min(batch, n_files)
+        n_overflow = batch - n_distinct
+
+        def _bake_combo(combo: Sequence[str], with_offset: bool) -> str:
+            transformed_parts: list[str] = []
+            for i, part in enumerate(parts):
+                ply = combo[i]
+                base_pose = self._per_ply_pose(ply, part_defaults[part])
+                if with_offset:
+                    offset = self._sample_position_offset(
+                        self._ply_key_candidates(ply, part=part), rng
+                    )
+                    pose = (
+                        (
+                            base_pose[0][0] + offset[0],
+                            base_pose[0][1] + offset[1],
+                            base_pose[0][2] + offset[2],
+                        ),
+                        base_pose[1],
+                    )
+                else:
+                    pose = base_pose
+                materialized = _materialize_transformed_background_ply(ply, pose)
+                if materialized is not None:
+                    transformed_parts.append(materialized)
+            return _merge_background_plys(transformed_parts)
+
+        out: list[str] = []
+        # Phase 1: distinct file combos, deterministic transforms only.
+        if n_distinct > 0:
+            distinct_combos = _sample_combinations(
+                list(part_pools.values()), n_distinct, rng
+            )
+            for combo in distinct_combos:
+                out.append(_bake_combo(combo, with_offset=False))
+
+        # Phase 2: overflow → file pool exhausted, differentiate via
+        # randomized offsets (sampled with replacement from the same pools).
+        for _ in range(n_overflow):
+            combo = tuple(
+                part_pools[parts[i]][int(rng.integers(sizes[i]))]
+                for i in range(len(parts))
+            )
+            out.append(_bake_combo(combo, with_offset=True))
+
         return out
 
 

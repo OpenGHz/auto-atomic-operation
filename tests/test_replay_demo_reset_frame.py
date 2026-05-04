@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+from collections import defaultdict
 from pathlib import Path
 
 import numpy as np
@@ -92,3 +93,55 @@ def test_apply_first_frame_reset_uses_kinematic_joint_application():
     assert operator == "arm"
     np.testing.assert_allclose(action, [1.0, 2.0])
     assert kinematic is True
+
+
+def test_observation_getter_keeps_frames_for_each_batch_env():
+    replay_demo = _load_replay_demo_module()
+
+    class DummyEnv:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def capture_observation(self) -> dict:
+            base = self.calls * 10
+            self.calls += 1
+            frames = np.asarray(
+                [
+                    np.full((2, 3, 3), base + 1, dtype=np.uint8),
+                    np.full((2, 3, 3), base + 2, dtype=np.uint8),
+                ]
+            )
+            return {"env2_cam/color/image_raw": {"data": frames, "t": 0.0}}
+
+    class DummyBackend:
+        def __init__(self, env) -> None:
+            self.env = env
+
+    class DummyContext:
+        def __init__(self, env) -> None:
+            self.backend = DummyBackend(env)
+
+    frames_by_camera_env = {"env2_cam": defaultdict(list)}
+    observation_getter = replay_demo.make_observation_getter(
+        frames_by_camera_env, ["env2_cam"]
+    )
+
+    env = DummyEnv()
+    observation_getter(DummyContext(env))
+    observation_getter(DummyContext(env))
+
+    assert sorted(frames_by_camera_env["env2_cam"]) == [0, 1]
+    assert len(frames_by_camera_env["env2_cam"][0]) == 2
+    assert len(frames_by_camera_env["env2_cam"][1]) == 2
+    np.testing.assert_array_equal(
+        frames_by_camera_env["env2_cam"][0][0], np.full((2, 3, 3), 1, dtype=np.uint8)
+    )
+    np.testing.assert_array_equal(
+        frames_by_camera_env["env2_cam"][1][0], np.full((2, 3, 3), 2, dtype=np.uint8)
+    )
+    np.testing.assert_array_equal(
+        frames_by_camera_env["env2_cam"][0][1], np.full((2, 3, 3), 11, dtype=np.uint8)
+    )
+    np.testing.assert_array_equal(
+        frames_by_camera_env["env2_cam"][1][1], np.full((2, 3, 3), 12, dtype=np.uint8)
+    )

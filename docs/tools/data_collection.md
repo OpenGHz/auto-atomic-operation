@@ -79,10 +79,9 @@ python examples/replay_demo.py --config-name pick_and_place \
     +replay.demo_name=my_demo +replay.mode=pose
 ```
 
-Replay videos are written to:
-
-- `assets/videos/<demo_name>_replay.gif`
-- `assets/videos/<demo_name>_replay.mp4`
+Replay videos are written to `outputs/records/videos/`. Batched replays write
+one file per environment, and multi-camera captures write one file per
+environment/camera pair, for example `<demo_name>_env0_env2_cam_replay.mp4`.
 
 ### Replay options
 

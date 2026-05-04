@@ -69,7 +69,10 @@ All replay settings live under the `replay` key in Hydra overrides
 | `fps`       | `25`        | Video frame rate |
 | `gif_width` | `320`       | GIF output width in pixels |
 
-Videos are saved to `outputs/records/videos/`.
+Videos are saved to `outputs/records/videos/`. Batched replays write one file
+per environment, and multi-camera captures write one file per environment/camera
+pair, for example `<demo_name>_env0_env2_cam_replay.mp4` and
+`<demo_name>_env1_eef_wrist_cam_replay.mp4`.
 
 ## MCAP Replay Pipeline
 

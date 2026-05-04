@@ -8,7 +8,7 @@ door_name: door19
 knob_name: knob1
 lock_name: lock1
 wall_name: wall*
-inside_name: inside14
+inside_name: inside0
 bg3dgs_name: null
 bg3dgs_dir: ${assets_dir}/gs/backgrounds/door_bg
 
@@ -19,14 +19,9 @@ env:
       door_body: ${gs_dir}/${door_name}.ply
       handle_gs_frame: ${gs_dir}/real_${knob_name}.ply
       lock_gs_frame: ${gs_dir}/real_${lock_name}.ply
-      # bg_gs_frame: ${assets_dir}/gs/backgrounds/door_bg/${bg3dgs_name}.ply
     background_ply:
       wall: ${bg3dgs_dir}/${wall_name}.ply
       inside: ${bg3dgs_dir}/${inside_name}.ply
-    # Original bg_gs_frame body pose from demo_gs_airbot_play.xml (wxyz→xyzw):
-    # pos=[-0.105, 0.491151190, -0.136037800]
-    # quat(wxyz)=[0.509794620, -0.516845570, 0.495912190, -0.476498890]
-    # (7-float form: [x, y, z, qx, qy, qz, qw])
     background_transforms:
       wall:
         [

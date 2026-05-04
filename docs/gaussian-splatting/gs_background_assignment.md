@@ -251,6 +251,105 @@ env:
 
 匹配顺序里完整路径排在 stem 之前，所以这两条 key 不会被同名的 stem `bg0` 错配。
 
+## 位置随机化：`background_transform_randomization`
+
+部件字典 / list / glob 模式下都支持给每条背景或每个部件加一个 *uniform 位置随机偏移*，
+让每个 env 拿到位姿略有不同的背景，扩大视觉多样性。orientation **不**参与随机化（保留
+`background_transforms` 里给出的固定四元数）。
+
+```yaml
+env:
+  gaussian_render:
+    background_ply:
+      wall:   ${bg3dgs_dir}/wall*.ply
+      inside: ${bg3dgs_dir}/inside*.ply
+    background_transforms:
+      wall:   [-0.035, 0.491151, -0.136038,
+               -0.516846, 0.495912, -0.476499, 0.509795]
+      inside: [ 0.300, 0.491151, -0.136038,
+               -0.516846, 0.495912, -0.476499, 0.509795]
+    background_transform_randomization:
+      wall:
+        x: [-0.05, 0.05]   # ± 5 cm 沿世界 X
+        z: [-0.02, 0.02]   # ± 2 cm 沿世界 Z；y 省略 = 不扰动
+      inside:
+        x: [-0.10, 0.10]
+```
+
+最终位姿 = `background_transforms[<key>]` 给出的确定基线位置 + 该 key 下每轴
+`uniform([low, high])` 采样得到的随机偏移；orientation 直接复用基线。
+
+### Key 匹配优先级
+
+与 `background_transforms` 一致，外层 key 按下列顺序匹配，第一个命中生效：
+
+1. PLY 完整路径 / `str(Path)` / 文件名 / stem — 单 PLY 精确匹配；
+2. 部件名（仅部件字典模式）；
+3. 未匹配 → 不随机化。
+
+举例：
+
+```yaml
+background_transform_randomization:
+  wall:  { x: [-1.0, 1.0] }    # 应用到所有 wall* 部件 PLY 的 x 轴
+  wall0: { x: [10.0, 10.0] }   # 但 wall0 单独被覆盖为 +10（确定值）
+```
+
+### 采样语义（部件字典模式）：先用满文件，再用随机化补差
+
+部件字典模式下采用 **「文件多样性优先」** 策略，分两阶段填满 batch_size 个组合：
+
+1. **Phase 1：文件笛卡尔积，无随机偏移。**
+   先取 `min(batch_size, n_files)` 个不重复的部件 PLY 组合（`n_files = 各部件池子大小之积`），
+   走 `_sample_combinations`（batch < n_files 时无放回采样，否则枚举完整笛卡尔积），
+   每个组合只烤入 `background_transforms` 给出的*确定*位姿，**完全不应用随机偏移**。
+2. **Phase 2：溢出时才用随机化补差。**
+   如果 `batch_size > n_files`，剩余 `batch_size - n_files` 个 env 才进入随机化分支：
+   按部件分别从池子里有放回地各采一张 PLY，然后叠加一份从
+   `background_transform_randomization` 采样的随机偏移，把它们材质化为新的 PLY。
+   这样溢出的 env 之间靠随机偏移区分，而不会和 phase-1 的确定组合重复。
+
+直观理解：
+
+| `batch_size` vs `n_files` | 实际行为 |
+|---|---|
+| `batch_size <= n_files` | 全 batch 用不重复的文件组合，**忽略 `background_transform_randomization`** |
+| `batch_size > n_files`  | 前 `n_files` 个 env 用不重复文件组合（无偏移）；剩余 env 复用文件并叠加随机偏移 |
+
+也就是说，*配置了随机化范围 ≠ 一定会用上*。只有当文件池不够覆盖整个 batch 时，
+随机化才被启用，目的是「在文件多样性已经用尽时再为额外的 env 引入视觉差异」。
+
+**采样器**：所有随机量（phase-1 的 `_sample_combinations` 索引、phase-2 的池采样、
+phase-2 的偏移）都共用 `_setup_gs_render_state()` 传进来的 `np.random.Generator`，
+即 env 自带的 `_bg_rng`，固定 seed 时整个解析过程可复现。
+
+**缓存**：偏移烤入 PLY 后由 `_materialize_transformed_background_ply` 落盘缓存到
+`.cache/gs_background_transforms/`，cache key 包含位姿 hash —— 不同偏移自然落到不同
+缓存条目；phase-1 的确定组合的位姿与现有的 `background_transforms` 缓存共享。
+
+**list / glob 模式**：保持原本的"每条池中 PLY 各采一份偏移"语义不变。
+`background_transforms`/randomization 在 list 模式里都是按 *单 PLY* 应用的，
+没有"组合"概念，因此不存在 phase-1 / phase-2 划分。
+
+### 与 `randomize_background_on_reset` 的关系
+
+随机偏移在初始化时就被烤入 PLY 并被 GPU renderer 持有；之后 `randomize_background_on_reset=true`
+仅会重新洗牌 env→renderer 的索引映射，**不会**重新采样偏移。这意味着：
+
+- 一次初始化后，全 batch 的视觉变体池子是固定的（最多 `batch_size` 种）；
+- reset 之间各 env 在这个池子里轮换，但池子本身不变。
+
+如果以后需要每次 reset 都换出全新偏移，会涉及销毁并重建 GPU renderer，开销较大；当前
+版本未实现，留作后续扩展。
+
+### 配置校验
+
+`GaussianRenderConfig` 的 model_validator 会拒绝下列错误配置：
+
+- 不在 `{x, y, z}` 中的轴名（避免拼写错误悄悄变成 no-op）；
+- 长度不是 2 的范围；
+- `low > high`。
+
 ## Reset 分配开关
 
 新增配置项：
