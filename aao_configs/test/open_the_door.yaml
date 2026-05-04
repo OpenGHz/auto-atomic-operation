@@ -1,15 +1,27 @@
 # @package _global_
 
-cam_width: 320
-cam_height: 240
+cam_width: 640
+cam_height: 480
 enable_color: true
 enable_depth: false
 enable_mask: false
 enable_heat_map: false
 
 env:
-  batch_size: 3
+  batch_size: 5
+  warmup: true
+  to_numpy: true
+  structured: false
   cameras:
+    - name: eef_wrist_cam
+      width: ${cam_width}
+      height: ${cam_height}
+      enable_color: ${enable_color}
+      enable_depth: ${enable_depth}
+      enable_mask: ${enable_mask}
+      enable_heat_map: ${enable_heat_map}
+      parent_frame: eef_pose
+      is_static: false
     - name: env2_cam
       width: ${cam_width}
       height: ${cam_height}
@@ -18,3 +30,5 @@ env:
       enable_mask: ${enable_mask}
       enable_heat_map: ${enable_heat_map}
       is_static: true
+  enabled_sensors:
+    - camera
