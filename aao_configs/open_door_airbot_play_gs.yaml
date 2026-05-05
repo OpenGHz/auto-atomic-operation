@@ -20,8 +20,8 @@ env:
       handle_gs_frame: ${gs_dir}/real_${knob_name}.ply
       lock_gs_frame: ${gs_dir}/real_${lock_name}.ply
     background_ply:
-      wall: ${bg3dgs_dir}/${wall_name}.ply
-      inside: ${bg3dgs_dir}/${inside_name}.ply
+      wall: ${bg3dgs_dir}/wall/${wall_name}.ply
+      inside: ${bg3dgs_dir}/inside/${inside_name}.ply
     background_transforms:
       wall:
         [
