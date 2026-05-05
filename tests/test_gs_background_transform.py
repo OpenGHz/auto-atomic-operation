@@ -193,6 +193,7 @@ def test_single_gs_reset_reassigns_multi_backgrounds_when_enabled(monkeypatch):
     monkeypatch.setattr(UnifiedMujocoEnv, "reset", lambda self: None)
     env = object.__new__(GSUnifiedMujocoEnv)
     env._is_multi_bg = True
+    env._pending_gs_config = None
     env.config = SimpleNamespace(
         gaussian_render=GaussianRenderConfig(randomize_background_on_reset=True)
     )
@@ -207,6 +208,7 @@ def test_single_gs_reset_keeps_multi_background_when_disabled(monkeypatch):
     monkeypatch.setattr(UnifiedMujocoEnv, "reset", lambda self: None)
     env = object.__new__(GSUnifiedMujocoEnv)
     env._is_multi_bg = True
+    env._pending_gs_config = None
     env.config = SimpleNamespace(
         gaussian_render=GaussianRenderConfig(randomize_background_on_reset=False)
     )
@@ -225,6 +227,8 @@ def test_batched_gs_reset_reassigns_multi_backgrounds_when_enabled(monkeypatch):
     )
     env = object.__new__(BatchedGSUnifiedMujocoEnv)
     env._is_multi_bg = True
+    env._pending_gs_config = None
+    env._share_physics = False
     env.config = SimpleNamespace(
         gaussian_render=GaussianRenderConfig(randomize_background_on_reset=True)
     )
@@ -244,6 +248,8 @@ def test_batched_gs_reset_keeps_multi_backgrounds_when_disabled(monkeypatch):
     )
     env = object.__new__(BatchedGSUnifiedMujocoEnv)
     env._is_multi_bg = True
+    env._pending_gs_config = None
+    env._share_physics = False
     env.config = SimpleNamespace(
         gaussian_render=GaussianRenderConfig(randomize_background_on_reset=False)
     )
