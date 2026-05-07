@@ -83,15 +83,15 @@
             <site name="handle_press_back_site" pos="0.095 -0.080 0.000" quat="0.707106781 0 0  0.707106781" size="0.012" rgba="0.2 1 0.2 1"/>
 
             <!-- GS frame body for handle/knob PLY -->
-            <body name="handle_gs_frame" pos="0.270651190 1.62 0.03" quat="0.023543636 -0.014802135 0.716127885 -0.697414831"/>
+            <body name="handle_gs_frame" pos="0.270651190 1.64 0.03" quat="0.023543636 -0.014802135 0.716127885 -0.697414831"/>
           </body>
 
           <!-- GS frame body for lock PLY, fixed outside the rotating lever body. -->
-          <body name="lock_gs_frame" pos="0.270651190 1.62 0.01" quat="0.023543636 -0.014802135 0.716127885 -0.697414831"/>
+          <body name="lock_gs_frame" pos="0.270651190 1.64 0.01" quat="0.023543636 -0.014802135 0.716127885 -0.697414831"/>
         </body>
 
         <!-- GS frame body for door PLY -->
-        <body name="door_gs_frame" pos="-0.448848810 1.62 0.863" quat="0.023543636 -0.014802135 0.716127885 -0.697414831">
+        <body name="door_gs_frame" pos="-0.448848810 1.64 0.863" quat="0.023543636 -0.014802135 0.716127885 -0.697414831">
           <body name="door_body" pos="0 0 0"/>
         </body>
       </body>
