@@ -1,5 +1,5 @@
 defaults:
-  - basis_p7_g2p
+  - basis_p7_v3_umi_v3
   - gs_mixin
   - _self_
 
@@ -55,6 +55,14 @@ task:
       y: [0.1, 0.2]
       collision_radius: 0.04
       reference: absolute_world
+    arm:
+      base:
+        x: [-0.15, 0.1]
+        y: [-0.2, 0.08]
+      eef:
+         x: [-0.03, 0.07]
+         y: [-0.15, 0.20]
+         z: [-0.005, 0.005]
 
   stages:
     - name: pick_blue_duck
