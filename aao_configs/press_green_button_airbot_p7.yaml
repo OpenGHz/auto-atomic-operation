@@ -1,5 +1,5 @@
 defaults:
-  - basis_p7_g2p
+  - basis_p7_v3_umi_v3
   - gs_mixin
   - _self_
 
@@ -59,6 +59,14 @@ task:
       y: [-0.09, -0.01]
       reference: absolute_world
       collision_radius: 0.05
+    arm:
+      base:
+        x: [-0.15, 0.1]
+        y: [-0.2, 0.08]
+      eef:
+         x: [-0.03, 0.07]
+         y: [-0.15, 0.20]
+         z: [-0.005, 0.005]
 
   stages:
     - name: press_green_button
@@ -70,14 +78,14 @@ task:
           - position: [0.0, 0.0, 0.12]
             orientation: [0.70710678, 0.0, -0.70710678, 0.0]
             reference: object_world
-          - position: [0.0, 0.0, 0.038]
+          - position: [0.0, 0.0, 0.028]
             reference: object_world
             tolerance:
               position: [0.015, 0.015, 0.025]
               orientation: 0.12
         eef:
           close: true
-          joint_positions: [0.01]
+          joint_positions: [0.05]
         post_move:
           - position: [0.0, 0.0, 0.12]
             reference: object_world
@@ -88,4 +96,4 @@ task_operators:
       base_pose:
         position: [0.90, 0.05, 0.15]
         orientation: [0.0, 0.0, -1, 0]
-      eef: 0.01075
+      eef: 0.05
