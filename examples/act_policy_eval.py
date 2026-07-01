@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import time
 from pathlib import Path
 from typing import Any, Optional
 
@@ -162,6 +163,51 @@ def _quat_xyzw_to_matrix(quat: Any) -> np.ndarray:
     )
 
 
+def _normalize_quat_batch_xyzw(quat: Any) -> np.ndarray:
+    q = np.asarray(quat, dtype=np.float64).reshape(-1, 4)
+    norm = np.linalg.norm(q, axis=-1, keepdims=True)
+    return q / np.clip(norm, 1e-12, None)
+
+
+def _quat_mul_batch_xyzw(a: Any, b: Any) -> np.ndarray:
+    """Hamilton product for xyzw quaternions, batched as (B, 4)."""
+    a = np.asarray(a, dtype=np.float64).reshape(-1, 4)
+    b = np.asarray(b, dtype=np.float64).reshape(-1, 4)
+    ax, ay, az, aw = a[:, 0], a[:, 1], a[:, 2], a[:, 3]
+    bx, by, bz, bw = b[:, 0], b[:, 1], b[:, 2], b[:, 3]
+    return np.stack(
+        [
+            aw * bx + ax * bw + ay * bz - az * by,
+            aw * by - ax * bz + ay * bw + az * bx,
+            aw * bz + ax * by - ay * bx + az * bw,
+            aw * bw - ax * bx - ay * by - az * bz,
+        ],
+        axis=-1,
+    )
+
+
+def _rot6d_to_matrix_batch(rot6d: Any) -> np.ndarray:
+    x = np.asarray(rot6d, dtype=np.float64).reshape(-1, 6)
+    a1 = x[:, 0:3]
+    a2 = x[:, 3:6]
+    b1 = a1 / np.clip(np.linalg.norm(a1, axis=1, keepdims=True), 1e-8, None)
+    a2 = a2 - np.sum(b1 * a2, axis=1, keepdims=True) * b1
+    b2 = a2 / np.clip(np.linalg.norm(a2, axis=1, keepdims=True), 1e-8, None)
+    b3 = np.cross(b1, b2, axis=1)
+    return np.stack((b1, b2, b3), axis=2)
+
+
+def _matrix_to_rot6d_batch(matrix: Any) -> np.ndarray:
+    R = np.asarray(matrix, dtype=np.float64).reshape(-1, 3, 3)
+    return np.concatenate((R[:, :, 0], R[:, :, 1]), axis=1)
+
+
+def _global_rela_rot6d(rot6d: Any, ref_rot6d: Any) -> np.ndarray:
+    R_ref = _rot6d_to_matrix_batch(ref_rot6d)
+    R = _rot6d_to_matrix_batch(rot6d)
+    return _matrix_to_rot6d_batch(np.einsum("bij,bjk->bik", R_ref.transpose(0, 2, 1), R))
+
+
 def _quat_angle_deg(q1: Any, q2: Any) -> float:
     a = _normalize_quat_xyzw(q1)
     b = _normalize_quat_xyzw(q2)
@@ -237,6 +283,8 @@ class ACTPolicyAdapter:
         action_debug_every: int = 0,
         replan_every_step: bool = False,
         delta_position_action: bool = False,
+        delta_orientation_action: bool = False,
+        episode0_rela_pose: bool = False,
         lock_vertical_orientation: bool = False,
         place_xy_from_target: bool = False,
         place_xy_offset: tuple[float, float] = (0.0, 0.0),
@@ -247,12 +295,18 @@ class ACTPolicyAdapter:
         self.action_debug_every = max(int(action_debug_every), 0)
         self.replan_every_step = replan_every_step
         self.delta_position_action = delta_position_action
+        self.delta_orientation_action = delta_orientation_action
+        self.episode0_rela_pose = episode0_rela_pose
         self.lock_vertical_orientation = lock_vertical_orientation
         self.place_xy_from_target = place_xy_from_target
         self.place_xy_offset = np.asarray(place_xy_offset, dtype=np.float32).reshape(2)
         self._printed_debug = False
         self._step = 0
         self._delta_anchor_pos: Optional[np.ndarray] = None
+        self._delta_anchor_quat: Optional[np.ndarray] = None
+        self._episode0_anchor_pos: Optional[np.ndarray] = None
+        self._episode0_anchor_rot6d: Optional[np.ndarray] = None
+        self._episode0_anchor_quat: Optional[np.ndarray] = None
         self.image_keys = _image_keys_from_checkpoint(self.checkpoint)
         policy_cfg = PreTrainedConfig.from_pretrained(self.checkpoint)
         policy_cfg.device = self.device
@@ -273,7 +327,47 @@ class ACTPolicyAdapter:
         self.preprocessor.reset()
         self.postprocessor.reset()
         self._delta_anchor_pos = None
+        self._delta_anchor_quat = None
+        self._episode0_anchor_pos = None
+        self._episode0_anchor_rot6d = None
+        self._episode0_anchor_quat = None
         self._step = 0
+
+    def _observed_quat(self, observation: dict) -> np.ndarray:
+        quat = np.asarray(observation["arm/pose/orientation"]["data"], dtype=np.float64)
+        return _normalize_quat_batch_xyzw(quat).astype(np.float32)
+
+    def _ensure_episode0_anchor(self, observation: dict) -> None:
+        if self._episode0_anchor_pos is not None:
+            return
+        self._episode0_anchor_pos = np.asarray(
+            observation["arm/pose/position"]["data"], dtype=np.float32
+        ).copy()
+        self._episode0_anchor_rot6d = np.asarray(
+            observation["arm/pose/rotation_6d"]["data"], dtype=np.float32
+        ).copy()
+        self._episode0_anchor_quat = self._observed_quat(observation).copy()
+
+    def _state_parts(self, observation: dict) -> list[np.ndarray]:
+        if not self.episode0_rela_pose:
+            return [
+                np.asarray(observation[k]["data"], dtype=np.float32)
+                for k in STATE_KEYS
+            ]
+
+        self._ensure_episode0_anchor(observation)
+        assert self._episode0_anchor_pos is not None
+        assert self._episode0_anchor_rot6d is not None
+        pos = np.asarray(observation["arm/pose/position"]["data"], dtype=np.float32)
+        rot6d = np.asarray(observation["arm/pose/rotation_6d"]["data"], dtype=np.float32)
+        grip = np.asarray(
+            observation["gripper/joint_state/position"]["data"], dtype=np.float32
+        )
+        pos_rela = pos - self._episode0_anchor_pos
+        rot6d_rela = _global_rela_rot6d(rot6d, self._episode0_anchor_rot6d).astype(
+            np.float32
+        )
+        return [pos_rela, rot6d_rela, grip]
 
     def _build_obs(self, observation: dict) -> dict:
         """aao 批量观测 dict -> lerobot 输入 dict。
@@ -281,9 +375,7 @@ class ACTPolicyAdapter:
         observation[key]["data"] 形状：低维 (B, dim)，图像 (B, H, W, 3) uint8。
         """
         # 1) 低维状态拼成 observation.state -> (B, 10)
-        state_parts = [
-            np.asarray(observation[k]["data"], dtype=np.float32) for k in STATE_KEYS
-        ]
+        state_parts = self._state_parts(observation)
         state = np.concatenate(state_parts, axis=-1)
         obs: dict[str, torch.Tensor] = {
             "observation.state": torch.from_numpy(state).to(self.device),
@@ -317,9 +409,16 @@ class ACTPolicyAdapter:
         _print_section("Expected Script Mapping")
         print(f"STATE_KEYS: {STATE_KEYS}")
         print(f"IMAGE_KEYS: {self.image_keys}")
-        print("ACTION layout: position[0:3] quat_xyzw[3:7] gripper[7:8]")
+        print("ACTION layout: position[0:3] quat_xyzw[3:7] gripper_abs[7:8]")
         print(f"delta_position_action: {self.delta_position_action}")
+        print(f"delta_orientation_action: {self.delta_orientation_action}")
+        print(f"episode0_rela_pose: {self.episode0_rela_pose}")
         print(f"lock_vertical_orientation: {self.lock_vertical_orientation}")
+        if self.episode0_rela_pose:
+            print(
+                "episode0 mapping: state=(pos-pos0, rot6d_rela_to_rot6d0, gripper_abs); "
+                "action=(pos_rela+pos0, quat_rela*quat0, gripper_abs)"
+            )
 
         _print_section("Raw AAO Observation")
         for key in STATE_KEYS:
@@ -386,19 +485,44 @@ class ACTPolicyAdapter:
         pos = action_np[:, ACT_POS]
         quat = action_np[:, ACT_QUAT]
         grip = action_np[:, ACT_GRIP]
+        abs_pos = pos
+        abs_quat = quat
+        if self.episode0_rela_pose:
+            self._ensure_episode0_anchor(observation)
+            assert self._episode0_anchor_pos is not None
+            assert self._episode0_anchor_quat is not None
+            abs_pos = pos + self._episode0_anchor_pos
+            rel_quat = _normalize_quat_batch_xyzw(quat)
+            abs_quat = _quat_mul_batch_xyzw(rel_quat, self._episode0_anchor_quat)
+        elif self.delta_orientation_action:
+            rel_quat = _normalize_quat_batch_xyzw(quat)
+            anchor_quat = self._observed_quat(observation)
+            abs_quat = _quat_mul_batch_xyzw(anchor_quat, rel_quat)
         if self.lock_vertical_orientation:
-            quat = np.broadcast_to(VERTICAL_QUAT_XYZW, quat.shape).copy()
-        quat_norm = np.linalg.norm(quat, axis=-1)
+            abs_quat = np.broadcast_to(VERTICAL_QUAT_XYZW, abs_quat.shape).copy()
+        quat_norm = np.linalg.norm(abs_quat, axis=-1)
         print(f"  position_or_delta[0]: {pos[0].round(5).tolist()}")
-        if self.delta_position_action:
+        if self.episode0_rela_pose:
+            assert self._episode0_anchor_pos is not None
+            assert self._episode0_anchor_quat is not None
+            print(f"  episode0_position[0]: {self._episode0_anchor_pos[0].round(5).tolist()}")
+            print(f"  absolute_position[0]: {abs_pos[0].round(5).tolist()}")
+            print(f"  relative_quat_xyzw[0]: {quat[0].round(5).tolist()}")
+            print(
+                f"  absolute_quat_xyzw[0]: {abs_quat[0].round(5).tolist()} "
+                f"norm={quat_norm[0]:.5f}"
+            )
+        elif self.delta_position_action:
             anchor = np.asarray(
                 observation[STATE_KEYS[0]]["data"], dtype=np.float32
             )[:, : pos.shape[-1]]
-            abs_pos = anchor + pos
-            print(f"  anchor_position[0]: {anchor[0].round(5).tolist()}")
-            print(f"  absolute_position[0]: {abs_pos[0].round(5).tolist()}")
-        print(f"  quat_xyzw[0]: {quat[0].round(5).tolist()} norm={quat_norm[0]:.5f}")
-        print(f"  gripper[0]: {grip[0].round(5).tolist()}")
+            chunk_abs_pos = anchor + pos
+            print(f"  chunk_anchor_position[0]: {anchor[0].round(5).tolist()}")
+            print(f"  absolute_position[0]: {chunk_abs_pos[0].round(5).tolist()}")
+            print(f"  quat_xyzw[0]: {abs_quat[0].round(5).tolist()} norm={quat_norm[0]:.5f}")
+        else:
+            print(f"  quat_xyzw[0]: {abs_quat[0].round(5).tolist()} norm={quat_norm[0]:.5f}")
+        print(f"  gripper_abs[0]: {grip[0].round(5).tolist()}")
 
     @torch.inference_mode()
     def act(
@@ -417,10 +541,10 @@ class ACTPolicyAdapter:
             # 型任务，逐步重规划更容易从“到上方”切到“下压/闭合”。
             self.policy.reset()
             queue_empty = True
-        if self.delta_position_action and (
-            queue_empty or self._delta_anchor_pos is None
-        ):
+        need_chunk_anchor = self.delta_position_action or self.delta_orientation_action
+        if need_chunk_anchor and (queue_empty or self._delta_anchor_pos is None):
             self._delta_anchor_pos = current_pos[:, :3].copy()
+            self._delta_anchor_quat = self._observed_quat(observation)
         action = self.policy.select_action(obs)        # normalized or raw depending on processor chain
         action = self.postprocessor(action)            # (B, 8), unnormalized policy action
         action = action.detach().cpu().numpy().astype(np.float32)
@@ -428,8 +552,21 @@ class ACTPolicyAdapter:
         pos = action[:, ACT_POS]                        # (B, 3)
         quat = action[:, ACT_QUAT]                      # (B, 4) xyzw
         grip = action[:, ACT_GRIP]                      # (B, 1)
-        if self.lock_vertical_orientation:
-            quat = np.broadcast_to(VERTICAL_QUAT_XYZW, quat.shape).copy()
+        delta_pos = None
+        anchor = None
+        delta_quat = None
+        anchor_quat = None
+        if self.episode0_rela_pose:
+            self._ensure_episode0_anchor(observation)
+            assert self._episode0_anchor_pos is not None
+            assert self._episode0_anchor_quat is not None
+            delta_pos = pos
+            anchor = self._episode0_anchor_pos
+            pos = anchor + delta_pos
+            delta_quat = _normalize_quat_batch_xyzw(quat)
+            anchor_quat = self._episode0_anchor_quat
+            # Match PoseGlobalRelaAbsTool.to_abs_orientation: abs = rela * ref.
+            quat = _quat_mul_batch_xyzw(delta_quat, anchor_quat)
         if self.delta_position_action:
             anchor = (
                 current_pos[:, :3]
@@ -438,6 +575,16 @@ class ACTPolicyAdapter:
             )
             delta_pos = pos
             pos = anchor + delta_pos
+        if self.delta_orientation_action:
+            delta_quat = _normalize_quat_batch_xyzw(quat)
+            anchor_quat = (
+                self._observed_quat(observation)
+                if self._delta_anchor_quat is None
+                else self._delta_anchor_quat
+            )
+            quat = _quat_mul_batch_xyzw(anchor_quat, delta_quat)
+        if self.lock_vertical_orientation:
+            quat = np.broadcast_to(VERTICAL_QUAT_XYZW, quat.shape).copy()
         if self.place_xy_from_target:
             stage_names = list(getattr(update, "stage_name", []))
             try:
@@ -460,17 +607,30 @@ class ACTPolicyAdapter:
         )
         if should_print:
             self._printed_debug = True
-            print(
+            msg = (
                 f"[debug] step={self._step} "
                 f"pos={pos[0].round(4).tolist()} "
                 f"quat={quat[0].round(4).tolist()} "
-                f"grip={grip[0].round(4).tolist()}"
-                + (
-                    f" delta={delta_pos[0].round(4).tolist()} anchor={anchor[0].round(4).tolist()}"
-                    if self.delta_position_action
-                    else ""
-                )
+                f"grip_abs={grip[0].round(4).tolist()}"
             )
+            if self.episode0_rela_pose:
+                msg += (
+                    f" episode0_dpos={delta_pos[0].round(4).tolist()}"
+                    f" episode0_pos={anchor[0].round(4).tolist()}"
+                    f" episode0_dquat={delta_quat[0].round(4).tolist()}"
+                    f" episode0_quat={anchor_quat[0].round(4).tolist()}"
+                )
+            elif self.delta_position_action:
+                msg += (
+                    f" delta={delta_pos[0].round(4).tolist()}"
+                    f" anchor={anchor[0].round(4).tolist()}"
+                )
+            if self.delta_orientation_action:
+                msg += (
+                    f" dquat={delta_quat[0].round(4).tolist()}"
+                    f" anchor_q={anchor_quat[0].round(4).tolist()}"
+                )
+            print(msg)
         self._step += 1
         return {"position": pos, "orientation": quat, "gripper": grip}
 
@@ -577,6 +737,104 @@ def _trace_rollout_state(
     )
 
 
+def _maybe_trace_rollout_state(
+    args: argparse.Namespace,
+    evaluator: PolicyEvaluator,
+    update: TaskUpdate,
+    *,
+    rollout: int,
+    step: int,
+    observation: Optional[dict],
+    last_action: Optional[dict],
+    prev_stage: Optional[tuple[int, str, str]],
+) -> Optional[tuple[int, str, str]]:
+    if not args.trace_grasp:
+        return prev_stage
+    stage_key = (
+        int(update.stage_index[0]),
+        update.stage_name[0],
+        str(update.status[0]),
+    )
+    trace_every = max(int(args.trace_every), 1)
+    if prev_stage != stage_key or step % trace_every == 0:
+        _trace_rollout_state(
+            evaluator,
+            update,
+            rollout=rollout,
+            step=step,
+            observation=observation,
+            last_action=last_action,
+        )
+    return stage_key
+
+
+def _run_policy_tail(
+    *,
+    policy: ACTPolicyAdapter,
+    evaluator: PolicyEvaluator,
+    update: TaskUpdate,
+    args: argparse.Namespace,
+    rollout: int,
+    step: int,
+    prev_stage: Optional[tuple[int, str, str]],
+    last_action: Optional[dict],
+) -> tuple[TaskUpdate, int, Optional[tuple[int, str, str]], Optional[dict], int]:
+    seconds = max(float(args.post_success_policy_seconds), 0.0)
+    if seconds <= 0.0:
+        return update, step, prev_stage, last_action, 0
+
+    freq = max(float(args.sim_loop_frequency), 1.0)
+    interval = 1.0 / freq
+    deadline = time.monotonic() + seconds
+    tail_steps = 0
+    print(f"[rollout {rollout}] success met; continuing policy for {seconds:.2f}s")
+    while time.monotonic() < deadline:
+        step += 1
+        obs = evaluator.get_observation()
+        action = policy.act(obs, update=update, evaluator=evaluator)
+        last_action = action
+        prev_stage = _maybe_trace_rollout_state(
+            args,
+            evaluator,
+            update,
+            rollout=rollout,
+            step=step,
+            observation=obs,
+            last_action=last_action,
+            prev_stage=prev_stage,
+        )
+        update = evaluator.update(action)
+        tail_steps += 1
+        remaining = deadline - time.monotonic()
+        if remaining > 0.0:
+            time.sleep(min(interval, remaining))
+    return update, step, prev_stage, last_action, tail_steps
+
+
+def _hold_after_done(evaluator: PolicyEvaluator, seconds: float, frequency: float) -> None:
+    seconds = max(float(seconds), 0.0)
+    if seconds <= 0.0:
+        return
+    print(f"[viewer] holding final state for {seconds:.2f}s")
+    if evaluator.sim_loop_running:
+        time.sleep(seconds)
+        return
+
+    env = evaluator.get_env()
+    if not hasattr(env, "update"):
+        time.sleep(seconds)
+        return
+
+    interval = 1.0 / max(float(frequency), 1.0)
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        with evaluator.sim_lock:
+            env.update()
+        remaining = deadline - time.monotonic()
+        if remaining > 0.0:
+            time.sleep(min(interval, remaining))
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -618,6 +876,28 @@ def main() -> None:
         help="把模型输出的 position[0:3] 当作相对查询时刻末端位置的 delta，再还原成绝对位置执行",
     )
     parser.add_argument(
+        "--delta-orientation-action",
+        action="store_true",
+        help="chunk-relative 对比用：把 quat[3:7] 当作相对 chunk 起点姿态的 delta，再还原成绝对姿态执行",
+    )
+    parser.add_argument(
+        "--episode0-rela-pose",
+        action="store_true",
+        help="按 mcap_data_loader poses.py 的 _rela 语义处理：pose 相对每个 rollout 第 0 帧，gripper 保持绝对值",
+    )
+    parser.add_argument(
+        "--post-success-policy-seconds",
+        type=float,
+        default=0.0,
+        help="所有环境判定成功后继续执行 policy 多少秒，方便在 viewer 里观察门是否真的继续打开",
+    )
+    parser.add_argument(
+        "--post-done-hold-seconds",
+        type=float,
+        default=0.0,
+        help="rollout done 后保持 viewer/物理仿真多少秒；不再更新判定，只保留最后控制",
+    )
+    parser.add_argument(
         "--lock-vertical-orientation",
         action="store_true",
         help="忽略模型输出的 quat，强制使用训练数据里的竖直末端姿态 [0,sqrt(0.5),0,sqrt(0.5)]",
@@ -650,6 +930,14 @@ def main() -> None:
         "--sim-loop-frequency", type=float, default=10.0, help="from_config 的仿真频率"
     )
     args = parser.parse_args()
+    if args.episode0_rela_pose and (
+        args.delta_position_action or args.delta_orientation_action
+    ):
+        parser.error(
+            "--episode0-rela-pose already handles relative pose restoration; "
+            "do not combine it with chunk-relative --delta-position-action/"
+            "--delta-orientation-action."
+        )
 
     overrides = [f"env.batch_size={args.batch_size}", *args.override]
     task_file = load_task_file_hydra(args.config_name, overrides=overrides)
@@ -659,6 +947,8 @@ def main() -> None:
         action_debug_every=args.action_debug_every,
         replan_every_step=args.replan_every_step,
         delta_position_action=args.delta_position_action,
+        delta_orientation_action=args.delta_orientation_action,
+        episode0_rela_pose=args.episode0_rela_pose,
         lock_vertical_orientation=args.lock_vertical_orientation,
         place_xy_from_target=args.place_xy_from_target,
         place_xy_offset=tuple(args.place_xy_offset),
@@ -688,23 +978,16 @@ def main() -> None:
                 obs = evaluator.get_observation()
                 action = policy.act(obs, update=update, evaluator=evaluator)
                 last_action = action
-                if args.trace_grasp:
-                    stage_key = (
-                        int(update.stage_index[0]),
-                        update.stage_name[0],
-                        str(update.status[0]),
-                    )
-                    trace_every = max(int(args.trace_every), 1)
-                    if prev_stage != stage_key or step % trace_every == 0:
-                        _trace_rollout_state(
-                            evaluator,
-                            update,
-                            rollout=rollout,
-                            step=step,
-                            observation=obs,
-                            last_action=last_action,
-                        )
-                    prev_stage = stage_key
+                prev_stage = _maybe_trace_rollout_state(
+                    args,
+                    evaluator,
+                    update,
+                    rollout=rollout,
+                    step=step,
+                    observation=obs,
+                    last_action=last_action,
+                    prev_stage=prev_stage,
+                )
                 update = evaluator.update(action)
                 if update.done.all():
                     if args.trace_grasp:
@@ -716,6 +999,26 @@ def main() -> None:
                             observation=obs,
                             last_action=last_action,
                         )
+                    if bool(np.all(update.success)):
+                        update, step, prev_stage, last_action, tail_steps = _run_policy_tail(
+                            policy=policy,
+                            evaluator=evaluator,
+                            update=update,
+                            args=args,
+                            rollout=rollout,
+                            step=step,
+                            prev_stage=prev_stage,
+                            last_action=last_action,
+                        )
+                        if tail_steps > 0:
+                            print(
+                                f"[rollout {rollout}] post-success policy steps={tail_steps}"
+                            )
+                    _hold_after_done(
+                        evaluator,
+                        args.post_done_hold_seconds,
+                        args.sim_loop_frequency,
+                    )
                     break
             summary = evaluator.summarize(
                 update, max_updates=args.max_steps, updates_used=step + 1
