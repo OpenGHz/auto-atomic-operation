@@ -32,4 +32,19 @@ gs = [
 
 [tool.setuptools.packages.find]
 include = ["auto_atom*"]
+# Prune heavy non-package dirs from the walk. With namespaces=true every dir
+# looks like a package, so setuptools would otherwise recurse into data/ (900M+),
+# assets/, third_party/ etc. and hang during editable builds. The early-prune
+# only fires on the exact literal "<name>*" pattern, so list each top-level dir.
+exclude = [
+  "data*",
+  "assets*",
+  "outputs*",
+  "third_party*",
+  "tests*",
+  "examples*",
+  "docs*",
+  "dist*",
+  "aao_configs*",
+]
 namespaces = true
