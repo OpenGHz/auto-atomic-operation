@@ -2,7 +2,9 @@
 
 By default this script loads ``outputs/records/demos/<config_name>.npz``
 produced by ``record_demo.py`` and replays the saved sequence step by step.
-It also supports loading ROS2 mcap files for joint-level replay.
+It also supports loading mcap files for joint-level replay, in two formats
+(auto-detected): the legacy ROS2 CDR format (``sensor_msgs/JointState``) and
+the newer Foxglove flatbuffer format (``foxglove.JointStates``).
 
 Examples:
 
@@ -21,6 +23,11 @@ Examples:
         +replay.gripper_topic=/robot/right_gripper/distance \
         +replay.base_topic=/robot/base_pose \
         +replay.scene_joint_topic=/scene/door/joint_states
+
+    # Foxglove flatbuffer mcap replay (arm/gripper topics auto-resolve to the
+    # airbot /observation/... joint_position streams)
+    python examples/replay_demo.py --config-name open_door_airbot_play_g2p \
+        +replay.mcap_path=data/replay/george.mcap
 """
 
 from __future__ import annotations

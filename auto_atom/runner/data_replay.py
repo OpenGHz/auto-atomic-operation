@@ -149,7 +149,15 @@ class DataReplayConfig(BaseModel):
     demo recording interval (e.g. 10 for MuJoCo sub-stepping)."""
     mcap_path: str | None = Field(default=None)
     arm_topic: str = Field(default="/robot/right_arm/joint_state")
+    """Arm joint topic. Matches the legacy ROS2 ``sensor_msgs/JointState``
+    recordings. For newer Foxglove flatbuffer recordings (``foxglove.JointStates``)
+    the format is auto-detected and, if this topic is absent, the arm stream is
+    resolved to the airbot ``/observation/airbot_play/arm/joint_position`` topic
+    (or an ``/arm/`` JointStates topic)."""
     gripper_topic: str = Field(default="/robot/right_gripper/joint_state")
+    """Gripper joint topic. As with ``arm_topic``, Foxglove recordings resolve
+    to ``/observation/airbot_play/g2t/parallel_position`` (or a parallel/g2t
+    JointStates topic) when this ROS2 topic is absent."""
     base_topic: str | None = Field(default=None)
     """Optional ROS2 topic carrying the operator base pose for MCAP replay.
 
@@ -297,12 +305,18 @@ def _load_ctrl_demo(demo_data: np.lib.npyio.NpzFile) -> Dict[str, np.ndarray]:
     return result
 
 
-def _get_operator_actuator_names(op_cfg: Any) -> list[str]:
-    """Return ``arm_actuators + eef_actuators`` from an operator config-like object."""
+def _get_operator_actuator_split(op_cfg: Any) -> tuple[list[str], list[str]]:
+    """Return ``(arm_actuators, eef_actuators)`` from an operator config-like object."""
     if op_cfg is None:
-        return []
+        return [], []
     arm_actuators = list(getattr(op_cfg, "arm_actuators", []) or [])
     eef_actuators = list(getattr(op_cfg, "eef_actuators", []) or [])
+    return arm_actuators, eef_actuators
+
+
+def _get_operator_actuator_names(op_cfg: Any) -> list[str]:
+    """Return ``arm_actuators + eef_actuators`` from an operator config-like object."""
+    arm_actuators, eef_actuators = _get_operator_actuator_split(op_cfg)
     return arm_actuators + eef_actuators
 
 
@@ -312,7 +326,7 @@ def _get_operator_actuator_names(op_cfg: Any) -> list[str]:
 
 
 class McapDemo:
-    """Container for data loaded from a ROS2 mcap file."""
+    """Container for data loaded from a ROS2 or Foxglove flatbuffer mcap file."""
 
     joint: np.ndarray  # (T, n_arm + n_grip)
     joint_names: list[str]
@@ -518,7 +532,206 @@ def _align_optional_scene_joint(
     )
 
 
-def _load_mcap_demo(
+# ---------------------------------------------------------------------------
+# Foxglove flatbuffer demos (new recording format)
+# ---------------------------------------------------------------------------
+#
+# Newer recordings (e.g. ``data/replay/george.mcap``) are written with the
+# Foxglove flatbuffer message encoding instead of ROS2 CDR.  Their schemas are
+# ``foxglove.JointStates`` (a ``timestamp`` + a vector of ``JointState``
+# {name, position, velocity, acceleration, effort}) and ``foxglove.PoseInFrame``
+# ({timestamp, frame_id, pose{position, orientation}}).  Arm and gripper live on
+# separate action topics, each with locally-indexed joint names (``j0..jN``), so
+# the columns are canonicalised to the target operator's actuator names by
+# position (arm topic -> arm_actuators, gripper topic -> eef_actuators).
+
+_FLB_JOINT_STATES_SCHEMA = "foxglove.JointStates"
+_FLB_POSE_IN_FRAME_SCHEMA = "foxglove.PoseInFrame"
+_FLB_MESSAGE_ENCODING = "flatbuffer"
+
+# Default Foxglove (airbot_play) replay topics, used when the configured ROS2
+# topics are absent from a flatbuffer recording.  These are the *observation*
+# (measured-state) streams, mirroring the legacy ROS2 replay which fed
+# ``/robot/right_arm/joint_state``; they are dense and free of the command
+# spikes seen on the ``/action/`` gripper topic.
+_FLB_DEFAULT_ARM_TOPIC = "/observation/airbot_play/arm/joint_position"
+_FLB_DEFAULT_GRIPPER_TOPIC = "/observation/airbot_play/g2t/parallel_position"
+
+
+def _read_mcap_channel_meta(mcap_path: str) -> Dict[str, tuple[str, str]]:
+    """Return ``{topic: (schema_name, message_encoding)}`` for every channel."""
+    from mcap.reader import make_reader
+
+    with open(mcap_path, "rb") as f:
+        summary = make_reader(f).get_summary()
+        meta: Dict[str, tuple[str, str]] = {}
+        for channel in summary.channels.values():
+            schema = summary.schemas.get(channel.schema_id)
+            meta[channel.topic] = (
+                schema.name if schema is not None else "",
+                channel.message_encoding,
+            )
+    return meta
+
+
+def _mcap_is_foxglove(channel_meta: Dict[str, tuple[str, str]]) -> bool:
+    """True when the recording carries Foxglove flatbuffer JointStates."""
+    return any(
+        schema_name == _FLB_JOINT_STATES_SCHEMA
+        for schema_name, _encoding in channel_meta.values()
+    )
+
+
+def _decode_foxglove_joint_states(data: bytes) -> tuple[list[str], np.ndarray]:
+    """Decode a ``foxglove.JointStates`` flatbuffer into ``(names, positions)``.
+
+    ``positions`` is a ``float32`` array with one entry per joint.  The
+    embedded ``timestamp`` is ignored — replay timing uses the MCAP log time.
+    """
+    import flatbuffers
+    from flatbuffers import number_types as N
+    from flatbuffers.table import Table
+
+    root = Table(data, flatbuffers.encode.Get(N.UOffsetTFlags.packer_type, data, 0))
+    joints_off = root.Offset(6)  # JointStates.joints (field id=1)
+    names: list[str] = []
+    positions: list[float] = []
+    if joints_off:
+        vector_start = root.Vector(joints_off)
+        for i in range(root.VectorLen(joints_off)):
+            joint = Table(data, root.Indirect(vector_start + i * 4))
+            name_off = joint.Offset(4)  # JointState.name (field id=0)
+            pos_off = joint.Offset(6)  # JointState.position (field id=1)
+            names.append(
+                joint.String(name_off + joint.Pos).decode() if name_off else ""
+            )
+            positions.append(
+                joint.Get(N.Float64Flags, pos_off + joint.Pos) if pos_off else 0.0
+            )
+    return names, np.asarray(positions, dtype=np.float32)
+
+
+def _decode_foxglove_pose_in_frame(data: bytes) -> tuple[np.ndarray, np.ndarray]:
+    """Decode a ``foxglove.PoseInFrame`` flatbuffer into ``(position, xyzw)``."""
+    import flatbuffers
+    from flatbuffers import number_types as N
+    from flatbuffers.table import Table
+
+    def _f64(tbl: Table, vtable_off: int) -> float:
+        off = tbl.Offset(vtable_off)
+        return tbl.Get(N.Float64Flags, off + tbl.Pos) if off else 0.0
+
+    def _subtable(tbl: Table, vtable_off: int) -> Table | None:
+        off = tbl.Offset(vtable_off)
+        return Table(tbl.Bytes, tbl.Indirect(off + tbl.Pos)) if off else None
+
+    root = Table(data, flatbuffers.encode.Get(N.UOffsetTFlags.packer_type, data, 0))
+    pose = _subtable(root, 8)  # PoseInFrame.pose (field id=2)
+    if pose is None:
+        raise ValueError("foxglove.PoseInFrame message is missing its 'pose' field.")
+    vec = _subtable(pose, 4)  # Pose.position (field id=0) -> Vector3
+    quat = _subtable(pose, 6)  # Pose.orientation (field id=1) -> Quaternion
+    position = np.array(
+        [_f64(vec, 4), _f64(vec, 6), _f64(vec, 8)] if vec else [0.0, 0.0, 0.0],
+        dtype=np.float32,
+    )
+    orientation = np.array(
+        [_f64(quat, 4), _f64(quat, 6), _f64(quat, 8), _f64(quat, 10)]
+        if quat
+        else [0.0, 0.0, 0.0, 1.0],
+        dtype=np.float32,
+    )
+    return position, orientation
+
+
+def _resolve_foxglove_joint_topic(
+    channel_meta: Dict[str, tuple[str, str]],
+    configured: str | None,
+    default_topic: str,
+    role_keywords: tuple[str, ...],
+    role: str,
+) -> str:
+    """Pick the JointStates topic for ``role`` in a flatbuffer recording.
+
+    Honors an explicitly-configured topic when it exists in the file; otherwise
+    falls back to the airbot default, then to auto-discovery by keyword. Raises
+    a clear error listing candidates when nothing matches.
+    """
+
+    def _is_joint_states(topic: str) -> bool:
+        return channel_meta.get(topic, ("", ""))[0] == _FLB_JOINT_STATES_SCHEMA
+
+    if configured and _is_joint_states(configured):
+        return configured
+    if _is_joint_states(default_topic):
+        return default_topic
+
+    candidates = [
+        topic
+        for topic, (schema_name, _enc) in channel_meta.items()
+        if schema_name == _FLB_JOINT_STATES_SCHEMA
+    ]
+    matched = [
+        topic
+        for topic in candidates
+        if any(keyword in topic for keyword in role_keywords)
+    ]
+    if matched:
+        # Prefer measured ``/observation/`` streams over ``/action/`` ones
+        # (the action gripper topic can carry out-of-range command spikes).
+        matched.sort(key=lambda t: (not t.startswith("/observation/"), t))
+        return matched[0]
+    raise ValueError(
+        f"Could not resolve a Foxglove {role} JointStates topic "
+        f"(configured={configured!r}, default={default_topic!r}). "
+        f"Available JointStates topics: {sorted(candidates)}"
+    )
+
+
+def _stack_joint_positions(positions: list[np.ndarray], *, topic: str) -> np.ndarray:
+    """Stack per-message joint rows, guarding against a ragged joint count."""
+    widths = {row.shape[0] for row in positions}
+    if len(widths) != 1:
+        raise ValueError(
+            f"JointStates topic '{topic}' has inconsistent joint counts {widths}."
+        )
+    return np.asarray(positions, dtype=np.float32)
+
+
+def _canonicalize_foxglove_names(
+    recorded_names: list[str],
+    actuator_names: list[str] | None,
+    *,
+    role: str,
+    topic: str,
+    fallback_prefix: str,
+) -> list[str]:
+    """Rename a JointStates block's columns to the operator's actuator names.
+
+    Foxglove recordings index joints locally per topic (``j0..jN``), so the arm
+    and gripper blocks both start at ``j0``.  When the operator's actuator names
+    are known they are assigned positionally (recordings list joints in actuator
+    order); otherwise the recorded names are kept but prefixed to stay unique
+    across blocks.
+    """
+    if actuator_names:
+        if len(recorded_names) != len(actuator_names):
+            raise ValueError(
+                f"Foxglove {role} topic '{topic}' has {len(recorded_names)} joint(s) "
+                f"{recorded_names}, but the operator declares {len(actuator_names)} "
+                f"{role} actuator(s) {actuator_names}. Provide matching actuators or "
+                f"an explicit joint_name_mapping."
+            )
+        return list(actuator_names)
+    return [f"{fallback_prefix}{name}" for name in recorded_names]
+
+
+# ---------------------------------------------------------------------------
+# Demo loading (dispatches on recording format)
+# ---------------------------------------------------------------------------
+
+
+def _load_mcap_demo_ros2(
     mcap_path: str,
     arm_topic: str,
     gripper_topic: str,
@@ -647,6 +860,196 @@ def _load_mcap_demo(
     )
 
 
+def _load_mcap_demo_foxglove(
+    mcap_path: str,
+    arm_topic: str | None,
+    gripper_topic: str | None,
+    base_topic: str | None,
+    scene_joint_topic: str | None,
+    channel_meta: Dict[str, tuple[str, str]],
+    *,
+    arm_actuator_names: list[str] | None = None,
+    eef_actuator_names: list[str] | None = None,
+) -> McapDemo:
+    """Load arm, gripper, and optional base/scene arrays from a Foxglove
+    flatbuffer mcap file (``foxglove.JointStates`` / ``foxglove.PoseInFrame``)."""
+    from mcap.reader import make_reader
+
+    arm_topic = _resolve_foxglove_joint_topic(
+        channel_meta, arm_topic, _FLB_DEFAULT_ARM_TOPIC, ("/arm/",), "arm"
+    )
+    gripper_topic = _resolve_foxglove_joint_topic(
+        channel_meta,
+        gripper_topic,
+        _FLB_DEFAULT_GRIPPER_TOPIC,
+        ("parallel", "/g2t/", "gripper"),
+        "gripper",
+    )
+
+    topics = [arm_topic, gripper_topic]
+    if base_topic is not None:
+        topics.append(base_topic)
+    if scene_joint_topic is not None:
+        topics.append(scene_joint_topic)
+
+    arm_names: list[str] | None = None
+    grip_names: list[str] | None = None
+    scene_joint_names: list[str] | None = None
+    arm_positions: list[np.ndarray] = []
+    grip_positions: list[np.ndarray] = []
+    scene_positions: list[np.ndarray] = []
+    arm_times: list[int] = []
+    grip_times: list[int] = []
+    scene_times: list[int] = []
+    base_positions: list[np.ndarray] = []
+    base_orientations: list[np.ndarray] = []
+    base_times: list[int] = []
+
+    with open(mcap_path, "rb") as f:
+        reader = make_reader(f)
+        for _schema, channel, message in reader.iter_messages(topics=topics):
+            topic = channel.topic
+            t = message.log_time
+            if topic == arm_topic:
+                names, values = _decode_foxglove_joint_states(message.data)
+                if arm_names is None:
+                    arm_names = names
+                arm_positions.append(values)
+                arm_times.append(t)
+            elif topic == gripper_topic:
+                names, values = _decode_foxglove_joint_states(message.data)
+                if grip_names is None:
+                    grip_names = names
+                grip_positions.append(values)
+                grip_times.append(t)
+            elif base_topic is not None and topic == base_topic:
+                pos, quat = _decode_foxglove_pose_in_frame(message.data)
+                base_positions.append(pos)
+                base_orientations.append(quat)
+                base_times.append(t)
+            elif scene_joint_topic is not None and topic == scene_joint_topic:
+                names, values = _decode_foxglove_joint_states(message.data)
+                if scene_joint_names is None:
+                    scene_joint_names = names
+                scene_positions.append(values)
+                scene_times.append(t)
+
+    if not arm_positions:
+        raise ValueError(f"No arm messages found on topic '{arm_topic}' in {mcap_path}")
+    if not grip_positions:
+        raise ValueError(
+            f"No gripper messages found on topic '{gripper_topic}' in {mcap_path}"
+        )
+
+    arm = _stack_joint_positions(arm_positions, topic=arm_topic)
+    grip = _stack_joint_positions(grip_positions, topic=gripper_topic)
+    arm_t = np.array(arm_times, dtype=np.int64)
+    grip_t = np.array(grip_times, dtype=np.int64)
+
+    # Arm and gripper are recorded on separate topics at different rates, so
+    # always align the gripper trajectory onto the arm timestamps.
+    grip = _align_samples_to_times(
+        grip, grip_t, arm_t, label=f"gripper topic '{gripper_topic}'"
+    )
+
+    arm_names = _canonicalize_foxglove_names(
+        arm_names or [],
+        arm_actuator_names,
+        role="arm",
+        topic=arm_topic,
+        fallback_prefix="",
+    )
+    grip_names = _canonicalize_foxglove_names(
+        grip_names or [],
+        eef_actuator_names,
+        role="gripper",
+        topic=gripper_topic,
+        fallback_prefix="gripper/",
+    )
+
+    base_position: np.ndarray | None = None
+    base_orientation: np.ndarray | None = None
+    if base_topic is not None:
+        if not base_positions:
+            raise ValueError(
+                f"No PoseInFrame messages found on base topic '{base_topic}' "
+                f"in {mcap_path}"
+            )
+        base_t = np.array(base_times, dtype=np.int64)
+        base_position = _align_samples_to_times(
+            np.asarray(base_positions, dtype=np.float32),
+            base_t,
+            arm_t,
+            label=f"base topic '{base_topic}' position",
+        )
+        base_orientation = _align_samples_to_times(
+            np.asarray(base_orientations, dtype=np.float32),
+            base_t,
+            arm_t,
+            label=f"base topic '{base_topic}' orientation",
+        )
+
+    scene_joint: np.ndarray | None = None
+    if scene_joint_topic is not None:
+        scene_joint = _align_optional_scene_joint(
+            scene_positions,
+            scene_times,
+            arm_t,
+            scene_joint_topic=scene_joint_topic,
+            mcap_path=mcap_path,
+        )
+
+    joint = np.concatenate([arm, grip], axis=-1)
+    joint_names = list(arm_names) + list(grip_names)
+    # Zero-anchor the log times (see the ROS2 loader for the rationale).
+    joint_times = arm_t - int(arm_t[0]) if arm_t.size > 0 else None
+    return McapDemo(
+        joint=joint,
+        joint_names=joint_names,
+        joint_times=joint_times,
+        base_position=base_position,
+        base_orientation=base_orientation,
+        scene_joint=scene_joint,
+        scene_joint_names=scene_joint_names,
+    )
+
+
+def _load_mcap_demo(
+    mcap_path: str,
+    arm_topic: str | None,
+    gripper_topic: str | None,
+    base_topic: str | None = None,
+    scene_joint_topic: str | None = None,
+    *,
+    arm_actuator_names: list[str] | None = None,
+    eef_actuator_names: list[str] | None = None,
+) -> McapDemo:
+    """Load an mcap demo, auto-dispatching on the recording format.
+
+    Supports the legacy ROS2 CDR format (``sensor_msgs/JointState``) and the
+    newer Foxglove flatbuffer format (``foxglove.JointStates``). The format is
+    detected from the file's channel schemas. ``arm_actuator_names`` /
+    ``eef_actuator_names`` are only used by the flatbuffer path, where recorded
+    joints are indexed locally per topic (``j0..jN``) and are canonicalised to
+    the operator's actuator names by position.
+    """
+    channel_meta = _read_mcap_channel_meta(mcap_path)
+    if _mcap_is_foxglove(channel_meta):
+        return _load_mcap_demo_foxglove(
+            mcap_path,
+            arm_topic,
+            gripper_topic,
+            base_topic,
+            scene_joint_topic,
+            channel_meta,
+            arm_actuator_names=arm_actuator_names,
+            eef_actuator_names=eef_actuator_names,
+        )
+    return _load_mcap_demo_ros2(
+        mcap_path, arm_topic, gripper_topic, base_topic, scene_joint_topic
+    )
+
+
 def _load_mcap_transform_at(
     mcap_path: str, topic: str, index: int = 0
 ) -> tuple[np.ndarray, np.ndarray]:
@@ -685,35 +1088,55 @@ def _load_mcap_transform_series(
     mcap_path: str,
     topic: str,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Return every ``TransformStamped`` sample on ``topic`` in ``mcap_path``."""
+    """Return every transform sample on ``topic`` in ``mcap_path``.
 
+    Supports both ROS2 ``geometry_msgs/TransformStamped`` and Foxglove
+    ``foxglove.PoseInFrame`` topics; a PoseInFrame pose is interpreted as the
+    ``translation``/``rotation`` of the transform.
+    """
     from mcap.reader import make_reader
-    from mcap_ros2idl_support import Ros2DecodeFactory
 
-    factory = Ros2DecodeFactory()
+    channel_meta = _read_mcap_channel_meta(mcap_path)
+    schema_name, encoding = channel_meta.get(topic, ("", ""))
+    is_foxglove = (
+        schema_name == _FLB_POSE_IN_FRAME_SCHEMA or encoding == _FLB_MESSAGE_ENCODING
+    )
+
     translations: list[np.ndarray] = []
     rotations: list[np.ndarray] = []
-    with open(mcap_path, "rb") as f:
-        reader = make_reader(f, decoder_factories=[factory])
-        for decoded in reader.iter_decoded_messages(topics=[topic]):
-            msg = decoded.decoded_message
-            t = msg["transform"]["translation"]
-            r = msg["transform"]["rotation"]
-            translations.append(
-                np.array(
-                    [float(t["x"]), float(t["y"]), float(t["z"])],
-                    dtype=np.float32,
+
+    if is_foxglove:
+        with open(mcap_path, "rb") as f:
+            reader = make_reader(f)
+            for _schema, _channel, message in reader.iter_messages(topics=[topic]):
+                pos, quat = _decode_foxglove_pose_in_frame(message.data)
+                translations.append(pos)
+                rotations.append(quat)
+    else:
+        from mcap_ros2idl_support import Ros2DecodeFactory
+
+        factory = Ros2DecodeFactory()
+        with open(mcap_path, "rb") as f:
+            reader = make_reader(f, decoder_factories=[factory])
+            for decoded in reader.iter_decoded_messages(topics=[topic]):
+                msg = decoded.decoded_message
+                t = msg["transform"]["translation"]
+                r = msg["transform"]["rotation"]
+                translations.append(
+                    np.array(
+                        [float(t["x"]), float(t["y"]), float(t["z"])],
+                        dtype=np.float32,
+                    )
                 )
-            )
-            rotations.append(
-                np.array(
-                    [float(r["x"]), float(r["y"]), float(r["z"]), float(r["w"])],
-                    dtype=np.float32,
+                rotations.append(
+                    np.array(
+                        [float(r["x"]), float(r["y"]), float(r["z"]), float(r["w"])],
+                        dtype=np.float32,
+                    )
                 )
-            )
     if not translations:
         raise ValueError(
-            f"No TransformStamped messages found on topic '{topic}' in {mcap_path}"
+            f"No transform messages found on topic '{topic}' in {mcap_path}"
         )
     return np.stack(translations), np.stack(rotations)
 
@@ -1512,17 +1935,20 @@ def preprocess_replay_dictconfig(
     if not os.path.exists(mcap_path):
         raise FileNotFoundError(f"MCAP file not found: {mcap_path}")
 
+    op_cfg = cfg.env.operators.arm
+    arm_actuators, eef_actuators = _get_operator_actuator_split(op_cfg)
     mcap_demo = _load_mcap_demo(
         mcap_path,
         replay_cfg.arm_topic,
         replay_cfg.gripper_topic,
         replay_cfg.base_topic,
         replay_cfg.scene_joint_topic,
+        arm_actuator_names=arm_actuators,
+        eef_actuator_names=eef_actuators,
     )
     replay_cfg.mode = "joint"
 
-    op_cfg = cfg.env.operators.arm
-    actuator_names = _get_operator_actuator_names(op_cfg)
+    actuator_names = arm_actuators + eef_actuators
     _prepare_mcap_demo_for_replay(mcap_demo, actuator_names, replay_cfg)
 
     init_jpos = mcap_demo.first_frame_joint_positions()
@@ -1781,24 +2207,24 @@ class DataReplayRunner(RunnerBase):
                 mcap_path = os.path.join(os.getcwd(), mcap_path)
             if not os.path.exists(mcap_path):
                 raise FileNotFoundError(f"MCAP file not found: {mcap_path}")
+            # Align mcap column order to the YAML actuator declaration order.
+            from auto_atom import ComponentRegistry
+
+            env = ComponentRegistry.get_env(config.task.env_name)
+            op_binding = env.config.operators.get("arm")
+            arm_actuators, eef_actuators = _get_operator_actuator_split(op_binding)
             mcap_demo = _load_mcap_demo(
                 mcap_path,
                 rcfg.arm_topic,
                 rcfg.gripper_topic,
                 rcfg.base_topic,
                 rcfg.scene_joint_topic,
+                arm_actuator_names=arm_actuators,
+                eef_actuator_names=eef_actuators,
             )
             rcfg.mode = "joint"
 
-            # Align mcap column order to the YAML actuator declaration order.
-            from auto_atom import ComponentRegistry
-
-            env = ComponentRegistry.get_env(config.task.env_name)
-            op_binding = env.config.operators.get("arm")
-            if op_binding is not None:
-                actuator_names = _get_operator_actuator_names(op_binding)
-            else:
-                actuator_names = []
+            actuator_names = arm_actuators + eef_actuators
             _prepare_mcap_demo_for_replay(mcap_demo, actuator_names, rcfg)
 
             demo: Dict[str, np.ndarray] = {"joint": mcap_demo.joint}
