@@ -25,7 +25,7 @@ Examples:
         +replay.scene_joint_topic=/scene/door/joint_states
 
     # Foxglove flatbuffer mcap replay (arm/gripper topics auto-resolve to the
-    # airbot /observation/... joint_position streams)
+    # airbot commanded /action/... joint_position streams)
     python examples/replay_demo.py --config-name open_door_airbot_play_g2p \
         +replay.mcap_path=data/replay/george.mcap
 """

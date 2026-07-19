@@ -147,17 +147,29 @@ class DataReplayConfig(BaseModel):
     """Number of physics steps to repeat each action before advancing to the
     next one.  Set to >1 when the simulation timestep is smaller than the
     demo recording interval (e.g. 10 for MuJoCo sub-stepping)."""
+    demo_stride: int = Field(default=1, ge=1)
+    """Keep every ``demo_stride``-th recorded frame at demo-load time (approach-1
+    replay downsampling).  ``1`` (default) is a no-op.  Values >1 reduce the
+    number of replay actions, which cuts both the number of simulation steps and
+    the number of saved frames, at the cost of a coarser (lower-fidelity)
+    trajectory.  The final recorded frame is always retained so the success
+    condition is preserved.  Orthogonal to ``steps_per_action`` (which repeats
+    each action for sub-stepping)."""
     mcap_path: str | None = Field(default=None)
     arm_topic: str = Field(default="/robot/right_arm/joint_state")
     """Arm joint topic. Matches the legacy ROS2 ``sensor_msgs/JointState``
     recordings. For newer Foxglove flatbuffer recordings (``foxglove.JointStates``)
     the format is auto-detected and, if this topic is absent, the arm stream is
-    resolved to the airbot ``/observation/airbot_play/arm/joint_position`` topic
-    (or an ``/arm/`` JointStates topic)."""
+    resolved to the commanded ``/action/airbot_play/arm/joint_position`` topic
+    (or an ``/arm/`` JointStates topic). The ``/action/`` (command) stream is
+    used rather than ``/observation/`` (measured state) so that position-control
+    replay reproduces contact forces."""
     gripper_topic: str = Field(default="/robot/right_gripper/joint_state")
     """Gripper joint topic. As with ``arm_topic``, Foxglove recordings resolve
-    to ``/observation/airbot_play/g2t/parallel_position`` (or a parallel/g2t
-    JointStates topic) when this ROS2 topic is absent."""
+    to the commanded ``/action/airbot_play/g2t/parallel_position`` (or a
+    parallel/g2t JointStates topic) when this ROS2 topic is absent. The command
+    stream is required for grasp force: it closes the gripper past the object,
+    which a stiff position actuator turns into grip force."""
     base_topic: str | None = Field(default=None)
     """Optional ROS2 topic carrying the operator base pose for MCAP replay.
 
@@ -550,12 +562,15 @@ _FLB_POSE_IN_FRAME_SCHEMA = "foxglove.PoseInFrame"
 _FLB_MESSAGE_ENCODING = "flatbuffer"
 
 # Default Foxglove (airbot_play) replay topics, used when the configured ROS2
-# topics are absent from a flatbuffer recording.  These are the *observation*
-# (measured-state) streams, mirroring the legacy ROS2 replay which fed
-# ``/robot/right_arm/joint_state``; they are dense and free of the command
-# spikes seen on the ``/action/`` gripper topic.
-_FLB_DEFAULT_ARM_TOPIC = "/observation/airbot_play/arm/joint_position"
-_FLB_DEFAULT_GRIPPER_TOPIC = "/observation/airbot_play/g2t/parallel_position"
+# topics are absent from a flatbuffer recording.  These are the *commanded*
+# ``/action/`` streams (not the measured ``/observation/`` state): in a
+# position-controlled replay the actuator force comes from the gap between the
+# commanded target and the achieved joint position, so the command is what
+# reproduces contact/grasp forces (pushing a door, closing onto a handle).
+# The measured state has already absorbed that compliance and would replay with
+# ~0 tracking error, losing the interaction forces.
+_FLB_DEFAULT_ARM_TOPIC = "/action/airbot_play/arm/joint_position"
+_FLB_DEFAULT_GRIPPER_TOPIC = "/action/airbot_play/g2t/parallel_position"
 
 
 def _read_mcap_channel_meta(mcap_path: str) -> Dict[str, tuple[str, str]]:
@@ -677,9 +692,9 @@ def _resolve_foxglove_joint_topic(
         if any(keyword in topic for keyword in role_keywords)
     ]
     if matched:
-        # Prefer measured ``/observation/`` streams over ``/action/`` ones
-        # (the action gripper topic can carry out-of-range command spikes).
-        matched.sort(key=lambda t: (not t.startswith("/observation/"), t))
+        # Prefer commanded ``/action/`` streams over ``/observation/`` ones:
+        # the command carries the interaction force (see the default-topic note).
+        matched.sort(key=lambda t: (not t.startswith("/action/"), t))
         return matched[0]
     raise ValueError(
         f"Could not resolve a Foxglove {role} JointStates topic "
@@ -1351,6 +1366,52 @@ def normalize_demo_for_batch(
     attach_optional_base_pose(result)
     attach_optional_scene_joint(result)
     attach_optional_joint_times(result)
+    return result
+
+
+def subsample_demo(demo: Dict[str, np.ndarray], stride: int) -> Dict[str, np.ndarray]:
+    """Return *demo* with only every ``stride``-th frame kept along the time axis.
+
+    Approach-1 replay downsampling: fewer recorded frames -> fewer replay
+    actions -> fewer simulation steps and fewer saved frames, at the cost of a
+    coarser (lower-fidelity) trajectory. ``stride <= 1`` is a no-op. The final
+    frame is always retained so the recorded success condition is preserved.
+
+    Every time-series array (leading dimension equal to the recorded frame
+    count) is sliced: ``joint`` / ``position`` / ``orientation`` / ``gripper`` /
+    ``ctrl`` / ``base_position`` / ``base_orientation`` / ``scene_joint`` /
+    ``joint_times``. Non-time entries such as ``scene_joint_names`` (a per-joint
+    label list) are passed through untouched.
+    """
+    if stride <= 1:
+        return demo
+    lead = None
+    for key in ("joint", "position", "ctrl"):
+        value = demo.get(key)
+        if value is not None:
+            lead = value
+            break
+    if lead is None:
+        return demo
+    num_frames = len(lead)
+    indices = list(range(0, num_frames, stride))
+    if indices and indices[-1] != num_frames - 1:
+        indices.append(num_frames - 1)
+    index = np.asarray(indices, dtype=np.int64)
+    result: Dict[str, np.ndarray] = {}
+    for key, value in demo.items():
+        if key == "scene_joint_names" or value is None:
+            result[key] = value
+        elif hasattr(value, "__len__") and len(value) == num_frames:
+            result[key] = np.asarray(value)[index]
+        else:
+            result[key] = value
+    logger.info(
+        "[demo_stride] subsampled demo from %d to %d frame(s) (stride=%d).",
+        num_frames,
+        len(index),
+        stride,
+    )
     return result
 
 
@@ -2283,6 +2344,7 @@ class DataReplayRunner(RunnerBase):
                     f"(expected 'pose', 'ctrl', or set mcap_path)"
                 )
 
+        demo = subsample_demo(demo, rcfg.demo_stride)
         batch_size = self._require_evaluator().batch_size
         demo = normalize_demo_for_batch(demo, batch_size=batch_size, mode=rcfg.mode)
         self._policy = ReplayPolicy(demo, rcfg.mode)
