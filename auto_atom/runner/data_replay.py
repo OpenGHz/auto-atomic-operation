@@ -1822,7 +1822,21 @@ def _apply_transform_resets(
         )
     env = context.backend.env
 
+    # Skip rules whose topic is absent from the recording (e.g. a legacy
+    # base->handle transform config replayed against a newer Foxglove capture
+    # that doesn't record it) instead of failing the whole replay.
+    available_topics = set(_read_mcap_channel_meta(mcap_path))
+
     for tr in replay_cfg.transform_resets:
+        if tr.topic not in available_topics:
+            logger.warning(
+                "[transform_reset] topic %r not found in %s; skipping this reset "
+                "(available topics: %d).",
+                tr.topic,
+                mcap_path,
+                len(available_topics),
+            )
+            continue
         t_pc, q_pc, selected_index = _load_mcap_transform_for_reset(mcap_path, tr)
         p_wp, q_wp = _query_entity_world(env, tr.parent)
         p_wc, q_wc = _query_entity_world(env, tr.child)
