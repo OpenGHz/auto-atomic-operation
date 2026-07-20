@@ -68,6 +68,8 @@ class MujocoGraspConfig(BaseModel):
     lateral_threshold: float = 0.0
     grasp_axis: int = 2
     settle_steps: int = 5
+    release_settle_steps: int = 0
+    """Control updates to wait after opening before the arm retreats."""
 
 
 class MujocoControlConfig(BaseModel):
@@ -590,8 +592,11 @@ class MujocoOperatorHandler(OperatorHandler):
                 # noticeably away from the fully-open position.
                 reached = True
                 event = "eef_reached"
-            elif not eef.close and actual <= (
-                self.eef_open_value + self.control.tolerance.eef
+            elif (
+                not eef.close
+                and self._eef_steps[env_index]
+                >= self.control.grasp.release_settle_steps
+                and actual <= (self.eef_open_value + self.control.tolerance.eef)
             ):
                 reached = True
                 event = "eef_reached"

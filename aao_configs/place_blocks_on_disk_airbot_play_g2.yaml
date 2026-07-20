@@ -1,0 +1,374 @@
+defaults:
+  - basis_airbot_play_g2
+  - _self_
+
+scene_name: place_blocks_on_disk
+task_name: place_blocks_on_disk_airbot_play_g2
+max_updates: 5000
+cam_width: 640
+cam_height: 480
+
+env:
+  initial_joint_positions:
+    joint1: 0.0000120721
+    joint2: -1.2155731
+    joint3: 1.1525712
+    joint4: 1.5707962
+    joint5: -1.5273775
+    joint6: -1.5707808
+    eef_left_joint: -0.0365794
+    eef_right_joint: -0.0365794
+  cameras:
+    - name: eef_wrist_cam
+      width: ${cam_width}
+      height: ${cam_height}
+      enable_color: ${enable_color}
+      enable_depth: ${enable_depth}
+      enable_mask: ${enable_mask}
+      enable_heat_map: ${enable_heat_map}
+      parent_frame: eef_pose
+      is_static: false
+    - name: env1_cam
+      width: ${cam_width}
+      height: ${cam_height}
+      enable_color: ${enable_color}
+      enable_depth: ${enable_depth}
+      enable_mask: ${enable_mask}
+      enable_heat_map: ${enable_heat_map}
+      is_static: true
+  sim_freq: 1100
+  # Keep the proven joint increment but run it at 100 Hz: approximately 2x
+  # trajectory speed while preserving per-update contact stability.
+  update_freq: 110
+  mask_objects: ["cube_blue", "cube_orange", "cube_yellow", "cube_blue_2", "cube_yellow_2", "cube_orange_2", "cube_blue_3", "cube_yellow_3", "cube_orange_3", "cube_blue_4", "disk"]
+  # Per-object heatmap channel: the 10 cubes are pick targets, the disk is the
+  # place target. Length must match mask_objects (positional pairing), so pick
+  # is repeated for each cube and the disk gets place.
+  operations: ["pick", "pick", "pick", "pick", "pick", "pick", "pick", "pick", "pick", "pick", "place"]
+  viewer:
+    lookat: [0.02, -0.04, 0.18]
+    distance: 1.45
+    azimuth: 145
+    elevation: -18
+    step_delay: 0.005
+    hold_seconds: 0.5
+
+task:
+  initial_pose:
+    cube_blue:
+      position: [0.32, 0.07, 0.2325]
+      orientation: [0.0, 0.0, 0.70710678, 0.70710678]
+    cube_orange:
+      position: [0.48, 0.13, 0.2325]
+      orientation: [0.0, 0.0, 0.70710678, 0.70710678]
+    cube_yellow:
+      position: [0.48, -0.08, 0.2325]
+      orientation: [0.0, 0.0, 0.70710678, 0.70710678]
+    cube_blue_2:
+      position: [0.24, 0.17, 0.2325]
+      orientation: [0.0, 0.0, 0.70710678, 0.70710678]
+    cube_yellow_2:
+      position: [0.30, 0.16, 0.2325]
+      orientation: [0.0, 0.0, 0.70710678, 0.70710678]
+    cube_orange_2:
+      position: [0.36, 0.14, 0.2325]
+      orientation: [0.0, 0.0, 0.70710678, 0.70710678]
+    cube_blue_3:
+      position: [0.24, -0.06, 0.2325]
+      orientation: [0.0, 0.0, 0.70710678, 0.70710678]
+    cube_yellow_3:
+      position: [0.34, -0.06, 0.2325]
+      orientation: [0.0, 0.0, 0.70710678, 0.70710678]
+    cube_orange_3:
+      position: [0.44, -0.02, 0.2325]
+      orientation: [0.0, 0.0, 0.70710678, 0.70710678]
+    cube_blue_4:
+      position: [0.40, 0.08, 0.2325]
+      orientation: [0.0, 0.0, 0.70710678, 0.70710678]
+  randomization:
+    # The disk is a collision-rejection participant, not a randomized target.
+    # 0.11 m disk radius + 0.02 m cube radius keeps every spawned cube at
+    # least 2 cm outside the physical tray edge.
+    disk:
+      collision_radius: 0.11
+    cube_blue:
+      x: [-0.012, 0.012]
+      y: [-0.012, 0.012]
+      yaw: [-0.1745, 0.1745]
+      collision_radius: 0.02
+    cube_orange:
+      x: [-0.012, 0.012]
+      y: [-0.012, 0.012]
+      yaw: [-0.1745, 0.1745]
+      collision_radius: 0.02
+    cube_yellow:
+      x: [-0.012, 0.012]
+      y: [-0.012, 0.012]
+      yaw: [-0.1745, 0.1745]
+      collision_radius: 0.02
+    cube_blue_2:
+      x: [-0.012, 0.012]
+      y: [-0.012, 0.012]
+      yaw: [-0.1745, 0.1745]
+      collision_radius: 0.02
+    cube_yellow_2:
+      x: [-0.012, 0.012]
+      y: [-0.012, 0.012]
+      yaw: [-0.1745, 0.1745]
+      collision_radius: 0.02
+    cube_orange_2:
+      x: [-0.012, 0.012]
+      y: [-0.012, 0.012]
+      yaw: [-0.1745, 0.1745]
+      collision_radius: 0.02
+    cube_blue_3:
+      x: [-0.012, 0.012]
+      y: [-0.012, 0.012]
+      yaw: [-0.1745, 0.1745]
+      collision_radius: 0.02
+    cube_yellow_3:
+      x: [-0.012, 0.012]
+      y: [-0.012, 0.012]
+      yaw: [-0.1745, 0.1745]
+      collision_radius: 0.02
+    cube_orange_3:
+      x: [-0.012, 0.012]
+      y: [-0.012, 0.012]
+      yaw: [-0.1745, 0.1745]
+      collision_radius: 0.02
+    cube_blue_4:
+      x: [-0.012, 0.012]
+      y: [-0.012, 0.012]
+      yaw: [-0.1745, 0.1745]
+      collision_radius: 0.02
+    # Override the broad inherited EEF jitter: it conflicts with collision
+    # rejection at the cube. Camera, object, visual, and dynamics variation
+    # below provide the sim-to-real coverage for this task.
+    arm:
+      eef:
+        collision_radius: 0.0
+  camera_randomization:
+    env1_cam:
+      x: [-0.015, 0.015]
+      y: [-0.015, 0.015]
+      z: [-0.01, 0.01]
+      roll: [-0.035, 0.035]
+      pitch: [-0.035, 0.035]
+      yaw: [-0.035, 0.035]
+  stages:
+    # One round places all ten 2.5 cm cubes in a 4-3-3 layout on the disk.
+    - &pick_cube
+      name: pick_cube_blue
+      object: cube_blue
+      operation: pick
+      operator: arm
+      param:
+        pre_move:
+          - position: [-0.0002, 0.0, 0.105]
+            orientation: [0.5, 0.5, -0.5, 0.5]
+            reference: object_world
+            static: true
+            max_linear_step: 0.0134
+            max_angular_step: 0.08
+            tolerance:
+              position: 0.006
+              orientation: 0.30
+          - position: [-0.0002, 0.0, 0.002]
+            orientation: [0.5, 0.5, -0.5, 0.5]
+            reference: object_world
+            static: true
+            max_linear_step: 0.001
+            max_angular_step: 0.05
+            tolerance:
+              position: 0.008
+              orientation: 0.25
+        eef:
+          close: true
+          joint_positions: [-0.0125]
+        post_move:
+          - position: [0.0, 0.0, 0.08]
+            reference: eef_world
+            max_linear_step: 0.005
+            max_angular_step: 0.04
+            tolerance:
+              position: 0.008
+              orientation: 0.20
+    - &place_in_disk
+      name: place_cube_blue_in_disk
+      object: disk
+      operation: place
+      operator: arm
+      param:
+        pre_move:
+          - &place_high
+            position: [-0.015, 0.03, 0.12]
+            reference: object_world
+            orientation: [0.5, 0.5, -0.5, 0.5]
+            max_linear_step: 0.005
+            max_angular_step: 0.04
+            tolerance:
+              position: 0.008
+              orientation: 0.20
+          - &place_low
+            position: [-0.015, 0.03, 0.025]
+            reference: object_world
+            orientation: [0.5, 0.5, -0.5, 0.5]
+            max_linear_step: 0.001
+            max_angular_step: 0.04
+            tolerance:
+              position: 0.008
+              orientation: 0.20
+        eef: &open_eef
+          close: false
+        post_move:
+          - &place_retreat
+            position: [0.0, 0.0, 0.08]
+            reference: eef_world
+            max_linear_step: 0.005
+            max_angular_step: 0.04
+    - <<: *pick_cube
+      name: pick_cube_orange
+      object: cube_orange
+    - <<: *place_in_disk
+      name: place_cube_orange_in_disk
+      param:
+        pre_move:
+          - <<: *place_high
+            position: [-0.045, -0.03, 0.12]
+          - <<: *place_low
+            position: [-0.045, -0.03, 0.025]
+        eef: *open_eef
+        post_move: [*place_retreat]
+    - <<: *pick_cube
+      name: pick_cube_yellow
+      object: cube_yellow
+    - <<: *place_in_disk
+      name: place_cube_yellow_in_disk
+      param:
+        pre_move:
+          - <<: *place_high
+            position: [-0.015, -0.03, 0.12]
+          - <<: *place_low
+            position: [-0.015, -0.03, 0.025]
+        eef: *open_eef
+        post_move: [*place_retreat]
+    - <<: *pick_cube
+      name: pick_cube_blue_2
+      object: cube_blue_2
+    - <<: *place_in_disk
+      name: place_cube_blue_2_in_disk
+      param:
+        pre_move:
+          - <<: *place_high
+            position: [0.015, -0.03, 0.12]
+          - <<: *place_low
+            position: [0.015, -0.03, 0.025]
+        eef: *open_eef
+        post_move: [*place_retreat]
+    - <<: *pick_cube
+      name: pick_cube_yellow_2
+      object: cube_yellow_2
+    - <<: *place_in_disk
+      name: place_cube_yellow_2_in_disk
+      param:
+        pre_move:
+          - <<: *place_high
+            position: [0.045, -0.03, 0.12]
+          - <<: *place_low
+            position: [0.045, -0.03, 0.025]
+        eef: *open_eef
+        post_move: [*place_retreat]
+    - <<: *pick_cube
+      name: pick_cube_orange_2
+      object: cube_orange_2
+    - <<: *place_in_disk
+      name: place_cube_orange_2_in_disk
+      param:
+        pre_move:
+          - <<: *place_high
+            position: [-0.045, 0.0, 0.12]
+          - <<: *place_low
+            position: [-0.045, 0.0, 0.025]
+        eef: *open_eef
+        post_move: [*place_retreat]
+    - <<: *pick_cube
+      name: pick_cube_blue_4
+      object: cube_blue_4
+    - <<: *place_in_disk
+      name: place_cube_blue_4_in_disk
+      param:
+        pre_move:
+          - <<: *place_high
+            position: [-0.015, 0.0, 0.12]
+          - <<: *place_low
+            position: [-0.015, 0.0, 0.025]
+        eef: *open_eef
+        post_move: [*place_retreat]
+    - <<: *pick_cube
+      name: pick_cube_orange_3
+      object: cube_orange_3
+    - <<: *place_in_disk
+      name: place_cube_orange_3_in_disk
+      param:
+        pre_move:
+          - <<: *place_high
+            position: [0.015, 0.0, 0.12]
+          - <<: *place_low
+            position: [0.015, 0.0, 0.025]
+        eef: *open_eef
+        post_move: [*place_retreat]
+    - <<: *pick_cube
+      name: pick_cube_blue_3
+      object: cube_blue_3
+    - <<: *place_in_disk
+      name: place_cube_blue_3_in_disk
+      param:
+        pre_move:
+          - <<: *place_high
+            position: [0.045, 0.0, 0.12]
+          - <<: *place_low
+            position: [0.045, 0.0, 0.025]
+        eef: *open_eef
+        post_move: [*place_retreat]
+    - <<: *pick_cube
+      name: pick_cube_yellow_3
+      object: cube_yellow_3
+    - <<: *place_in_disk
+      name: place_cube_yellow_3_in_disk
+      param:
+        pre_move:
+          - <<: *place_high
+            position: [0.015, 0.03, 0.12]
+          - <<: *place_low
+            position: [0.015, 0.03, 0.025]
+        eef: *open_eef
+        post_move: [*place_retreat]
+task_operators:
+  arm:
+    initial_state:
+      eef: -0.0366
+      base_pose:
+        position: [0.32, 0.37, 0.22]
+        orientation: [0.0, 0.0, -0.70710678, 0.70710678]
+      eef_pose:
+        position: [0.30, 0.0, 0.1175]
+        orientation: [0.0, 0.70710678, 0.0, 0.70710678]
+        reference: base
+    control:
+      timeout_steps: 650
+      cartesian_max_linear_step: 0.04
+      cartesian_max_angular_step: 0.50
+      tolerance:
+        position: 0.012
+        orientation: 0.12
+        eef: 0.0001
+      grasp:
+        settle_steps: 100
+        release_settle_steps: 30
+      ik_unreachable_threshold: 20
+    max_joint_delta: 0.35
+    ik:
+      arm_type: play_short
+      eef_type: G2
+      joint_control_mode: solve_once_interpolate
+      joint_interp_speed: 0.0067

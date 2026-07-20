@@ -1,0 +1,97 @@
+<mujoco model="place_blocks_on_disk">
+  <compiler meshdir="../../../meshes"/>
+
+  <visual>
+    <map znear="0.001"/>
+  </visual>
+
+  <asset>
+    <mesh name="cube_blue_mesh" file="stack_color_blocks/blue_plastic_cube/blue_plastic_cube.obj" scale="0.5 0.5 0.5"/>
+    <mesh name="cube_yellow_mesh" file="stack_color_blocks/yellow_plastic_cube/yellow_plastic_cube.obj" scale="0.5 0.5 0.5"/>
+    <mesh name="cube_orange_mesh" file="stack_color_blocks/orange_plastic_cube/orange_plastic_cube.obj" scale="0.5 0.5 0.5"/>
+
+    <material name="cube_blue_mat" rgba="0.10 0.35 0.95 1" reflectance="0.2"/>
+    <material name="cube_yellow_mat" rgba="0.95 0.85 0.10 1" reflectance="0.2"/>
+    <material name="cube_orange_mat" rgba="0.95 0.55 0.10 1" reflectance="0.2"/>
+  </asset>
+
+  <worldbody>
+    <light name="demo_light" pos="0 0 1.5" dir="0 0 -1"/>
+    <geom name="floor" type="plane" size="2 2 0.1" rgba="0.85 0.85 0.85 1"
+          contype="0" conaffinity="0"/>
+
+    <!-- Raised visual table for AIRBOT Play. The small cube pads below carry
+         collision so the gripper can approach the cube sides without hitting
+         a broad tabletop. Top surface z = 0.22 m. -->
+    <body name="table" pos="0.18 0.04 0.19">
+      <geom name="table_top" type="box" size="0.70 0.40 0.03" rgba="0.6 0.45 0.3 1"
+            contype="1" conaffinity="1"/>
+    </body>
+
+    <body name="disk" pos="0.12 0.07 0.235" quat="0.70710678 0 0 0.70710678">
+      <geom name="disk_col" type="cylinder" size="0.09 0.012" mass="0.08"
+            friction="1.6 0.05 0.01" rgba="0.12 0.16 0.20 1" contype="1" conaffinity="1"/>
+      <site name="disk_site" pos="0 0 0" size="0.004" rgba="1 0 1 0"/>
+      <geom name="disk_vis" type="cylinder" size="0.09 0.012" rgba="0.12 0.16 0.20 1"
+            contype="0" conaffinity="0" group="1"/>
+      <!-- Low physical rim: the real tray retains blocks after release. -->
+      <geom name="disk_rim_0" type="capsule" fromto="0.085 0 0.015 0.0601 0.0601 0.015" size="0.003" friction="1.6 0.05 0.01" rgba="0.12 0.16 0.20 1"/>
+      <geom name="disk_rim_1" type="capsule" fromto="0.0601 0.0601 0.015 0 0.085 0.015" size="0.003" friction="1.6 0.05 0.01" rgba="0.12 0.16 0.20 1"/>
+      <geom name="disk_rim_2" type="capsule" fromto="0 0.085 0.015 -0.0601 0.0601 0.015" size="0.003" friction="1.6 0.05 0.01" rgba="0.12 0.16 0.20 1"/>
+      <geom name="disk_rim_3" type="capsule" fromto="-0.0601 0.0601 0.015 -0.085 0 0.015" size="0.003" friction="1.6 0.05 0.01" rgba="0.12 0.16 0.20 1"/>
+      <geom name="disk_rim_4" type="capsule" fromto="-0.085 0 0.015 -0.0601 -0.0601 0.015" size="0.003" friction="1.6 0.05 0.01" rgba="0.12 0.16 0.20 1"/>
+      <geom name="disk_rim_5" type="capsule" fromto="-0.0601 -0.0601 0.015 0 -0.085 0.015" size="0.003" friction="1.6 0.05 0.01" rgba="0.12 0.16 0.20 1"/>
+      <geom name="disk_rim_6" type="capsule" fromto="0 -0.085 0.015 0.0601 -0.0601 0.015" size="0.003" friction="1.6 0.05 0.01" rgba="0.12 0.16 0.20 1"/>
+      <geom name="disk_rim_7" type="capsule" fromto="0.0601 -0.0601 0.015 0.085 0 0.015" size="0.003" friction="1.6 0.05 0.01" rgba="0.12 0.16 0.20 1"/>
+    </body>
+
+    <geom name="cube_blue_pad" type="box" pos="0.32 0.07 0.21" size="0.015 0.015 0.01"
+          rgba="0.45 0.36 0.26 1"/>
+    <geom name="cube_orange_pad" type="box" pos="0.48 0.13 0.21" size="0.015 0.015 0.01"
+          rgba="0.45 0.36 0.26 1"/>
+    <geom name="cube_yellow_pad" type="box" pos="0.48 -0.08 0.21" size="0.015 0.015 0.01"
+          rgba="0.45 0.36 0.26 1"/>
+
+    <!-- Cube side = 0.025 m, center z = 0.22 + 0.0125 = 0.2325 m. -->
+    <body name="cube_blue" pos="0.32 0.07 0.2325">
+      <freejoint name="cube_blue_joint"/>
+      <geom name="cube_blue_col" type="box" size="0.0125 0.0125 0.0125"
+            mass="0.005" friction="1.5 0.05 0.01"
+            rgba="0 0 0 0" contype="1" conaffinity="1"/>
+      <geom name="cube_blue_vis" type="mesh" mesh="cube_blue_mesh" material="cube_blue_mat"
+            density="0" contype="0" conaffinity="0" group="1"/>
+      <site name="cube_blue_site" pos="0 0 0" size="0.004" rgba="1 0 0 0"/>
+    </body>
+
+    <body name="cube_orange" pos="0.48 0.13 0.2325">
+      <freejoint name="cube_orange_joint"/>
+      <geom name="cube_orange_col" type="box" size="0.0125 0.0125 0.0125"
+            mass="0.005" friction="1.5 0.05 0.01"
+            rgba="0 0 0 0" contype="1" conaffinity="1"/>
+      <geom name="cube_orange_vis" type="mesh" mesh="cube_orange_mesh" material="cube_orange_mat"
+            density="0" contype="0" conaffinity="0" group="1"/>
+      <site name="cube_orange_site" pos="0 0 0" size="0.004" rgba="1 0 0 0"/>
+    </body>
+
+    <body name="cube_yellow" pos="0.48 -0.08 0.2325">
+      <freejoint name="cube_yellow_joint"/>
+      <geom name="cube_yellow_col" type="box" size="0.0125 0.0125 0.0125"
+            mass="0.005" friction="1.5 0.05 0.01"
+            rgba="0 0 0 0" contype="1" conaffinity="1"/>
+      <geom name="cube_yellow_vis" type="mesh" mesh="cube_yellow_mesh" material="cube_yellow_mat"
+            density="0" contype="0" conaffinity="0" group="1"/>
+      <site name="cube_yellow_site" pos="0 0 0" size="0.004" rgba="1 0 0 0"/>
+    </body>
+
+    <body name="cube_blue_2" pos="0.20 0.14 0.2325"><freejoint name="cube_blue_2_joint"/><geom name="cube_blue_2_col" type="box" size="0.0125 0.0125 0.0125" mass="0.005" friction="1.5 0.05 0.01" rgba="0 0 0 0"/><geom name="cube_blue_2_vis" type="mesh" mesh="cube_blue_mesh" material="cube_blue_mat" density="0" contype="0" conaffinity="0" group="1"/></body>
+    <body name="cube_yellow_2" pos="0.28 0.14 0.2325"><freejoint name="cube_yellow_2_joint"/><geom name="cube_yellow_2_col" type="box" size="0.0125 0.0125 0.0125" mass="0.005" friction="1.5 0.05 0.01" rgba="0 0 0 0"/><geom name="cube_yellow_2_vis" type="mesh" mesh="cube_yellow_mesh" material="cube_yellow_mat" density="0" contype="0" conaffinity="0" group="1"/></body>
+    <body name="cube_orange_2" pos="0.36 0.14 0.2325"><freejoint name="cube_orange_2_joint"/><geom name="cube_orange_2_col" type="box" size="0.0125 0.0125 0.0125" mass="0.005" friction="1.5 0.05 0.01" rgba="0 0 0 0"/><geom name="cube_orange_2_vis" type="mesh" mesh="cube_orange_mesh" material="cube_orange_mat" density="0" contype="0" conaffinity="0" group="1"/></body>
+    <body name="cube_blue_3" pos="0.20 -0.12 0.2325"><freejoint name="cube_blue_3_joint"/><geom name="cube_blue_3_col" type="box" size="0.0125 0.0125 0.0125" mass="0.005" friction="1.5 0.05 0.01" rgba="0 0 0 0"/><geom name="cube_blue_3_vis" type="mesh" mesh="cube_blue_mesh" material="cube_blue_mat" density="0" contype="0" conaffinity="0" group="1"/></body>
+    <body name="cube_yellow_3" pos="0.28 -0.12 0.2325"><freejoint name="cube_yellow_3_joint"/><geom name="cube_yellow_3_col" type="box" size="0.0125 0.0125 0.0125" mass="0.005" friction="1.5 0.05 0.01" rgba="0 0 0 0"/><geom name="cube_yellow_3_vis" type="mesh" mesh="cube_yellow_mesh" material="cube_yellow_mat" density="0" contype="0" conaffinity="0" group="1"/></body>
+    <body name="cube_orange_3" pos="0.36 -0.12 0.2325"><freejoint name="cube_orange_3_joint"/><geom name="cube_orange_3_col" type="box" size="0.0125 0.0125 0.0125" mass="0.005" friction="1.5 0.05 0.01" rgba="0 0 0 0"/><geom name="cube_orange_3_vis" type="mesh" mesh="cube_orange_mesh" material="cube_orange_mat" density="0" contype="0" conaffinity="0" group="1"/></body>
+    <body name="cube_blue_4" pos="0.44 0.14 0.2325"><freejoint name="cube_blue_4_joint"/><geom name="cube_blue_4_col" type="box" size="0.0125 0.0125 0.0125" mass="0.005" friction="1.5 0.05 0.01" rgba="0 0 0 0"/><geom name="cube_blue_4_vis" type="mesh" mesh="cube_blue_mesh" material="cube_blue_mat" density="0" contype="0" conaffinity="0" group="1"/></body>
+
+    <camera name="env1_cam" pos="0.10 -0.75 0.60" xyaxes="1 0 0 0 0.447 0.894" fovy="45"/>
+    <camera name="env0_cam" pos="0.8 0 0.55" xyaxes="0 1 0 -0.406 0 0.914" fovy="45"/>
+  </worldbody>
+</mujoco>
