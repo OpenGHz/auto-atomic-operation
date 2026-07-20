@@ -13,7 +13,12 @@ from .data_replay import (
     DataReplayTaskFileConfig,
     preprocess_replay_dictconfig,
 )
-from .task_info import TaskInfo, collect_task_infos, load_task_info
+from .task_info import (
+    TaskInfo,
+    collect_task_infos,
+    filter_task_infos,
+    load_task_info,
+)
 
 __all__ = [
     "DataReplayConfig",
@@ -23,6 +28,7 @@ __all__ = [
     "RunnerBase",
     "TaskInfo",
     "collect_task_infos",
+    "filter_task_infos",
     "load_task_info",
     "prepare_task_file",
     "print_final_summary",

@@ -83,17 +83,30 @@ operations it performs, and a workflow generated from the ordered stages.
 
 ```bash
 aao-info                    # list every runnable task
-aao-info pick_and_place     # only the named config(s)
+aao-info pick_and_place     # a single config by exact name
+aao-info 'open_door*'       # glob over config names (quote so the shell doesn't expand it)
+aao-info -o press           # only tasks that press something
+aao-info --object cup       # only tasks involving a "cup" object
+aao-info -o pick -s pick_and_place   # combine filters (AND across categories)
 aao-info --json             # machine-readable output
 aao-info --verbose          # also report configs skipped as non-tasks
 ```
 
+### Filtering
+
 | Argument | Description |
 |---|---|
-| `names...` | Optional config name(s) to inspect; default: all runnable tasks |
+| `PATTERN...` | Glob pattern(s) (`fnmatch`) matched against config names; an exact name matches itself. Default: all runnable tasks |
+| `-o, --operation OP` | Keep tasks that use operation `OP` (repeatable, or comma-separated: `-o pick,place`) |
+| `-b, --object OBJ` | Keep tasks referencing an object whose name contains `OBJ` (case-insensitive substring) |
+| `-s, --scene GLOB` | Keep tasks whose `scene_name` matches the glob |
 | `--json` | Emit a JSON array instead of the readable text report |
 | `--config-dir DIR` | Config directory (default: `./aao_configs`) |
 | `--verbose` | Print configs skipped as non-tasks or on composition errors (to stderr) |
+
+Filter categories are AND-combined; values within a category are OR-combined
+(e.g. `-o pick -o place` keeps tasks that use pick **or** place). Name globs are
+matched before composition, so filtering by name is cheap.
 
 Example output:
 

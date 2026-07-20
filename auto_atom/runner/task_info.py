@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from fnmatch import fnmatch
 from pathlib import Path
 from typing import List, Optional
 
@@ -195,16 +196,25 @@ def load_task_info(config_name: str) -> Optional[TaskInfo]:
 
 def collect_task_infos(
     config_dir: Path,
-    names: Optional[List[str]] = None,
+    name_patterns: Optional[List[str]] = None,
     *,
     verbose: bool = False,
 ) -> List[TaskInfo]:
-    """Compose each candidate config and keep the ones that are tasks.
+    """Compose the matching configs and keep the ones that are tasks.
 
-    ``names`` restricts to specific config stems; when omitted, every top-level
-    config is considered. Composition happens under a single Hydra context.
+    ``name_patterns`` is a list of ``fnmatch`` globs (e.g. ``open_door*``)
+    matched against the discovered top-level config stems; when omitted, every
+    top-level config is considered. An exact name is just a glob that matches
+    itself, so composition happens only for configs that match. Composition
+    runs under a single Hydra context.
     """
-    candidates = names if names is not None else discover_config_names(config_dir)
+    candidates = discover_config_names(config_dir)
+    if name_patterns:
+        candidates = [
+            name
+            for name in candidates
+            if any(fnmatch(name, pattern) for pattern in name_patterns)
+        ]
     infos: List[TaskInfo] = []
 
     # A single Hydra init serves every compose() call in the loop.
@@ -231,6 +241,42 @@ def collect_task_infos(
 
     infos.sort(key=lambda t: t.config_name)
     return infos
+
+
+def filter_task_infos(
+    infos: List[TaskInfo],
+    *,
+    operations: Optional[List[str]] = None,
+    objects: Optional[List[str]] = None,
+    scenes: Optional[List[str]] = None,
+) -> List[TaskInfo]:
+    """Keep task infos matching every provided filter category.
+
+    Categories are AND-combined; values within a category are OR-combined:
+
+    - ``operations``: keep a task that uses at least one listed operation
+      (case-insensitive, exact match against the task's operations).
+    - ``objects``: keep a task that references an object containing at least
+      one listed substring (case-insensitive).
+    - ``scenes``: keep a task whose ``scene_name`` matches at least one glob.
+    """
+
+    def keep(info: TaskInfo) -> bool:
+        if operations:
+            wanted = {op.lower() for op in operations}
+            if not (wanted & {op.lower() for op in info.operations}):
+                return False
+        if objects:
+            needles = [o.lower() for o in objects]
+            haystack = [o.lower() for o in info.objects]
+            if not any(needle in obj for needle in needles for obj in haystack):
+                return False
+        if scenes:
+            if not any(fnmatch(info.scene_name, pattern) for pattern in scenes):
+                return False
+        return True
+
+    return [info for info in infos if keep(info)]
 
 
 def render_text(infos: List[TaskInfo]) -> str:
@@ -279,15 +325,53 @@ def render_json(infos: List[TaskInfo]) -> str:
     return json.dumps(payload, indent=2, ensure_ascii=False)
 
 
+def _flatten_csv(values: Optional[List[str]]) -> List[str]:
+    """Split comma-separated filter values so ``-o pick,place`` works too."""
+    out: List[str] = []
+    for value in values or []:
+        out.extend(part.strip() for part in value.split(",") if part.strip())
+    return out
+
+
 def main(argv: Optional[List[str]] = None) -> None:
     parser = argparse.ArgumentParser(
         prog="aao-info",
-        description="Introspect runnable task configs in aao_configs/.",
+        description="Introspect and filter runnable task configs in aao_configs/.",
     )
     parser.add_argument(
-        "names",
+        "patterns",
         nargs="*",
-        help="Specific config name(s) to inspect; default: all runnable tasks.",
+        metavar="PATTERN",
+        help=(
+            "Glob pattern(s) matched against config names, e.g. 'open_door*' "
+            "(an exact name matches itself); default: all runnable tasks."
+        ),
+    )
+    parser.add_argument(
+        "-o",
+        "--operation",
+        action="append",
+        default=[],
+        metavar="OP",
+        help="Keep tasks that use this operation (repeatable / comma-separated).",
+    )
+    parser.add_argument(
+        "-b",
+        "--object",
+        dest="objects",
+        action="append",
+        default=[],
+        metavar="OBJ",
+        help="Keep tasks referencing an object containing this substring "
+        "(repeatable / comma-separated).",
+    )
+    parser.add_argument(
+        "-s",
+        "--scene",
+        action="append",
+        default=[],
+        metavar="GLOB",
+        help="Keep tasks whose scene name matches this glob (repeatable).",
     )
     parser.add_argument(
         "--json", action="store_true", help="Emit JSON instead of readable text."
@@ -309,8 +393,13 @@ def main(argv: Optional[List[str]] = None) -> None:
     if not config_dir.is_dir():
         parser.error(f"config directory not found: {config_dir}")
 
-    names = args.names or None
-    infos = collect_task_infos(config_dir, names, verbose=args.verbose)
+    infos = collect_task_infos(config_dir, args.patterns or None, verbose=args.verbose)
+    infos = filter_task_infos(
+        infos,
+        operations=_flatten_csv(args.operation) or None,
+        objects=_flatten_csv(args.objects) or None,
+        scenes=_flatten_csv(args.scene) or None,
+    )
 
     if args.json:
         print(render_json(infos))
