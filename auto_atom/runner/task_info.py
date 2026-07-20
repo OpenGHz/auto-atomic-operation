@@ -428,6 +428,87 @@ def render_json(infos: List[TaskInfo]) -> str:
     return json.dumps(payload, indent=2, ensure_ascii=False)
 
 
+# Vocabulary fields, in display order. Each maps to the sorted set of values
+# seen across the tasks — a controlled vocabulary for keyword-driven retrieval.
+_VOCAB_LABELS = {
+    "configs": "configs",
+    "scenes": "scenes",
+    "operators": "operators",
+    "robots": "robots",
+    "objects": "objects",
+    "operations": "operations",
+    "stage_names": "stage names",
+}
+
+
+def build_vocabulary(infos: List[TaskInfo]) -> "dict[str, List[str]]":
+    """Aggregate every task field into sorted, de-duplicated value sets.
+
+    Instead of a per-task view, this collapses all tasks into one glossary:
+    each field maps to the union of its values across ``infos``. Objects and
+    operations union both the declared and stage-derived sources so no term is
+    missed. Useful as a controlled vocabulary an agent can search against.
+    """
+    buckets: "dict[str, set[str]]" = {key: set() for key in _VOCAB_LABELS}
+    for info in infos:
+        buckets["configs"].add(info.config_name)
+        if info.scene_name:
+            buckets["scenes"].add(info.scene_name)
+        buckets["operators"].update(op.name for op in info.operators)
+        buckets["robots"].update(info.robots)
+        buckets["objects"].update(info.declared_objects)
+        buckets["objects"].update(info.stage_objects)
+        buckets["operations"].update(info.declared_operations)
+        buckets["operations"].update(info.stage_operations)
+        buckets["stage_names"].update(s.name for s in info.stages if s.name)
+    # Drop unresolved interpolation placeholders (e.g. ``${object_name}`` from
+    # template configs) — they are noise in a keyword vocabulary.
+    return {
+        key: sorted(v for v in values if "${" not in v)
+        for key, values in buckets.items()
+    }
+
+
+def render_vocab_text(vocab: "dict[str, List[str]]") -> str:
+    """Render the aggregated vocabulary as a readable, wrapped glossary."""
+    import textwrap
+
+    n_tasks = len(vocab.get("configs", []))
+    if n_tasks == 0:
+        return "No runnable task configs found."
+
+    lines: List[str] = [
+        f"Task vocabulary ({n_tasks} task{'s' if n_tasks != 1 else ''}):",
+        "",
+    ]
+    for key, label in _VOCAB_LABELS.items():
+        values = vocab.get(key, [])
+        lines.append(f"{label} ({len(values)}):")
+        if values:
+            lines.append(
+                textwrap.fill(
+                    ", ".join(values),
+                    width=78,
+                    initial_indent="  ",
+                    subsequent_indent="  ",
+                    break_long_words=False,
+                    break_on_hyphens=False,
+                )
+            )
+        else:
+            lines.append("  (none)")
+        lines.append("")
+
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def render_vocab_json(vocab: "dict[str, List[str]]") -> str:
+    """Render the aggregated vocabulary as a JSON object of sorted value lists."""
+    import json
+
+    return json.dumps(vocab, indent=2, ensure_ascii=False)
+
+
 def _flatten_csv(values: Optional[List[str]]) -> List[str]:
     """Split comma-separated filter values so ``-o pick,place`` works too."""
     out: List[str] = []
@@ -486,6 +567,14 @@ def main(argv: Optional[List[str]] = None) -> None:
         "(repeatable / comma-separated).",
     )
     parser.add_argument(
+        "--vocab",
+        "--keywords",
+        dest="vocab",
+        action="store_true",
+        help="Aggregate all fields into a keyword vocabulary (sorted value sets) "
+        "instead of a per-task report — a glossary for retrieval.",
+    )
+    parser.add_argument(
         "--json", action="store_true", help="Emit JSON instead of readable text."
     )
     parser.add_argument(
@@ -526,7 +615,13 @@ def main(argv: Optional[List[str]] = None) -> None:
         robots=_flatten_csv(args.robot) or None,
     )
 
-    if args.json:
+    if args.vocab:
+        vocab = build_vocabulary(infos)
+        if args.json:
+            print(render_vocab_json(vocab))
+        else:
+            print(render_vocab_text(vocab), end="")
+    elif args.json:
         print(render_json(infos))
     else:
         print(render_text(infos), end="")

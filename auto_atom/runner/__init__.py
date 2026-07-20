@@ -15,6 +15,7 @@ from .data_replay import (
 )
 from .task_info import (
     TaskInfo,
+    build_vocabulary,
     collect_task_infos,
     filter_task_infos,
     load_task_info,
@@ -27,6 +28,7 @@ __all__ = [
     "ExampleLoopHooks",
     "RunnerBase",
     "TaskInfo",
+    "build_vocabulary",
     "collect_task_infos",
     "filter_task_infos",
     "load_task_info",

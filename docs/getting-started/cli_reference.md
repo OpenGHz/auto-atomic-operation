@@ -104,7 +104,8 @@ aao-info --verbose          # also report configs skipped as non-tasks
 | `-b, --object OBJ` | Keep tasks referencing an object whose name contains `OBJ` (case-insensitive substring) |
 | `-s, --scene GLOB` | Keep tasks whose `scene_name` matches the glob |
 | `-r, --robot MODEL` | Keep tasks whose robot model contains `MODEL` (case-insensitive substring) |
-| `--json` | Emit a JSON array instead of the readable text report |
+| `--vocab`, `--keywords` | Aggregate all fields into a keyword vocabulary instead of a per-task report (see below) |
+| `--json` | Emit a JSON array (or, with `--vocab`, a `{field: [values]}` object) instead of readable text |
 | `--config-dir DIR` | Config directory (default: `./aao_configs`) |
 | `--verbose` | Print configs skipped as non-tasks or on composition errors (to stderr) |
 | `--no-progress` | Disable the progress line (see below) |
@@ -147,6 +148,42 @@ In `--json` output these are the `operators` (list of `{name, model}`) and
 Objects and operations are cross-checked: the report prefers the declared
 `env.mask_objects` / `env.operations`, and adds a `note:` line when they differ
 from the objects/operations actually referenced by the stages.
+
+### Vocabulary mode (`--vocab`)
+
+`--vocab` (alias `--keywords`) flips the output from per-task to per-field: it
+collapses all matching tasks into one glossary, where each field maps to the
+sorted, de-duplicated union of its values. This is a controlled vocabulary an
+agent (or a human) can search against for intelligent retrieval — "which
+operations exist?", "what objects can be manipulated?", "which robot models are
+available?".
+
+```bash
+aao-info --vocab              # glossary across all tasks
+aao-info -r airbot --vocab    # glossary restricted to airbot tasks
+aao-info --vocab --json       # {field: [sorted values]} for programmatic use
+```
+
+The aggregated fields are `configs`, `scenes`, `operators`, `robots`,
+`objects`, `operations`, and `stage_names`. All active filters apply first, so
+the vocabulary always reflects exactly the task subset you selected. Unresolved
+interpolation placeholders (e.g. `${object_name}` from template configs) are
+dropped so the vocabulary stays clean. Example:
+
+```
+Task vocabulary (40 tasks):
+
+operators (3):
+  arm, arm_a, observer
+
+robots (9):
+  airbot_play_with_g2, airbot_play_with_g2p, p7_arm_v3_with_umi_gripper_v3,
+  p7_arm_with_g2p, p7_arm_with_xf9600, panda_robotiq, robotiq,
+  umi_gripper_v3_mocap, xf9600_mocap
+
+operations (6):
+  move, pick, place, press, pull, push
+```
 
 ## Config resolution
 
