@@ -2,14 +2,14 @@
 
 The package provides two console entry points, both powered by [Hydra](https://hydra.cc).
 
-## aao_demo
+## aao-demo
 
 Run a task-runner demo.
 
 ```bash
-aao_demo                                # default: pick_and_place
-aao_demo --config-name cup_on_coaster   # any config in aao_configs/
-aao_demo --list                         # list available configs
+aao-demo                                # default: pick_and_place
+aao-demo --config-name cup_on_coaster   # any config in aao_configs/
+aao-demo --list                         # list available configs
 ```
 
 ### Hydra overrides
@@ -28,24 +28,24 @@ Any key present in the YAML config can be overridden on the command line followi
 
 ```bash
 # Multiple overrides
-aao_demo --config-name stack_color_blocks rounds=3 env.batch_size=4 max_updates=500
+aao-demo --config-name stack_color_blocks rounds=3 env.batch_size=4 max_updates=500
 
 # Override a nested key
-aao_demo task.stages.0.param.pre_move.0.position="[0.4, 0.0, 0.1]"
+aao-demo task.stages.0.param.pre_move.0.position="[0.4, 0.0, 0.1]"
 ```
 
 ### Output
 
 Each run writes a `summary.json` to the Hydra output directory (`outputs/<date>/<time>/summary.json`) containing per-round success rates, completion steps, timing, and failure reasons.
 
-## aao_eval
+## aao-eval
 
-Run policy evaluation. Same Hydra config system as `aao_demo` but accepts an external policy.
+Run policy evaluation. Same Hydra config system as `aao-demo` but accepts an external policy.
 
 ```bash
-aao_eval --config-name pick_and_place       # evaluate with ConfigDrivenDemoPolicy (default)
-aao_eval --config-name policy_eval_mock     # mock backend evaluation
-aao_eval --list                             # list available configs
+aao-eval --config-name pick_and_place       # evaluate with ConfigDrivenDemoPolicy (default)
+aao-eval --config-name policy_eval_mock     # mock backend evaluation
+aao-eval --list                             # list available configs
 ```
 
 ### Additional overrides
@@ -67,7 +67,7 @@ policy:
   checkpoint: /path/to/model.pt
 ```
 
-When `policy` is omitted, `aao_eval` defaults to `auto_atom.ConfigDrivenDemoPolicy`, which replays the same primitive actions that `aao_demo` uses. See [Policy Evaluation](../tools/policy_evaluation.md) for the full API reference.
+When `policy` is omitted, `aao-eval` defaults to `auto_atom.ConfigDrivenDemoPolicy`, which replays the same primitive actions that `aao-demo` uses. See [Policy Evaluation](../tools/policy_evaluation.md) for the full API reference.
 
 ## Config resolution
 

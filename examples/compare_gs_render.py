@@ -16,7 +16,7 @@ Usage::
     # Display the result interactively (pass as Hydra override)
     python examples/compare_gs_render.py show=true
 
-Must be run from the project root (same working directory as `aao_demo`).
+Must be run from the project root (same working directory as `aao-demo`).
 """
 
 from __future__ import annotations

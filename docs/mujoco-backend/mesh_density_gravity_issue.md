@@ -2,7 +2,7 @@
 
 ## 现象
 
-运行 `aao_demo --config-name arrange_flowers_gs` 时，机器人成功抓住花并开始抬升，但抬到一定高度后停住不动，无法继续上升，最终超时失败。
+运行 `aao-demo --config-name arrange_flowers_gs` 时，机器人成功抓住花并开始抬升，但抬到一定高度后停住不动，无法继续上升，最终超时失败。
 
 ## 根因分析
 

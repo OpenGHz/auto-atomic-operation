@@ -105,9 +105,9 @@ Use it for final aggregate metrics:
 ## Policy Interface
 
 The package entry point is [auto_atom/runner/policy_eval.py](../auto_atom/runner/policy_eval.py).
-By default, `aao_eval` resolves Hydra configs from `./aao_configs/` relative to the current working directory.
+By default, `aao-eval` resolves Hydra configs from `./aao_configs/` relative to the current working directory.
 
-If the config does not provide a `policy` section, `aao_eval` will default to
+If the config does not provide a `policy` section, `aao-eval` will default to
 `auto_atom.ConfigDrivenDemoPolicy`, so you can directly evaluate a normal demo
 task config without creating a separate evaluation YAML.
 
@@ -150,21 +150,21 @@ def my_policy(observation, update=None, evaluator=None):
 ```
 
 If the instantiated policy object exposes `action_applier` or `observation_getter`,
-`aao_eval` will prefer those over the built-in defaults.
+`aao-eval` will prefer those over the built-in defaults.
 
 ## Config-Driven Demo Policy
 
-The package includes `auto_atom.ConfigDrivenDemoPolicy`, and `aao_eval` uses it
+The package includes `auto_atom.ConfigDrivenDemoPolicy`, and `aao-eval` uses it
 by default when `policy` is omitted from the config.
 
 It does not use a learned model. Instead, it rebuilds the same primitive
 `pre_move` / `eef` / `post_move` action sequence that `TaskRunner` uses in
-`aao_demo`, and applies those primitives through the same operator handlers.
+`aao-demo`, and applies those primitives through the same operator handlers.
 
 This is useful as a consistency check:
 
-- if `aao_demo` succeeds on a task
-- then `aao_eval` with `ConfigDrivenDemoPolicy` should also succeed
+- if `aao-demo` succeeds on a task
+- then `aao-eval` with `ConfigDrivenDemoPolicy` should also succeed
 - so you can verify that the stage-completion logic used by `PolicyEvaluator`
   is aligned with the framework runtime
 
@@ -286,13 +286,13 @@ The repository includes:
 Run evaluation directly on a demo config:
 
 ```bash
-aao_eval --config-name pick_and_place
+aao-eval --config-name pick_and_place
 ```
 
 Or run the mock example:
 
 ```bash
-aao_eval --config-name policy_eval_mock
+aao-eval --config-name policy_eval_mock
 ```
 
 `policy_eval_mock.yaml` explicitly pins `auto_atom.ConfigDrivenDemoPolicy`, but

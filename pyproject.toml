@@ -14,8 +14,8 @@ dependencies = ["hydra-core", "numpy", "pydantic>=2"]
 urls = { "repository" = "https://github.com/OpenGHz/auto-atomic-operation.git" }
 
 [project.scripts]
-aao_demo = "auto_atom.runner.demo:main"
-aao_eval = "auto_atom.runner.policy_eval:main"
+aao-demo = "auto_atom.runner.demo:main"
+aao-eval = "auto_atom.runner.policy_eval:main"
 
 [project.optional-dependencies]
 mujoco = ["mujoco >=3.4.0", "PyOpenGL_accelerate"]

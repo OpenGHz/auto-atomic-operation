@@ -19,7 +19,7 @@
 再运行:
 
 ```bash
-aao_demo --config-name open_door_p7_ik
+aao-demo --config-name open_door_p7_ik
 ```
 
 会出现以下现象：
@@ -28,7 +28,7 @@ aao_demo --config-name open_door_p7_ik
 - `door_hinge` 基本保持在 `0`
 - 任务卡在 `post_move` 推门阶段，最终失败
 
-对比之下，`aao_demo --config-name open_door_airbot_play` 在同样的厚门尺寸下仍可成功。
+对比之下，`aao-demo --config-name open_door_airbot_play` 在同样的厚门尺寸下仍可成功。
 
 ## 结论
 

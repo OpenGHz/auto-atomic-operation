@@ -4,7 +4,7 @@ This guide covers the scripts used to record task demonstrations and compare ren
 
 ## Record Demo Video
 
-[`examples/record_demo.py`](../examples/record_demo.py) runs a task in the MuJoCo backend and saves the camera feed as a GIF and/or MP4. It also exports replayable demo data, including low-dimensional observations, action pose targets, and low-level control actions. It reuses the same Hydra configs as `aao_demo`.
+[`examples/record_demo.py`](../examples/record_demo.py) runs a task in the MuJoCo backend and saves the camera feed as a GIF and/or MP4. It also exports replayable demo data, including low-dimensional observations, action pose targets, and low-level control actions. It reuses the same Hydra configs as `aao-demo`.
 
 ### Basic usage
 

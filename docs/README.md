@@ -106,13 +106,13 @@ runner.close()
 
 ```bash
 # Mock backend (no simulator required)
-aao_demo --config-name mock
+aao-demo --config-name mock
 
 # MuJoCo demos
-aao_demo --config-name pick_and_place
+aao-demo --config-name pick_and_place
 
 # List all available demos
-aao_demo --list
+aao-demo --list
 ```
 
 ## MuJoCo Demos

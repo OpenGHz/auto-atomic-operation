@@ -1,6 +1,6 @@
 """Test MuJoCo environment construction from task configs.
 
-Uses the same Hydra config infrastructure as ``aao_demo`` / ``record_demo``.
+Uses the same Hydra config infrastructure as ``aao-demo`` / ``record_demo``.
 Switch tasks with ``--config-name``:
 
     python tests/test_mujoco.py --config-name pick_and_place

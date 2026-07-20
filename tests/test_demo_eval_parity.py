@@ -1,4 +1,4 @@
-"""Parity tests between TaskRunner (aao_demo) and PolicyEvaluator + ConfigDrivenDemoPolicy (aao_eval).
+"""Parity tests between TaskRunner (aao-demo) and PolicyEvaluator + ConfigDrivenDemoPolicy (aao-eval).
 
 The PolicyEvaluator path duplicates parts of TaskRunner so an external
 policy can be plugged in. The ConfigDrivenDemoPolicy is supposed to

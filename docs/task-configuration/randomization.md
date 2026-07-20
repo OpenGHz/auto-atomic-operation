@@ -561,8 +561,8 @@ Use the `rounds` top-level config key (default 1) to run the task multiple times
 with different random seeds:
 
 ```bash
-aao_demo rounds=10
-aao_demo --config-name cup_on_coaster rounds=20
+aao-demo rounds=10
+aao-demo --config-name cup_on_coaster rounds=20
 ```
 
 Each round resets the scene (applying a fresh random sample) and runs all stages.
@@ -600,7 +600,7 @@ sampling. This is useful for verifying that configured ranges don't cause
 unreachable grasps or collisions.
 
 ```bash
-aao_demo task.randomization_debug=true rounds=20
+aao-demo task.randomization_debug=true rounds=20
 ```
 
 ## Reproducibility
@@ -608,7 +608,7 @@ aao_demo task.randomization_debug=true rounds=20
 Set `task.seed` to fix the numpy RNG seed:
 
 ```bash
-aao_demo task.seed=42 rounds=5
+aao-demo task.seed=42 rounds=5
 ```
 
 The same seed produces the same sequence of random poses across runs.

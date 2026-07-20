@@ -61,13 +61,13 @@ git lfs pull
 The CLI looks for configs in `./aao_configs/` relative to the current working directory. After cloning the repo, run from the project root:
 
 ```bash
-aao_demo --list                          # list every available config
-aao_demo --config-name mock              # mock backend, no simulator required
-aao_demo --config-name pick_and_place    # MuJoCo demo (default)
-aao_demo --config-name <config>          # any other config
+aao-demo --list                          # list every available config
+aao-demo --config-name mock              # mock backend, no simulator required
+aao-demo --config-name pick_and_place    # MuJoCo demo (default)
+aao-demo --config-name <config>          # any other config
 ```
 
-For all CLI flags, Hydra overrides, and `aao_eval` usage, see the [CLI Reference](https://openghz.github.io/auto-atomic-operation/#/getting-started/cli_reference).
+For all CLI flags, Hydra overrides, and `aao-eval` usage, see the [CLI Reference](https://openghz.github.io/auto-atomic-operation/#/getting-started/cli_reference).
 
 ### Robotiq tasks
 
@@ -111,7 +111,7 @@ hf download OpenGHz/auto-atom-assets --repo-type=dataset --include "assets/gs/*"
 
 Full documentation is hosted at **[openghz.github.io/auto-atomic-operation](https://openghz.github.io/auto-atomic-operation/#/)**. Common entry points:
 
-- [CLI Reference](https://openghz.github.io/auto-atomic-operation/#/getting-started/cli_reference) — every flag, override, and output of `aao_demo` / `aao_eval`
+- [CLI Reference](https://openghz.github.io/auto-atomic-operation/#/getting-started/cli_reference) — every flag, override, and output of `aao-demo` / `aao-eval`
 - [Task Configuration](https://openghz.github.io/auto-atomic-operation/#/task-configuration/stages_and_waypoints) — YAML schema, stages, waypoints, action space, randomization, scene composition
 - [Execution Completion Flow](https://openghz.github.io/auto-atomic-operation/#/task-configuration/execution_completion_flow) — how `pre_move` / `eef` / `post_move` decide they are done and how that drives stage success
 - [MuJoCo Backend](https://openghz.github.io/auto-atomic-operation/#/mujoco-backend/mujoco_backend_conditions) — backend conditions, gripper semantics, observation wiring

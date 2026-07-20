@@ -1,6 +1,6 @@
 """Record a demo as MP4/GIF plus replayable low-dimensional data.
 
-Uses the same config files as ``aao_demo``. Switch tasks with ``--config-name``
+Uses the same config files as ``aao-demo``. Switch tasks with ``--config-name``
 and override any value via Hydra:
 
     python examples/record_demo.py --config-name pick_and_place
