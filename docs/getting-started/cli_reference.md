@@ -103,10 +103,18 @@ aao-info --verbose          # also report configs skipped as non-tasks
 | `--json` | Emit a JSON array instead of the readable text report |
 | `--config-dir DIR` | Config directory (default: `./aao_configs`) |
 | `--verbose` | Print configs skipped as non-tasks or on composition errors (to stderr) |
+| `--no-progress` | Disable the progress line (see below) |
 
 Filter categories are AND-combined; values within a category are OR-combined
 (e.g. `-o pick -o place` keeps tasks that use pick **or** place). Name globs are
 matched before composition, so filtering by name is cheap.
+
+> **Progress:** each config must be composed by Hydra to decide whether it is a
+> task, which takes a moment when there are many configs. While it works,
+> `aao-info` shows a transient `Composing configs [i/total]` line on **stderr**.
+> It is auto-enabled only when stderr is a terminal (so piped or redirected
+> output stays clean) and can be turned off with `--no-progress`. Because it is
+> on stderr, it never contaminates the text or `--json` output on stdout.
 
 Example output:
 

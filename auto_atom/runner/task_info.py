@@ -140,6 +140,24 @@ def _as_str_list(value: object) -> List[str]:
     return [str(v) for v in value]
 
 
+# Width the transient progress line is padded to, so a shorter line fully
+# overwrites a longer previous one before the carriage return.
+_PROGRESS_WIDTH = 80
+
+
+def _write_progress(current: int, total: int, name: str) -> None:
+    line = f"Composing configs [{current}/{total}]: {name}"
+    if len(line) > _PROGRESS_WIDTH:
+        line = line[: _PROGRESS_WIDTH - 1] + "…"
+    sys.stderr.write("\r" + line.ljust(_PROGRESS_WIDTH))
+    sys.stderr.flush()
+
+
+def _clear_progress() -> None:
+    sys.stderr.write("\r" + " " * _PROGRESS_WIDTH + "\r")
+    sys.stderr.flush()
+
+
 def discover_config_names(config_dir: Path) -> List[str]:
     """Return the stems of every top-level ``*.yaml`` in ``config_dir``.
 
@@ -199,6 +217,7 @@ def collect_task_infos(
     name_patterns: Optional[List[str]] = None,
     *,
     verbose: bool = False,
+    progress: Optional[bool] = None,
 ) -> List[TaskInfo]:
     """Compose the matching configs and keep the ones that are tasks.
 
@@ -207,6 +226,10 @@ def collect_task_infos(
     top-level config is considered. An exact name is just a glob that matches
     itself, so composition happens only for configs that match. Composition
     runs under a single Hydra context.
+
+    ``progress`` shows a transient ``[i/total]`` line on stderr while composing
+    (composition is the slow part). ``None`` (default) auto-enables it only when
+    stderr is a TTY, so piped/redirected output stays clean.
     """
     candidates = discover_config_names(config_dir)
     if name_patterns:
@@ -217,14 +240,22 @@ def collect_task_infos(
         ]
     infos: List[TaskInfo] = []
 
+    if progress is None:
+        progress = sys.stderr.isatty()
+    total = len(candidates)
+
     # A single Hydra init serves every compose() call in the loop.
     GlobalHydra.instance().clear()
     with initialize_config_dir(config_dir=str(config_dir), version_base=None):
-        for name in candidates:
+        for i, name in enumerate(candidates, start=1):
+            if progress:
+                _write_progress(i, total, name)
             try:
                 info = load_task_info(name)
             except Exception as exc:  # noqa: BLE001 — report, never abort the sweep
                 if verbose:
+                    if progress:
+                        _clear_progress()
                     print(
                         f"[skip] {name}: {type(exc).__name__}: {exc}",
                         file=sys.stderr,
@@ -232,12 +263,17 @@ def collect_task_infos(
                 continue
             if info is None:
                 if verbose:
+                    if progress:
+                        _clear_progress()
                     print(
                         f"[skip] {name}: no task.stages (not a task)",
                         file=sys.stderr,
                     )
                 continue
             infos.append(info)
+
+    if progress:
+        _clear_progress()
 
     infos.sort(key=lambda t: t.config_name)
     return infos
@@ -387,13 +423,25 @@ def main(argv: Optional[List[str]] = None) -> None:
         action="store_true",
         help="Report configs skipped as non-tasks or on composition errors.",
     )
+    parser.add_argument(
+        "--no-progress",
+        dest="progress",
+        action="store_false",
+        default=None,
+        help="Disable the progress line (auto-shown only on a TTY otherwise).",
+    )
     args = parser.parse_args(argv)
 
     config_dir = args.config_dir or get_config_dir()
     if not config_dir.is_dir():
         parser.error(f"config directory not found: {config_dir}")
 
-    infos = collect_task_infos(config_dir, args.patterns or None, verbose=args.verbose)
+    infos = collect_task_infos(
+        config_dir,
+        args.patterns or None,
+        verbose=args.verbose,
+        progress=args.progress,
+    )
     infos = filter_task_infos(
         infos,
         operations=_flatten_csv(args.operation) or None,
