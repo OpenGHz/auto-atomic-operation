@@ -1,6 +1,7 @@
 # CLI Reference
 
-The package provides two console entry points, both powered by [Hydra](https://hydra.cc).
+The package provides three console entry points. `aao-demo` and `aao-eval` are
+powered by [Hydra](https://hydra.cc); `aao-info` introspects the task configs.
 
 ## aao-demo
 
@@ -9,8 +10,9 @@ Run a task-runner demo.
 ```bash
 aao-demo                                # default: pick_and_place
 aao-demo --config-name cup_on_coaster   # any config in aao_configs/
-aao-demo --list                         # list available configs
 ```
+
+To discover which configs are runnable tasks, use [`aao-info`](#aao-info).
 
 ### Hydra overrides
 
@@ -45,7 +47,6 @@ Run policy evaluation. Same Hydra config system as `aao-demo` but accepts an ext
 ```bash
 aao-eval --config-name pick_and_place       # evaluate with ConfigDrivenDemoPolicy (default)
 aao-eval --config-name policy_eval_mock     # mock backend evaluation
-aao-eval --list                             # list available configs
 ```
 
 ### Additional overrides
@@ -69,8 +70,49 @@ policy:
 
 When `policy` is omitted, `aao-eval` defaults to `auto_atom.ConfigDrivenDemoPolicy`, which replays the same primitive actions that `aao-demo` uses. See [Policy Evaluation](../tools/policy_evaluation.md) for the full API reference.
 
+## aao-info
+
+Introspect the **runnable tasks** in `aao_configs/`. Unlike a flat directory
+listing, `aao-info` only reports configs that compose into a real task — i.e.
+those with a non-empty `task.stages` after Hydra composition. Building-block
+configs (bases, robot/eef definitions, mixins, variable files) are skipped
+because they declare no stages.
+
+For each task it reports the task name, the objects it manipulates, the
+operations it performs, and a workflow generated from the ordered stages.
+
+```bash
+aao-info                    # list every runnable task
+aao-info pick_and_place     # only the named config(s)
+aao-info --json             # machine-readable output
+aao-info --verbose          # also report configs skipped as non-tasks
+```
+
+| Argument | Description |
+|---|---|
+| `names...` | Optional config name(s) to inspect; default: all runnable tasks |
+| `--json` | Emit a JSON array instead of the readable text report |
+| `--config-dir DIR` | Config directory (default: `./aao_configs`) |
+| `--verbose` | Print configs skipped as non-tasks or on composition errors (to stderr) |
+
+Example output:
+
+```
+Runnable tasks (39):
+
+press_three_buttons
+  objects:    button_blue, button_green, button_pink
+  operations: press
+  workflow:
+    1. press button_blue [press_blue]
+    2. press button_green [press_green]
+    3. press button_pink [press_pink]
+```
+
+Objects and operations are cross-checked: the report prefers the declared
+`env.mask_objects` / `env.operations`, and adds a `note:` line when they differ
+from the objects/operations actually referenced by the stages.
+
 ## Config resolution
 
-Both entry points resolve Hydra configs from `./aao_configs/` relative to the current working directory. Run them from the project root.
-
-The `--list` flag scans this directory and prints every available config name (one per `.yaml` file).
+`aao-demo` and `aao-eval` resolve Hydra configs from `./aao_configs/` relative to the current working directory, and `aao-info` scans the same directory. Run them from the project root.

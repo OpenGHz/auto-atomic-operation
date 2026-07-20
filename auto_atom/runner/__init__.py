@@ -3,7 +3,6 @@
 from .base import RunnerBase
 from .common import (
     ExampleLoopHooks,
-    list_demos,
     prepare_task_file,
     print_final_summary,
     run_example_rounds,
@@ -14,6 +13,7 @@ from .data_replay import (
     DataReplayTaskFileConfig,
     preprocess_replay_dictconfig,
 )
+from .task_info import TaskInfo, collect_task_infos, load_task_info
 
 __all__ = [
     "DataReplayConfig",
@@ -21,7 +21,9 @@ __all__ = [
     "DataReplayTaskFileConfig",
     "ExampleLoopHooks",
     "RunnerBase",
-    "list_demos",
+    "TaskInfo",
+    "collect_task_infos",
+    "load_task_info",
     "prepare_task_file",
     "print_final_summary",
     "preprocess_replay_dictconfig",

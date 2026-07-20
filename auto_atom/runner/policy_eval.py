@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import inspect
-import sys
 from typing import Any
 
 import hydra
@@ -16,7 +15,6 @@ from auto_atom.policy_eval import ConfigDrivenDemoPolicy, PolicyEvaluator
 from .common import (
     ExampleLoopHooks,
     get_config_dir,
-    list_demos,
     prepare_task_file,
     print_final_summary,
     run_example_rounds,
@@ -112,11 +110,6 @@ def _call_policy(
     if "evaluator" in signature.parameters:
         kwargs["evaluator"] = evaluator
     return fn(observation, **kwargs)
-
-
-if "--list" in sys.argv:
-    list_demos(get_config_dir())
-    sys.exit(0)
 
 
 @hydra.main(

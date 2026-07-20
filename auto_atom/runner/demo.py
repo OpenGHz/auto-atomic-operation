@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 from time import perf_counter
 
@@ -15,16 +14,11 @@ from auto_atom.runtime import TaskRunner
 from .common import (
     ExampleLoopHooks,
     get_config_dir,
-    list_demos,
     prepare_task_file,
     print_final_summary,
     run_example_rounds,
     save_final_summary,
 )
-
-if "--list" in sys.argv:
-    list_demos(get_config_dir())
-    sys.exit(0)
 
 
 @hydra.main(

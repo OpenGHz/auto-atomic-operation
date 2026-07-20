@@ -111,8 +111,8 @@ aao-demo --config-name mock
 # MuJoCo demos
 aao-demo --config-name pick_and_place
 
-# List all available demos
-aao-demo --list
+# List all runnable tasks (name, objects, operations, workflow)
+aao-info
 ```
 
 ## MuJoCo Demos

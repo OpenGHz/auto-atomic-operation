@@ -16,6 +16,7 @@ urls = { "repository" = "https://github.com/OpenGHz/auto-atomic-operation.git" }
 [project.scripts]
 aao-demo = "auto_atom.runner.demo:main"
 aao-eval = "auto_atom.runner.policy_eval:main"
+aao-info = "auto_atom.runner.task_info:main"
 
 [project.optional-dependencies]
 mujoco = ["mujoco >=3.4.0", "PyOpenGL_accelerate"]

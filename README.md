@@ -61,7 +61,7 @@ git lfs pull
 The CLI looks for configs in `./aao_configs/` relative to the current working directory. After cloning the repo, run from the project root:
 
 ```bash
-aao-demo --list                          # list every available config
+aao-info                                 # list every runnable task
 aao-demo --config-name mock              # mock backend, no simulator required
 aao-demo --config-name pick_and_place    # MuJoCo demo (default)
 aao-demo --config-name <config>          # any other config

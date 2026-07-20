@@ -39,14 +39,6 @@ def get_config_dir() -> Path:
     return Path.cwd() / "aao_configs"
 
 
-def list_demos(base_dir: Optional[Path] = None) -> None:
-    config_dir = base_dir or get_config_dir()
-    names = sorted(p.stem for p in config_dir.glob("*.yaml"))
-    print(f"Available demos ({len(names)}):")
-    for name in names:
-        print(f"  {name}")
-
-
 def prepare_task_file(
     cfg: DictConfig, config_cls: BaseModel = TaskFileConfig
 ) -> TaskFileConfig:
