@@ -77,6 +77,17 @@ class StageInfo(BaseModel):
         return _OPERATION_PHRASE_NO_OBJECT.get(op, f"{op} (target pose)")
 
 
+class OperatorInfo(BaseModel):
+    """The operating subject (actor) that performs a task's stages."""
+
+    name: str
+    """The operator name referenced by stages / declared in ``task_operators``."""
+    model: str = ""
+    """The robot model the operator is embodied as — the ``env.robot_paths`` XML
+    stem (e.g. ``robotiq``, ``airbot_play_with_g2p``). Set when the scene loads a
+    single robot; left empty when the robot is ambiguous (see ``TaskInfo.robots``)."""
+
+
 class TaskInfo(BaseModel):
     """Introspected metadata for a single runnable task config."""
 
@@ -84,6 +95,11 @@ class TaskInfo(BaseModel):
     """The config file stem (what you pass to ``--config-name``)."""
     scene_name: str = ""
     """The scene the task runs in (``scene_name`` in the composed config)."""
+    operators: List[OperatorInfo] = []
+    """Operating subjects — the operator(s) that perform the stages, each with
+    its robot model when known."""
+    robots: List[str] = []
+    """Robot models loaded by the scene, from ``env.robot_paths`` (XML stems)."""
     declared_objects: List[str] = []
     """Objects declared in ``env.mask_objects``."""
     stage_objects: List[str] = []
@@ -96,13 +112,23 @@ class TaskInfo(BaseModel):
 
     @property
     def objects(self) -> List[str]:
-        """Best available object list: declared if present, else stage-derived."""
-        return self.declared_objects or self.stage_objects
+        """Best available object list: declared if present, else stage-derived.
+
+        Deduplicated for display; the raw ``declared_objects`` /
+        ``stage_objects`` fields back the mismatch check.
+        """
+        return _unique_preserving_order(self.declared_objects or self.stage_objects)
 
     @property
     def operations(self) -> List[str]:
-        """Best available operation list: declared if present, else stage-derived."""
-        return self.declared_operations or self.stage_operations
+        """Best available operation list: declared if present, else stage-derived.
+
+        Deduplicated for display; the raw ``declared_operations`` /
+        ``stage_operations`` fields back the mismatch check.
+        """
+        return _unique_preserving_order(
+            self.declared_operations or self.stage_operations
+        )
 
     @property
     def object_mismatch(self) -> bool:
@@ -201,9 +227,32 @@ def load_task_info(config_name: str) -> Optional[TaskInfo]:
     env = data.get("env") or {}
     env = env if isinstance(env, dict) else {}
 
+    # Robot models loaded by the scene, from the env.robot_paths XML stems.
+    robot_paths = env.get("robot_paths")
+    robots = (
+        _unique_preserving_order([Path(str(p)).stem for p in robot_paths])
+        if isinstance(robot_paths, list)
+        else []
+    )
+
+    # Operating subjects: names come from the stages (the actors that act) plus
+    # any declared in task_operators / env.operators. The robot model is only
+    # attached when the scene loads exactly one robot (otherwise ambiguous).
+    task_operators = data.get("task_operators")
+    env_operators = env.get("operators")
+    operator_names = _unique_preserving_order(
+        [s.operator for s in stages]
+        + (list(task_operators) if isinstance(task_operators, dict) else [])
+        + (list(env_operators) if isinstance(env_operators, dict) else [])
+    )
+    sole_model = robots[0] if len(robots) == 1 else ""
+    operators = [OperatorInfo(name=n, model=sole_model) for n in operator_names]
+
     return TaskInfo(
         config_name=config_name,
         scene_name=str(data.get("scene_name", "") or ""),
+        operators=operators,
+        robots=robots,
         declared_objects=_as_str_list(env.get("mask_objects")),
         stage_objects=_unique_preserving_order([s.object for s in stages]),
         declared_operations=_as_str_list(env.get("operations")),
@@ -285,6 +334,7 @@ def filter_task_infos(
     operations: Optional[List[str]] = None,
     objects: Optional[List[str]] = None,
     scenes: Optional[List[str]] = None,
+    robots: Optional[List[str]] = None,
 ) -> List[TaskInfo]:
     """Keep task infos matching every provided filter category.
 
@@ -295,6 +345,8 @@ def filter_task_infos(
     - ``objects``: keep a task that references an object containing at least
       one listed substring (case-insensitive).
     - ``scenes``: keep a task whose ``scene_name`` matches at least one glob.
+    - ``robots``: keep a task whose robot model contains at least one listed
+      substring (case-insensitive) — the operating subject's model.
     """
 
     def keep(info: TaskInfo) -> bool:
@@ -309,6 +361,11 @@ def filter_task_infos(
                 return False
         if scenes:
             if not any(fnmatch(info.scene_name, pattern) for pattern in scenes):
+                return False
+        if robots:
+            needles = [r.lower() for r in robots]
+            haystack = [r.lower() for r in info.robots]
+            if not any(needle in robot for needle in needles for robot in haystack):
                 return False
         return True
 
@@ -326,6 +383,16 @@ def render_text(infos: List[TaskInfo]) -> str:
         if info.scene_name and info.scene_name != info.config_name:
             header += f"  (scene: {info.scene_name})"
         lines.append(header)
+        if info.operators:
+            actors = ", ".join(
+                f"{op.name} ({op.model})" if op.model else op.name
+                for op in info.operators
+            )
+            lines.append(f"  operators:  {actors}")
+        # Show an explicit robots line unless it is the single-robot case
+        # already displayed inline on the operators line.
+        if info.robots and (len(info.robots) != 1 or not info.operators):
+            lines.append(f"  robots:     {', '.join(info.robots)}")
         lines.append(f"  objects:    {', '.join(info.objects) or '(none)'}")
         if info.object_mismatch:
             lines.append(
@@ -410,6 +477,15 @@ def main(argv: Optional[List[str]] = None) -> None:
         help="Keep tasks whose scene name matches this glob (repeatable).",
     )
     parser.add_argument(
+        "-r",
+        "--robot",
+        action="append",
+        default=[],
+        metavar="MODEL",
+        help="Keep tasks whose robot model contains this substring "
+        "(repeatable / comma-separated).",
+    )
+    parser.add_argument(
         "--json", action="store_true", help="Emit JSON instead of readable text."
     )
     parser.add_argument(
@@ -447,6 +523,7 @@ def main(argv: Optional[List[str]] = None) -> None:
         operations=_flatten_csv(args.operation) or None,
         objects=_flatten_csv(args.objects) or None,
         scenes=_flatten_csv(args.scene) or None,
+        robots=_flatten_csv(args.robot) or None,
     )
 
     if args.json:

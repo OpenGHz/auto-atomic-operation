@@ -78,8 +78,10 @@ those with a non-empty `task.stages` after Hydra composition. Building-block
 configs (bases, robot/eef definitions, mixins, variable files) are skipped
 because they declare no stages.
 
-For each task it reports the task name, the objects it manipulates, the
-operations it performs, and a workflow generated from the ordered stages.
+For each task it reports the task name, the **operating subject** (the operator
+that performs the stages and the robot model it is embodied as), the objects it
+manipulates, the operations it performs, and a workflow generated from the
+ordered stages.
 
 ```bash
 aao-info                    # list every runnable task
@@ -87,7 +89,8 @@ aao-info pick_and_place     # a single config by exact name
 aao-info 'open_door*'       # glob over config names (quote so the shell doesn't expand it)
 aao-info -o press           # only tasks that press something
 aao-info --object cup       # only tasks involving a "cup" object
-aao-info -o pick -s pick_and_place   # combine filters (AND across categories)
+aao-info -r airbot          # only tasks running on an airbot robot
+aao-info -o pick -r p7      # combine filters (AND across categories)
 aao-info --json             # machine-readable output
 aao-info --verbose          # also report configs skipped as non-tasks
 ```
@@ -100,6 +103,7 @@ aao-info --verbose          # also report configs skipped as non-tasks
 | `-o, --operation OP` | Keep tasks that use operation `OP` (repeatable, or comma-separated: `-o pick,place`) |
 | `-b, --object OBJ` | Keep tasks referencing an object whose name contains `OBJ` (case-insensitive substring) |
 | `-s, --scene GLOB` | Keep tasks whose `scene_name` matches the glob |
+| `-r, --robot MODEL` | Keep tasks whose robot model contains `MODEL` (case-insensitive substring) |
 | `--json` | Emit a JSON array instead of the readable text report |
 | `--config-dir DIR` | Config directory (default: `./aao_configs`) |
 | `--verbose` | Print configs skipped as non-tasks or on composition errors (to stderr) |
@@ -119,9 +123,10 @@ matched before composition, so filtering by name is cheap.
 Example output:
 
 ```
-Runnable tasks (39):
+Runnable tasks (40):
 
 press_three_buttons
+  operators:  arm (robotiq)
   objects:    button_blue, button_green, button_pink
   operations: press
   workflow:
@@ -129,6 +134,15 @@ press_three_buttons
     2. press button_green [press_green]
     3. press button_pink [press_pink]
 ```
+
+The **operating subject** comes from the task's operators (the `operator` a
+stage runs on, plus any declared in `task_operators` / `env.operators`), each
+annotated with its robot model — the `env.robot_paths` XML stem (e.g.
+`robotiq`, `airbot_play_with_g2p`). The model is shown inline when the scene
+loads a single robot; when the scene loads several (or none, e.g. the mock
+backend), a separate `robots:` line lists them and the inline model is omitted.
+In `--json` output these are the `operators` (list of `{name, model}`) and
+`robots` fields.
 
 Objects and operations are cross-checked: the report prefers the declared
 `env.mask_objects` / `env.operations`, and adds a `note:` line when they differ
