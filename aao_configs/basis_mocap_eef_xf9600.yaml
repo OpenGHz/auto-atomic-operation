@@ -1,5 +1,6 @@
 defaults:
   - basis
+  - _self_
 
 env:
   # Inject the XF9600 mocap gripper into every task that inherits this base.

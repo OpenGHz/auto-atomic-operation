@@ -1,5 +1,6 @@
 defaults:
   - basis
+  - _self_
 
 env:
   # Inject the umi_gripper_v3 mocap into every task that inherits this base.

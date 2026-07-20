@@ -4,6 +4,7 @@
 
 defaults:
   - basis
+  - _self_
 
 env:
   # Home pose at reset; mirrors the qpos from the <keyframe name="home"> in

@@ -1,6 +1,7 @@
 defaults:
   - robotiq_gs
   - gs_mixin
+  - _self_
 
 env:
   viewer:

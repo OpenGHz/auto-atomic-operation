@@ -1,5 +1,6 @@
 defaults:
   - basis
+  - _self_
 
 env:
   # Inject the Robotiq 2F-85 mocap gripper into every task that inherits this
