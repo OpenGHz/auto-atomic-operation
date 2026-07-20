@@ -17,6 +17,7 @@
   - [Mesh Density & Gravity](/mujoco-backend/mesh_density_gravity_issue.md)
   - [Gripper Joint Semantics](/mujoco-backend/gripper_joint_semantics.md)
   - [EEF Mapper (Finger Distance)](/mujoco-backend/eef_mapper.md)
+  - [Grasp Contact Stability (condim)](/mujoco-backend/grasp_contact_stability.md)
   - [Joint State Observation](/mujoco-backend/joint_state_observation.md)
   - [Pose Observation](/mujoco-backend/pose_observation.md)
   - [Tactile Prefix Binding](/mujoco-backend/tactile_prefix_binding.md)
