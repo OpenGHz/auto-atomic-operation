@@ -73,6 +73,26 @@ class PoseOffset(BaseModel, frozen=True):
     euler, radians).  Default is identity."""
 
 
+class TransformDefault(BaseModel, frozen=True):
+    """Fallback ``T_parent->child`` transform for a :class:`TransformResetConfig`.
+
+    Used when the rule's ``topic`` is absent from the recording (e.g. a newer
+    Foxglove capture that doesn't record the base->handle transform).  The
+    values have the same meaning as the recorded ``geometry_msgs/TransformStamped``
+    would: translation of the child origin expressed in the parent frame, plus
+    the child-in-parent rotation.
+    """
+
+    model_config = ConfigDict(validate_assignment=True, extra="forbid")
+
+    translation: List[float] = Field(default_factory=lambda: [0.0, 0.0, 0.0])
+    """Translation (x, y, z) of the child origin in the parent frame."""
+    rotation: List[float] = Field(default_factory=lambda: [0.0, 0.0, 0.0, 1.0])
+    """Child-in-parent rotation. Accepts 4 floats (xyzw quaternion) or 3 floats
+    (intrinsic XYZ euler, radians).  Only used when ``use_orientation`` is True;
+    otherwise the movable entity keeps its current orientation."""
+
+
 class TransformResetConfig(BaseModel, frozen=True):
     """Generic scene-reset rule driven by a recorded ``TransformStamped``.
 
@@ -120,6 +140,14 @@ class TransformResetConfig(BaseModel, frozen=True):
     offset: PoseOffset = Field(default_factory=PoseOffset)
     """Post-hoc calibration offset applied to the computed movable-side
     pose.  Default is identity (no adjustment)."""
+    default: Optional[TransformDefault] = None
+    """Fallback transform used when ``topic`` is absent from the recording.
+
+    If ``None`` (default) and the topic is missing, the reset is skipped with a
+    warning.  If set, its ``translation``/``rotation`` are used in place of the
+    recorded transform, so the reset still runs against recordings that don't
+    carry this topic (e.g. Foxglove captures).  The ``offset`` above is still
+    applied on top of the resulting pose."""
 
 
 class JointClipBounds(BaseModel, frozen=True):
@@ -1857,6 +1885,37 @@ def _resolve_pose_offset(offset: "PoseOffset") -> tuple[np.ndarray, np.ndarray]:
     return pos, quat
 
 
+def _resolve_transform_default(
+    default: "TransformDefault",
+) -> tuple[np.ndarray, np.ndarray]:
+    """Convert a :class:`TransformDefault` into ``(translation (3,), quat xyzw (4,))``.
+
+    Mirrors the ``(translation, rotation)`` a recorded ``TransformStamped`` would
+    yield. ``rotation`` accepts 4-element (xyzw quat) or 3-element (intrinsic XYZ
+    euler radians) lists.
+    """
+    from auto_atom.utils.pose import euler_to_quaternion
+
+    translation = np.asarray(default.translation, dtype=np.float32)
+    if translation.shape != (3,):
+        raise ValueError(
+            f"TransformDefault.translation must be 3 floats, got {default.translation!r}"
+        )
+    rot = list(default.rotation)
+    if len(rot) == 4:
+        rotation = np.asarray(rot, dtype=np.float32)
+    elif len(rot) == 3:
+        rotation = np.asarray(
+            euler_to_quaternion((rot[0], rot[1], rot[2])), dtype=np.float32
+        )
+    else:
+        raise ValueError(
+            f"TransformDefault.rotation must be 3 (euler) or 4 (xyzw quat) floats, "
+            f"got {default.rotation!r}"
+        )
+    return translation, rotation
+
+
 def _apply_transform_resets(
     evaluator: PolicyEvaluator,
     replay_cfg: "DataReplayConfig",
@@ -1883,22 +1942,34 @@ def _apply_transform_resets(
         )
     env = context.backend.env
 
-    # Skip rules whose topic is absent from the recording (e.g. a legacy
-    # base->handle transform config replayed against a newer Foxglove capture
-    # that doesn't record it) instead of failing the whole replay.
+    # Rules whose topic is absent from the recording fall back to their
+    # configured ``default`` transform when set, or are skipped with a warning
+    # otherwise (instead of failing the whole replay).
     available_topics = set(_read_mcap_channel_meta(mcap_path))
 
     for tr in replay_cfg.transform_resets:
-        if tr.topic not in available_topics:
+        if tr.topic in available_topics:
+            t_pc, q_pc, selected_index = _load_mcap_transform_for_reset(mcap_path, tr)
+        elif tr.default is not None:
+            t_pc, q_pc = _resolve_transform_default(tr.default)
+            selected_index = -1
+            logger.info(
+                "[transform_reset] topic %r not found in %s; using configured "
+                "default transform (translation=%s, rotation=%s).",
+                tr.topic,
+                mcap_path,
+                t_pc.tolist(),
+                q_pc.tolist(),
+            )
+        else:
             logger.warning(
-                "[transform_reset] topic %r not found in %s; skipping this reset "
-                "(available topics: %d).",
+                "[transform_reset] topic %r not found in %s and no default "
+                "configured; skipping this reset (available topics: %d).",
                 tr.topic,
                 mcap_path,
                 len(available_topics),
             )
             continue
-        t_pc, q_pc, selected_index = _load_mcap_transform_for_reset(mcap_path, tr)
         p_wp, q_wp = _query_entity_world(env, tr.parent)
         p_wc, q_wc = _query_entity_world(env, tr.child)
         # p_wp/q_wp and p_wc/q_wc are batched (B, 3) / (B, 4)
