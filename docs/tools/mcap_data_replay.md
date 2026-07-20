@@ -4,7 +4,14 @@
 driven by the `DataReplayRunner` class.  It supports two data sources:
 
 - **NPZ** demos recorded by `record_demo.py` (pose or ctrl mode)
-- **ROS2 MCAP** files captured from a real robot (joint mode)
+- **MCAP** files captured from a real robot (joint mode), in two auto-detected
+  formats:
+  - **Legacy ROS2 CDR** — `sensor_msgs/JointState` messages (`message_encoding="cdr"`)
+  - **Foxglove flatbuffer** — `foxglove.JointStates` messages
+    (`message_encoding="flatbuffer"`), e.g. `data/replay/george.mcap`
+
+The MCAP format is detected automatically from the channel schema; no flag is
+needed to select between them. See [MCAP Formats](#mcap-formats) below.
 
 ## Quick Start
 
@@ -17,6 +24,11 @@ python examples/replay_demo.py --config-name pick_and_place +replay.demo_name=my
 # ROS2 mcap replay (auto-selects joint mode)
 python examples/replay_demo.py --config-name pick_and_place \
     +replay.mcap_path=data/recording.mcap
+
+# Foxglove flatbuffer mcap replay — arm/gripper topics auto-resolve to the
+# airbot commanded /action/... joint_position streams
+python examples/replay_demo.py --config-name open_door_airbot_play_g2p \
+    +replay.mcap_path=data/replay/george.mcap
 
 # Custom topics
 python examples/replay_demo.py --config-name pick_and_place \
@@ -46,8 +58,8 @@ All replay settings live under the `replay` key in Hydra overrides
 | `demo_name`           | `str \| None`   | `None` (uses config name)              | NPZ file stem under `demo_dir` |
 | `demo_dir`            | `str \| None`   | `outputs/records/demos`                | Directory containing `.npz` demo files |
 | `mcap_path`           | `str \| None`   | `None`                                 | Path to a ROS2 `.mcap` file; enables joint-mode replay |
-| `arm_topic`           | `str`           | `/robot/right_arm/joint_state`         | ROS2 topic for arm joint states |
-| `gripper_topic`       | `str`           | `/robot/right_gripper/joint_state`     | ROS2 topic for gripper joint states |
+| `arm_topic`           | `str`           | `/robot/right_arm/joint_state`         | ROS2 topic for arm joint states. For Foxglove recordings, if this topic is absent the arm stream auto-resolves to the commanded `/action/airbot_play/arm/joint_position` topic (or any `/arm/` JointStates topic) |
+| `gripper_topic`       | `str`           | `/robot/right_gripper/joint_state`     | ROS2 topic for gripper joint states. For Foxglove recordings, if this topic is absent it auto-resolves to the commanded `/action/airbot_play/g2t/parallel_position` topic (or a parallel/g2t JointStates topic) |
 | `base_topic`          | `str \| None`   | `None`                                 | Optional ROS2 `geometry_msgs/PoseStamped` topic for the operator base pose in world frame |
 | `scene_joint_topic`   | `str \| None`   | `None`                                 | Optional ROS2 `sensor_msgs/JointState` topic for passive scene joints such as doors / handles |
 | `joint_name_mapping`  | `dict`          | `{"gripper": "eef_claw_joint"}`        | Maps mcap joint names to YAML actuator names |
@@ -57,6 +69,7 @@ All replay settings live under the `replay` key in Hydra overrides
 | `done_on_success`     | `bool`          | `false`                                | `true`: report `done=True` as soon as all stages succeed; `false` (default): keep playing back until all replay data is consumed |
 | `reset_from_first_frame` | `bool`       | `true`                                 | Apply the first recorded action as the post-reset initial state |
 | `steps_per_action`    | `int`           | `1`                                    | Physics steps per recorded action (set >1 for sub-stepping) |
+| `demo_stride`         | `int` (≥1)      | `1`                                    | Keep every `demo_stride`-th recorded frame at demo-load time (downsampling). `1` is a no-op; values >1 reduce replay actions — fewer sim steps and saved frames — at the cost of a coarser trajectory. The final frame is always retained so the success condition is preserved. Orthogonal to `steps_per_action`. |
 | `kinematic`           | `bool`          | `false`                                | `true`: write qpos directly (exact positions); `false`: drive actuators through physics |
 | `load_on_initialize`  | `bool`          | `true`                                 | If `true`, the demo NPZ / MCAP is loaded inside `DataReplayRunner.from_config()`. Set `false` when constructing the runner before the demo source is known and you intend to call `set_demo_path(..., load=True)` later. |
 
@@ -69,11 +82,45 @@ All replay settings live under the `replay` key in Hydra overrides
 | `save_mp4`  | `false`     | Save an MP4 of the replay |
 | `fps`       | `25`        | Video frame rate |
 | `gif_width` | `320`       | GIF output width in pixels |
+| `use_input` | `false`     | Pause after each replay step and wait for the user to press Enter before continuing (interactive step-through) |
 
 Videos are saved to `outputs/records/videos/`. Batched replays write one file
 per environment, and multi-camera captures write one file per environment/camera
 pair, for example `<demo_name>_env0_env2_cam_replay.mp4` and
 `<demo_name>_env1_eef_wrist_cam_replay.mp4`.
+
+## MCAP Formats
+
+`DataReplayRunner` auto-detects the MCAP format from the channel schema, so the
+same `mcap_path` override works for both:
+
+| Format | Encoding | Joint schema | Example |
+|--------|----------|--------------|---------|
+| Legacy ROS2 CDR | `cdr` | `sensor_msgs/JointState` | `data/replay_old/open-door.mcap` |
+| Foxglove flatbuffer | `flatbuffer` | `foxglove.JointStates` | `data/replay/george.mcap` |
+
+**Legacy ROS2 CDR** messages are decoded through the generated ROS2 message
+support. The default `arm_topic` / `gripper_topic` (`/robot/right_arm/joint_state`,
+`/robot/right_gripper/joint_state`) match these recordings.
+
+**Foxglove flatbuffer** recordings have no generated decoder, so joint states and
+poses are decoded directly from the flatbuffer tables. When the configured
+`arm_topic` / `gripper_topic` are absent (which they are for airbot captures like
+`george.mcap`), the streams auto-resolve to the **commanded** action topics:
+
+- arm → `/action/airbot_play/arm/joint_position`
+- gripper → `/action/airbot_play/g2t/parallel_position`
+
+The `/action/` (command) stream is used rather than `/observation/` (measured
+state) on purpose: in position-controlled replay the actuator force is roughly
+`kp · (commanded − achieved)`, so replaying the command reproduces the contact
+and grasp forces (door push, gripper closing past the handle). Replaying the
+measured state — which has already absorbed that compliance — would yield near-zero
+tracking error and lose the interaction force. Foxglove joint streams are
+canonicalized by position (arm topic → `arm_actuators`, gripper topic →
+`eef_actuators`) using the operator's actuator names, so `joint_name_mapping`
+becomes an identity mapping. An explicit `+replay.arm_topic=...` override is still
+honoured.
 
 ## MCAP Replay Pipeline
 
@@ -82,7 +129,8 @@ steps before the simulation starts:
 
 ### 1. Load and align joints
 
-Joint positions are read from the arm and gripper ROS2 topics.  If the arm
+Joint positions are read from the arm and gripper topics of whichever MCAP
+format was detected (see [MCAP Formats](#mcap-formats)).  If the arm
 and gripper publish at different rates, gripper samples are aligned to arm
 timestamps via nearest-neighbour interpolation.
 
@@ -207,10 +255,40 @@ Fields:
 | `jump_orientation_threshold` | `float`                          | `0.10`       | Radians; for `first_jump`, triggers on orientation delta above this threshold |
 | `use_orientation` | `bool`                                       | `false`      | `false`: keep movable entity's current world orientation, only adjust translation. `true`: compose the full transform |
 | `offset`          | `PoseOffset`                                 | identity     | Post-hoc calibration: `position` is in the movable entity's local frame; `orientation` right-multiplies the computed rotation (xyzw or euler rpy) |
+| `default`         | `TransformDefault \| None`                   | `None`       | Fallback `T_parent->child` used when `topic` is absent from the recording. See "Missing topic behavior" below |
 
 `operator_base` as a side refers to the operator's base frame and uses
 `override_operator_base_pose` under the hood so mocap and joint-mode
 operators behave consistently.
+
+#### Missing topic behavior
+
+If a rule's `topic` is not present in the MCAP (e.g. a Foxglove capture that
+doesn't record the base->handle transform):
+
+- **`default` is `None`** (default): the reset is **skipped with a warning** —
+  replay never errors on a missing transform topic.
+- **`default` is set**: its `translation` / `rotation` are used in place of the
+  recorded transform, so the reset still runs against recordings that don't
+  carry the topic. The rule's `offset` still applies on top.
+
+`TransformDefault` fields:
+
+| Field         | Type          | Default             | Description |
+|---------------|---------------|---------------------|-------------|
+| `translation` | `list[float]` | `[0, 0, 0]`         | Translation (x, y, z) of the child origin in the parent frame |
+| `rotation`    | `list[float]` | `[0, 0, 0, 1]`      | Child-in-parent rotation: 4 floats (xyzw quat) or 3 floats (intrinsic XYZ euler, radians). Only used when `use_orientation: true` |
+
+```yaml
+replay:
+  transform_resets:
+    - topic: /robot/right_arm/base_handle/transform   # absent in george.mcap
+      parent: { kind: operator_base, name: base }
+      child:  { kind: site, name: handle_grasp_back_site }
+      move: parent
+      default:
+        translation: [0.416, -0.0195, 0.2534]         # used since topic is missing
+```
 
 Selector behavior:
 
@@ -240,6 +318,15 @@ See [Scene Initialization & Randomization](../task-configuration/randomization.m
 
 Task randomization is automatically disabled (`task.randomization = {}`) to
 ensure exact trajectory reproduction.
+
+### 10. Optional frame downsampling
+
+If `demo_stride > 1`, the loaded demo is subsampled to every `demo_stride`-th
+frame (the last frame is always kept so the success condition still fires).
+This reduces the number of replay actions — and therefore both simulation
+steps and saved video frames — at the cost of a coarser trajectory. It is
+orthogonal to `steps_per_action`, which instead repeats each action for
+sub-stepping.
 
 ## DataReplayRunner API
 
