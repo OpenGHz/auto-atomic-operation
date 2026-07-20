@@ -3,6 +3,7 @@
   - [CLI Reference](/getting-started/cli_reference.md)
 
 - **Task Configuration**
+  - [Reusing & Creating Tasks](/task-configuration/reusing_and_creating_tasks.md)
   - [Action Space](/task-configuration/action_space.md)
   - [Scene Composition](/task-configuration/scene_composition.md)
   - [Randomization](/task-configuration/randomization.md)
