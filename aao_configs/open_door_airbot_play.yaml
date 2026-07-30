@@ -1,0 +1,7 @@
+# Alias for open_door_airbot_play_g2p — the non-GS, physics-only AirBot Play
+# open-door scene.  Used by the collect-aao pipeline when
+# managers/auto_atom/task=open_door_airbot_play so that the task group name
+# and the aao_configs name stay in sync (basis.yaml requires both to exist).
+defaults:
+  - open_door_airbot_play_g2p
+  - _self_

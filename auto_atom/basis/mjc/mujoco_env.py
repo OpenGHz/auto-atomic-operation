@@ -1429,7 +1429,7 @@ class UnifiedMujocoEnv(MujocoBasis):
                         "t": t,
                     }
                     obs[kc.apply_prefix(f"{op.name}/pose/rotation_6d")] = {
-                        "data": rot9d[:6],
+                        "data": rot9d.reshape(3, 3).T.ravel()[:6],  # column-major: first 2 columns
                         "t": t,
                     }
 

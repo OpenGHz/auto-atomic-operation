@@ -6,14 +6,31 @@ scene_name: open_door
 task_name: open_door
 
 env:
-  # Task-specific arm home — gripper facing the door handle. Shifted for the
-  # consolidated demo.xml: door frame is at world (1.54, 0.1, -1.0) vs the
-  # legacy robotiq scene's (1.49, 0.1, 0.0), so the arm home moves +0.05 x
-  # and -1.0 z to keep the same relative pose to the handle.
+  # Task-specific arm home — gripper horizontal, pointing +X (fingers toward the
+  # door, body/wrist toward the robot). The robotiq palm/wrist sits ~0.14m BEHIND
+  # the fingertips, so pointing +X keeps the bulky body clear of both the lever
+  # and the door panel (only ~8cm apart) while the fingers reach in to clamp the
+  # lever bar vertically (jaw along world Z, straddling the bar top/bottom).
+  # NOTE: for the mocap gripper this value is the *mocap target*; the TCP/pads
+  # land ~0.34m ahead of it, so this freejoint pose was calibrated so the open
+  # finger pads sit ~5.5cm in front of the bar (a clean pre-grasp) with the palm
+  # back at x~1.27 (clear of the 1.46 bar and 1.52 panel).
   initial_joint_positions:
-    robotiq_freejoint: [1.285, 0.3155, -0.195, 0.5, 0.5, -0.5, -0.5]
+    robotiq_freejoint: [1.057, 0.436, -0.367, -0.5, -0.5, 0.5, 0.5]
   mask_objects: ["handle_lever_body", "handle_body_phys"]
-  operations: ["pick", "push"]
+  operations: ["push"]
+  # Door latch: keeps door_hinge spring-locked near zero until the handle is
+  # pressed past unlock_threshold. Without this the door swings freely the
+  # instant the gripper touches it, so the handle never gets pressed and the
+  # approach just bulldozes the (unlatched) door.
+  pre_step_callbacks:
+    - _target_: auto_atom.callbacks.door_latch.DoorLatchCallback
+      door_joint: door_hinge
+      handle_joint: handle_hinge
+      kp: 80.0
+      kd: 8.0
+      unlock_threshold: 0.12
+      lock_zone: 0.05
   viewer:
     lookat: [1.45, 0.12, 0.8]
     distance: 1.2
@@ -23,56 +40,73 @@ env:
     hold_seconds: 1.0
 
 task:
+  randomization:
+    arm:
+      eef:
+        x: [-0.02, 0.02]
+        y: [-0.02, 0.02]
+        z: [-0.02, 0.02]
+        roll: [-0.0873, 0.0873]
+        pitch: [-0.0873, 0.0873]
+        yaw: [-0.0873, 0.0873]
   stages:
-    - name: rotate_handle
-      object: handle_lever_body
-      operation: pick
-      operator: arm
-      param:
-        pre_move:
-          - position: [0.095, 0.106, 0.0]
-            reference: object
-            max_linear_step: 0.02
-            max_angular_step: 0.25
-          - position: [0.095, 0.055, 0.0]
-            reference: object
-            max_linear_step: 0.01
-            max_angular_step: 0.2
-        eef:
-          close: true
-        post_move:
-          - arc:
-              pivot: handle_hinge
-              axis: [0, 1, 0]
-              angle: 0.45
-              absolute: true
-              max_step: 0.03
-            reference: world
-    - name: push_open
+    # One continuous push: press the lever down to unlock, then swing the door
+    # open. The success object is handle_body_phys (rides on the door panel), so
+    # the door's translation satisfies the "pushed" displacement check — the
+    # lever only rotates in place, which a displacement check would reject.
+    - name: open_door
       object: handle_body_phys
       operation: push
       operator: arm
       param:
         pre_move:
-          - position: [0.0, 0.0, 0.0]
+          # 0. Re-home in front of the lever bar with the open finger pads
+          #    straddling it in Z (~5.5cm in front). The mocap reset settles to a
+          #    slightly different pose per batch env, so drive to an explicit
+          #    object-referenced point (world axes) to converge every env.
+          - position: [-0.13, 0.079, 0.0]
+            reference: object_world
+            max_linear_step: 0.1
+            max_angular_step: 0.3
+          # 1. Advance +X so the bar enters the jaw (between the top/bottom pads).
+          - position: [0.06, 0.0, 0.0]
             reference: eef_world
-            max_linear_step: 0.01
-            max_angular_step: 0.15
+            max_linear_step: 0.1
+            max_angular_step: 0.25
+        eef:
+          close: true
         post_move:
+          # 2. Press the lever down to unlock. handle_hinge's local Y axis maps
+          #    to world -X (door frame is rotated +90deg about Z), so the arc
+          #    axis is world [-1,0,0]; a positive target angle presses the lever
+          #    down past the latch's unlock_threshold. max_step 0.15 keeps each
+          #    arc sub-step (>~0.014m) above the 0.01m tolerance so it moves.
           - arc:
               pivot: handle_hinge
-              axis: [0, 1, 0]
-              angle: 0.55
+              axis: [-1, 0, 0]
+              angle: 0.45
               absolute: true
-              max_step: 0.03
+              max_step: 0.15
             reference: world
+          # 3. Swing the door open by sweeping the gripper +0.9rad around the
+          #    door_hinge (world +Z). RELATIVE (not absolute) on purpose: a
+          #    snapshot-based arc rotates the gripper from its pose at action
+          #    start by the cumulative angle, so the orientation target stays a
+          #    clean horizontal Z-sweep. An absolute arc instead re-references
+          #    the live (contact-deflected) pose every tick, so when the door
+          #    momentarily stalls on its high frictionloss (5.0) the grip twists
+          #    the gripper and it accumulates into the wrist flipping to point
+          #    straight up. The per-waypoint tolerance lets the sweep finish when
+          #    the door stalls a hair short of the full angle.
           - arc:
               pivot: door_hinge
-              axis: [0, 0, -1]
-              angle: -1.2
-              absolute: true
-              max_step: 0.04
+              axis: [0, 0, 1]
+              angle: 0.9
+              max_step: 0.2
             reference: world
+            tolerance:
+              position: 0.06
+              orientation: 0.12
 
 operators:
   - name: arm
