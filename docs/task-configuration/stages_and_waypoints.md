@@ -1,8 +1,10 @@
 # Stages & Waypoints
 
-This page documents three less-obvious fields on stage / waypoint
+This page documents four less-obvious fields on task / stage / waypoint
 configuration that are easy to miss but frequently needed:
 
+- `AutoAtomConfig.start_after` — reconstruct an earlier task prefix during
+  reset and begin rollout after a selected YAML waypoint.
 - `StageConfig.site` — re-base `object_world` / `object` references onto a
   site or geometry instead of the stage object's body origin.
 - `PoseControlConfig.static` — freeze a tracking reference at the first
@@ -10,6 +12,54 @@ configuration that are easy to miss but frequently needed:
 - `StageControlConfig.displacement_threshold` — per-stage override of the
   distance an object must move before the `displaced` post-condition is
   satisfied.
+
+## Reset after a waypoint
+
+`task.start_after` turns a complete task definition into a suffix-only demo
+without duplicating the skipped stages or hard-coding an initial grasp pose.
+For example, this configuration reconstructs `pick_source` during reset and
+starts the visible rollout at `place_source`:
+
+```yaml
+task:
+  start_after:
+    stage: pick_source
+    phase: post_move
+    waypoint: 0
+```
+
+The selector uses a unique stage name, `pre_move` or `post_move`, and a
+zero-based index into that YAML waypoint list. The selected waypoint is
+already complete when `reset()` returns; rollout continues with the next
+primitive action. An arc still counts as one YAML waypoint even when it is
+expanded into multiple internal control actions.
+
+Reset replay uses the normal task semantics:
+
+- scene, operator, camera, and waypoint randomization are applied first;
+- waypoint randomization uses a deterministic stream keyed by task seed,
+  environment, reset episode, and stage, so normal execution and reset replay
+  resolve the same waypoint regardless of batch execution order;
+- waypoint references (`world`, `base`, `object_world`, `eef_world`, etc.)
+  are resolved through the same runtime path as a normal rollout;
+- EEF and already-grasped objects are teleported while preserving each
+  object's full EEF-relative SE(3) pose;
+- gripper close/open commands use the normal controller and settle logic, so
+  a skipped pick must establish a real backend grasp rather than a logical
+  attachment;
+- skipped stages do not emit execution records and are excluded from the
+  current rollout's `total_stages` summary.
+
+Only pose waypoints can be selected. To begin after a close action, select a
+following pose waypoint. Backends that opt into this feature must implement
+kinematic EEF teleportation and mutable object poses; configurations without
+`start_after` do not require those capabilities.
+
+Runnable example:
+
+```bash
+aao-demo --config-name pick_and_place_place_only
+```
 
 ## Stage reference site
 

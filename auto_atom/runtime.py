@@ -43,6 +43,8 @@ from .utils.pose import (
     rotate_pose_around_axis,
 )
 
+_RESET_EEF_SETTLE_MAX_UPDATES = 10_000
+
 
 class StageExecutionStatus(str, Enum):
     PENDING = "pending"
@@ -145,6 +147,17 @@ class OperatorHandler(ABC):
     ) -> None:
         raise NotImplementedError
 
+    def teleport_end_effector(
+        self,
+        pose: PoseState,
+        target: Optional[ObjectHandler] = None,  # noqa: ARG002
+        env_mask: Optional[np.ndarray] = None,  # noqa: ARG002
+    ) -> None:
+        """Kinematically set the world-frame end-effector pose for reset replay."""
+        raise NotImplementedError(
+            f"Operator '{self.name}' does not support end-effector teleportation."
+        )
+
 
 @runtime_checkable
 class EnvProtocol(Protocol):
@@ -214,6 +227,21 @@ class SceneBackend(ABC):
     def is_operator_grasping(self, operator_name: str) -> np.ndarray:
         """Return whether the operator is currently grasping any object."""
 
+    def get_grasped_object_names(
+        self,
+        operator_name: str,
+        env_index: int = 0,
+    ) -> List[str]:
+        """Return task object names physically grasped by an operator."""
+        handlers = getattr(self, "object_handlers", None)
+        if not isinstance(handlers, dict):
+            return []
+        return [
+            name
+            for name in handlers
+            if bool(self.is_object_grasped(operator_name, name)[env_index])
+        ]
+
     @property
     def dt_per_update(self) -> float:
         """Simulation time advanced per update() call, in seconds.
@@ -266,6 +294,10 @@ class SceneBackend(ABC):
     ) -> None:
         """Notify the backend about the current task-focus objects and operations."""
 
+    def refresh(self) -> None:
+        """Refresh backend visualization after reset-time state edits."""
+        return None
+
 
 @dataclass
 class ArcExecutionSnapshot:
@@ -281,6 +313,9 @@ class PrimitiveAction:
     resolved_pose: Optional[PoseControlConfig] = None
     arc_snapshot: Optional[ArcExecutionSnapshot] = None
     arc_cumulative_angle: Optional[float] = None
+    source_phase: Optional[str] = None
+    source_waypoint: Optional[int] = None
+    source_waypoint_end: bool = False
 
 
 @dataclass
@@ -360,9 +395,16 @@ class ActiveStageState:
 
 
 @dataclass
+class ResetReplayResult:
+    state: "_EnvRuntimeState"
+    details: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
 class _EnvRuntimeState:
     stage_cursor: int = 0
     active: Optional[ActiveStageState] = None
+    episode_index: int = -1
     done: bool = False
     success: bool = False
     phase: Optional[str] = None
@@ -435,24 +477,18 @@ class TaskFlowBuilder:
             actions, last_orientation = TaskFlowBuilder._build_pose_actions(
                 TaskFlowBuilder._require_moves(stage, control, "pre_move"),
                 last_orientation,
+                phase="pre_move",
             )
         else:
             actions, last_orientation = TaskFlowBuilder._build_pose_actions(
-                control.pre_move, last_orientation
+                control.pre_move, last_orientation, phase="pre_move"
             )
 
-        if stage.operation == Operation.GRASP:
-            actions.append(
-                PrimitiveAction(kind="eef", eef=TaskFlowBuilder._grasp_eef(control))
-            )
-        elif stage.operation == Operation.RELEASE:
-            actions.append(
-                PrimitiveAction(kind="eef", eef=TaskFlowBuilder._release_eef(control))
-            )
-        elif stage.operation in {Operation.PICK, Operation.PULL}:
-            actions.append(
-                PrimitiveAction(kind="eef", eef=TaskFlowBuilder._grasp_eef(control))
-            )
+        eef_action = TaskFlowBuilder._build_eef_action(stage, control)
+        if eef_action is not None:
+            actions.append(eef_action)
+
+        if stage.operation in {Operation.PICK, Operation.PULL}:
             for i, pm in enumerate(control.post_move):
                 if pm.reference == PoseReference.OBJECT_WORLD or (
                     pm.reference == PoseReference.AUTO and stage.object
@@ -463,24 +499,20 @@ class TaskFlowBuilder:
                         f"After a pick/pull, the grasped object moves with the EEF, causing "
                         f"a runaway feedback loop. Use 'eef_world' instead."
                     )
-        elif stage.operation == Operation.PLACE:
-            actions.append(
-                PrimitiveAction(kind="eef", eef=TaskFlowBuilder._release_eef(control))
-            )
-        elif stage.operation == Operation.PRESS:
-            actions.append(
-                PrimitiveAction(kind="eef", eef=TaskFlowBuilder._grasp_eef(control))
-            )
-        elif stage.operation == Operation.PUSH:
-            if control.eef is not None:
-                actions.append(PrimitiveAction(kind="eef", eef=control.eef))
-        elif stage.operation != Operation.MOVE:
+        elif stage.operation not in {
+            Operation.GRASP,
+            Operation.RELEASE,
+            Operation.PLACE,
+            Operation.PRESS,
+            Operation.PUSH,
+            Operation.MOVE,
+        }:
             raise NotImplementedError(
                 f"Unsupported operation '{stage.operation.value}'."
             )
 
         post_actions, last_orientation = TaskFlowBuilder._build_pose_actions(
-            control.post_move, last_orientation
+            control.post_move, last_orientation, phase="post_move"
         )
         actions.extend(post_actions)
         return actions, last_orientation
@@ -499,12 +531,36 @@ class TaskFlowBuilder:
         )
 
     @staticmethod
+    def _build_eef_action(
+        stage: StageConfig,
+        control: StageControlConfig,
+    ) -> Optional[PrimitiveAction]:
+        if stage.operation in {
+            Operation.GRASP,
+            Operation.PICK,
+            Operation.PULL,
+            Operation.PRESS,
+        }:
+            eef = TaskFlowBuilder._grasp_eef(control)
+        elif stage.operation in {Operation.RELEASE, Operation.PLACE}:
+            eef = TaskFlowBuilder._release_eef(control)
+        elif stage.operation == Operation.PUSH:
+            eef = control.eef
+        else:
+            eef = None
+        if eef is None:
+            return None
+        return PrimitiveAction(kind="eef", eef=eef, source_phase="eef")
+
+    @staticmethod
     def _build_pose_actions(
         poses: List[PoseControlConfig],
         last_orientation: Optional[Orientation] = None,
+        *,
+        phase: Optional[str] = None,
     ) -> tuple[List[PrimitiveAction], Optional[Orientation]]:
         actions: List[PrimitiveAction] = []
-        for pose in poses:
+        for waypoint_index, pose in enumerate(poses):
             effective_pose = pose
             if pose.orientation:
                 last_orientation = pose.orientation
@@ -519,25 +575,34 @@ class TaskFlowBuilder:
 
             if effective_pose.arc is not None:
                 sub_poses = TaskFlowBuilder._split_arc(effective_pose)
-                if effective_pose.arc.absolute:
-                    for sp in sub_poses:
-                        actions.append(PrimitiveAction(kind="pose", pose=sp))
-                else:
-                    arc_snapshot = ArcExecutionSnapshot()
-                    cumulative_angle = 0.0
-                    for sp in sub_poses:
-                        assert sp.arc is not None
-                        cumulative_angle += sp.arc.angle
-                        actions.append(
-                            PrimitiveAction(
-                                kind="pose",
-                                pose=sp,
-                                arc_snapshot=arc_snapshot,
-                                arc_cumulative_angle=cumulative_angle,
-                            )
+                relative_arc = not effective_pose.arc.absolute
+                arc_snapshot = ArcExecutionSnapshot() if relative_arc else None
+                cumulative_angle: Optional[float] = 0.0 if relative_arc else None
+                for sub_index, sub_pose in enumerate(sub_poses):
+                    if cumulative_angle is not None:
+                        assert sub_pose.arc is not None
+                        cumulative_angle += sub_pose.arc.angle
+                    actions.append(
+                        PrimitiveAction(
+                            kind="pose",
+                            pose=sub_pose,
+                            arc_snapshot=arc_snapshot,
+                            arc_cumulative_angle=cumulative_angle,
+                            source_phase=phase,
+                            source_waypoint=waypoint_index,
+                            source_waypoint_end=sub_index == len(sub_poses) - 1,
                         )
+                    )
             else:
-                actions.append(PrimitiveAction(kind="pose", pose=effective_pose))
+                actions.append(
+                    PrimitiveAction(
+                        kind="pose",
+                        pose=effective_pose,
+                        source_phase=phase,
+                        source_waypoint=waypoint_index,
+                        source_waypoint_end=True,
+                    )
+                )
         return actions, last_orientation
 
     @staticmethod
@@ -557,6 +622,7 @@ class TaskFlowBuilder:
                     angle=step_angle,
                 ),
                 reference=pose.reference,
+                tolerance=pose.tolerance,
             )
             for _ in range(n_steps)
         ]
@@ -593,6 +659,7 @@ class TaskRunner:
         self._records: List[ExecutionRecord] = []
         self._env_states: List[_EnvRuntimeState] = []
         self._has_reset: np.ndarray = np.zeros(0, dtype=bool)
+        self._execution_start_stage_index = 0
 
     @property
     def records(self) -> List[ExecutionRecord]:
@@ -610,7 +677,10 @@ class TaskRunner:
         return _build_execution_summary(
             update=update or self._build_task_update(),
             records=self._records,
-            total_stages=len(self._plan),
+            total_stages=max(
+                len(self._plan) - self._execution_start_stage_index,
+                0,
+            ),
             max_updates=max_updates,
             updates_used=updates_used,
             elapsed_time_sec=elapsed_time_sec,
@@ -640,6 +710,7 @@ class TaskRunner:
         self._env_states = [_EnvRuntimeState() for _ in range(backend.batch_size)]
         self._has_reset = np.zeros(backend.batch_size, dtype=bool)
         self._records = []
+        self._execution_start_stage_index = 0
         return self
 
     def reset(self, env_mask: Optional[np.ndarray] = None) -> TaskUpdate:
@@ -648,10 +719,17 @@ class TaskRunner:
         context.backend.reset(mask)
         for env_index, enabled in enumerate(mask):
             if enabled:
-                self._env_states[env_index] = _EnvRuntimeState()
-                self._env_states[
-                    env_index
-                ].latest_details = self._collect_reset_details(env_index, context)
+                reset_result = TaskRunner.initialize_reset_env(
+                    env_index=env_index,
+                    previous_state=self._env_states[env_index],
+                    context=context,
+                    plans=self._plan,
+                    builder=self.builder,
+                )
+                self._env_states[env_index] = reset_result.state
+                self._execution_start_stage_index = reset_result.state.stage_cursor
+        if context.config.start_after is not None:
+            context.backend.refresh()
         self._has_reset[mask] = True
         # self._set_interest_focus()
         return self._build_task_update()
@@ -680,6 +758,7 @@ class TaskRunner:
         self._records = []
         self._env_states = []
         self._has_reset = np.zeros(0, dtype=bool)
+        self._execution_start_stage_index = 0
 
     def _update_env(
         self,
@@ -714,7 +793,12 @@ class TaskRunner:
                 state.latest_status = StageExecutionStatus.FAILED
                 state.latest_details = failure
                 return
-            state.active = self._start_stage(env_index, context, plan)
+            state.active = self._start_stage(
+                env_index,
+                state.episode_index,
+                context,
+                plan,
+            )
             state.latest_status = StageExecutionStatus.RUNNING
 
         assert state.active is not None
@@ -775,37 +859,12 @@ class TaskRunner:
         if signal == ControlSignal.REACHED:
             completed_action = action
             active.action_index += 1
-            op = active.plan.stage.operation
-            mid_failure: Optional[Dict[str, Any]] = None
-            if completed_action.kind == "eef":
-                if op == Operation.PULL:
-                    mid_failure = self._check_stage_condition(
-                        env_index=env_index,
-                        context=context,
-                        plan=active.plan,
-                        condition_type=OperationConditionType.PERFORM,
-                        initial_pose=active.initial_object_pose,
-                    )
-                elif op == Operation.PICK and not bool(
-                    context.backend.is_operator_grasping(active.operator.name)[
-                        env_index
-                    ]
-                ):
-                    mid_failure = self._check_stage_condition(
-                        env_index=env_index,
-                        context=context,
-                        plan=active.plan,
-                        condition_type=OperationConditionType.SUCCESS,
-                        initial_pose=active.initial_object_pose,
-                    )
-                elif op == Operation.PRESS:
-                    mid_failure = self._check_stage_condition(
-                        env_index=env_index,
-                        context=context,
-                        plan=active.plan,
-                        condition_type=OperationConditionType.SUCCESS,
-                        initial_pose=active.initial_object_pose,
-                    )
+            mid_failure = self._mid_action_failure(
+                env_index=env_index,
+                context=context,
+                active=active,
+                completed_action=completed_action,
+            )
             if mid_failure is not None:
                 self._record_failure(env_index, active.plan, mid_failure)
                 state.active = None
@@ -827,33 +886,10 @@ class TaskRunner:
                 state.phase_step = phase_step
                 return
 
-            # Resolve target object pose for PLACED condition
-            target_object_pose: Optional[PoseState] = None
-            held_name: Optional[str] = active.held_object_name
-            if op == Operation.PLACE:
-                control = active.plan.stage.param
-                ref = getattr(control, "placed_reference", "object")
-                target_obj_name = active.plan.stage.object
-                if ref == "object" and target_obj_name:
-                    target_handler = context.backend.get_object_handler(target_obj_name)
-                    if target_handler is not None:
-                        target_object_pose = target_handler.get_pose().select(env_index)
-                else:
-                    target_object_pose = self._pre_move_end_pose(active)
-
-            success_failure = (
-                None
-                if op == Operation.PRESS
-                else self._check_stage_condition(
-                    env_index=env_index,
-                    context=context,
-                    plan=active.plan,
-                    condition_type=OperationConditionType.SUCCESS,
-                    initial_pose=active.initial_object_pose,
-                    completion_pose=self._completion_pose_from_active(active),
-                    target_object_pose=target_object_pose,
-                    held_object_name=held_name,
-                )
+            success_failure = self._stage_completion_failure(
+                env_index=env_index,
+                context=context,
+                active=active,
             )
             if success_failure is not None:
                 self._record_failure(env_index, active.plan, success_failure)
@@ -925,8 +961,25 @@ class TaskRunner:
     def _start_stage(
         self,
         env_index: int,
+        episode_index: int,
         context: ExecutionContext,
         plan: StageExecutionPlan,
+    ) -> ActiveStageState:
+        return self._create_active_stage(
+            env_index,
+            episode_index,
+            context,
+            plan,
+            self.builder,
+        )
+
+    @staticmethod
+    def _create_active_stage(
+        env_index: int,
+        episode_index: int,
+        context: ExecutionContext,
+        plan: StageExecutionPlan,
+        builder: TaskFlowBuilder,
     ) -> ActiveStageState:
         operator = context.backend.get_operator_handler(plan.operator_name)
         target = context.backend.get_object_handler(plan.stage.object)
@@ -935,10 +988,16 @@ class TaskRunner:
             initial_object_pose = target.get_pose().select(env_index)
         held_object_name: Optional[str] = None
         if plan.stage.operation == Operation.PLACE:
-            held_object_name = self._find_grasped_object(
+            held_object_name = TaskRunner._find_grasped_object(
                 context.backend, plan.operator_name, env_index
             )
-        actions = TaskRunner._build_stage_actions(plan, self.builder, context)
+        actions = TaskRunner._build_stage_actions(
+            plan,
+            builder,
+            context,
+            env_index=env_index,
+            episode_index=episode_index,
+        )
         return ActiveStageState(
             plan=plan,
             operator=operator,
@@ -953,16 +1012,432 @@ class TaskRunner:
         backend: SceneBackend, operator_name: str, env_index: int
     ) -> Optional[str]:
         """Return the name of the object currently grasped by the operator."""
-        handlers = getattr(backend, "object_handlers", {})
-        for name in handlers:
-            if backend.is_object_grasped(operator_name, name)[env_index]:
-                return name
+        names = backend.get_grasped_object_names(operator_name, env_index)
+        return names[0] if names else None
+
+    @staticmethod
+    def initialize_reset_env(
+        *,
+        env_index: int,
+        previous_state: _EnvRuntimeState,
+        context: ExecutionContext,
+        plans: List[StageExecutionPlan],
+        builder: TaskFlowBuilder,
+    ) -> ResetReplayResult:
+        """Create one env's runtime state after the backend has been reset."""
+        result = TaskRunner.fast_forward_reset_env(
+            env_index=env_index,
+            episode_index=previous_state.episode_index + 1,
+            context=context,
+            plans=plans,
+            builder=builder,
+        )
+        details = _collect_reset_details(env_index, context)
+        if result.details:
+            details["fast_forward"] = result.details
+        result.state.latest_details = details
+        return result
+
+    @staticmethod
+    def fast_forward_reset_env(
+        env_index: int,
+        episode_index: int,
+        context: ExecutionContext,
+        plans: List[StageExecutionPlan],
+        builder: TaskFlowBuilder,
+    ) -> ResetReplayResult:
+        selector = context.config.start_after
+        if selector is None:
+            return ResetReplayResult(
+                state=_EnvRuntimeState(episode_index=episode_index)
+            )
+
+        target_stage_index = next(
+            plan.stage_index
+            for plan in plans
+            if plan.stage.name == selector.stage
+        )
+        completed_stage_names: List[str] = []
+
+        for plan in plans[: target_stage_index + 1]:
+            failure = (
+                None
+                if plan.stage.operation == Operation.PULL
+                else _check_stage_condition(
+                    env_index=env_index,
+                    context=context,
+                    plan=plan,
+                    condition_type=OperationConditionType.PERFORM,
+                )
+            )
+            if failure is not None:
+                TaskRunner._raise_fast_forward_failure(plan, failure)
+
+            active = TaskRunner._create_active_stage(
+                env_index,
+                episode_index,
+                context,
+                plan,
+                builder,
+            )
+            reached_target = plan.stage_index == target_stage_index
+            target_action_index = (
+                TaskRunner._find_fast_forward_action_index(active.actions, context)
+                if reached_target
+                else None
+            )
+
+            replay_end = (
+                target_action_index
+                if target_action_index is not None
+                else len(active.actions) - 1
+            )
+            for action_index in range(replay_end + 1):
+                action = active.actions[action_index]
+                try:
+                    TaskRunner._fast_forward_action(
+                        env_index=env_index,
+                        context=context,
+                        active=active,
+                        action=action,
+                    )
+                except RuntimeError as exc:
+                    location = action.source_phase or action.kind
+                    if action.source_waypoint is not None:
+                        location += f"[{action.source_waypoint}]"
+                    raise RuntimeError(
+                        "start_after replay failed at "
+                        f"'{plan.stage_name}.{location}': {exc}"
+                    ) from exc
+                active.action_index = action_index + 1
+                mid_failure = TaskRunner._mid_action_failure(
+                    env_index=env_index,
+                    context=context,
+                    active=active,
+                    completed_action=action,
+                )
+                if mid_failure is not None:
+                    TaskRunner._raise_fast_forward_failure(plan, mid_failure)
+
+            if reached_target and active.action_index < len(active.actions):
+                next_action = active.actions[active.action_index]
+                state = _EnvRuntimeState(
+                    stage_cursor=plan.stage_index,
+                    active=active,
+                    episode_index=episode_index,
+                )
+                return ResetReplayResult(
+                    state=state,
+                    details=TaskRunner._fast_forward_details(
+                        context=context,
+                        env_index=env_index,
+                        completed_stage_names=completed_stage_names,
+                        resume_stage=plan.stage_name,
+                        resume_action=next_action,
+                    ),
+                )
+
+            completion_failure = TaskRunner._stage_completion_failure(
+                env_index=env_index,
+                context=context,
+                active=active,
+            )
+            if completion_failure is not None:
+                TaskRunner._raise_fast_forward_failure(plan, completion_failure)
+            completed_stage_names.append(plan.stage_name)
+
+            if reached_target:
+                next_cursor = plan.stage_index + 1
+                done = next_cursor >= len(plans)
+                state = _EnvRuntimeState(
+                    stage_cursor=next_cursor,
+                    episode_index=episode_index,
+                    done=done,
+                    success=done,
+                    latest_status=(
+                        StageExecutionStatus.SUCCEEDED
+                        if done
+                        else StageExecutionStatus.PENDING
+                    ),
+                )
+                resume_stage = (
+                    plans[next_cursor].stage_name if not done else ""
+                )
+                return ResetReplayResult(
+                    state=state,
+                    details=TaskRunner._fast_forward_details(
+                        context=context,
+                        env_index=env_index,
+                        completed_stage_names=completed_stage_names,
+                        resume_stage=resume_stage,
+                        resume_action=None,
+                    ),
+                )
+
+        raise RuntimeError("start_after replay ended without reaching its target")
+
+    @staticmethod
+    def _find_fast_forward_action_index(
+        actions: List[PrimitiveAction],
+        context: ExecutionContext,
+    ) -> int:
+        selector = context.config.start_after
+        assert selector is not None
+        for action_index, action in enumerate(actions):
+            if (
+                action.source_phase == selector.phase
+                and action.source_waypoint == selector.waypoint
+                and action.source_waypoint_end
+            ):
+                return action_index
+        raise RuntimeError(
+            "start_after target did not map to a primitive action: "
+            f"{selector.stage}.{selector.phase}[{selector.waypoint}]"
+        )
+
+    @staticmethod
+    def _raise_fast_forward_failure(
+        plan: StageExecutionPlan,
+        details: Dict[str, Any],
+    ) -> None:
+        reason = details.get("failure_reason", "unknown fast-forward failure")
+        raise RuntimeError(
+            f"start_after replay failed in stage '{plan.stage_name}': {reason}"
+        )
+
+    @staticmethod
+    def _fast_forward_details(
+        *,
+        context: ExecutionContext,
+        env_index: int,
+        completed_stage_names: List[str],
+        resume_stage: str,
+        resume_action: Optional[PrimitiveAction],
+    ) -> Dict[str, Any]:
+        selector = context.config.start_after
+        assert selector is not None
+        held_objects: Dict[str, List[str]] = {}
+        for plan in context.plan:
+            operator_name = plan.operator_name
+            if operator_name in held_objects:
+                continue
+            held_objects[operator_name] = context.backend.get_grasped_object_names(
+                operator_name, env_index
+            )
+        return {
+            "target": selector.model_dump(mode="json"),
+            "completed_stages": list(completed_stage_names),
+            "resume_stage": resume_stage,
+            "resume_phase": resume_action.source_phase if resume_action else None,
+            "resume_waypoint": (
+                resume_action.source_waypoint if resume_action else None
+            ),
+            "held_objects": held_objects,
+        }
+
+    @staticmethod
+    def _fast_forward_action(
+        *,
+        env_index: int,
+        context: ExecutionContext,
+        active: ActiveStageState,
+        action: PrimitiveAction,
+    ) -> None:
+        mask = np.zeros(context.backend.batch_size, dtype=bool)
+        mask[env_index] = True
+        if action.kind == "pose" and action.pose is not None:
+            TaskRunner._teleport_pose_action(
+                env_index=env_index,
+                context=context,
+                active=active,
+                action=action,
+                env_mask=mask,
+            )
+            return
+
+        if action.kind == "eef" and action.eef is not None:
+            TaskRunner._settle_eef_action(
+                env_index=env_index,
+                active=active,
+                action=action,
+                env_mask=mask,
+            )
+            return
+
+        raise RuntimeError(f"Invalid primitive action '{action.kind}'.")
+
+    @staticmethod
+    def _teleport_pose_action(
+        *,
+        env_index: int,
+        context: ExecutionContext,
+        active: ActiveStageState,
+        action: PrimitiveAction,
+        env_mask: np.ndarray,
+    ) -> None:
+        assert action.pose is not None
+        eef_before = active.operator.get_end_effector_pose().select(env_index)
+        eef_inverse = inverse_pose(eef_before)
+        held_relations: List[tuple[ObjectHandler, PoseState]] = []
+        for object_name in context.backend.get_grasped_object_names(
+            active.operator.name, env_index
+        ):
+            handler = context.backend.get_object_handler(object_name)
+            if handler is not None:
+                held_relations.append(
+                    (
+                        handler,
+                        compose_pose(
+                            eef_inverse,
+                            handler.get_pose().select(env_index),
+                        ),
+                    )
+                )
+        resolved = TaskRunner._resolve_pose_command(
+            env_index=env_index,
+            operator=active.operator,
+            pose=action.pose,
+            target=active.target,
+            backend=context.backend,
+            action=action,
+            reference_site=active.plan.stage.site,
+        )
+        action.resolved_pose = resolved
+        try:
+            active.operator.teleport_end_effector(
+                PoseState(
+                    position=resolved.position,
+                    orientation=resolved.orientation,
+                ),
+                target=active.target,
+                env_mask=env_mask,
+            )
+        except NotImplementedError as exc:
+            raise RuntimeError(
+                "task.start_after requires an operator backend that supports "
+                "kinematic end-effector teleportation"
+            ) from exc
+
+        eef_after = active.operator.get_end_effector_pose().select(env_index)
+        for handler, relation in held_relations:
+            try:
+                handler.set_pose(
+                    compose_pose(eef_after, relation), env_mask=env_mask
+                )
+            except NotImplementedError as exc:
+                raise RuntimeError(
+                    f"task.start_after requires mutable poses for grasped "
+                    f"object '{handler.name}'"
+                ) from exc
+            if not bool(
+                context.backend.is_object_grasped(
+                    active.operator.name, handler.name
+                )[env_index]
+            ):
+                raise RuntimeError(
+                    f"grasp on '{handler.name}' was lost while teleporting "
+                    f"stage '{active.plan.stage_name}'"
+                )
+
+    @staticmethod
+    def _settle_eef_action(
+        *,
+        env_index: int,
+        active: ActiveStageState,
+        action: PrimitiveAction,
+        env_mask: np.ndarray,
+    ) -> None:
+        assert action.eef is not None
+        for _ in range(_RESET_EEF_SETTLE_MAX_UPDATES):
+            result = active.operator.control_eef(action.eef, env_mask=env_mask)
+            signal = result.signals[env_index]
+            if signal == ControlSignal.REACHED:
+                return
+            if signal in {ControlSignal.TIMED_OUT, ControlSignal.FAILED}:
+                details = result.details[env_index]
+                raise RuntimeError(
+                    details.get(
+                        "failure_reason",
+                        f"end-effector action reported {signal.value}",
+                    )
+                )
+        raise RuntimeError("end-effector action exceeded reset replay safeguard")
+
+    @staticmethod
+    def _mid_action_failure(
+        *,
+        env_index: int,
+        context: ExecutionContext,
+        active: ActiveStageState,
+        completed_action: PrimitiveAction,
+    ) -> Optional[Dict[str, Any]]:
+        if completed_action.kind != "eef":
+            return None
+        operation = active.plan.stage.operation
+        if operation == Operation.PULL:
+            return _check_stage_condition(
+                env_index=env_index,
+                context=context,
+                plan=active.plan,
+                condition_type=OperationConditionType.PERFORM,
+                initial_pose=active.initial_object_pose,
+            )
+        if operation == Operation.PICK and not bool(
+            context.backend.is_operator_grasping(active.operator.name)[env_index]
+        ):
+            return _check_stage_condition(
+                env_index=env_index,
+                context=context,
+                plan=active.plan,
+                condition_type=OperationConditionType.SUCCESS,
+                initial_pose=active.initial_object_pose,
+            )
+        if operation == Operation.PRESS:
+            return _check_stage_condition(
+                env_index=env_index,
+                context=context,
+                plan=active.plan,
+                condition_type=OperationConditionType.SUCCESS,
+                initial_pose=active.initial_object_pose,
+            )
         return None
+
+    @staticmethod
+    def _stage_completion_failure(
+        *,
+        env_index: int,
+        context: ExecutionContext,
+        active: ActiveStageState,
+    ) -> Optional[Dict[str, Any]]:
+        operation = active.plan.stage.operation
+        if operation == Operation.PRESS:
+            return None
+        target_object_pose: Optional[PoseState] = None
+        if operation == Operation.PLACE:
+            control = active.plan.stage.param
+            placed_reference = getattr(control, "placed_reference", "object")
+            target_name = active.plan.stage.object
+            if placed_reference == "object" and target_name:
+                target_handler = context.backend.get_object_handler(target_name)
+                if target_handler is not None:
+                    target_object_pose = target_handler.get_pose().select(env_index)
+            else:
+                target_object_pose = TaskRunner._pre_move_end_pose(active)
+        return _check_stage_condition(
+            env_index=env_index,
+            context=context,
+            plan=active.plan,
+            condition_type=OperationConditionType.SUCCESS,
+            initial_pose=active.initial_object_pose,
+            completion_pose=TaskRunner._completion_pose_from_active(active),
+            target_object_pose=target_object_pose,
+            held_object_name=active.held_object_name,
+        )
 
     @staticmethod
     def _apply_waypoint_randomization(
         actions: List[PrimitiveAction],
-        context: ExecutionContext,
+        rng: np.random.Generator,
     ) -> None:
         """Apply per-waypoint randomization to pose actions in-place.
 
@@ -980,9 +1455,6 @@ class TaskRunner:
         BASE`` and use ``absolute_world`` (or ``relative``) in the
         waypoint's ``randomization``.
         """
-        rng = getattr(context.backend, "_rng", None)
-        if rng is None:
-            rng = np.random.default_rng()
         for action in actions:
             if action.kind != "pose" or action.pose is None:
                 continue
@@ -1143,6 +1615,9 @@ class TaskRunner:
         plan: StageExecutionPlan,
         builder: "TaskFlowBuilder",
         context: ExecutionContext,
+        *,
+        env_index: int,
+        episode_index: int,
     ) -> List[PrimitiveAction]:
         """Build the primitive-action list for a stage.
 
@@ -1154,8 +1629,41 @@ class TaskRunner:
         actions = deepcopy(
             builder.build_actions(plan.stage, plan.last_orientation_before)[0]
         )
-        TaskRunner._apply_waypoint_randomization(actions, context)
+        rng = TaskRunner._waypoint_randomization_rng(
+            context=context,
+            env_index=env_index,
+            episode_index=episode_index,
+            stage_index=plan.stage_index,
+        )
+        TaskRunner._apply_waypoint_randomization(actions, rng)
         return actions
+
+    @staticmethod
+    def _waypoint_randomization_rng(
+        *,
+        context: ExecutionContext,
+        env_index: int,
+        episode_index: int,
+        stage_index: int,
+    ) -> np.random.Generator:
+        """Return an order-independent RNG for one env/stage episode.
+
+        Waypoint sampling must not depend on which batched environment reaches
+        a stage first.  Keying the stream by task seed and runtime coordinates
+        gives normal execution and reset replay identical samples while still
+        producing new samples after each reset.
+        """
+        seed = int(context.config.seed) & ((1 << 64) - 1)
+        seed_sequence = np.random.SeedSequence(
+            [
+                seed & 0xFFFFFFFF,
+                seed >> 32,
+                int(env_index),
+                int(episode_index),
+                int(stage_index),
+            ]
+        )
+        return np.random.default_rng(seed_sequence)
 
     @staticmethod
     def _run_stage_action(
@@ -1283,6 +1791,7 @@ class TaskRunner:
             use_slerp=pose.use_slerp,
             max_linear_step=pose.max_linear_step,
             max_angular_step=pose.max_angular_step,
+            tolerance=pose.tolerance,
         )
 
     @staticmethod
@@ -1474,79 +1983,6 @@ class TaskRunner:
             phase=phase,
             phase_step=np.asarray(phase_step, dtype=np.int64),
         )
-
-    def _collect_reset_details(
-        self,
-        env_index: int,
-        context: ExecutionContext,
-    ) -> Dict[str, Any]:
-        initial_poses: Dict[str, Any] = {}
-        names_in_order: List[str] = []
-        seen_names: set[str] = set()
-
-        for stage in context.config.stages:
-            if stage.operator and stage.operator not in seen_names:
-                names_in_order.append(stage.operator)
-                seen_names.add(stage.operator)
-            if stage.object and stage.object not in seen_names:
-                names_in_order.append(stage.object)
-                seen_names.add(stage.object)
-
-        for name in context.config.randomization:
-            if name not in seen_names:
-                names_in_order.append(name)
-                seen_names.add(name)
-
-        for name in names_in_order:
-            object_handler: Optional[ObjectHandler]
-            try:
-                object_handler = context.backend.get_object_handler(name)
-            except KeyError:
-                object_handler = None
-            if object_handler is not None:
-                pose = object_handler.get_pose().select(env_index)
-                initial_poses[name] = self._serialize_pose(pose)
-                continue
-
-            try:
-                operator = context.backend.get_operator_handler(name)
-            except KeyError:
-                continue
-            entry_details = {
-                "base_pose": self._serialize_pose(
-                    operator.get_base_pose().select(env_index)
-                ),
-                "eef_pose": self._serialize_pose(
-                    operator.get_end_effector_pose().select(env_index)
-                ),
-            }
-            initial_poses[name] = entry_details
-
-        # Collect camera poses if camera randomization is configured.
-        cam_rand = getattr(context.backend, "camera_randomization", {})
-        if cam_rand:
-            camera_poses: Dict[str, Any] = {}
-            get_cam_pose = getattr(context.backend, "_get_camera_pose", None)
-            if get_cam_pose is not None:
-                for cam_name in cam_rand:
-                    try:
-                        pose = get_cam_pose(cam_name).select(env_index)
-                        camera_poses[cam_name] = self._serialize_pose(pose)
-                    except (KeyError, AttributeError):
-                        continue
-            if camera_poses:
-                initial_poses["_cameras"] = camera_poses
-
-        if not initial_poses:
-            return {}
-        return {"initial_poses": initial_poses}
-
-    @staticmethod
-    def _serialize_pose(pose: PoseState) -> Dict[str, List[float]]:
-        return {
-            "position": [round(float(v), 4) for v in pose.position[0]],
-            "orientation": [round(float(v), 4) for v in pose.orientation[0]],
-        }
 
     def _normalize_mask(self, env_mask: Optional[np.ndarray]) -> np.ndarray:
         batch_size = self._require_context().backend.batch_size
@@ -1835,7 +2271,21 @@ def _collect_reset_details(
     context: ExecutionContext,
 ) -> Dict[str, Any]:
     initial_poses: Dict[str, Any] = {}
+    names_in_order: List[str] = []
+    seen_names: set[str] = set()
+    for stage in context.config.stages:
+        if stage.operator and stage.operator not in seen_names:
+            names_in_order.append(stage.operator)
+            seen_names.add(stage.operator)
+        if stage.object and stage.object not in seen_names:
+            names_in_order.append(stage.object)
+            seen_names.add(stage.object)
     for name in context.config.randomization:
+        if name not in seen_names:
+            names_in_order.append(name)
+            seen_names.add(name)
+
+    for name in names_in_order:
         object_handler: Optional[ObjectHandler]
         try:
             object_handler = context.backend.get_object_handler(name)
@@ -1850,8 +2300,28 @@ def _collect_reset_details(
             operator = context.backend.get_operator_handler(name)
         except KeyError:
             continue
-        pose = operator.get_base_pose().select(env_index)
-        initial_poses[name] = _serialize_pose(pose)
+        initial_poses[name] = {
+            "base_pose": _serialize_pose(
+                operator.get_base_pose().select(env_index)
+            ),
+            "eef_pose": _serialize_pose(
+                operator.get_end_effector_pose().select(env_index)
+            ),
+        }
+
+    camera_randomization = getattr(context.backend, "camera_randomization", {})
+    get_camera_pose = getattr(context.backend, "_get_camera_pose", None)
+    if camera_randomization and get_camera_pose is not None:
+        camera_poses: Dict[str, Any] = {}
+        for camera_name in camera_randomization:
+            try:
+                camera_poses[camera_name] = _serialize_pose(
+                    get_camera_pose(camera_name).select(env_index)
+                )
+            except (KeyError, AttributeError):
+                continue
+        if camera_poses:
+            initial_poses["_cameras"] = camera_poses
     if not initial_poses:
         return {}
     return {"initial_poses": initial_poses}

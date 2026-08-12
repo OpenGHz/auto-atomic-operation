@@ -1,5 +1,5 @@
 from enum import Enum
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Literal, Optional, Tuple, Union
 
 from pydantic import (
     BaseModel,
@@ -496,6 +496,26 @@ class InitialPoseConfig(BaseModel):
     """Quaternion (4 floats, xyzw) or Euler angles (3 floats, roll/pitch/yaw in radians)."""
 
 
+class StartAfterWaypointConfig(BaseModel):
+    """Reset-time fast-forward target expressed in YAML waypoint coordinates."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    stage: str
+    """Unique stage name containing the target waypoint."""
+    phase: Literal["pre_move", "post_move"]
+    """Waypoint list containing the target."""
+    waypoint: int = Field(ge=0)
+    """Zero-based waypoint index within ``phase``."""
+
+    @field_validator("stage")
+    @classmethod
+    def _validate_stage_name(cls, value: str) -> str:
+        if not value:
+            raise ValueError("stage must be a non-empty stage name")
+        return value
+
+
 class AutoAtomConfig(BaseModel):
     """Configuration for the AutoAtom operator."""
 
@@ -507,6 +527,10 @@ class AutoAtomConfig(BaseModel):
     """The registered environment name used to resolve the basis environment instance for the selected scene."""
     seed: int = 0
     """The random seed for the AutoAtom operator. This is used to ensure reproducibility of the operator's behavior."""
+    start_after: Optional[StartAfterWaypointConfig] = None
+    """Optional reset-time fast-forward target. The selected waypoint and all
+    preceding actions are applied during reset; rollout starts at the next
+    primitive action."""
     initial_pose: Dict[str, InitialPoseConfig] = Field(default_factory=dict)
     """Per-object initial pose overrides applied after keyframe reset, before
     randomization.  Keys are object names matching the MuJoCo body (or stage
@@ -561,6 +585,30 @@ class AutoAtomConfig(BaseModel):
             z: [0.4, 0.6]
     """
     randomization_debug: bool = False
+
+    @model_validator(mode="after")
+    def _validate_start_after(self):
+        selector = self.start_after
+        if selector is None:
+            return self
+        matches = [stage for stage in self.stages if stage.name == selector.stage]
+        if not matches:
+            raise ValueError(
+                f"start_after stage '{selector.stage}' does not exist"
+            )
+        if len(matches) > 1:
+            raise ValueError(
+                f"start_after stage '{selector.stage}' is ambiguous; stage names "
+                "must be unique when start_after is configured"
+            )
+        waypoints = getattr(matches[0].param, selector.phase)
+        if selector.waypoint >= len(waypoints):
+            raise ValueError(
+                f"start_after waypoint {selector.stage}.{selector.phase}"
+                f"[{selector.waypoint}] is out of range; phase has "
+                f"{len(waypoints)} waypoint(s)"
+            )
+        return self
 
     @field_validator(
         "initial_pose",

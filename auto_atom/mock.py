@@ -32,6 +32,20 @@ class MockObjectHandler(ObjectHandler):
     def get_pose(self) -> PoseState:
         return self.pose
 
+    def set_pose(
+        self,
+        pose: PoseState,
+        env_mask: Optional[np.ndarray] = None,
+    ) -> None:
+        pose = pose.broadcast_to(self.pose.batch_size)
+        mask = (
+            np.ones(self.pose.batch_size, dtype=bool)
+            if env_mask is None
+            else np.asarray(env_mask, dtype=bool).reshape(-1)
+        )
+        self.pose.position[mask] = pose.position[mask]
+        self.pose.orientation[mask] = pose.orientation[mask]
+
 
 @dataclass
 class MockOperatorHandler(OperatorHandler):
@@ -42,12 +56,16 @@ class MockOperatorHandler(OperatorHandler):
     _progress: np.ndarray = field(default_factory=lambda: np.zeros(1, dtype=np.int64))
     base_pose: PoseState = field(default_factory=PoseState)
     end_effector_pose: PoseState = field(default_factory=PoseState)
+    _last_target_names: List[Optional[str]] = field(default_factory=list)
+    _grasped_object_names: List[Optional[str]] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         self._command_key = [""] * self.batch_size
         self._progress = np.zeros(self.batch_size, dtype=np.int64)
         self.base_pose = self.base_pose.broadcast_to(self.batch_size)
         self.end_effector_pose = self.end_effector_pose.broadcast_to(self.batch_size)
+        self._last_target_names = [None] * self.batch_size
+        self._grasped_object_names = [None] * self.batch_size
 
     @property
     def name(self) -> str:
@@ -65,6 +83,7 @@ class MockOperatorHandler(OperatorHandler):
         for env_index, enabled in enumerate(mask):
             if not enabled:
                 continue
+            self._last_target_names[env_index] = target.name if target else None
             command_key = (
                 f"pose:{_serialize_param(pose)}:{target.name if target else ''}"
             )
@@ -110,6 +129,9 @@ class MockOperatorHandler(OperatorHandler):
                 details[env_index] = {"event": "eef_moving", "operator": self.name}
                 continue
             signals[env_index] = ControlSignal.REACHED
+            self._grasped_object_names[env_index] = (
+                self._last_target_names[env_index] if eef.close else None
+            )
             details[env_index] = {"event": "eef_reached", "operator": self.name}
         return ControlResult(signals=signals, details=details)
 
@@ -118,6 +140,22 @@ class MockOperatorHandler(OperatorHandler):
 
     def get_base_pose(self) -> PoseState:
         return self.base_pose
+
+    def teleport_end_effector(
+        self,
+        pose: PoseState,
+        target: Optional[ObjectHandler] = None,
+        env_mask: Optional[np.ndarray] = None,
+    ) -> None:
+        pose = pose.broadcast_to(self.batch_size)
+        mask = self._normalize_mask(env_mask)
+        self.end_effector_pose.position[mask] = pose.position[mask]
+        self.end_effector_pose.orientation[mask] = pose.orientation[mask]
+        for env_index, enabled in enumerate(mask):
+            if enabled:
+                self._last_target_names[env_index] = target.name if target else None
+                self._command_key[env_index] = ""
+                self._progress[env_index] = 0
 
     def _prepare_command(self, env_index: int, command_key: str) -> None:
         if self._command_key[env_index] != command_key:
@@ -167,9 +205,29 @@ class MockSceneBackend(SceneBackend):
     lifecycle_events: List[str] = field(default_factory=list)
     interest_updates: List[Dict[str, List[str]]] = field(default_factory=list)
     env: MockEnv = field(init=False)
+    _home_operator_eef_poses: Dict[str, PoseState] = field(
+        init=False, repr=False, default_factory=dict
+    )
+    _home_object_poses: Dict[str, PoseState] = field(
+        init=False, repr=False, default_factory=dict
+    )
 
     def __post_init__(self) -> None:
         self.env = MockEnv(batch_size=self.batch_size)
+        self._home_operator_eef_poses = {
+            name: PoseState(
+                position=operator.end_effector_pose.position.copy(),
+                orientation=operator.end_effector_pose.orientation.copy(),
+            )
+            for name, operator in self.operators.items()
+        }
+        self._home_object_poses = {
+            name: PoseState(
+                position=handler.pose.position.copy(),
+                orientation=handler.pose.orientation.copy(),
+            )
+            for name, handler in self.objects.items()
+        }
 
     def setup(self, config: AutoAtomConfig) -> None:
         self.lifecycle_events.append(
@@ -188,6 +246,16 @@ class MockSceneBackend(SceneBackend):
             for env_index, enabled in enumerate(mask):
                 if enabled:
                     operator._command_key[env_index] = ""
+                    operator._last_target_names[env_index] = None
+                    operator._grasped_object_names[env_index] = None
+        for name, operator in self.operators.items():
+            home = self._home_operator_eef_poses[name]
+            operator.end_effector_pose.position[mask] = home.position[mask]
+            operator.end_effector_pose.orientation[mask] = home.orientation[mask]
+        for name, handler in self.objects.items():
+            home = self._home_object_poses[name]
+            handler.pose.position[mask] = home.position[mask]
+            handler.pose.orientation[mask] = home.orientation[mask]
 
     def teardown(self) -> None:
         self.lifecycle_events.append("teardown()")
@@ -211,13 +279,29 @@ class MockSceneBackend(SceneBackend):
             raise KeyError(f"Unknown object '{name}'. Known objects: {known}") from exc
 
     def is_object_grasped(self, operator_name: str, object_name: str) -> np.ndarray:
-        _ = self.get_operator_handler(operator_name)
+        operator = self.get_operator_handler(operator_name)
         _ = self.get_object_handler(object_name)
-        return np.zeros(self.batch_size, dtype=bool)
+        return np.asarray(
+            [name == object_name for name in operator._grasped_object_names],
+            dtype=bool,
+        )
 
     def is_operator_grasping(self, operator_name: str) -> np.ndarray:
-        _ = self.get_operator_handler(operator_name)
-        return np.zeros(self.batch_size, dtype=bool)
+        operator = self.get_operator_handler(operator_name)
+        return np.asarray(
+            [name is not None for name in operator._grasped_object_names],
+            dtype=bool,
+        )
+
+    def get_grasped_object_names(
+        self,
+        operator_name: str,
+        env_index: int = 0,
+    ) -> List[str]:
+        name = self.get_operator_handler(operator_name)._grasped_object_names[
+            env_index
+        ]
+        return [name] if name is not None else []
 
     def set_interest_objects_and_operations(
         self,

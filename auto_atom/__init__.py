@@ -12,6 +12,7 @@ from .framework import (
     RandomizationReference,
     StageConfig,
     StageControlConfig,
+    StartAfterWaypointConfig,
     TaskFileConfig,
 )
 from .mock import MockOperatorHandler, MockSceneBackend
@@ -75,6 +76,7 @@ __all__ = [
     "StageConfig",
     "StageControlConfig",
     "StageExecutionStatus",
+    "StartAfterWaypointConfig",
     "TaskFileConfig",
     "TaskFlowBuilder",
     "TaskRunner",

@@ -161,6 +161,12 @@ It does not use a learned model. Instead, it rebuilds the same primitive
 `pre_move` / `eef` / `post_move` action sequence that `TaskRunner` uses in
 `aao-demo`, and applies those primitives through the same operator handlers.
 
+When `task.start_after` is configured, `PolicyEvaluator.reset()` uses the same
+reset replay implementation as `TaskRunner`. If the selector resumes inside a
+stage, `ConfigDrivenDemoPolicy` consumes the already-built action list and its
+resume offset instead of rebuilding or re-randomizing the stage. External
+policies see the resumed stage in the first `TaskUpdate` after reset.
+
 This is useful as a consistency check:
 
 - if `aao-demo` succeeds on a task

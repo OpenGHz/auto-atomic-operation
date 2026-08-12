@@ -64,6 +64,7 @@ The CLI looks for configs in `./aao_configs/` relative to the current working di
 aao-info                                 # list every runnable task
 aao-demo --config-name mock              # mock backend, no simulator required
 aao-demo --config-name pick_and_place    # MuJoCo demo (default)
+aao-demo --config-name pick_and_place_place_only  # reset with a valid grasp, run place only
 aao-demo --config-name <config>          # any other config
 ```
 

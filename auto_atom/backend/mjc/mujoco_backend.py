@@ -717,6 +717,52 @@ class MujocoOperatorHandler(OperatorHandler):
             env_mask=env_mask,
         )
 
+    def teleport_end_effector(
+        self,
+        pose: PoseState,
+        target: Optional[ObjectHandler] = None,
+        env_mask: Optional[np.ndarray] = None,
+    ) -> None:
+        pose = pose.broadcast_to(self.env.batch_size)
+        mask = self._normalize_mask(env_mask)
+        position_base, orientation_base = self.env.world_to_base(
+            self.operator_name,
+            pose.position,
+            pose.orientation,
+        )
+        self.env.apply_pose_action(
+            self.operator_name,
+            position_base,
+            orientation_base,
+            env_mask=mask,
+            kinematic=True,
+        )
+        self.reset_state(mask)
+        if isinstance(target, MujocoObjectHandler):
+            for env_index, enabled in enumerate(mask):
+                if enabled:
+                    self._last_target[env_index] = target
+
+        actual = self.get_end_effector_pose()
+        for env_index, enabled in enumerate(mask):
+            if not enabled:
+                continue
+            position_error = np.asarray(
+                actual.position[env_index], dtype=np.float64
+            ) - np.asarray(pose.position[env_index], dtype=np.float64)
+            orientation_error = quaternion_angular_distance(
+                actual.orientation[env_index], pose.orientation[env_index]
+            )
+            if not position_within_tolerance(
+                position_error, self.control.tolerance.position
+            ) or orientation_error > float(self.control.tolerance.orientation):
+                raise RuntimeError(
+                    f"Kinematic teleport for operator '{self.name}' did not reach "
+                    f"the requested EEF pose in env {env_index}: "
+                    f"position_error={float(np.linalg.norm(position_error)):.6f}, "
+                    f"orientation_error={float(orientation_error):.6f}"
+                )
+
     def _eef_target(self, eef: EefControlConfig) -> float:
         if eef.joint_positions:
             return float(eef.joint_positions[0])
@@ -884,6 +930,9 @@ class MujocoTaskBackend(SceneBackend):
 
     def teardown(self) -> None:
         self.env.close()
+
+    def refresh(self) -> None:
+        self.env.refresh_viewer()
 
     def get_operator_handler(self, name: str) -> MujocoOperatorHandler:
         try:
@@ -1896,6 +1945,17 @@ class MujocoTaskBackend(SceneBackend):
         for object_name in self.object_handlers:
             result |= self.is_object_grasped(operator_name, object_name)
         return result
+
+    def get_grasped_object_names(
+        self,
+        operator_name: str,
+        env_index: int = 0,
+    ) -> List[str]:
+        return [
+            object_name
+            for object_name in self.object_handlers
+            if bool(self.is_object_grasped(operator_name, object_name)[env_index])
+        ]
 
     def is_operator_contacting(
         self, operator_name: str, object_name: str
