@@ -1,0 +1,11 @@
+defaults:
+  - pick_and_place
+  - _self_
+
+# Reuse the complete pick-and-place task definition to construct a physically
+# valid grasp during reset, then expose only the place suffix to the rollout.
+task:
+  start_after:
+    stage: pick_source
+    phase: post_move
+    waypoint: 0
