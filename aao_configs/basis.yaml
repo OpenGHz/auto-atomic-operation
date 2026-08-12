@@ -62,6 +62,9 @@ backend: auto_atom.backend.mjc.mujoco_backend.build_mujoco_backend
 task:
   env_name: ${task_name}
   seed: 42
+  # Optional reset-time fast-forward selector. Child configs can replace this
+  # mapping to start rollout after a configured YAML waypoint.
+  start_after: null
   randomization:
     arm:
       eef:
