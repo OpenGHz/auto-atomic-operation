@@ -39,6 +39,7 @@
 
 - **Tools**
   - [Data Collection](/tools/data_collection.md)
+  - [External Data Collection](/tools/external_data_collection.md)
   - [Data Replay](/tools/mcap_data_replay.md)
   - [Policy Evaluation](/tools/policy_evaluation.md)
   - [Panel XML Assembly](/tools/panel_xml_assembly.md)

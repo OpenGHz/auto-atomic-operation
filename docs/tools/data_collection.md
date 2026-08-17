@@ -244,67 +244,19 @@ If GS masks are generated with the same `alpha + scene_depth` logic as the third
 - If a GS-generated point cloud looks noisy or "floating", inspect opacity / alpha behavior in addition to camera intrinsics and extrinsics.
 
 
+## Integrate with an External Collector
+
+To use AAO with another dataset writer, episode scheduler, or collection
+framework, embed the runner and observation APIs directly. See
+[Integrating AAO with External Data Collection Programs](external_data_collection.md)
+for the framework-independent lifecycle, batch handling, schema adaptation,
+and completion semantics.
+
 ## Robot Learning Data Collection
 
-### Setup
-
-```bash
-git clone --depth 1 https://github.com/OpenGHz/AIRBOT-Data-Collection.git airdc -b develop
-```
-
-```
-cd airdc
-```
-
-```bash
-pip install -e ."[assis]"
-```
-
-Link`auto-atomic-operation` to `third_party`:
-
-```bash
-mkdir -p third_party
-```
-
-```bash
-ln -s <path_to_auto_atomic_operation> third_party/
-```
-
-将`操作任务配置`目录软链接到`airbot_ie/configs/managers/auto_atom`目录下：
-
-```bash
-ln -s <path_to_auto_atomic_operation>/aao_configs airbot_ie/configs/managers/auto_atom/
-```
-
-配置文件主要分为两部分：
-
-- 采集环境（示教器）：`airbot_ie/configs/demonstrators/mujoco`中对仿真环境进行配置，包括要采集的数据种类、相机的配置、仿真频率的配置等。这部分不涉及具体的任务逻辑。
-- 流程管理器：`airbot_ie/configs/managers/auto_atom`中对采集流程进行配置，包括要采集哪些任务、每个任务的采集细节（如是否使用GS渲染、是否保存视频等）。这部分涉及具体的任务逻辑。
-
-### 运行
-
-示例命令如下：
-
-```bash
-airdc --name aao_config dataset.directory=aao_data managers/auto_atom/task=pick_and_place sample_limit.rounds=100 batch_size=2
-```
-
-其中：
-- `--name`指定`aao_config`基础配置文件进行采集。
-- `dataset.directory=aao_data`指定采集的数据将被保存到`aao_data`目录下。
-- `managers/auto_atom/task=pick_and_place`指定使用`pick_and_place`任务的流程管理器进行采集。
-- `sample_limit.rounds=100`指定采集100轮，每轮包含一个完整的任务执行过程。
-- `batch_size=2`指定每轮采集使用2个并行环境进行数据采集。
-在多卡无头服务器环境下，可参考如下命令进行同任务并行数采：
-
-```bash
-export CUDA_VISIBLE_DEVICES=0 TASK_NAME=cup_on_coaster && airdc --name aao_config +managers/auto_atom/aao_configs/env=gl managers/auto_atom/task=$TASK_NAME managers.auto_atom.task.seed=$CUDA_VISIBLE_DEVICES dataset.directory=${TASK_NAME}/$CUDA_VISIBLE_DEVICES/env
-```
-
-其中，`CUDA_VISIBLE_DEVICES`指定使用的GPU设备，`TASK_NAME`指定要采集的任务名称，`managers.auto_atom.task.seed`设置每个并行采集实例的随机种子（这里使用GPU ID作为种子），`dataset.directory`指定每个实例的数据保存目录，用任务名和GPU ID区分。另外，通过`+managers/auto_atom/aao_configs/env=gl`指定使用`EGL`渲染环境进行采集，避免无头环境下`OpenGL`报错。
-
-如遇渲染问题，可参考[MuJoCo渲染问题排查](../troubleshooting/mujoco-egl-troubleshooting.md)进行排查。
-
+The AIRBOT-Data-Collection project integrates AAO and supports AAO-based data
+collection. See its [AAO data collection workflow](https://github.com/OpenGHz/AIRBOT-Data-Collection/blob/develop/docs/workflows/aao.md)
+for usage instructions.
 
 ### 模型训练
 
