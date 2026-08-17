@@ -12,6 +12,36 @@ This guide covers the scripts used to record task demonstrations and compare ren
 python examples/record_demo.py --config-name pick_and_place
 ```
 
+### Hide the robot from native camera data
+
+Set `env.hide_operators_in_camera=true` to remove every configured operator
+(`root_body` and all descendants, including gripper collision and tactile
+geoms) from native MuJoCo RGB, depth, mask, and heat-map rendering:
+
+```bash
+aao-demo --config-name pick_and_place \
+    env.hide_operators_in_camera=true +perf_count=true
+
+python examples/record_demo.py --config-name pick_and_place \
+    env.hide_operators_in_camera=true
+```
+
+The robot still participates in physics, contact, tactile sensing, and control.
+A wrist-mounted camera also continues to move normally because cameras are not
+geoms. The passive viewer remains unchanged; filtering applies only to captured
+offscreen camera scenes.
+
+When AAO is launched through AIRDC, the task config is nested under the manager:
+
+```bash
+airdc --name aao_config managers/auto_atom/task=pick_and_place \
+    managers.auto_atom.env.hide_operators_in_camera=true
+```
+
+This option filters native MuJoCo rendering. Gaussian Splatting RGB/depth uses
+a separate renderer; remove robot entries from `gaussian_render.body_gaussians`
+(and ensure the background PLY does not bake in the robot) for GS datasets.
+
 Output files are written to:
 
 - `assets/videos/<config_name>.gif`

@@ -1547,6 +1547,7 @@ class UnifiedMujocoEnv(MujocoBasis):
                     camera=cam_id,
                     scene_option=self._renderer_scene_option,
                 )
+                self._hide_operator_geoms_from_camera_scene(renderer)
                 renderer.disable_depth_rendering()
                 renderer.disable_segmentation_rendering()
                 if spec.enable_color:

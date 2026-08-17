@@ -214,6 +214,14 @@ class EnvConfig(BaseModel, frozen=True):
     """The sensor categories that should be exposed in captured observations."""
     cameras: List[CameraSpec] = Field(default_factory=list)
     """The camera specifications to initialize when camera output is enabled."""
+    hide_operators_in_camera: bool = False
+    """Hide configured operators from native MuJoCo camera rendering.
+
+    Geoms below every operator's ``root_body`` and ``mocap_body`` are removed
+    from the offscreen scene used for RGB, depth, masks, and heat maps.  The
+    MuJoCo model remains unchanged, so physics, contacts, tactile sensing,
+    control, and the passive viewer are unaffected.
+    """
     mask_objects: List[str] = Field(default_factory=list)
     """The object names that are eligible for binary mask and heat-map generation."""
     operations: List[str] = Field(default_factory=list)
@@ -376,6 +384,16 @@ class MujocoBasis:
 
         # Pre-compute per-operator actuator and joint index arrays.
         self._operators = config.operators
+        self._camera_hidden_geom_ids = (
+            self._resolve_operator_render_geom_ids()
+            if config.hide_operators_in_camera
+            else frozenset()
+        )
+        if config.hide_operators_in_camera:
+            self.get_logger().info(
+                "Hiding %d operator geoms from native camera rendering.",
+                len(self._camera_hidden_geom_ids),
+            )
         self._op_arm_aidx: dict[str, np.ndarray] = {}
         self._op_eef_aidx: dict[str, np.ndarray] = {}
         self._op_arm_qidx: dict[str, np.ndarray] = {}
@@ -983,6 +1001,70 @@ class MujocoBasis:
             self._last_time = current_time
             return True
         return False
+
+    # ------------------------------------------------------------------
+    # Camera render visibility
+    # ------------------------------------------------------------------
+
+    def _resolve_operator_render_geom_ids(self) -> frozenset[int]:
+        """Return geom IDs belonging to configured operator body subtrees."""
+        root_names = {
+            body_name
+            for operator in self._operators.values()
+            for body_name in (operator.root_body, operator.mocap_body)
+            if body_name
+        }
+        if not root_names:
+            self.get_logger().warning(
+                "hide_operators_in_camera is enabled, but no operator has a "
+                "root_body or mocap_body."
+            )
+            return frozenset()
+
+        root_ids: set[int] = set()
+        for body_name in root_names:
+            body_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, body_name)
+            if body_id < 0:
+                raise ValueError(
+                    "hide_operators_in_camera could not find operator body "
+                    f"'{body_name}' in the MuJoCo model."
+                )
+            root_ids.add(int(body_id))
+
+        hidden_body_ids = set(root_ids)
+        for body_id in range(1, self.model.nbody):
+            ancestor_id = body_id
+            while ancestor_id > 0:
+                if ancestor_id in root_ids:
+                    hidden_body_ids.add(body_id)
+                    break
+                ancestor_id = int(self.model.body_parentid[ancestor_id])
+
+        return frozenset(
+            geom_id
+            for geom_id in range(self.model.ngeom)
+            if int(self.model.geom_bodyid[geom_id]) in hidden_body_ids
+        )
+
+    def _hide_operator_geoms_from_camera_scene(self, renderer: Any) -> None:
+        """Remove configured operator geoms from one populated render scene.
+
+        Mutating ``MjvGeom.type`` affects only this renderer's transient scene;
+        it does not alter ``MjModel`` and therefore cannot change simulation
+        physics or the passive viewer.
+        """
+        hidden_geom_ids = getattr(self, "_camera_hidden_geom_ids", frozenset())
+        if not hidden_geom_ids:
+            return
+
+        geom_obj_type = int(mujoco.mjtObj.mjOBJ_GEOM)
+        hidden_type = int(mujoco.mjtGeom.mjGEOM_NONE)
+        for scene_geom in renderer.scene.geoms[: renderer.scene.ngeom]:
+            if (
+                int(scene_geom.objtype) == geom_obj_type
+                and int(scene_geom.objid) in hidden_geom_ids
+            ):
+                scene_geom.type = hidden_type
 
     # ------------------------------------------------------------------
     # Info / lifecycle

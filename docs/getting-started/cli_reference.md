@@ -25,6 +25,7 @@ To discover which configs are runnable tasks, use [`aao-info`](#aao-info).
 | `env.batch_size=N` | int | (from config) | Override the number of parallel environments |
 | `task.seed=N` | int | (from config) | Override the randomization seed |
 | `env.viewer.disable=true` | bool | false | Run headless (no viewer window) |
+| `env.hide_operators_in_camera=true` | bool | false | Exclude configured operators from native MuJoCo RGB/depth/mask rendering without changing physics |
 
 Any key present in the YAML config can be overridden on the command line following Hydra syntax:
 

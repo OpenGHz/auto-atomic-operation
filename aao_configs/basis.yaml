@@ -28,6 +28,9 @@ env:
     - joint_effort
   sim_freq: 600
   update_freq: 30
+  # Remove configured operator body subtrees from native MuJoCo RGB/depth/
+  # segmentation rendering without changing physics or the passive viewer.
+  hide_operators_in_camera: false
   cameras:
     - name: wrist_cam
       width: ${cam_width}
