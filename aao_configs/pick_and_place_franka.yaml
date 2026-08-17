@@ -73,7 +73,10 @@ task:
 task_operators:
   arm:
     ik:
-      joint_control_mode: solve_once_interpolate
+      # Closed-loop IK is required for the randomized object poses and close
+      # approach waypoints. A single solve can retain centimetres of residual
+      # EEF error and then hold that joint target until the primitive times out.
+      joint_control_mode: per_step_ik
       joint_interp_speed: 0.9
     initial_state:
       base_pose:

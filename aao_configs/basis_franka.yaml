@@ -55,6 +55,17 @@ env:
 
 backend: auto_atom.backend.mjc.ik.mink_ik_solver.build_franka_backend
 
+task:
+  randomization:
+    arm:
+      # The generic basis randomizes a floating/mocap EEF over a wide range.
+      # Keep the fixed-base Franka at its validated home pose instead.
+      eef:
+        x: [-0.0, 0.0]
+        y: [-0.0, 0.0]
+        z: [-0.0, 0.0]
+        collision_radius: 0.15
+
 task_operators:
   arm:
     max_joint_delta: 1.8 # max per-joint displacement per control step (rad)

@@ -65,8 +65,9 @@ TaskRunner.update()
 
 #### 一次求解 + 关节插值
 
-这是当前 Franka 示例任务推荐的模式，`aao_configs/pick_and_place_franka.yaml`
-默认使用它。
+这个模式适合单次 IK 已能准确收敛、且希望减少求解次数的任务。若目标存在
+不可忽略的残差，它不会继续闭环修正；因此带随机目标与近距离抓取动作的
+`aao_configs/pick_and_place_franka.yaml` 使用 `per_step_ik`。
 
 执行过程：
 
