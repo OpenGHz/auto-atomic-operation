@@ -11,6 +11,9 @@
   - [Execution Completion Flow](/task-configuration/execution_completion_flow.md)
   - [sim_freq & update_freq](/task-configuration/sim_freq_update_freq.md)
 
+- **Design**
+  - [Update Granularity & Keypoint Stepping](/design/update-granularity-analysis.md)
+
 - **MuJoCo Backend**
   - [Backend Conditions](/mujoco-backend/mujoco_backend_conditions.md)
   - [Custom Backend](/mujoco-backend/custom-backend.md)
