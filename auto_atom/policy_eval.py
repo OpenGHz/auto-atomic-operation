@@ -28,6 +28,7 @@ from .runtime import (
     ObjectHandler,
     OperatorHandler,
     PrimitiveAction,
+    ResetReplayResult,
     SceneBackend,
     StageExecutionPlan,
     StageExecutionStatus,
@@ -37,6 +38,7 @@ from .runtime import (
     _build_execution_summary,
     _check_stage_condition,
     _EnvRuntimeState,
+    _RuntimeAdvanceResult,
 )
 from .utils.pose import PoseState
 
@@ -72,6 +74,13 @@ class PolicyActionFeedback:
     signals: List[Optional[ControlSignal]]
     details: List[Dict[str, Any]]
     stage_action_sequence_done: List[bool]
+    applied_actions: Optional[List[Optional[PrimitiveAction]]] = None
+    """Config-derived primitive applied on each env, when available.
+
+    Generic policy appliers may leave this as ``None``. Absolute-frame
+    ``stop_at`` targets still work, while waypoint targets require this
+    metadata so the evaluator can observe the selected YAML waypoint.
+    """
 
 
 class ConfigDrivenDemoPolicy:
@@ -80,11 +89,13 @@ class ConfigDrivenDemoPolicy:
     def __init__(self, builder: Optional[TaskFlowBuilder] = None) -> None:
         self.builder = builder or TaskFlowBuilder()
         self._cached_stage_indices: List[Optional[int]] = []
+        self._cached_episode_indices: List[Optional[int]] = []
         self._cached_actions: List[List[PrimitiveAction]] = []
         self._action_indices: List[int] = []
 
     def reset(self) -> None:
         self._cached_stage_indices = []
+        self._cached_episode_indices = []
         self._cached_actions = []
         self._action_indices = []
 
@@ -133,6 +144,7 @@ class ConfigDrivenDemoPolicy:
                 stage_action_sequence_done=[
                     False for _ in range(context.backend.batch_size)
                 ],
+                applied_actions=[None for _ in range(context.backend.batch_size)],
             )
         if not isinstance(action, ConfigDrivenPolicyAction):
             raise TypeError(
@@ -150,6 +162,7 @@ class ConfigDrivenDemoPolicy:
             stage_action_sequence_done=[
                 False for _ in range(context.backend.batch_size)
             ],
+            applied_actions=[None for _ in range(context.backend.batch_size)],
         )
 
         for env_index, env_action in enumerate(action.env_actions):
@@ -174,12 +187,15 @@ class ConfigDrivenDemoPolicy:
                 )
             feedback.signals[env_index] = result.signals[env_index]
             feedback.details[env_index] = dict(result.details[env_index])
+            assert feedback.applied_actions is not None
+            feedback.applied_actions[env_index] = env_action.action
         return feedback
 
     def _ensure_capacity(self, batch_size: int) -> None:
         if len(self._cached_stage_indices) == batch_size:
             return
         self._cached_stage_indices = [None for _ in range(batch_size)]
+        self._cached_episode_indices = [None for _ in range(batch_size)]
         self._cached_actions = [[] for _ in range(batch_size)]
         self._action_indices = [0 for _ in range(batch_size)]
 
@@ -189,7 +205,11 @@ class ConfigDrivenDemoPolicy:
         stage_index: int,
         evaluator: "PolicyEvaluator",
     ) -> List[PrimitiveAction]:
-        if self._cached_stage_indices[env_index] != stage_index:
+        episode_index = evaluator._env_states[env_index].episode_index
+        if (
+            self._cached_stage_indices[env_index] != stage_index
+            or self._cached_episode_indices[env_index] != episode_index
+        ):
             resume_stage = evaluator._get_resume_active_stage(
                 env_index, stage_index
             )
@@ -204,6 +224,7 @@ class ConfigDrivenDemoPolicy:
                 )
                 self._action_indices[env_index] = 0
             self._cached_stage_indices[env_index] = stage_index
+            self._cached_episode_indices[env_index] = episode_index
         return self._cached_actions[env_index]
 
     @staticmethod
@@ -233,7 +254,10 @@ class PolicyEvaluator:
     def __init__(
         self,
         *,
-        action_applier: Callable[[ExecutionContext, Any, Optional[np.ndarray]], None],
+        action_applier: Callable[
+            [ExecutionContext, Any, Optional[np.ndarray]],
+            Optional[PolicyActionFeedback],
+        ],
         observation_getter: Optional[Callable[[ExecutionContext], Any]] = None,
         builder: Optional[TaskFlowBuilder] = None,
         default_position_tolerance: float = 0.01,
@@ -251,6 +275,9 @@ class PolicyEvaluator:
         self._policy_states: List[Optional[_PolicyStageState]] = []
         self._resume_stages: List[Optional[ActiveStageState]] = []
         self._has_reset: np.ndarray = np.zeros(0, dtype=bool)
+        self._execution_start_stage_indices: np.ndarray = np.zeros(
+            0, dtype=np.int64
+        )
         self._execution_start_stage_index = 0
         self._sim_lock: threading.Lock = threading.Lock()
         self._sim_thread: Optional[threading.Thread] = None
@@ -295,6 +322,9 @@ class PolicyEvaluator:
         self._policy_states = [None for _ in range(backend.batch_size)]
         self._resume_stages = [None for _ in range(backend.batch_size)]
         self._has_reset = np.zeros(backend.batch_size, dtype=bool)
+        self._execution_start_stage_indices = np.zeros(
+            backend.batch_size, dtype=np.int64
+        )
         self._records = []
         self._execution_start_stage_index = 0
         self._pending_sim_loop_freq = float(sim_loop_frequency)
@@ -303,24 +333,47 @@ class PolicyEvaluator:
     def reset(self, env_mask: Optional[np.ndarray] = None) -> TaskUpdate:
         context = self._require_context()
         mask = self._normalize_mask(env_mask)
+        if not bool(np.any(mask)):
+            return self._build_task_update()
+
         with self._sim_lock:
-            context.backend.reset(mask)
-            for env_index, enabled in enumerate(mask):
-                if enabled:
-                    reset_result = TaskRunner.initialize_reset_env(
-                        env_index=env_index,
-                        previous_state=self._env_states[env_index],
-                        context=context,
-                        plans=self._plan,
-                        builder=self.builder,
-                    )
-                    self._env_states[env_index] = reset_result.state
-                    self._policy_states[env_index] = None
-                    self._resume_stages[env_index] = reset_result.state.active
-                    self._execution_start_stage_index = (
-                        reset_result.state.stage_cursor
-                    )
-            if context.config.start_after is not None:
+            self._has_reset[mask] = False
+            pending_results: Dict[int, ResetReplayResult] = {}
+            try:
+                context.backend.reset(mask)
+                for env_index, enabled in enumerate(mask):
+                    if enabled:
+                        pending_results[env_index] = (
+                            TaskRunner.initialize_reset_env(
+                                env_index=env_index,
+                                previous_state=self._env_states[env_index],
+                                context=context,
+                                plans=self._plan,
+                                builder=self.builder,
+                            )
+                        )
+            except Exception:
+                try:
+                    context.backend.refresh()
+                except Exception:
+                    pass
+                raise
+
+            for env_index, reset_result in pending_results.items():
+                self._env_states[env_index] = reset_result.state
+                self._policy_states[env_index] = None
+                self._resume_stages[env_index] = reset_result.state.active
+                self._execution_start_stage_indices[env_index] = (
+                    reset_result.state.stage_cursor
+                )
+            initialized = self._has_reset | mask
+            self._execution_start_stage_index = int(
+                np.min(self._execution_start_stage_indices[initialized])
+            )
+            if (
+                context.config.start_after is not None
+                or context.config.physical_replay is not None
+            ):
                 context.backend.refresh()
         self._has_reset[mask] = True
         # self._set_interest_focus()
@@ -376,6 +429,7 @@ class PolicyEvaluator:
         self._policy_states = []
         self._resume_stages = []
         self._has_reset = np.zeros(0, dtype=bool)
+        self._execution_start_stage_indices = np.zeros(0, dtype=np.int64)
         self._execution_start_stage_index = 0
 
     # ------------------------------------------------------------------
@@ -525,6 +579,23 @@ class PolicyEvaluator:
             state.phase_step = None
 
         assert policy_state is not None
+        state.task_frame += 1
+        applied_action: Optional[PrimitiveAction] = None
+        applied_signal: Optional[ControlSignal] = None
+        if action_feedback is not None:
+            applied_signal = action_feedback.signals[env_index]
+            applied_actions = getattr(action_feedback, "applied_actions", None)
+            if applied_actions is not None:
+                applied_action = applied_actions[env_index]
+        TaskRunner._track_stop_at_waypoint(
+            state=state,
+            selector=context.config.stop_at,
+            advance=_RuntimeAdvanceResult(
+                stage_name=policy_state.plan.stage_name,
+                action=applied_action,
+                signal=applied_signal,
+            ),
+        )
         if action_feedback is not None:
             signal = action_feedback.signals[env_index]
             if signal in {ControlSignal.TIMED_OUT, ControlSignal.FAILED}:
@@ -552,11 +623,33 @@ class PolicyEvaluator:
                     "event": "stage_action_sequence_running",
                     "env_index": env_index,
                     "evaluation_mode": "policy",
+                    "task_frame": state.task_frame,
                     **action_feedback.details[env_index],
                 }
                 state.phase = "policy"
                 state.phase_step = None
+                TaskRunner._finish_stop_at_if_due(
+                    state=state,
+                    context=context,
+                )
                 return
+
+        state.latest_details = {
+            "event": "policy_update_applied",
+            "env_index": env_index,
+            "evaluation_mode": "policy",
+            "task_frame": state.task_frame,
+            **(
+                action_feedback.details[env_index]
+                if action_feedback is not None
+                else {}
+            ),
+        }
+        if TaskRunner._finish_stop_at_if_due(
+            state=state,
+            context=context,
+        ):
+            return
 
         success_failure = _check_stage_condition(
             env_index=env_index,
@@ -601,6 +694,10 @@ class PolicyEvaluator:
                 state.success = True
             else:
                 state.success = False
+            TaskRunner._raise_if_stop_at_unreachable(
+                state=state,
+                context=context,
+            )
             return
 
         if (

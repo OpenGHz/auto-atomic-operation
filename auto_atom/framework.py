@@ -164,9 +164,13 @@ class ArcControlConfig(BaseModel):
     """When True, ``angle`` is treated as an absolute target joint angle (radians)
     instead of a relative rotation.  Requires ``pivot`` to be a joint name so the
     runtime can read the current joint angle and compute the delta."""
-    max_step: float = 0.2
+    max_step: float = Field(default=0.2, gt=0.0)
     """Maximum arc sub-step in radians (~11.5 deg).  Smaller values produce smoother
     arcs at the cost of more waypoints."""
+    joint_tolerance: float = Field(default=0.01, gt=0.0)
+    """Absolute-mode completion tolerance for the pivot joint angle, in radians.
+    The controller keeps issuing physical ``max_step`` increments until the
+    named joint is within this tolerance of ``angle``."""
     reverse: bool = False
     """When True, the arc is traced in the opposite direction around the axis.
 
@@ -516,6 +520,100 @@ class StartAfterWaypointConfig(BaseModel):
         return value
 
 
+class PhysicalReplayConfig(BaseModel):
+    """Target for reset-time replay through the normal controller and physics."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    stage: Optional[str] = None
+    """Unique stage name containing a waypoint target."""
+    phase: Optional[Literal["pre_move", "post_move"]] = None
+    """Waypoint list containing the target."""
+    waypoint: Optional[int] = Field(default=None, ge=0, strict=True)
+    """Zero-based waypoint index within ``phase``."""
+    frame: Optional[int] = Field(default=None, ge=0, strict=True)
+    """Absolute task control frame. Frame zero is the freshly reset
+    scene; frame N is the state after N normal task controller updates."""
+    frame_offset: int = Field(default=0, ge=0, strict=True)
+    """Additional control frames after the selected waypoint completes."""
+
+    @model_validator(mode="after")
+    def _validate_target(self):
+        waypoint_values = (self.stage, self.phase, self.waypoint)
+        has_any_waypoint_value = any(value is not None for value in waypoint_values)
+        has_all_waypoint_values = all(value is not None for value in waypoint_values)
+
+        if self.frame is not None:
+            if has_any_waypoint_value:
+                raise ValueError(
+                    "physical_replay must select either an absolute frame or "
+                    "stage/phase/waypoint, not both"
+                )
+            if "frame_offset" in self.model_fields_set:
+                raise ValueError(
+                    "physical_replay.frame_offset is only valid with a waypoint "
+                    "target"
+                )
+            return self
+
+        if not has_all_waypoint_values:
+            raise ValueError(
+                "physical_replay requires either frame or all of "
+                "stage, phase, and waypoint"
+            )
+        if not self.stage:
+            raise ValueError(
+                "physical_replay.stage must be a non-empty stage name"
+            )
+        return self
+
+
+class StopAtConfig(BaseModel):
+    """Normal-success endpoint expressed in absolute task-frame or waypoint coordinates."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    stage: Optional[str] = None
+    """Unique stage name containing a waypoint target."""
+    phase: Optional[Literal["pre_move", "post_move"]] = None
+    """Waypoint list containing the target."""
+    waypoint: Optional[int] = Field(default=None, ge=0, strict=True)
+    """Zero-based waypoint index within ``phase``."""
+    frame: Optional[int] = Field(default=None, ge=0, strict=True)
+    """Absolute task control frame. Frame zero is the freshly reset scene;
+    frame N is the state after N normal task controller updates, including a
+    reset-time ``physical_replay`` prefix."""
+    frame_offset: int = Field(default=0, ge=0, strict=True)
+    """Additional control frames after the selected waypoint completes."""
+
+    @model_validator(mode="after")
+    def _validate_target(self):
+        waypoint_values = (self.stage, self.phase, self.waypoint)
+        has_any_waypoint_value = any(value is not None for value in waypoint_values)
+        has_all_waypoint_values = all(value is not None for value in waypoint_values)
+
+        if self.frame is not None:
+            if has_any_waypoint_value:
+                raise ValueError(
+                    "stop_at must select either an absolute frame or "
+                    "stage/phase/waypoint, not both"
+                )
+            if "frame_offset" in self.model_fields_set:
+                raise ValueError(
+                    "stop_at.frame_offset is only valid with a waypoint target"
+                )
+            return self
+
+        if not has_all_waypoint_values:
+            raise ValueError(
+                "stop_at requires either frame or all of "
+                "stage, phase, and waypoint"
+            )
+        if not self.stage:
+            raise ValueError("stop_at.stage must be a non-empty stage name")
+        return self
+
+
 class AutoAtomConfig(BaseModel):
     """Configuration for the AutoAtom operator."""
 
@@ -531,6 +629,13 @@ class AutoAtomConfig(BaseModel):
     """Optional reset-time fast-forward target. The selected waypoint and all
     preceding actions are applied during reset; rollout starts at the next
     primitive action."""
+    physical_replay: Optional[PhysicalReplayConfig] = None
+    """Optional independent reset-time physical replay target. Every normal
+    controller and physics frame is executed before rollout resumes."""
+    stop_at: Optional[StopAtConfig] = None
+    """Optional normal-success endpoint. Execution stops on an absolute task
+    frame or after a selected waypoint plus an optional frame offset, without
+    executing the remaining task suffix."""
     initial_pose: Dict[str, InitialPoseConfig] = Field(default_factory=dict)
     """Per-object initial pose overrides applied after keyframe reset, before
     randomization.  Keys are object names matching the MuJoCo body (or stage
@@ -608,6 +713,91 @@ class AutoAtomConfig(BaseModel):
                 f"[{selector.waypoint}] is out of range; phase has "
                 f"{len(waypoints)} waypoint(s)"
             )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_physical_replay(self):
+        if self.start_after is not None and self.physical_replay is not None:
+            raise ValueError(
+                "task.start_after and task.physical_replay are mutually exclusive"
+            )
+        selector = self.physical_replay
+        if selector is None or selector.frame is not None:
+            return self
+        assert selector.stage is not None
+        assert selector.phase is not None
+        assert selector.waypoint is not None
+        matches = [stage for stage in self.stages if stage.name == selector.stage]
+        if not matches:
+            raise ValueError(
+                f"physical_replay stage '{selector.stage}' does not exist"
+            )
+        if len(matches) > 1:
+            raise ValueError(
+                f"physical_replay stage '{selector.stage}' is ambiguous; stage "
+                "names must be unique when physical_replay is configured"
+            )
+        waypoints = getattr(matches[0].param, selector.phase)
+        if selector.waypoint >= len(waypoints):
+            raise ValueError(
+                f"physical_replay waypoint {selector.stage}.{selector.phase}"
+                f"[{selector.waypoint}] is out of range; phase has "
+                f"{len(waypoints)} waypoint(s)"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_stop_at(self):
+        selector = self.stop_at
+        if selector is None:
+            return self
+        if selector.frame is not None:
+            if self.start_after is not None:
+                raise ValueError(
+                    "task.stop_at.frame cannot be combined with task.start_after: "
+                    "kinematic teleport fast-forward has no physical task-frame "
+                    "coordinate; use a waypoint stop target or physical_replay"
+                )
+            return self
+        assert selector.stage is not None
+        assert selector.phase is not None
+        assert selector.waypoint is not None
+        matches = [stage for stage in self.stages if stage.name == selector.stage]
+        if not matches:
+            raise ValueError(f"stop_at stage '{selector.stage}' does not exist")
+        if len(matches) > 1:
+            raise ValueError(
+                f"stop_at stage '{selector.stage}' is ambiguous; stage names "
+                "must be unique when stop_at is configured"
+            )
+        waypoints = getattr(matches[0].param, selector.phase)
+        if selector.waypoint >= len(waypoints):
+            raise ValueError(
+                f"stop_at waypoint {selector.stage}.{selector.phase}"
+                f"[{selector.waypoint}] is out of range; phase has "
+                f"{len(waypoints)} waypoint(s)"
+            )
+        if self.start_after is not None:
+            stage_indices = {
+                stage.name: index for index, stage in enumerate(self.stages)
+            }
+            phase_order = {"pre_move": 0, "post_move": 2}
+            start_key = (
+                stage_indices[self.start_after.stage],
+                phase_order[self.start_after.phase],
+                self.start_after.waypoint,
+            )
+            stop_key = (
+                stage_indices[selector.stage],
+                phase_order[selector.phase],
+                selector.waypoint,
+            )
+            if stop_key <= start_key:
+                raise ValueError(
+                    "task.stop_at waypoint must be after task.start_after; "
+                    "the teleport prefix has already passed the requested "
+                    "endpoint"
+                )
         return self
 
     @field_validator(

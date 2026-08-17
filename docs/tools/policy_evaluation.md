@@ -161,11 +161,21 @@ It does not use a learned model. Instead, it rebuilds the same primitive
 `pre_move` / `eef` / `post_move` action sequence that `TaskRunner` uses in
 `aao-demo`, and applies those primitives through the same operator handlers.
 
-When `task.start_after` is configured, `PolicyEvaluator.reset()` uses the same
-reset replay implementation as `TaskRunner`. If the selector resumes inside a
-stage, `ConfigDrivenDemoPolicy` consumes the already-built action list and its
-resume offset instead of rebuilding or re-randomizing the stage. External
-policies see the resumed stage in the first `TaskUpdate` after reset.
+`PolicyEvaluator.reset()` supports both independent reset-prefix mechanisms
+used by `TaskRunner`: the existing `task.start_after` teleport fast-forward and
+the new `task.physical_replay` controller/physics replay. Physical replay can
+target an absolute `frame` or a waypoint plus `frame_offset`. If it stops inside
+a primitive action, `ConfigDrivenDemoPolicy` consumes the same already-built
+action object and controller offset instead of rebuilding, re-resolving, or
+re-randomizing it. External policies see the exact resumed stage in the first
+`TaskUpdate` after reset.
+
+`task.stop_at` is also honored by `PolicyEvaluator`. Absolute endpoints count
+full-task controller frames, including any `physical_replay` prefix. Waypoint
+endpoints work automatically with `ConfigDrivenDemoPolicy`, whose feedback
+identifies the applied YAML primitive. Generic external policies can always
+use absolute-frame endpoints; a waypoint endpoint requires an action applier
+that returns `PolicyActionFeedback.applied_actions` metadata.
 
 This is useful as a consistency check:
 

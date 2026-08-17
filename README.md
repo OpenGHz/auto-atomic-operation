@@ -64,7 +64,9 @@ The CLI looks for configs in `./aao_configs/` relative to the current working di
 aao-info                                 # list every runnable task
 aao-demo --config-name mock              # mock backend, no simulator required
 aao-demo --config-name pick_and_place    # MuJoCo demo (default)
-aao-demo --config-name pick_and_place_place_only  # reset with a valid grasp, run place only
+aao-demo --config-name pick_and_place_place_only  # teleport fast-forward, then run place
+aao-demo --config-name pick_and_place_place_only_physical_replay  # physical replay, then run place
+aao-demo --config-name pick_and_place_physical_segment  # physical replay, then stop at an endpoint
 aao-demo --config-name <config>          # any other config
 ```
 

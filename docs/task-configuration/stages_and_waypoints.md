@@ -1,10 +1,14 @@
 # Stages & Waypoints
 
-This page documents four less-obvious fields on task / stage / waypoint
+This page documents six less-obvious fields on task / stage / waypoint
 configuration that are easy to miss but frequently needed:
 
-- `AutoAtomConfig.start_after` — reconstruct an earlier task prefix during
-  reset and begin rollout after a selected YAML waypoint.
+- `AutoAtomConfig.start_after` — use the existing kinematic teleport
+  fast-forward and begin rollout after a selected YAML waypoint.
+- `AutoAtomConfig.physical_replay` — independently execute the complete task
+  physics up to an absolute frame or a waypoint-relative frame.
+- `AutoAtomConfig.stop_at` — finish successfully at an absolute task frame or
+  a waypoint-relative frame instead of executing the remaining suffix.
 - `StageConfig.site` — re-base `object_world` / `object` references onto a
   site or geometry instead of the stage object's body origin.
 - `PoseControlConfig.static` — freeze a tracking reference at the first
@@ -13,12 +17,151 @@ configuration that are easy to miss but frequently needed:
   distance an object must move before the `displaced` post-condition is
   satisfied.
 
-## Reset after a waypoint
+## Reset-time task prefixes
 
-`task.start_after` turns a complete task definition into a suffix-only demo
-without duplicating the skipped stages or hard-coding an initial grasp pose.
-For example, this configuration reconstructs `pick_source` during reset and
+There are two independent ways to turn a complete task definition into a
+suffix-only rollout. `task.start_after` keeps the existing teleport mechanism;
+`task.physical_replay` is a separate full-physics mechanism. They cannot be
+configured together.
+
+### Complete physical replay (`task.physical_replay`)
+
+Use `physical_replay` when the prefix contains contacts or articulated scene
+motion. Every controller update, MuJoCo physics substep, pre-step callback,
+grasp, release, and stage condition is executed exactly as in a normal
+rollout. Only viewer synchronization, viewer `step_delay`, observation capture,
+and prefix execution records are skipped.
+
+This example physically executes the complete pick stage during `reset()` and
 starts the visible rollout at `place_source`:
+
+```yaml
+task:
+  physical_replay:
+    stage: pick_source
+    phase: post_move
+    waypoint: 0
+```
+
+An optional offset continues physical execution after that waypoint:
+
+```yaml
+task:
+  physical_replay:
+    stage: pick_source
+    phase: pre_move
+    waypoint: 1
+    frame_offset: 20
+```
+
+`frame_offset: 0` stops on the control tick where the selected waypoint's last
+internal primitive reports `REACHED`. `frame_offset: N` then executes exactly
+N additional controller updates; the offset may cross action and stage
+boundaries. The task must contain enough subsequent frames for the requested
+offset.
+
+Alternatively, stop at an absolute task frame without naming a waypoint:
+
+```yaml
+task:
+  physical_replay:
+    frame: 300
+```
+
+Frame numbering is defined at the task controller boundary:
+
+- frame `0` is the randomized backend state immediately after reset, before
+  any task action;
+- frame `N` is the state after exactly `N` normal controller updates;
+- one controller frame contains the backend's configured physics substeps, so
+  this is not a raw MuJoCo substep or a downsampled video frame;
+- for a complete task recorded without `physical_replay`, the reset
+  observation from `record_demo.py` is frame `0`; with `physical_replay`, its
+  first observation is instead the requested replay target state.
+
+Stopping in the middle of a primitive preserves its action object, resolved
+target, arc snapshot, controller progress, velocities, contacts, and scene
+joint state. The first rollout update therefore continues from the exact next
+physical tick. No object is manually attached to or moved with the gripper;
+drawer and door state emerges entirely from the replayed physical process.
+
+If the task fails, ends before the requested target, or exceeds the global
+replay safeguard, `reset()` raises an error instead of returning a silently
+clamped or non-physical state. `gaussian_render.share_physics: true` is not
+supported for physical reset replay because its virtual batch entries share
+one physical world.
+
+### Early successful endpoint (`task.stop_at`)
+
+`stop_at` independently selects where the task should finish. It uses the
+same coordinates as `physical_replay`, so the two fields can define a visible
+segment of one complete physical task:
+
+```yaml
+task:
+  # Start the visible rollout after physically executing the complete pick.
+  physical_replay:
+    stage: pick_source
+    phase: post_move
+    waypoint: 0
+
+  # End as soon as the second place approach waypoint is reached.
+  stop_at:
+    stage: place_source
+    phase: pre_move
+    waypoint: 1
+```
+
+An endpoint can include additional controller frames after its waypoint:
+
+```yaml
+task:
+  stop_at:
+    stage: place_source
+    phase: pre_move
+    waypoint: 0
+    frame_offset: 20
+```
+
+Or it can use an absolute full-task frame:
+
+```yaml
+task:
+  physical_replay:
+    frame: 300
+  stop_at:
+    frame: 450
+```
+
+Absolute frames do not restart at zero after replay: in the last example,
+`reset()` executes frames 1 through 300 and the visible rollout executes only
+frames 301 through 450. A waypoint offset follows the same rule and may cross
+primitive-action and stage boundaries.
+
+When the endpoint is reached, the environment reports `done: true`,
+`success: true`, and a `details.stop_at` entry containing the resolved task
+frame. The remaining action/stage suffix is not executed, and an incomplete
+stage does not emit a stage-completion record. Controller or task failures
+that occur before the endpoint still fail normally.
+
+The endpoint must be reachable from the selected start:
+
+- a target already passed by `physical_replay`, or beyond the natural task
+  end, raises an error instead of silently clamping;
+- `stop_at.frame` cannot be combined with kinematic `start_after`, because a
+  teleport prefix has no physical frame count;
+- a waypoint-based `stop_at` may be combined with `start_after`, but it must
+  occur after the start waypoint.
+
+Runnable segment example:
+
+```bash
+aao-demo --config-name pick_and_place_physical_segment
+```
+
+### Existing teleport fast-forward (`task.start_after`)
+
+The existing `start_after` configuration remains unchanged:
 
 ```yaml
 task:
@@ -28,13 +171,18 @@ task:
     waypoint: 0
 ```
 
-The selector uses a unique stage name, `pre_move` or `post_move`, and a
-zero-based index into that YAML waypoint list. The selected waypoint is
-already complete when `reset()` returns; rollout continues with the next
-primitive action. An arc still counts as one YAML waypoint even when it is
-expanded into multiple internal control actions.
+Teleport fast-forward is faster for free-space prefixes, but pose waypoints do
+not execute the intervening physics. It teleports the EEF and manually preserves
+the relative pose of already-grasped objects; gripper close/open commands
+still use the normal controller and settle logic. This mode is unsuitable for
+reconstructing drawer, door, lever, deformable, or other contact-driven state.
 
-Reset replay uses the normal task semantics:
+The waypoint selector uses a unique stage name, `pre_move` or `post_move`, and
+a zero-based index into that YAML waypoint list. The selected waypoint is
+already complete when `reset()` returns. An arc still counts as one YAML
+waypoint even when expanded into multiple internal primitives.
+
+Both mechanisms use the normal task semantics where applicable:
 
 - scene, operator, camera, and waypoint randomization are applied first;
 - waypoint randomization uses a deterministic stream keyed by task seed,
@@ -42,23 +190,23 @@ Reset replay uses the normal task semantics:
   resolve the same waypoint regardless of batch execution order;
 - waypoint references (`world`, `base`, `object_world`, `eef_world`, etc.)
   are resolved through the same runtime path as a normal rollout;
-- EEF and already-grasped objects are teleported while preserving each
-  object's full EEF-relative SE(3) pose;
-- gripper close/open commands use the normal controller and settle logic, so
-  a skipped pick must establish a real backend grasp rather than a logical
-  attachment;
+- `physical_replay` uses the same controller, physics, callbacks, conditions,
+  and action state machine as normal rollout;
+- `start_after` preserves each already-grasped object's full EEF-relative
+  SE(3) pose and physically settles gripper close/open commands;
 - skipped stages do not emit execution records and are excluded from the
   current rollout's `total_stages` summary.
 
-Only pose waypoints can be selected. To begin after a close action, select a
-following pose waypoint. Backends that opt into this feature must implement
-kinematic EEF teleportation and mutable object poses; configurations without
-`start_after` do not require those capabilities.
+Only pose waypoints can be selected by waypoint coordinates. To begin after a
+close action, select a following pose waypoint. `start_after` requires
+kinematic EEF teleportation and mutable poses for carried objects;
+`physical_replay` does not require either capability.
 
 Runnable example:
 
 ```bash
 aao-demo --config-name pick_and_place_place_only
+aao-demo --config-name pick_and_place_place_only_physical_replay
 ```
 
 ## Stage reference site

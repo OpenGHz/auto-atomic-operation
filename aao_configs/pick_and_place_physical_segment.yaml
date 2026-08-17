@@ -1,0 +1,13 @@
+defaults:
+  - pick_and_place_place_only_physical_replay
+  - _self_
+
+# Reset physically replays the complete pick stage. The visible rollout then
+# executes only the place approach and finishes successfully as soon as the
+# second place pre_move waypoint is reached; the release and retreat suffix is
+# intentionally not executed.
+task:
+  stop_at:
+    stage: place_source
+    phase: pre_move
+    waypoint: 1

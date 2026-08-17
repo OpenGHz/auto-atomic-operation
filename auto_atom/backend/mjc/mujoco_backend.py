@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Union
 
@@ -933,6 +934,24 @@ class MujocoTaskBackend(SceneBackend):
 
     def refresh(self) -> None:
         self.env.refresh_viewer()
+
+    @contextmanager
+    def physical_replay_context(self):
+        """Run every physics step while deferring viewer sync and sleep."""
+        if getattr(self.env, "_share_physics", False):
+            raise RuntimeError(
+                "task.physical_replay does not support "
+                "gaussian_render.share_physics=true"
+            )
+        envs = list(self.env.envs)
+        previous = [env._suppress_viewer_updates for env in envs]
+        for env in envs:
+            env._suppress_viewer_updates = True
+        try:
+            yield
+        finally:
+            for env, old_value in zip(envs, previous):
+                env._suppress_viewer_updates = old_value
 
     def get_operator_handler(self, name: str) -> MujocoOperatorHandler:
         try:

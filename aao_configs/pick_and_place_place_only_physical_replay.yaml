@@ -1,0 +1,12 @@
+defaults:
+  - pick_and_place
+  - _self_
+
+# Execute the complete pick stage through the normal controller and physics
+# during reset, then expose only the place suffix to the visible rollout.
+# The existing pick_and_place_place_only teleport config remains independent.
+task:
+  physical_replay:
+    stage: pick_source
+    phase: post_move
+    waypoint: 0

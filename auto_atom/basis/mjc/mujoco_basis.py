@@ -358,6 +358,7 @@ class MujocoBasis:
         )
         self._ctrl_interp = config.ctrl_interpolation and self._n_substeps > 1
         self._prev_ctrl: np.ndarray | None = None
+        self._suppress_viewer_updates = False
 
         if self.model.nkey > 0:
             mujoco.mj_resetDataKeyframe(self.model, self.data, 0)
@@ -972,7 +973,7 @@ class MujocoBasis:
                 for cb in self._pre_step_callbacks:
                     cb(self.model, self.data)
                 mujoco.mj_step(self.model, self.data)
-        if self._viewer_running():
+        if self._viewer_running() and not self._suppress_viewer_updates:
             self._sync_viewer()
             if self.config.viewer.step_delay > 0.0:
                 time.sleep(self.config.viewer.step_delay)

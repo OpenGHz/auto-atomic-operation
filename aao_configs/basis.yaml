@@ -65,6 +65,12 @@ task:
   # Optional reset-time fast-forward selector. Child configs can replace this
   # mapping to start rollout after a configured YAML waypoint.
   start_after: null
+  # Independent full controller/physics replay target. Select either an
+  # absolute task frame or a waypoint plus an optional frame offset.
+  physical_replay: null
+  # Optional normal-success endpoint in the same absolute-frame or
+  # waypoint-plus-offset coordinate system as physical_replay.
+  stop_at: null
   randomization:
     arm:
       eef:

@@ -9,14 +9,20 @@ from .framework import (
     PoseControlConfig,
     PoseRandomRange,
     PoseReference,
+    PhysicalReplayConfig,
     RandomizationReference,
     StageConfig,
     StageControlConfig,
     StartAfterWaypointConfig,
+    StopAtConfig,
     TaskFileConfig,
 )
 from .mock import MockOperatorHandler, MockSceneBackend
-from .policy_eval import ConfigDrivenDemoPolicy, PolicyEvaluator
+from .policy_eval import (
+    ConfigDrivenDemoPolicy,
+    PolicyActionFeedback,
+    PolicyEvaluator,
+)
 
 # Runner imports last – runner subpackage depends on the modules above.
 from .runner.base import RunnerBase
@@ -65,7 +71,9 @@ __all__ = [
     "OperatorConfig",
     "OperatorRandomizationConfig",
     "OperatorHandler",
+    "PolicyActionFeedback",
     "PolicyEvaluator",
+    "PhysicalReplayConfig",
     "PoseControlConfig",
     "PoseRandomRange",
     "PoseReference",
@@ -77,6 +85,7 @@ __all__ = [
     "StageControlConfig",
     "StageExecutionStatus",
     "StartAfterWaypointConfig",
+    "StopAtConfig",
     "TaskFileConfig",
     "TaskFlowBuilder",
     "TaskRunner",

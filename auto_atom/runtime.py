@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 from abc import ABC, abstractmethod
+from contextlib import nullcontext
 from copy import deepcopy
 from dataclasses import dataclass, field
 from enum import Enum
@@ -21,6 +22,7 @@ from .framework import (
     OperationConditionType,
     OperationConstraint,
     Orientation,
+    PhysicalReplayConfig,
     PlacedToleranceConfig,
     PoseControlConfig,
     PoseReference,
@@ -28,6 +30,7 @@ from .framework import (
     RandomizationReference,
     StageConfig,
     StageControlConfig,
+    StopAtConfig,
     TaskFileConfig,
 )
 from .utils.pose import (
@@ -44,6 +47,7 @@ from .utils.pose import (
 )
 
 _RESET_EEF_SETTLE_MAX_UPDATES = 10_000
+_RESET_PHYSICAL_REPLAY_MAX_FRAMES = 1_000_000
 
 
 class StageExecutionStatus(str, Enum):
@@ -298,6 +302,14 @@ class SceneBackend(ABC):
         """Refresh backend visualization after reset-time state edits."""
         return None
 
+    def physical_replay_context(self):
+        """Optionally suppress presentation delays during physical replay.
+
+        Physics stepping and callbacks must remain enabled. Backends may
+        override this to defer viewer synchronization until replay completes.
+        """
+        return nullcontext()
+
 
 @dataclass
 class ArcExecutionSnapshot:
@@ -313,6 +325,8 @@ class PrimitiveAction:
     resolved_pose: Optional[PoseControlConfig] = None
     arc_snapshot: Optional[ArcExecutionSnapshot] = None
     arc_cumulative_angle: Optional[float] = None
+    absolute_arc_initial_delta: Optional[float] = None
+    absolute_arc_control_steps: int = 0
     source_phase: Optional[str] = None
     source_waypoint: Optional[int] = None
     source_waypoint_end: bool = False
@@ -401,6 +415,18 @@ class ResetReplayResult:
 
 
 @dataclass
+class _RuntimeAdvanceResult:
+    """One config-driven controller tick and the transition it produced."""
+
+    stage_index: Optional[int] = None
+    stage_name: str = ""
+    action: Optional[PrimitiveAction] = None
+    signal: Optional[ControlSignal] = None
+    stage_completed: bool = False
+    stopped_at: bool = False
+
+
+@dataclass
 class _EnvRuntimeState:
     stage_cursor: int = 0
     active: Optional[ActiveStageState] = None
@@ -411,6 +437,10 @@ class _EnvRuntimeState:
     phase_step: Optional[int] = None
     latest_status: StageExecutionStatus = StageExecutionStatus.PENDING
     latest_details: Dict[str, Any] = field(default_factory=dict)
+    task_frame: int = 0
+    stop_waypoint_reached_frame: Optional[int] = None
+    stopped_at: bool = False
+    stop_at_details: Dict[str, Any] = field(default_factory=dict)
 
 
 class ComponentRegistry:
@@ -659,6 +689,9 @@ class TaskRunner:
         self._records: List[ExecutionRecord] = []
         self._env_states: List[_EnvRuntimeState] = []
         self._has_reset: np.ndarray = np.zeros(0, dtype=bool)
+        self._execution_start_stage_indices: np.ndarray = np.zeros(
+            0, dtype=np.int64
+        )
         self._execution_start_stage_index = 0
 
     @property
@@ -709,6 +742,9 @@ class TaskRunner:
         self._context.backend.setup(self._context.config)
         self._env_states = [_EnvRuntimeState() for _ in range(backend.batch_size)]
         self._has_reset = np.zeros(backend.batch_size, dtype=bool)
+        self._execution_start_stage_indices = np.zeros(
+            backend.batch_size, dtype=np.int64
+        )
         self._records = []
         self._execution_start_stage_index = 0
         return self
@@ -716,19 +752,42 @@ class TaskRunner:
     def reset(self, env_mask: Optional[np.ndarray] = None) -> TaskUpdate:
         context = self._require_context()
         mask = self._normalize_mask(env_mask)
-        context.backend.reset(mask)
-        for env_index, enabled in enumerate(mask):
-            if enabled:
-                reset_result = TaskRunner.initialize_reset_env(
-                    env_index=env_index,
-                    previous_state=self._env_states[env_index],
-                    context=context,
-                    plans=self._plan,
-                    builder=self.builder,
-                )
-                self._env_states[env_index] = reset_result.state
-                self._execution_start_stage_index = reset_result.state.stage_cursor
-        if context.config.start_after is not None:
+        if not bool(np.any(mask)):
+            return self._build_task_update()
+
+        self._has_reset[mask] = False
+        pending_results: Dict[int, ResetReplayResult] = {}
+        try:
+            context.backend.reset(mask)
+            for env_index, enabled in enumerate(mask):
+                if enabled:
+                    pending_results[env_index] = TaskRunner.initialize_reset_env(
+                        env_index=env_index,
+                        previous_state=self._env_states[env_index],
+                        context=context,
+                        plans=self._plan,
+                        builder=self.builder,
+                    )
+        except Exception:
+            try:
+                context.backend.refresh()
+            except Exception:
+                pass
+            raise
+
+        for env_index, reset_result in pending_results.items():
+            self._env_states[env_index] = reset_result.state
+            self._execution_start_stage_indices[env_index] = (
+                reset_result.state.stage_cursor
+            )
+        initialized = self._has_reset | mask
+        self._execution_start_stage_index = int(
+            np.min(self._execution_start_stage_indices[initialized])
+        )
+        if (
+            context.config.start_after is not None
+            or context.config.physical_replay is not None
+        ):
             context.backend.refresh()
         self._has_reset[mask] = True
         # self._set_interest_focus()
@@ -758,6 +817,7 @@ class TaskRunner:
         self._records = []
         self._env_states = []
         self._has_reset = np.zeros(0, dtype=bool)
+        self._execution_start_stage_indices = np.zeros(0, dtype=np.int64)
         self._execution_start_stage_index = 0
 
     def _update_env(
@@ -766,20 +826,46 @@ class TaskRunner:
         state: _EnvRuntimeState,
         context: ExecutionContext,
     ) -> None:
-        if state.stage_cursor >= len(self._plan):
+        TaskRunner._advance_env_once(
+            env_index=env_index,
+            state=state,
+            context=context,
+            plans=self._plan,
+            builder=self.builder,
+            records=self._records,
+        )
+
+    @staticmethod
+    def _advance_env_once(
+        *,
+        env_index: int,
+        state: _EnvRuntimeState,
+        context: ExecutionContext,
+        plans: List[StageExecutionPlan],
+        builder: TaskFlowBuilder,
+        records: Optional[List[ExecutionRecord]],
+        enforce_stop_at: bool = True,
+    ) -> _RuntimeAdvanceResult:
+        """Advance one env by one normal config-driven controller tick.
+
+        Normal rollout and reset-time physical replay share this transition
+        path. Passing ``records=None`` suppresses records for the replayed
+        prefix while preserving controller, condition, and stage semantics.
+        """
+        if state.stage_cursor >= len(plans):
             state.done = True
             state.success = True
             state.latest_status = StageExecutionStatus.SUCCEEDED
             state.phase = None
             state.phase_step = None
-            return
+            return _RuntimeAdvanceResult()
 
         if state.active is None:
-            plan = self._plan[state.stage_cursor]
+            plan = plans[state.stage_cursor]
             failure = (
                 None
                 if plan.stage.operation == Operation.PULL
-                else self._check_stage_condition(
+                else TaskRunner._check_stage_condition(
                     env_index=env_index,
                     context=context,
                     plan=plan,
@@ -787,24 +873,31 @@ class TaskRunner:
                 )
             )
             if failure is not None:
-                self._record_failure(env_index, plan, failure)
+                TaskRunner._append_failure_record(
+                    records, env_index, plan, failure
+                )
                 state.done = True
                 state.success = False
                 state.latest_status = StageExecutionStatus.FAILED
                 state.latest_details = failure
-                return
-            state.active = self._start_stage(
-                env_index,
-                state.episode_index,
-                context,
-                plan,
+                return _RuntimeAdvanceResult(
+                    stage_index=plan.stage_index,
+                    stage_name=plan.stage_name,
+                )
+            state.active = TaskRunner._create_active_stage(
+                env_index=env_index,
+                episode_index=state.episode_index,
+                context=context,
+                plan=plan,
+                builder=builder,
             )
             state.latest_status = StageExecutionStatus.RUNNING
 
         assert state.active is not None
         active = state.active
         action = active.actions[active.action_index]
-        mask = self._mask_for_env(env_index)
+        mask = np.zeros(context.backend.batch_size, dtype=bool)
+        mask[env_index] = True
         result = TaskRunner._run_stage_action(
             env_index=env_index,
             plan=active.plan,
@@ -813,10 +906,23 @@ class TaskRunner:
             env_mask=mask,
         )
         signal = result.signals[env_index]
+        advance = _RuntimeAdvanceResult(
+            stage_index=active.plan.stage_index,
+            stage_name=active.plan.stage_name,
+            action=action,
+            signal=signal,
+        )
+        state.task_frame += 1
+        TaskRunner._track_stop_at_waypoint(
+            state=state,
+            selector=context.config.stop_at,
+            advance=advance,
+        )
         details = {
             "env_index": env_index,
             "action": action.kind,
             "action_index": active.action_index,
+            "task_frame": state.task_frame,
             **result.details[env_index],
         }
         if (
@@ -849,24 +955,33 @@ class TaskRunner:
             details["arc"] = arc_info
 
         if signal == ControlSignal.RUNNING:
-            phase, phase_step = self._action_phase(active.actions, active.action_index)
+            phase, phase_step = TaskRunner._action_phase(
+                active.actions, active.action_index
+            )
             state.latest_status = StageExecutionStatus.RUNNING
             state.latest_details = details
             state.phase = phase
             state.phase_step = phase_step
-            return
+            if enforce_stop_at and TaskRunner._finish_stop_at_if_due(
+                state=state,
+                context=context,
+            ):
+                advance.stopped_at = True
+            return advance
 
         if signal == ControlSignal.REACHED:
             completed_action = action
             active.action_index += 1
-            mid_failure = self._mid_action_failure(
+            mid_failure = TaskRunner._mid_action_failure(
                 env_index=env_index,
                 context=context,
                 active=active,
                 completed_action=completed_action,
             )
             if mid_failure is not None:
-                self._record_failure(env_index, active.plan, mid_failure)
+                TaskRunner._append_failure_record(
+                    records, env_index, active.plan, mid_failure
+                )
                 state.active = None
                 state.done = True
                 state.success = False
@@ -874,25 +989,35 @@ class TaskRunner:
                 state.latest_details = mid_failure
                 state.phase = None
                 state.phase_step = None
-                return
+                return advance
+
+            state.latest_details = details
+            if enforce_stop_at and TaskRunner._finish_stop_at_if_due(
+                state=state,
+                context=context,
+            ):
+                advance.stopped_at = True
+                return advance
 
             if active.action_index < len(active.actions):
-                phase, phase_step = self._action_phase(
+                phase, phase_step = TaskRunner._action_phase(
                     active.actions, active.action_index
                 )
                 state.latest_status = StageExecutionStatus.RUNNING
                 state.latest_details = details
                 state.phase = phase
                 state.phase_step = phase_step
-                return
+                return advance
 
-            success_failure = self._stage_completion_failure(
+            success_failure = TaskRunner._stage_completion_failure(
                 env_index=env_index,
                 context=context,
                 active=active,
             )
             if success_failure is not None:
-                self._record_failure(env_index, active.plan, success_failure)
+                TaskRunner._append_failure_record(
+                    records, env_index, active.plan, success_failure
+                )
                 state.active = None
                 state.done = True
                 state.success = False
@@ -900,36 +1025,45 @@ class TaskRunner:
                 state.latest_details = success_failure
                 state.phase = None
                 state.phase_step = None
-                return
+                return advance
 
-            self._records.append(
-                ExecutionRecord(
-                    env_index=env_index,
-                    stage_index=active.plan.stage_index,
-                    stage_name=active.plan.stage_name,
-                    operator=active.operator.name,
-                    operation=active.plan.stage.operation.value,
-                    target_object=active.plan.stage.object,
-                    blocking=active.plan.stage.blocking,
-                    status=StageExecutionStatus.SUCCEEDED,
-                    details=details,
+            if records is not None:
+                records.append(
+                    ExecutionRecord(
+                        env_index=env_index,
+                        stage_index=active.plan.stage_index,
+                        stage_name=active.plan.stage_name,
+                        operator=active.operator.name,
+                        operation=active.plan.stage.operation.value,
+                        target_object=active.plan.stage.object,
+                        blocking=active.plan.stage.blocking,
+                        status=StageExecutionStatus.SUCCEEDED,
+                        details=details,
+                    )
                 )
-            )
             state.stage_cursor += 1
             state.active = None
             state.latest_status = StageExecutionStatus.SUCCEEDED
             state.latest_details = details
             state.phase = None
             state.phase_step = None
-            if state.stage_cursor >= len(self._plan):
+            if state.stage_cursor >= len(plans):
                 state.done = True
                 state.success = True
             else:
                 state.success = False
-            return
+            advance.stage_completed = True
+            if enforce_stop_at:
+                TaskRunner._raise_if_stop_at_unreachable(
+                    state=state,
+                    context=context,
+                )
+            return advance
 
-        failure = self._build_action_failure_details(active.plan, details, signal)
-        self._record_failure(env_index, active.plan, failure)
+        failure = TaskRunner._build_action_failure_details(
+            active.plan, details, signal
+        )
+        TaskRunner._append_failure_record(records, env_index, active.plan, failure)
         state.active = None
         state.done = True
         state.success = False
@@ -937,14 +1071,18 @@ class TaskRunner:
         state.latest_details = failure
         state.phase = None
         state.phase_step = None
+        return advance
 
-    def _record_failure(
-        self,
+    @staticmethod
+    def _append_failure_record(
+        records: Optional[List[ExecutionRecord]],
         env_index: int,
         plan: StageExecutionPlan,
         details: Dict[str, Any],
     ) -> None:
-        self._records.append(
+        if records is None:
+            return
+        records.append(
             ExecutionRecord(
                 env_index=env_index,
                 stage_index=plan.stage_index,
@@ -956,6 +1094,16 @@ class TaskRunner:
                 status=StageExecutionStatus.FAILED,
                 details=details,
             )
+        )
+
+    def _record_failure(
+        self,
+        env_index: int,
+        plan: StageExecutionPlan,
+        details: Dict[str, Any],
+    ) -> None:
+        TaskRunner._append_failure_record(
+            self._records, env_index, plan, details
         )
 
     def _start_stage(
@@ -1025,16 +1173,41 @@ class TaskRunner:
         builder: TaskFlowBuilder,
     ) -> ResetReplayResult:
         """Create one env's runtime state after the backend has been reset."""
-        result = TaskRunner.fast_forward_reset_env(
-            env_index=env_index,
-            episode_index=previous_state.episode_index + 1,
+        episode_index = previous_state.episode_index + 1
+        if context.config.physical_replay is not None:
+            with context.backend.physical_replay_context():
+                result = TaskRunner._physical_replay_reset_env(
+                    env_index=env_index,
+                    episode_index=episode_index,
+                    context=context,
+                    plans=plans,
+                    builder=builder,
+                    selector=context.config.physical_replay,
+                )
+            detail_key = "physical_replay"
+        else:
+            result = TaskRunner.fast_forward_reset_env(
+                env_index=env_index,
+                episode_index=episode_index,
+                context=context,
+                plans=plans,
+                builder=builder,
+            )
+            detail_key = "fast_forward"
+        TaskRunner._finish_stop_at_if_due(
+            state=result.state,
             context=context,
-            plans=plans,
-            builder=builder,
+            error_if_passed=True,
+        )
+        TaskRunner._raise_if_stop_at_unreachable(
+            state=result.state,
+            context=context,
         )
         details = _collect_reset_details(env_index, context)
         if result.details:
-            details["fast_forward"] = result.details
+            details[detail_key] = result.details
+        if result.state.stopped_at:
+            details["stop_at"] = dict(result.state.stop_at_details)
         result.state.latest_details = details
         return result
 
@@ -1051,7 +1224,6 @@ class TaskRunner:
             return ResetReplayResult(
                 state=_EnvRuntimeState(episode_index=episode_index)
             )
-
         target_stage_index = next(
             plan.stage_index
             for plan in plans
@@ -1177,6 +1349,292 @@ class TaskRunner:
         raise RuntimeError("start_after replay ended without reaching its target")
 
     @staticmethod
+    def _physical_replay_reset_env(
+        *,
+        env_index: int,
+        episode_index: int,
+        context: ExecutionContext,
+        plans: List[StageExecutionPlan],
+        builder: TaskFlowBuilder,
+        selector: PhysicalReplayConfig,
+    ) -> ResetReplayResult:
+        """Physically execute the task prefix and preserve the exact stop state."""
+        state = _EnvRuntimeState(episode_index=episode_index)
+        completed_stage_names: List[str] = []
+        replayed_frames = 0
+        waypoint_reached_frame: Optional[int] = None
+
+        while True:
+            absolute_target_reached = (
+                selector.frame is not None
+                and replayed_frames == selector.frame
+            )
+            waypoint_target_reached = (
+                waypoint_reached_frame is not None
+                and replayed_frames
+                == waypoint_reached_frame + selector.frame_offset
+            )
+            if absolute_target_reached or waypoint_target_reached:
+                return TaskRunner._finish_physical_replay(
+                    state=state,
+                    context=context,
+                    plans=plans,
+                    env_index=env_index,
+                    selector=selector,
+                    completed_stage_names=completed_stage_names,
+                    replayed_frames=replayed_frames,
+                    waypoint_reached_frame=waypoint_reached_frame,
+                )
+
+            if state.done:
+                target = (
+                    f"frame {selector.frame}"
+                    if selector.frame is not None
+                    else (
+                        f"{selector.stage}.{selector.phase}"
+                        f"[{selector.waypoint}] + {selector.frame_offset} frame(s)"
+                    )
+                )
+                raise RuntimeError(
+                    "physical_replay reached the end of the task "
+                    f"after {replayed_frames} frame(s), before target {target}"
+                )
+            if replayed_frames >= _RESET_PHYSICAL_REPLAY_MAX_FRAMES:
+                raise RuntimeError(
+                    "physical_replay exceeded the "
+                    f"{_RESET_PHYSICAL_REPLAY_MAX_FRAMES}-frame safeguard"
+                )
+
+            action_location = TaskRunner._physical_replay_location(state, plans)
+            try:
+                advance = TaskRunner._advance_env_once(
+                    env_index=env_index,
+                    state=state,
+                    context=context,
+                    plans=plans,
+                    builder=builder,
+                    records=None,
+                    enforce_stop_at=False,
+                )
+            except RuntimeError as exc:
+                raise RuntimeError(
+                    "physical_replay failed before completing "
+                    f"frame {replayed_frames + 1} at '{action_location}': {exc}"
+                ) from exc
+
+            if state.done and not state.success:
+                reason = state.latest_details.get(
+                    "failure_reason", "unknown physical replay failure"
+                )
+                raise RuntimeError(
+                    "physical_replay failed before completing "
+                    f"frame {replayed_frames + 1} at '{action_location}': {reason}"
+                )
+            if advance.action is None:
+                raise RuntimeError(
+                    "physical_replay made no controller progress at "
+                    f"frame {replayed_frames + 1}"
+                )
+
+            replayed_frames += 1
+            if advance.stage_completed:
+                completed_stage_names.append(advance.stage_name)
+
+            action = advance.action
+            if (
+                selector.frame is None
+                and waypoint_reached_frame is None
+                and advance.stage_name == selector.stage
+                and action.source_phase == selector.phase
+                and action.source_waypoint == selector.waypoint
+                and action.source_waypoint_end
+                and advance.signal == ControlSignal.REACHED
+            ):
+                waypoint_reached_frame = replayed_frames
+
+    @staticmethod
+    def _finish_physical_replay(
+        *,
+        state: _EnvRuntimeState,
+        context: ExecutionContext,
+        plans: List[StageExecutionPlan],
+        env_index: int,
+        selector: PhysicalReplayConfig,
+        completed_stage_names: List[str],
+        replayed_frames: int,
+        waypoint_reached_frame: Optional[int],
+    ) -> ResetReplayResult:
+        if state.active is not None:
+            active = state.active
+            resume_stage = active.plan.stage_name
+            resume_action = active.actions[active.action_index]
+        elif state.stage_cursor < len(plans):
+            resume_stage = plans[state.stage_cursor].stage_name
+            resume_action = None
+            state.latest_status = StageExecutionStatus.PENDING
+        else:
+            resume_stage = ""
+            resume_action = None
+
+        return ResetReplayResult(
+            state=state,
+            details=TaskRunner._physical_replay_details(
+                context=context,
+                env_index=env_index,
+                selector=selector,
+                completed_stage_names=completed_stage_names,
+                resume_stage=resume_stage,
+                resume_action=resume_action,
+                replayed_frames=replayed_frames,
+                waypoint_reached_frame=waypoint_reached_frame,
+            ),
+        )
+
+    @staticmethod
+    def _physical_replay_location(
+        state: _EnvRuntimeState,
+        plans: List[StageExecutionPlan],
+    ) -> str:
+        if state.active is not None:
+            active = state.active
+            if not active.actions:
+                return active.plan.stage_name
+            action_index = min(active.action_index, len(active.actions) - 1)
+            action = active.actions[action_index]
+            phase = action.source_phase or action.kind
+            if action.source_waypoint is not None:
+                phase += f"[{action.source_waypoint}]"
+            return f"{active.plan.stage_name}.{phase}"
+        if state.stage_cursor < len(plans):
+            return plans[state.stage_cursor].stage_name
+        return "<task end>"
+
+    @staticmethod
+    def _track_stop_at_waypoint(
+        *,
+        state: _EnvRuntimeState,
+        selector: Optional[StopAtConfig],
+        advance: _RuntimeAdvanceResult,
+    ) -> None:
+        """Record the full-task frame where a waypoint endpoint is reached."""
+        if (
+            selector is None
+            or selector.frame is not None
+            or state.stop_waypoint_reached_frame is not None
+            or advance.action is None
+        ):
+            return
+        action = advance.action
+        if (
+            advance.stage_name == selector.stage
+            and action.source_phase == selector.phase
+            and action.source_waypoint == selector.waypoint
+            and action.source_waypoint_end
+            and advance.signal == ControlSignal.REACHED
+        ):
+            state.stop_waypoint_reached_frame = state.task_frame
+
+    @staticmethod
+    def _stop_at_target_frame(
+        state: _EnvRuntimeState,
+        selector: StopAtConfig,
+    ) -> Optional[int]:
+        if selector.frame is not None:
+            return selector.frame
+        if state.stop_waypoint_reached_frame is None:
+            return None
+        return state.stop_waypoint_reached_frame + selector.frame_offset
+
+    @staticmethod
+    def _finish_stop_at_if_due(
+        *,
+        state: _EnvRuntimeState,
+        context: ExecutionContext,
+        error_if_passed: bool = False,
+    ) -> bool:
+        """Finish successfully when the configured endpoint is exactly due."""
+        selector = context.config.stop_at
+        if selector is None:
+            return False
+        if state.stopped_at:
+            return True
+        target_frame = TaskRunner._stop_at_target_frame(state, selector)
+        if target_frame is None or state.task_frame < target_frame:
+            return False
+        if state.task_frame > target_frame:
+            qualifier = (
+                " during reset-time prefix execution" if error_if_passed else ""
+            )
+            raise RuntimeError(
+                f"task.stop_at target {TaskRunner._stop_at_description(selector)} "
+                f"resolved to task frame {target_frame}, but execution reached "
+                f"frame {state.task_frame}{qualifier} before stop_at could be "
+                "applied"
+            )
+
+        if state.active is not None:
+            stop_stage = state.active.plan.stage_name
+        elif state.stage_cursor < len(context.plan):
+            stop_stage = context.plan[state.stage_cursor].stage_name
+        else:
+            stop_stage = ""
+        stop_details: Dict[str, Any] = {
+            "event": "stop_at_reached",
+            "target": selector.model_dump(
+                mode="json", exclude_none=True, exclude_defaults=True
+            ),
+            "task_frame": state.task_frame,
+            "task_sim_time_sec": state.task_frame * context.backend.dt_per_update,
+            "stage": stop_stage,
+        }
+        if state.stop_waypoint_reached_frame is not None:
+            stop_details["waypoint_reached_frame"] = (
+                state.stop_waypoint_reached_frame
+            )
+
+        state.stopped_at = True
+        state.stop_at_details = stop_details
+        state.done = True
+        state.success = True
+        state.latest_status = StageExecutionStatus.SUCCEEDED
+        state.phase = None
+        state.phase_step = None
+        state.latest_details = {
+            **state.latest_details,
+            "stop_at": dict(stop_details),
+        }
+        return True
+
+    @staticmethod
+    def _raise_if_stop_at_unreachable(
+        *,
+        state: _EnvRuntimeState,
+        context: ExecutionContext,
+    ) -> None:
+        selector = context.config.stop_at
+        if (
+            selector is None
+            or state.stopped_at
+            or not state.done
+            or not state.success
+        ):
+            return
+        raise RuntimeError(
+            "task reached the end after "
+            f"{state.task_frame} frame(s), before task.stop_at target "
+            f"{TaskRunner._stop_at_description(selector)}"
+        )
+
+    @staticmethod
+    def _stop_at_description(selector: StopAtConfig) -> str:
+        if selector.frame is not None:
+            return f"frame {selector.frame}"
+        return (
+            f"{selector.stage}.{selector.phase}[{selector.waypoint}] + "
+            f"{selector.frame_offset} frame(s)"
+        )
+
+    @staticmethod
     def _find_fast_forward_action_index(
         actions: List[PrimitiveAction],
         context: ExecutionContext,
@@ -1234,6 +1692,46 @@ class TaskRunner:
             ),
             "held_objects": held_objects,
         }
+
+    @staticmethod
+    def _physical_replay_details(
+        *,
+        context: ExecutionContext,
+        env_index: int,
+        selector: PhysicalReplayConfig,
+        completed_stage_names: List[str],
+        resume_stage: str,
+        resume_action: Optional[PrimitiveAction],
+        replayed_frames: int,
+        waypoint_reached_frame: Optional[int],
+    ) -> Dict[str, Any]:
+        held_objects: Dict[str, List[str]] = {}
+        for plan in context.plan:
+            operator_name = plan.operator_name
+            if operator_name in held_objects:
+                continue
+            held_objects[operator_name] = context.backend.get_grasped_object_names(
+                operator_name, env_index
+            )
+        details: Dict[str, Any] = {
+            "target": selector.model_dump(
+                mode="json", exclude_none=True, exclude_defaults=True
+            ),
+            "completed_stages": list(completed_stage_names),
+            "resume_stage": resume_stage,
+            "resume_phase": resume_action.source_phase if resume_action else None,
+            "resume_waypoint": (
+                resume_action.source_waypoint if resume_action else None
+            ),
+            "held_objects": held_objects,
+            "replayed_frames": replayed_frames,
+            "replayed_sim_time_sec": (
+                replayed_frames * context.backend.dt_per_update
+            ),
+        }
+        if waypoint_reached_frame is not None:
+            details["waypoint_reached_frame"] = waypoint_reached_frame
+        return details
 
     @staticmethod
     def _fast_forward_action(
@@ -1725,10 +2223,87 @@ class TaskRunner:
                     reference_site=reference_site,
                 )
                 action.resolved_pose = resolved_pose
-            return operator.move_to_pose(resolved_pose, target, env_mask=env_mask)
+            result = operator.move_to_pose(
+                resolved_pose, target, env_mask=env_mask
+            )
+            if is_arc and action.pose.arc.absolute:
+                return TaskRunner._enforce_absolute_arc_completion(
+                    env_index=env_index,
+                    operator=operator,
+                    action=action,
+                    backend=backend,
+                    result=result,
+                )
+            return result
         if action.kind == "eef" and action.eef is not None:
             return operator.control_eef(action.eef, env_mask=env_mask)
         raise RuntimeError(f"Invalid primitive action '{action.kind}'.")
+
+    @staticmethod
+    def _enforce_absolute_arc_completion(
+        *,
+        env_index: int,
+        operator: OperatorHandler,
+        action: PrimitiveAction,
+        backend: SceneBackend,
+        result: ControlResult,
+    ) -> ControlResult:
+        """Keep an absolute arc active until its named joint reaches the goal."""
+        assert action.pose is not None and action.pose.arc is not None
+        arc = action.pose.arc
+        assert arc.absolute and isinstance(arc.pivot, str)
+
+        action.absolute_arc_control_steps += 1
+        current_joint = float(backend.get_joint_angle(arc.pivot, env_index))
+        remaining = abs(float(arc.angle) - current_joint)
+        details = result.details[env_index]
+        arc_details = details.setdefault("absolute_arc", {})
+        arc_details.update(
+            {
+                "joint": arc.pivot,
+                "current_joint_angle": current_joint,
+                "target_joint_angle": float(arc.angle),
+                "remaining_joint_angle": remaining,
+                "joint_tolerance": float(arc.joint_tolerance),
+                "control_steps": action.absolute_arc_control_steps,
+            }
+        )
+
+        signal = result.signals[env_index]
+        if (
+            remaining <= arc.joint_tolerance
+            and signal in {ControlSignal.RUNNING, ControlSignal.REACHED}
+        ):
+            result.signals[env_index] = ControlSignal.REACHED
+            details["event"] = "absolute_arc_reached"
+            return result
+
+        if signal == ControlSignal.REACHED and remaining > arc.joint_tolerance:
+            result.signals[env_index] = ControlSignal.RUNNING
+            details["event"] = "absolute_arc_advancing"
+
+        if (
+            result.signals[env_index] == ControlSignal.RUNNING
+            and remaining > arc.joint_tolerance
+        ):
+            initial_delta = action.absolute_arc_initial_delta or remaining
+            segment_count = max(1, math.ceil(initial_delta / arc.max_step))
+            control = getattr(operator, "control", None)
+            per_segment_timeout = int(
+                getattr(control, "timeout_steps", _RESET_EEF_SETTLE_MAX_UPDATES)
+            )
+            max_control_steps = segment_count * max(per_segment_timeout, 1)
+            arc_details["max_control_steps"] = max_control_steps
+            if action.absolute_arc_control_steps >= max_control_steps:
+                result.signals[env_index] = ControlSignal.TIMED_OUT
+                details["event"] = "absolute_arc_timeout"
+                details["failure_category"] = "controller_timeout"
+                details["failure_reason"] = (
+                    f"absolute arc joint '{arc.pivot}' remained {remaining:.6f} "
+                    f"rad from target {float(arc.angle):.6f} after "
+                    f"{action.absolute_arc_control_steps} control steps"
+                )
+        return result
 
     @staticmethod
     def _resolve_arc_command(
@@ -1749,6 +2324,8 @@ class TaskRunner:
                 raise ValueError("Arc absolute mode requires pivot to be a joint name.")
             current_joint = backend.get_joint_angle(arc.pivot, env_index)
             delta = arc.angle - current_joint
+            if action is not None and action.absolute_arc_initial_delta is None:
+                action.absolute_arc_initial_delta = abs(float(delta))
             sign = 1.0 if delta >= 0 else -1.0
             angle = sign * min(abs(delta), arc.max_step)
             pivot_world_pos = backend.get_element_pose(arc.pivot, env_index).position[0]
