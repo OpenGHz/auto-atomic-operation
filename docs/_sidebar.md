@@ -8,6 +8,7 @@
   - [Scene Composition](/task-configuration/scene_composition.md)
   - [Randomization](/task-configuration/randomization.md)
   - [Stages & Waypoints](/task-configuration/stages_and_waypoints.md)
+  - [Physical Replay Presentation](/task-configuration/physical_replay.md)
   - [Execution Completion Flow](/task-configuration/execution_completion_flow.md)
   - [sim_freq & update_freq](/task-configuration/sim_freq_update_freq.md)
 

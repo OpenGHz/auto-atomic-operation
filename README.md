@@ -116,6 +116,7 @@ Full documentation is hosted at **[openghz.github.io/auto-atomic-operation](http
 
 - [CLI Reference](https://openghz.github.io/auto-atomic-operation/#/getting-started/cli_reference) — every flag, override, and output of `aao-demo` / `aao-eval`
 - [Task Configuration](https://openghz.github.io/auto-atomic-operation/#/task-configuration/stages_and_waypoints) — YAML schema, stages, waypoints, action space, randomization, scene composition
+- [Physical Replay Presentation](https://openghz.github.io/auto-atomic-operation/#/task-configuration/physical_replay) — physically replay a hidden prefix, show a waypoint-to-waypoint segment, and stop at a selected endpoint
 - [Execution Completion Flow](https://openghz.github.io/auto-atomic-operation/#/task-configuration/execution_completion_flow) — how `pre_move` / `eef` / `post_move` decide they are done and how that drives stage success
 - [MuJoCo Backend](https://openghz.github.io/auto-atomic-operation/#/mujoco-backend/mujoco_backend_conditions) — backend conditions, gripper semantics, observation wiring
 - [Custom Backend Guide](https://openghz.github.io/auto-atomic-operation/#/mujoco-backend/custom-backend) — integrate a new simulator or real robot

@@ -26,6 +26,10 @@ configured together.
 
 ### Complete physical replay (`task.physical_replay`)
 
+For a complete start/end configuration, presentation modes, runnable commands,
+and troubleshooting, see
+[Physical Replay Presentation](physical_replay.md).
+
 Use `physical_replay` when the prefix contains contacts or articulated scene
 motion. Every controller update, MuJoCo physics substep, pre-step callback,
 grasp, release, and stage condition is executed exactly as in a normal
