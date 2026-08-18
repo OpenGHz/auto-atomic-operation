@@ -16,6 +16,7 @@ from auto_atom import StopAtConfig as PublicStopAtConfig
 from auto_atom.framework import (
     AutoAtomConfig,
     PhysicalReplayConfig,
+    PhysicalReplayPresentationConfig,
     StartAfterWaypointConfig,
     StopAtConfig,
     TaskFileConfig,
@@ -44,6 +45,33 @@ def _move_stage(name: str, positions: list[float]) -> dict:
                     "reference": "world",
                 }
                 for position in positions
+            ]
+        },
+    }
+
+
+def _linear_then_arc_stage(name: str) -> dict:
+    return {
+        "name": name,
+        "object": "",
+        "operation": "move",
+        "operator": "arm",
+        "param": {
+            "pre_move": [
+                {
+                    "position": [0.1, 0.0, 0.2],
+                    "orientation": [0.0, 0.0, 0.0, 1.0],
+                    "reference": "world",
+                },
+                {
+                    "arc": {
+                        "pivot": [0.0, 0.0, 0.0],
+                        "axis": [0.0, 0.0, 1.0],
+                        "angle": 0.2,
+                        "max_step": 0.05,
+                    },
+                    "reference": "world",
+                },
             ]
         },
     }
@@ -98,6 +126,26 @@ def _spy_on_operator(runner: TaskRunner, *, reject_teleport: bool = False) -> li
 
         operator.teleport_end_effector = MethodType(_teleport, operator)
     return move_calls
+
+
+def _spy_on_replay_presentation(runner: TaskRunner) -> tuple[list[bool], list[float]]:
+    backend = runner._context.backend
+    animation_calls: list[bool] = []
+    keyframe_calls: list[float] = []
+
+    def _set_animation(self, enabled):
+        animation_calls.append(bool(enabled))
+
+    def _present_keyframe(self, hold_seconds):
+        keyframe_calls.append(float(hold_seconds))
+
+    backend.set_physical_replay_animation = MethodType(
+        _set_animation, backend
+    )
+    backend.present_physical_replay_keyframe = MethodType(
+        _present_keyframe, backend
+    )
+    return animation_calls, keyframe_calls
 
 
 def _base_auto_atom_payload() -> dict:
@@ -226,6 +274,47 @@ def test_physical_replay_schema_accepts_absolute_and_waypoint_targets() -> None:
         }
     )
     assert waypoint.physical_replay.frame_offset == 3
+
+
+def test_physical_replay_presentation_schema_and_defaults() -> None:
+    selector = PhysicalReplayConfig(frame=0)
+    assert type(selector.presentation) is PhysicalReplayPresentationConfig
+    assert selector.presentation.mode == "waypoint"
+    assert selector.presentation.preserve_arcs is False
+    assert selector.presentation.keyframe_hold_seconds == pytest.approx(0.05)
+    assert selector.model_dump(exclude_none=True, exclude_defaults=True) == {
+        "frame": 0
+    }
+
+    configured = PhysicalReplayConfig.model_validate(
+        {
+            "frame": 1,
+            "presentation": {
+                "mode": "waypoint",
+                "preserve_arcs": True,
+                "keyframe_hold_seconds": 0.2,
+            },
+        }
+    )
+    assert configured.presentation.preserve_arcs is True
+    assert configured.presentation.keyframe_hold_seconds == pytest.approx(0.2)
+
+
+@pytest.mark.parametrize(
+    "presentation, expected",
+    [
+        ({"mode": "keyframe"}, "Input should be"),
+        ({"keyframe_hold_seconds": -0.1}, "greater than or equal to 0"),
+        ({"animate_lines": True}, "Extra inputs are not permitted"),
+    ],
+)
+def test_physical_replay_presentation_schema_rejects_invalid_values(
+    presentation: dict, expected: str
+) -> None:
+    with pytest.raises(ValueError, match=expected):
+        PhysicalReplayConfig.model_validate(
+            {"frame": 0, "presentation": presentation}
+        )
 
 
 @pytest.mark.parametrize(
@@ -367,10 +456,17 @@ def test_place_only_examples_compose_to_independent_replay_fields() -> None:
             compose(config_name="pick_and_place_physical_segment"),
             resolve=True,
         )
+        block_segment_raw = OmegaConf.to_container(
+            compose(
+                config_name="place_blocks_on_disk_airbot_play_g2_segment"
+            ),
+            resolve=True,
+        )
 
     teleport = TaskFileConfig.model_validate(teleport_raw)
     physical = TaskFileConfig.model_validate(physical_raw)
     segment = TaskFileConfig.model_validate(segment_raw)
+    block_segment = TaskFileConfig.model_validate(block_segment_raw)
 
     assert type(teleport.task.start_after) is StartAfterWaypointConfig
     assert teleport.task.physical_replay is None
@@ -386,6 +482,20 @@ def test_place_only_examples_compose_to_independent_replay_fields() -> None:
         "stage": "place_source",
         "phase": "pre_move",
         "waypoint": 1,
+    }
+    assert block_segment.task.physical_replay.model_dump(
+        exclude_defaults=True
+    ) == {
+        "stage": "pick_cube_yellow_2",
+        "phase": "pre_move",
+        "waypoint": 1,
+    }
+    assert block_segment.task.physical_replay.presentation.mode == "waypoint"
+    assert block_segment.task.physical_replay.presentation.preserve_arcs is False
+    assert block_segment.task.stop_at.model_dump(exclude_defaults=True) == {
+        "stage": "place_cube_orange_3_in_disk",
+        "phase": "post_move",
+        "waypoint": 0,
     }
 
 
@@ -415,6 +525,218 @@ def test_absolute_frame_zero_does_not_execute_control() -> None:
         assert details["target"] == {"frame": 0}
         assert details["replayed_frames"] == 0
         assert runner.records == []
+    finally:
+        runner.close()
+        ComponentRegistry.clear()
+
+
+def test_waypoint_presentation_fast_forwards_linear_motion_between_keyframes() -> None:
+    selector = {
+        "stage": "move_0",
+        "phase": "pre_move",
+        "waypoint": 1,
+        "presentation": {
+            "mode": "waypoint",
+            "keyframe_hold_seconds": 0.0,
+        },
+    }
+    runner = TaskRunner().from_config(
+        _mock_task(selector, stages=[_move_stage("move_0", [0.1, 0.2])])
+    )
+    try:
+        animation_calls, keyframe_calls = _spy_on_replay_presentation(runner)
+        runner.reset()
+
+        # Two mock controller ticks per linear waypoint. The reset-time prefix
+        # before the selected start waypoint is hidden; that start keyframe is
+        # presented once when reset returns.
+        assert animation_calls == [False]
+        assert keyframe_calls == [0.0]
+    finally:
+        runner.close()
+        ComponentRegistry.clear()
+
+
+def test_full_presentation_hides_prefix_and_animates_every_visible_tick() -> None:
+    runner = TaskRunner().from_config(
+        _mock_task(
+            {
+                "stage": "move_0",
+                "phase": "pre_move",
+                "waypoint": 0,
+                "presentation": {
+                    "mode": "full",
+                    "keyframe_hold_seconds": 0.0,
+                },
+            },
+            stages=[_move_stage("move_0", [0.1, 0.2])],
+            stop_at={
+                "stage": "move_0",
+                "phase": "pre_move",
+                "waypoint": 1,
+            },
+        )
+    )
+    try:
+        animation_calls, keyframe_calls = _spy_on_replay_presentation(runner)
+        runner.reset()
+        runner.update()
+        update = runner.update()
+
+        assert update.done.tolist() == [True]
+        assert animation_calls == [False, True, True]
+        assert keyframe_calls == [0.0]
+    finally:
+        runner.close()
+        ComponentRegistry.clear()
+
+
+def test_waypoint_presentation_continues_through_visible_suffix_until_stop_at() -> None:
+    runner = TaskRunner().from_config(
+        _mock_task(
+            {
+                "stage": "move_0",
+                "phase": "pre_move",
+                "waypoint": 0,
+                "presentation": {
+                    "mode": "waypoint",
+                    "keyframe_hold_seconds": 0.0,
+                },
+            },
+            stages=[_move_stage("move_0", [0.1, 0.2])],
+            stop_at={
+                "stage": "move_0",
+                "phase": "pre_move",
+                "waypoint": 1,
+            },
+        )
+    )
+    try:
+        animation_calls, keyframe_calls = _spy_on_replay_presentation(runner)
+        runner.reset()
+
+        # The first waypoint is the visible start. The second waypoint is
+        # presented by normal rollout before stop_at marks the task complete.
+        assert animation_calls == [False]
+        assert keyframe_calls == [0.0]
+
+        update = runner.update()
+        assert update.done.tolist() == [False]
+        update = runner.update()
+        assert update.done.tolist() == [True]
+        assert animation_calls == [False, False, False]
+        assert keyframe_calls == [0.0, 0.0]
+    finally:
+        runner.close()
+        ComponentRegistry.clear()
+
+
+def test_physical_replay_can_fast_forward_all_the_way_to_stop_at() -> None:
+    endpoint = {
+        "stage": "move_0",
+        "phase": "pre_move",
+        "waypoint": 1,
+    }
+    runner = TaskRunner().from_config(
+        _mock_task(
+            {
+                **endpoint,
+                "presentation": {
+                    "mode": "waypoint",
+                    "keyframe_hold_seconds": 0.0,
+                },
+            },
+            stages=[_move_stage("move_0", [0.1, 0.2])],
+            stop_at=endpoint,
+        )
+    )
+    try:
+        animation_calls, keyframe_calls = _spy_on_replay_presentation(runner)
+        update = runner.reset()
+
+        assert update.done.tolist() == [True]
+        assert update.success.tolist() == [True]
+        assert update.details[0]["stop_at"]["task_frame"] == 4
+        # The prefix is hidden and the endpoint has priority as the final
+        # visible keyframe, even though the task ends during reset.
+        assert animation_calls == [False]
+        assert keyframe_calls == [0.0]
+    finally:
+        runner.close()
+        ComponentRegistry.clear()
+
+
+def test_waypoint_presentation_can_preserve_arc_animation() -> None:
+    stage = _linear_then_arc_stage("arc_move")
+    runner = TaskRunner().from_config(
+        _mock_task(
+            {
+                "stage": "arc_move",
+                "phase": "pre_move",
+                "waypoint": 0,
+                "presentation": {
+                    "mode": "waypoint",
+                    "preserve_arcs": True,
+                    "keyframe_hold_seconds": 0.0,
+                },
+            },
+            stages=[stage],
+            stop_at={
+                "stage": "arc_move",
+                "phase": "pre_move",
+                "waypoint": 1,
+            },
+        )
+    )
+    try:
+        animation_calls, keyframe_calls = _spy_on_replay_presentation(runner)
+        runner.reset()
+        for _ in range(8):
+            update = runner.update()
+
+        # The prefix before waypoint 0 is hidden. The visible arc has four
+        # sub-primitives and two mock controller ticks per primitive.
+        assert update.done.tolist() == [True]
+        assert animation_calls == [False] + [True] * 8
+        assert keyframe_calls == [0.0, 0.0]
+    finally:
+        runner.close()
+        ComponentRegistry.clear()
+
+
+def test_waypoint_presentation_can_skip_arc_animation() -> None:
+    stage = _linear_then_arc_stage("arc_move")
+    runner = TaskRunner().from_config(
+        _mock_task(
+            {
+                "stage": "arc_move",
+                "phase": "pre_move",
+                "waypoint": 0,
+                "presentation": {
+                    "mode": "waypoint",
+                    "preserve_arcs": False,
+                    "keyframe_hold_seconds": 0.0,
+                },
+            },
+            stages=[stage],
+            stop_at={
+                "stage": "arc_move",
+                "phase": "pre_move",
+                "waypoint": 1,
+            },
+        )
+    )
+    try:
+        animation_calls, keyframe_calls = _spy_on_replay_presentation(runner)
+        runner.reset()
+        for _ in range(8):
+            update = runner.update()
+
+        # The complete four-part arc still takes eight visible-window controller
+        # ticks; all are hidden and only the reached endpoint is presented.
+        assert update.done.tolist() == [True]
+        assert animation_calls == [False] * 9
+        assert keyframe_calls == [0.0, 0.0]
     finally:
         runner.close()
         ComponentRegistry.clear()

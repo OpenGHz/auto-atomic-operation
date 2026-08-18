@@ -29,8 +29,10 @@ configured together.
 Use `physical_replay` when the prefix contains contacts or articulated scene
 motion. Every controller update, MuJoCo physics substep, pre-step callback,
 grasp, release, and stage condition is executed exactly as in a normal
-rollout. Only viewer synchronization, viewer `step_delay`, observation capture,
-and prefix execution records are skipped.
+rollout. Observation capture and prefix execution records are skipped. Viewer
+synchronization and viewer `step_delay` are governed independently by the
+presentation policy, without changing which controller or physics steps
+execute.
 
 This example physically executes the complete pick stage during `reset()` and
 starts the visible rollout at `place_source`:
@@ -42,6 +44,63 @@ task:
     phase: post_move
     waypoint: 0
 ```
+
+The `physical_replay` target is also the visible start point. Its complete
+reset-time prefix is physically executed but not displayed. Once the target is
+reached, it is presented once as the start keyframe. From there, interactive
+presentation defaults to jumping from one completed YAML waypoint to the next
+until `stop_at` (or the natural task end). Every hidden controller update and
+physics substep still runs; the viewer is simply not synchronized between
+those endpoints. End-effector open/close endpoints are keyframes too:
+
+```yaml
+task:
+  physical_replay:
+    stage: pick_source
+    phase: post_move
+    waypoint: 0
+    presentation:
+      mode: waypoint
+      preserve_arcs: false
+      keyframe_hold_seconds: 0.05
+```
+
+`preserve_arcs: false` is the default and means arcs inside the visible segment
+are visually skipped just like linear motion: only the reached arc waypoint is
+shown. Set it to `true` for tasks such as opening a door where the continuous
+curved animation matters:
+
+```yaml
+task:
+  physical_replay:
+    stage: open_door
+    phase: post_move
+    waypoint: 1
+    presentation:
+      mode: waypoint
+      preserve_arcs: true
+```
+
+The presentation modes are:
+
+- `waypoint` (default): show the selected start, then jump between waypoint/eef
+  endpoints, optionally animating arcs with `preserve_arcs: true`;
+- `hidden`: show the selected start and endpoint but hide the segment interior;
+- `full`: display every controller tick inside the visible segment, including
+  linear moves;
+- `keyframe_hold_seconds`: optional wall-clock hold after each endpoint; it
+  does not advance simulation time.
+
+These settings affect only an interactive MuJoCo viewer. They do not turn
+physical replay into teleportation, remove collision steps, or alter the state
+returned by `reset()`.
+
+When both `physical_replay` and `stop_at` are configured, their targets have
+priority over the presentation mode and form a visible window: the prefix
+before the start is silent, the start is shown, the segment interior follows
+the selected presentation policy, and the endpoint is always shown. Once the
+endpoint is reached, the task finishes and no suffix after it is executed or
+displayed.
 
 An optional offset continues physical execution after that waypoint:
 

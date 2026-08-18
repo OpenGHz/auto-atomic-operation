@@ -303,12 +303,22 @@ class SceneBackend(ABC):
         return None
 
     def physical_replay_context(self):
-        """Optionally suppress presentation delays during physical replay.
+        """Optionally control presentation delays during physical replay.
 
         Physics stepping and callbacks must remain enabled. Backends may
-        override this to defer viewer synchronization until replay completes.
+        override this to suppress viewer synchronization by default, then use
+        the presentation hooks below for selected ticks and keyframes.
         """
         return nullcontext()
+
+    def set_physical_replay_animation(self, enabled: bool) -> None:
+        """Enable or suppress per-control-tick replay presentation."""
+        _ = enabled
+
+    def present_physical_replay_keyframe(self, hold_seconds: float) -> None:
+        """Present one reached replay keyframe without advancing physics."""
+        _ = hold_seconds
+        self.refresh()
 
 
 @dataclass
@@ -826,14 +836,32 @@ class TaskRunner:
         state: _EnvRuntimeState,
         context: ExecutionContext,
     ) -> None:
-        TaskRunner._advance_env_once(
+        advance = TaskRunner._advance_env_once(
             env_index=env_index,
             state=state,
             context=context,
             plans=self._plan,
             builder=self.builder,
             records=self._records,
+            physical_replay_selector=context.config.physical_replay,
         )
+        if context.config.physical_replay is not None:
+            presented = TaskRunner._present_physical_replay_boundary(
+                context=context,
+                selector=context.config.physical_replay,
+                advance=advance,
+            )
+            if (
+                advance.stopped_at
+                and not presented
+                and context.config.physical_replay.presentation.mode != "full"
+            ):
+                # A frame-based stop can fall in the middle of an action and
+                # therefore is not a YAML waypoint boundary. The selected end
+                # point still has priority over the presentation mode.
+                context.backend.present_physical_replay_keyframe(
+                    context.config.physical_replay.presentation.keyframe_hold_seconds
+                )
 
     @staticmethod
     def _advance_env_once(
@@ -845,6 +873,7 @@ class TaskRunner:
         builder: TaskFlowBuilder,
         records: Optional[List[ExecutionRecord]],
         enforce_stop_at: bool = True,
+        physical_replay_selector: Optional[PhysicalReplayConfig] = None,
     ) -> _RuntimeAdvanceResult:
         """Advance one env by one normal config-driven controller tick.
 
@@ -896,6 +925,13 @@ class TaskRunner:
         assert state.active is not None
         active = state.active
         action = active.actions[active.action_index]
+        if physical_replay_selector is not None:
+            context.backend.set_physical_replay_animation(
+                TaskRunner._physical_replay_action_is_animated(
+                    physical_replay_selector,
+                    action,
+                )
+            )
         mask = np.zeros(context.backend.batch_size, dtype=bool)
         mask[env_index] = True
         result = TaskRunner._run_stage_action(
@@ -1363,6 +1399,10 @@ class TaskRunner:
         completed_stage_names: List[str] = []
         replayed_frames = 0
         waypoint_reached_frame: Optional[int] = None
+        # The physical replay target defines the visible start. Everything
+        # before it must execute physically but remain outside the presentation
+        # window, regardless of how the visible segment itself is animated.
+        context.backend.set_physical_replay_animation(False)
 
         while True:
             absolute_target_reached = (
@@ -1453,6 +1493,46 @@ class TaskRunner:
                 waypoint_reached_frame = replayed_frames
 
     @staticmethod
+    def _physical_replay_action_is_animated(
+        selector: PhysicalReplayConfig,
+        action: PrimitiveAction,
+    ) -> bool:
+        presentation = selector.presentation
+        if presentation.mode == "full":
+            return True
+        if presentation.mode == "hidden":
+            return False
+        return bool(
+            presentation.preserve_arcs
+            and action.kind == "pose"
+            and action.pose is not None
+            and action.pose.arc is not None
+        )
+
+    @staticmethod
+    def _present_physical_replay_boundary(
+        *,
+        context: ExecutionContext,
+        selector: PhysicalReplayConfig,
+        advance: _RuntimeAdvanceResult,
+    ) -> bool:
+        presentation = selector.presentation
+        action = advance.action
+        if (
+            presentation.mode != "waypoint"
+            or action is None
+            or advance.signal != ControlSignal.REACHED
+        ):
+            return False
+        reached_keyframe = action.source_waypoint_end or action.kind == "eef"
+        if reached_keyframe:
+            context.backend.present_physical_replay_keyframe(
+                presentation.keyframe_hold_seconds
+            )
+            return True
+        return False
+
+    @staticmethod
     def _finish_physical_replay(
         *,
         state: _EnvRuntimeState,
@@ -1464,6 +1544,13 @@ class TaskRunner:
         replayed_frames: int,
         waypoint_reached_frame: Optional[int],
     ) -> ResetReplayResult:
+        # The reset-time prefix before the selected target is intentionally
+        # hidden. Present the reached start state once so both ``waypoint`` and
+        # ``full`` modes begin their visible window at a clear keyframe.
+        if selector.presentation.mode != "hidden":
+            context.backend.present_physical_replay_keyframe(
+                selector.presentation.keyframe_hold_seconds
+            )
         if state.active is not None:
             active = state.active
             resume_stage = active.plan.stage_name

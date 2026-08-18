@@ -520,6 +520,21 @@ class StartAfterWaypointConfig(BaseModel):
         return value
 
 
+class PhysicalReplayPresentationConfig(BaseModel):
+    """Viewer policy for the visible segment after physical replay reaches its target."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    mode: Literal["hidden", "waypoint", "full"] = "waypoint"
+    """``hidden`` suppresses the segment interior, ``waypoint`` jumps between
+    completed YAML waypoints, and ``full`` displays every visible control tick."""
+    preserve_arcs: bool = False
+    """In ``waypoint`` mode, display arc actions continuously while ordinary
+    pose and gripper actions remain endpoint-only."""
+    keyframe_hold_seconds: float = Field(default=0.05, ge=0.0)
+    """Optional viewer hold after each displayed waypoint/eef endpoint."""
+
+
 class PhysicalReplayConfig(BaseModel):
     """Target for reset-time replay through the normal controller and physics."""
 
@@ -536,6 +551,12 @@ class PhysicalReplayConfig(BaseModel):
     scene; frame N is the state after N normal task controller updates."""
     frame_offset: int = Field(default=0, ge=0, strict=True)
     """Additional control frames after the selected waypoint completes."""
+    presentation: PhysicalReplayPresentationConfig = Field(
+        default_factory=PhysicalReplayPresentationConfig
+    )
+    """How the target-to-end segment is presented in an interactive viewer.
+    The prefix before the target stays hidden and physics execution is
+    identical in every presentation mode."""
 
     @model_validator(mode="after")
     def _validate_target(self):

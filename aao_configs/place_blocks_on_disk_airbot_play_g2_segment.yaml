@@ -1,0 +1,21 @@
+defaults:
+  - place_blocks_on_disk_airbot_play_g2
+  - _self_
+
+# Physically replay the complete prefix through the final grasp-approach
+# waypoint for cube_yellow_2. The visible segment then continues waypoint by
+# waypoint until the orange-cube placement endpoint.
+task:
+  physical_replay:
+    stage: pick_cube_yellow_2
+    phase: pre_move
+    waypoint: 1
+    presentation:
+      mode: waypoint
+      preserve_arcs: false
+      keyframe_hold_seconds: 0.05
+
+  stop_at:
+    stage: place_cube_orange_3_in_disk
+    phase: post_move
+    waypoint: 0

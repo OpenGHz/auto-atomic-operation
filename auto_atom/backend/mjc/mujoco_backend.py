@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from collections.abc import Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -883,6 +884,7 @@ class MujocoTaskBackend(SceneBackend):
     _default_camera_poses: Dict[str, PoseState] = field(
         init=False, repr=False, default_factory=dict
     )
+    _hide_reset_refresh: bool = field(init=False, repr=False, default=False)
 
     def __post_init__(self) -> None:
         logging.getLogger(MujocoTaskBackend.__name__).info(
@@ -900,6 +902,7 @@ class MujocoTaskBackend(SceneBackend):
         return e.model.opt.timestep * e._n_substeps
 
     def setup(self, config: AutoAtomConfig) -> None:
+        self._hide_reset_refresh = config.physical_replay is not None
         for operator in self.operator_handlers.values():
             operator.home()
         if self.initial_poses:
@@ -927,7 +930,8 @@ class MujocoTaskBackend(SceneBackend):
             self._apply_randomization(mask)
         if self.camera_randomization:
             self._apply_camera_randomization(mask)
-        self.env.refresh_viewer()
+        if not self._hide_reset_refresh:
+            self.env.refresh_viewer()
 
     def teardown(self) -> None:
         self.env.close()
@@ -937,7 +941,7 @@ class MujocoTaskBackend(SceneBackend):
 
     @contextmanager
     def physical_replay_context(self):
-        """Run every physics step while deferring viewer sync and sleep."""
+        """Run every physics step with viewer sync disabled by default."""
         if getattr(self.env, "_share_physics", False):
             raise RuntimeError(
                 "task.physical_replay does not support "
@@ -952,6 +956,19 @@ class MujocoTaskBackend(SceneBackend):
         finally:
             for env, old_value in zip(envs, previous):
                 env._suppress_viewer_updates = old_value
+
+    def set_physical_replay_animation(self, enabled: bool) -> None:
+        """Toggle per-tick viewer sync without changing physics execution."""
+        for env in self.env.envs:
+            env._suppress_viewer_updates = not enabled
+
+    def present_physical_replay_keyframe(self, hold_seconds: float) -> None:
+        """Sync a reached waypoint once, optionally holding it for the viewer."""
+        viewer_env = self.env.envs[self.env.config.viewer_env_index]
+        viewer_running = viewer_env._viewer_running()
+        self.env.refresh_viewer()
+        if viewer_running and hold_seconds > 0.0:
+            time.sleep(hold_seconds)
 
     def get_operator_handler(self, name: str) -> MujocoOperatorHandler:
         try:

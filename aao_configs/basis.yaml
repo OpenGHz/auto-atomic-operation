@@ -66,7 +66,11 @@ task:
   # mapping to start rollout after a configured YAML waypoint.
   start_after: null
   # Independent full controller/physics replay target. Select either an
-  # absolute task frame or a waypoint plus an optional frame offset.
+  # absolute task frame or a waypoint plus an optional frame offset. The target
+  # is the visible start: its prefix is physically executed but hidden. From
+  # there, presentation defaults to waypoint jumps until stop_at; set
+  # presentation.preserve_arcs=true to animate arcs, or presentation.mode=full
+  # to animate every visible controller tick. Physics is never skipped.
   physical_replay: null
   # Optional normal-success endpoint in the same absolute-frame or
   # waypoint-plus-offset coordinate system as physical_replay.
