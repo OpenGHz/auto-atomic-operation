@@ -93,7 +93,7 @@ def deserialize_task_update(data: Dict[str, Any]) -> TaskUpdate:
             [StageExecutionStatus(s) for s in data["status"]], dtype=object
         ),
         done=_to_ndarray(data["done"], "bool"),
-        success=np.asarray(data["success"], dtype=bool),
+        success=_to_ndarray(data["success"], "bool"),
         details=deserialize_value(data["details"]),
         phase=data["phase"],
         phase_step=_to_ndarray(data["phase_step"], "int64"),
@@ -153,8 +153,12 @@ def serialize_execution_summary(summary: ExecutionSummary) -> Dict[str, Any]:
         "final_done": serialize_value(summary.final_done),
         "final_success": serialize_value(summary.final_success),
         "elapsed_time_sec": summary.elapsed_time_sec,
+        "sim_time_sec": summary.sim_time_sec,
         "env_completion_steps": serialize_value(summary.env_completion_steps),
         "env_completion_time_sec": serialize_value(summary.env_completion_time_sec),
+        "env_completion_sim_time_sec": serialize_value(
+            summary.env_completion_sim_time_sec
+        ),
         "completed_stage_info": {
             stage_name: list(statuses)
             for stage_name, statuses in summary.completed_stage_info.items()
@@ -175,11 +179,15 @@ def deserialize_execution_summary(data: Dict[str, Any]) -> ExecutionSummary:
             [StageExecutionStatus(s) for s in data["final_status"]], dtype=object
         ),
         final_done=_to_ndarray(data["final_done"], "bool"),
-        final_success=np.asarray(data["final_success"], dtype=bool),
+        final_success=_to_ndarray(data["final_success"], "bool"),
         elapsed_time_sec=data["elapsed_time_sec"],
+        sim_time_sec=data.get("sim_time_sec", 0.0),
         env_completion_steps=_to_ndarray(data.get("env_completion_steps"), "int64"),
         env_completion_time_sec=_to_ndarray(
             data.get("env_completion_time_sec"), "float64"
+        ),
+        env_completion_sim_time_sec=_to_ndarray(
+            data.get("env_completion_sim_time_sec"), "float64"
         ),
         completed_stage_info={
             str(stage_name): list(statuses)

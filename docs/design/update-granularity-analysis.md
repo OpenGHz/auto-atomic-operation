@@ -1,6 +1,8 @@
 # TaskRunner Update 粒度与关键点步进方案分析
 
-> 本文是设计分析，不代表相关接口已经实现。当前公开行为仍以代码和现有 CLI 文档为准。
+> `execution.update_boundary` 与 `execution.interval_selection` 均已实现。
+> 本文同时保留其他实现方案的对比，以及 viewer 快进和内部观测 callback 的
+> 后续演进建议。
 
 本文分析 `aao-demo --config-name pick_and_place` 为什么需要多次
 `TaskRunner.update()` 才能完成一个配置点位，并比较“每次外部 update
@@ -8,21 +10,68 @@
 
 ## 结论
 
-推荐保留现有 `TaskRunner.update()` 的单控制周期语义，新增一个可选的
-**宏步进接口**：一次外部调用在内部重复执行现有控制周期，直到当前
-primitive action 到达 `REACHED`、失败或超时。
+当前实现保留 `TaskRunner.update()` 的默认单控制周期语义，并通过
+`execution.update_boundary` 提供可选的**宏步进**。一次公开调用可以在内部重复
+执行现有控制周期，直到到达指定的 primitive、keypoint 或 stage 边界，或任务
+失败、超时、结束。
 
 对 `pick_and_place` 而言：
 
 - 当前执行包含 6 个 pose primitive 和 2 个 eef primitive；
 - 默认模式实测需要 248 次公开 `update()`；
-- primitive 宏步进模式可表现为 8 次外部调用；
+- `primitive` 或 `keypoint` 模式可表现为 8 次外部调用；
+- `stage` 模式可表现为 2 次外部调用；
 - 内部仍执行相同的物理控制周期，因此不会自动缩短仿真时间，但可以减少
-  外部交互次数，并可选择只在关键点刷新 viewer。
+  外部交互次数。只在 boundary 刷新 viewer 仍是后续能力，不是当前宏步配置的
+  隐含行为。
 
 如果要求物理状态真正瞬时跳到点位，只能使用 kinematic teleport 或状态
 snapshot。这两类方案会绕过正常接触动力学，不适合作为 pick/place
 数据采集的默认模式。
+
+## 已实现：统一执行配置
+
+执行粒度和闭区间选择统一位于任务文件顶层的 `execution` 节：
+
+```yaml
+execution:
+  update_boundary: keypoint
+  max_internal_updates_per_update: 10000
+  interval_selection:
+    start:
+      stage: pick_source
+      phase: post_move
+      waypoint: 0
+    stop:
+      stage: place_source
+      phase: post_move
+      waypoint: 0
+    max_fast_forward_updates: 10000
+```
+
+- `update_boundary` 支持 `control_tick`、`primitive`、`keypoint`、`stage`；
+- 默认 `control_tick`，保持历史行为；
+- `reset()` 复用正常状态机和物理控制，执行并包含 start，reset observation
+  就是 start 状态；
+- 后续公开 `update()` 按 `update_boundary` 返回；
+- stop 完整到达且相关 condition 通过后，任务成功结束，不再执行下一点；
+- stop 优先于更粗的 update boundary，例如 `stage` 不会越过 stage 中间的 stop；
+- `start == stop` 时，reset 到达该点后直接返回成功；
+- arc 的内部拆分不会暴露为多个可选择 waypoint；`eef` 使用唯一索引 0。
+
+两个安全上限相互独立：
+
+- `max_internal_updates_per_update` 限制一次公开 `update()` 内每个环境的内部
+  controller update 数；
+- `interval_selection.max_fast_forward_updates` 限制 `reset()` 快进到 start 的
+  controller update 数。
+
+二者默认都是 `10000`。前者耗尽会产生
+`internal_update_limit_exceeded` 终态失败，后者耗尽会产生 interval
+fast-forward timeout；修改其中一个不会影响另一个。
+
+详细配置与校验规则见
+[Stages & Waypoints](../task-configuration/stages_and_waypoints.md#inclusive-task-interval-selection)。
 
 ## 当前任务与执行粒度
 
@@ -47,16 +96,16 @@ pre_move[0] -> pre_move[1] -> eef -> post_move[0]
 | stage 数量 | 2 |
 
 `TaskFlowBuilder.build_actions()` 负责把 `pre_move`、`eef` 和 `post_move`
-配置展开成 primitive action。`TaskRunner.update()` 对每个选中的环境只执行
-当前 primitive 的一个控制周期：
+配置展开成 primitive action。在默认 `control_tick` 模式下，
+`TaskRunner.update()` 对每个选中的环境只执行当前 primitive 的一个控制周期：
 
 - 后端返回 `RUNNING`：保持当前 primitive，并立即返回；
 - 后端返回 `REACHED`：推进 action index，但不在同一次 update 中继续执行
   下一个 primitive；
 - 后端返回 `FAILED` 或 `TIMED_OUT`：终止当前 stage 和任务环境。
 
-这意味着现有公开 `update()` 的含义是“推进一个 control tick”，而不是
-“完成一个 YAML waypoint”。完整的完成判定流程见
+在 `primitive`、`keypoint` 或 `stage` 模式下，公开 `update()` 会在内部重复这
+段逻辑，到达对应边界后再返回。完整的完成判定流程见
 [Execution Completion Flow](../task-configuration/execution_completion_flow.md)。
 
 ## 为什么 `pick_and_place` 会逐步逼近
@@ -158,37 +207,36 @@ viewer:
 
 ## “每次 update 到一个关键点”的语义
 
-实现前必须明确“关键点”指什么。建议支持以下边界：
+实现区分了四种边界：
 
 | 边界 | `pick_and_place` 外部调用数 | 语义 |
 | --- | ---: | --- |
-| `control_tick` | 约 248 | 当前行为；一次推进一个控制周期 |
+| `control_tick` | 约 248 | 默认行为；一次推进一个控制周期 |
 | `primitive` | 8 | 每个 pose 或 eef primitive 完成后返回 |
-| `pose` | 6 | 只在空间点位完成后返回 |
+| `keypoint` | 8 | 每个 YAML waypoint 完成后返回；arc 子段合并为同一 keypoint |
 | `stage` | 2 | 一次完成整个 pick 或 place stage |
 
-首版推荐 `primitive`，因为它与当前状态机一一对应，且不会隐式决定 close/open
-应该与前一个 pose 还是后一个 pose 合并。
+对当前不含 arc 的 `pick_and_place`，`primitive` 和 `keypoint` 的调用数相同；
+差异在 arc waypoint 上。arc 可以展开为多个 runtime primitive：`primitive` 在
+每个子段后返回，而 `keypoint` 完成全部子段后才返回。interval endpoint 始终
+引用稳定的 YAML keypoint，不引用可能随实现变化的 primitive。
 
-`pose` 模式必须额外定义 eef grouping，例如：
-
-- 到达最后一个 `pre_move` 后是否立即闭合夹爪再返回；
-- 打开夹爪是与放置点合并，还是与撤退点合并；
-- eef 失败时应该归属于哪个 pose boundary。
+`keypoint` 包含 `eef` keypoint，因此不需要把 close/open 隐式归组到相邻 pose。
 
 ## 实现方案对比
 
-### 方案 A：Runner 宏步进到 primitive boundary
+### 方案 A：Runner 宏步进到配置 boundary（已采用）
 
-一次公开调用在内部重复执行现有 control tick，直到当前 primitive 完成。
+一次公开调用在 `TaskRunner` 内部重复执行现有 control tick，直到配置的
+primitive、keypoint 或 stage boundary 完成。默认 `control_tick` 不进入宏循环。
 
 | 维度 | 评价 |
 | --- | --- |
-| 外部语义 | 一次调用完成一个 primitive |
+| 外部语义 | 一次调用到达配置的 update boundary |
 | 物理正确性 | 高；保留当前 IK、weld、接触、grasp/place 条件和 timeout |
 | 改动范围 | 中；主要位于 `TaskRunner` 和 CLI 调用层 |
 | 调用延迟 | 单次调用会阻塞，最长到 primitive timeout |
-| 数据采集 | 默认只看到关键点；需要 callback 才能保留内部轨迹 |
+| 数据采集 | 宏步调用方只看到边界状态；需要未来的 callback 才能保留内部轨迹 |
 | 推荐程度 | 最高 |
 
 优点：
@@ -198,14 +246,13 @@ viewer:
 - 不改变 pose reference、waypoint randomization 和 stage condition；
 - mock、mocap 和 joint operator 都可以共享相同的高层语义。
 
-需要解决：
+实现要点：
 
-- batch 中每个环境的收敛速度不同；
-- 一个环境完成当前 primitive 后必须从 pending mask 移除，不能继续跨到下一个点；
-- 需要独立的内部最大迭代数，防止异常 handler 永远返回 `RUNNING`；
-- 现有 summary 使用“外部 update 数 × `dt_per_update`”估算仿真时间，宏步后不再成立；
-- 当前 `TaskUpdate.phase` 在 primitive 完成后可能已经指向下一个动作，需要显式返回
-  `completed_action`。
+- batch 中每个环境独立到达自己的首个边界，完成后从 pending mask 移除；
+- `max_internal_updates_per_update` 防止异常 handler 永远返回 `RUNNING`；
+- `TaskUpdate.details[env].execution` 报告 boundary、event 和实际 internal update 数；
+- interval stop 在检查完绑定条件后优先抢占更粗的 boundary；
+- summary 的模拟时间按内部 controller update 数计算，而不是外部调用数。
 
 ### 方案 B：Handler 内部阻塞或 action repeat
 
@@ -296,34 +343,33 @@ reset 后先用正常物理控制跑完整任务，在每个 primitive boundary 
 
 适合确定性的离线回放或回归测试，不适合通用在线 runner。
 
-## 推荐设计
+## 已采用设计
 
-### 保留现有 update，新增宏步接口
+### 保留 `update()` API，以配置选择返回边界
 
-不建议直接改变 `TaskRunner.update()` 的默认含义。它是 `RunnerBase`、IPC、AIRDC、
-测试和 policy evaluation 共同依赖的逐 tick 接口。
+实现没有新增另一套推进 API，也没有改变 `TaskRunner.update()` 的默认含义。
+任务文件通过以下配置选择行为：
 
-建议增加独立接口，示意如下：
-
-```python
-result = runner.advance_to_boundary(
-    boundary="primitive",
-    env_mask=active_mask,
-    max_internal_updates=100,
-    on_internal_update=None,
-)
+```yaml
+execution:
+  update_boundary: control_tick  # control_tick | primitive | keypoint | stage
+  max_internal_updates_per_update: 10000
 ```
 
-建议返回：
+`control_tick` 与旧行为一致；其余值让同一个 `update(env_mask)` 在内部继续调用
+原有逐 tick 状态机。调用结果仍是 `TaskUpdate`，每个环境的
+`details.execution` 额外报告：
 
 ```text
-AdvanceResult
-  update                 最终 TaskUpdate
-  completed_action       刚完成的 stage / phase / action index / kind
-  internal_updates       每个环境实际消耗的 control tick 数
-  sim_time_start/end     实际仿真时间范围
-  boundary               primitive / pose / stage
+event                            本次返回原因
+update_boundary                  配置的边界
+internal_updates                 本次公开调用实际执行的内部 update 数
+max_internal_updates_per_update  配置的安全上限
 ```
+
+因此 `RunnerBase` 和现有 `TaskRunner` 调用方仍使用同一方法；不配置
+`execution` 的任务无需迁移。当前 IPC service 封装的是 `PolicyEvaluator`，仅支持
+`control_tick`，不提供这组 TaskRunner 宏步能力。
 
 ### Batch 推进规则
 
@@ -340,14 +386,16 @@ return
 ```
 
 不同环境可以消耗不同数量的内部 tick，但不能因为某个环境较快就让它提前跨过
-两个 primitive。
+两个目标 boundary。任务结束、失败、timeout、内部上限失败和 interval stop 也会
+立即把该环境从 pending 集合移除。
 
 ### Viewer 快进应是独立开关
 
 Runner 宏步只改变外部调用粒度。如果内部每个物理 tick 仍然同步 viewer 并执行
 `step_delay`，画面仍会逐步运动，只是调用方被阻塞在一次函数调用中。
 
-建议把以下行为分开配置：
+当前没有 viewer-only fast-forward 配置：宏步改变的是公开调用粒度，不保证画面
+瞬移。后续可以把以下行为分开配置：
 
 - `render_internal_updates=true`：显示完整运动过程；
 - `render_internal_updates=false`：内部不 sync/sleep，只在 boundary 刷新一次；
@@ -366,11 +414,12 @@ AIRDC 当前按主循环 tick 调用 `runner.update(update_mask)`，采样器也
 - 最终 boundary 是否在保存前被捕获取决于 manager 调度顺序；
 - summary 中的 update 数不再代表物理控制周期数。
 
-因此建议：
+因此当前使用建议是：
 
 - `aao-demo` 交互和调试可启用宏步模式；
 - AIRDC 默认继续使用 `control_tick`；
-- 若 AIRDC 需要“外部一次关键点、内部仍保存完整轨迹”，通过
+- 当前宏步只暴露 boundary observation，不暴露内部观测 callback；
+- 若 AIRDC 未来需要“外部一次关键点、内部仍保存完整轨迹”，可增加
   `on_internal_update` callback 或 ring buffer 收集内部帧；
 - 数据 metadata 同时记录 outer boundary index 和 internal control tick。
 
@@ -380,14 +429,15 @@ AIRDC 当前按主循环 tick 调用 `runner.update(update_mask)`，采样器也
 ### Policy evaluation 与兼容性
 
 `ConfigDrivenDemoPolicy` 和 `PolicyEvaluator` 有独立的 action 应用与状态推进路径。
-建议宏步接口只作为现有逐 tick runner 的外层组合，不改变 primitive 的共享执行逻辑。
+外部 policy 每个 control tick 都需要提供新 action，因此当前
+`PolicyEvaluator` / `aao-eval` 明确拒绝：
 
-如果未来让任务配置默认声明宏步模式，则必须保证：
+- 任意 `execution.interval_selection`；
+- 任意非 `control_tick` 的 `execution.update_boundary`。
 
-- demo 与 eval 共用同一个 boundary helper；
-- 现有 demo/eval parity test 继续通过；
-- IPC 客户端仍可明确选择逐 tick 或宏步；
-- `max_updates` 明确指 outer update 还是 internal control tick。
+`aao-demo` 的 `max_updates` 和外部采集循环中的同名限制都表示公开
+`TaskRunner.update()` 调用次数，不表示内部 controller tick 数。内部消耗通过
+`details.execution.internal_updates` 和模拟时间统计体现。
 
 `StageConfig.blocking` 当前只记录在执行结果中，并未实现异步 stage 调度，不能直接
 用它实现关键点步进。
@@ -397,53 +447,60 @@ AIRDC 当前按主循环 tick 调用 `runner.update(update_mask)`，采样器也
 关键点步进只改变 runner 的执行粒度，不改变机器人、物体、场景或 operation flow。
 按照任务复用规则，不应为它复制出新的 `pick_and_place_*` 任务 YAML。
 
-推荐配置位置是 CLI/runner 层，例如：
+已实现的边界与区间选择都属于任务文件的 runner 执行层，因此集中在与 `task`
+同级的 `execution` 节，而不是放入描述 operation flow 的 `task` 内：
 
 ```yaml
 execution:
-  update_boundary: control_tick  # control_tick | primitive | pose | stage
-  max_internal_updates: 100
-  render_internal_updates: true
-  record_internal_updates: false
+  update_boundary: keypoint
+  max_internal_updates_per_update: 10000
+  interval_selection:
+    start: {stage: pick_source, phase: post_move, waypoint: 0}
+    stop: {stage: place_source, phase: post_move, waypoint: 0}
+    max_fast_forward_updates: 10000
 ```
 
-以上只是建议结构，当前尚未实现。
+区间 endpoint 强依赖 stage 定义，但它选择的是“本次如何执行现有任务”，不是任务
+本身有哪些阶段；集中在 `execution` 既保留依赖关系，也避免把 rollout policy 混入
+可复用的任务语义。误放在顶层的 `interval_selection`、`update_boundary` 和两个
+安全上限字段会被配置校验明确拒绝，并提示对应的 `execution...` 路径，避免静默
+失效。
 
-## 测试建议
+## 测试覆盖与后续验证
 
-### 单元测试
+### 已覆盖的核心行为
 
-- mock handler 连续返回 N 次 `RUNNING` 后返回 `REACHED`，验证一次宏步消耗 N+1
-  个 internal update；
-- `FAILED`、`TIMED_OUT` 和 internal cap 能立即结束；
-- primitive 完成时返回正确的 `completed_action`；
-- `env_mask` 只推进选中的环境；
-- batch 中不同环境以不同速度完成，但每个环境只跨一个 boundary。
+- 默认与显式 `control_tick` 行为一致；
+- `primitive`、`keypoint`、`stage` 分别在目标边界返回；
+- arc 是多个 primitive、一个 keypoint；
+- batch 中不同环境以不同速度完成，但每个环境只跨一个边界；
+- `max_internal_updates_per_update` 耗尽后显式失败；
+- interval stop 抢占更粗的 stage boundary；
+- `PolicyEvaluator` 拒绝 interval 和非 `control_tick` boundary；
+- 宏步 summary 使用每个环境的实际内部 update 数计算模拟时间。
 
-### MuJoCo 集成测试
+### 仍值得持续验证
 
 - 固定 seed 的 `pick_and_place` 成功完成；
-- primitive boundary 数严格为 8；
-- 宏步与逐 tick 的最终 success、stage records 和 object state 一致；
-- viewer fast-forward 不改变物理结果；
+- primitive/keypoint boundary 数严格为 8，stage boundary 数严格为 2；
+- 宏步与逐 tick 的最终 success、stage records、object state 和模拟时间一致；
+- 未来 viewer fast-forward 不改变物理结果；
 - teleport 模式明确验证抓取物体不会被错误假定为自动跟随。
 
 ### 数据与兼容性测试
 
-- dense recording 模式保留内部帧、时间戳和最终帧；
-- keyframe-only 模式产生预期的 boundary 帧数；
+- 未来 dense recording callback 保留内部帧、时间戳和最终帧；
+- boundary-only 模式产生预期的关键点帧数；
 - AIRDC 不会因 kinematic 模式未推进 `data.time` 而静默丢帧；
 - `aao-demo` 与 `aao-eval` parity 保持不变；
 - summary 同时正确报告 outer updates、internal updates 和 simulated time。
 
-## 建议实施顺序
+## 后续演进顺序
 
-1. 在 `TaskRunner` 增加 opt-in `advance_to_boundary(boundary="primitive")`。
-2. 为每个环境记录 completed primitive generation 和 internal tick 数。
-3. 在 `aao-demo` 增加交互式 primitive 步进选项，默认仍为 `control_tick`。
-4. 增加 viewer boundary-only 刷新和准确的模拟时间统计。
-5. 根据 AIRDC 是否需要密集轨迹，再加入 internal observation callback。
-6. 真机或异步控制需求明确后，再评估 trajectory/action-server 架构。
+1. 增加 viewer boundary-only 刷新，并保持它与 update boundary 独立。
+2. 根据 AIRDC 是否需要密集轨迹，加入 internal observation callback 或 buffer。
+3. 为 boundary-only 与 dense-recording metadata 明确 outer/internal 索引。
+4. 真机或异步控制需求明确后，再评估 trajectory/action-server 架构。
 
 ## Related
 

@@ -18,24 +18,69 @@ To discover which configs are runnable tasks, use [`aao-info`](#aao-info).
 
 | Override | Type | Default | Description |
 |---|---|---|---|
-| `rounds=N` | int | 1 | Number of demo rounds to run |
-| `use_input=true` | bool | false | Pause between steps (press Enter to continue) |
-| `max_updates=N` | int | 300 | Maximum update steps per round |
-| `perf_count=true` | bool | false | Capture observations each step for performance analysis |
+| `[+]rounds=N` | int | 1 | Number of demo rounds to run |
+| `[+]use_input=true` | bool | false | Pause between steps (press Enter to continue) |
+| `[+]max_updates=N` | int | 600 | Maximum public `TaskRunner.update()` calls per round; macro-boundary internal controller updates are limited separately |
+| `[+]perf_count=true` | bool | false | Capture observations each step for performance analysis |
 | `env.batch_size=N` | int | (from config) | Override the number of parallel environments |
 | `task.seed=N` | int | (from config) | Override the randomization seed |
 | `+env.viewer.disable=true` | bool | false | Run headless (no viewer window) |
 | `env.hide_operators_in_camera=true` | bool | false | Exclude configured operators from native MuJoCo RGB/depth/mask rendering without changing physics |
+| `+execution.update_boundary=...` | enum | `control_tick` | Public `update()` boundary: `control_tick`, `primitive`, `keypoint`, or `stage` |
+| `+execution.max_internal_updates_per_update=N` | int | 10000 | Per-environment controller-update limit within one public `update()` |
+| `+execution.interval_selection...` | mapping | unset | Run an inclusive `stage` / `phase` / `waypoint` interval; `reset()` reaches the start point |
+| `+execution.interval_selection.max_fast_forward_updates=N` | int | 10000 | Per-environment controller-update limit while `reset()` advances to the interval start |
 
 Any key present in the YAML config can be overridden on the command line following Hydra syntax:
 
+Use `+key=value` when the selected YAML does not define the key, and
+`key=value` when it already exists. `[+]` in the table means the prefix depends
+on the selected config; using `+` for an existing key causes a Hydra composition
+error.
+
 ```bash
 # Multiple overrides
-aao-demo --config-name stack_color_blocks rounds=3 env.batch_size=4 max_updates=500
+aao-demo --config-name stack_color_blocks +rounds=3 env.batch_size=4 +max_updates=500
 
 # Override a nested key
 aao-demo task.stages.0.param.pre_move.0.position="[0.4, 0.0, 0.1]"
 ```
+
+Make each public update complete one YAML waypoint, and select an inclusive
+keypoint interval without copying the task config:
+
+```bash
+aao-demo --config-name pick_and_place \
+  +execution.update_boundary=keypoint \
+  +execution.interval_selection.start.stage=pick_source \
+  +execution.interval_selection.start.phase=post_move \
+  +execution.interval_selection.start.waypoint=0 \
+  +execution.interval_selection.stop.stage=place_source \
+  +execution.interval_selection.stop.phase=post_move \
+  +execution.interval_selection.stop.waypoint=0
+```
+
+The leading `+` is required because shipped task YAML files leave these
+optional fields unset. The boundary choices are:
+
+- `control_tick`: return after one controller update; this default preserves
+  the previous behavior.
+- `primitive`: complete one runtime primitive. Arc sub-actions are separate
+  primitive boundaries.
+- `keypoint`: complete one YAML waypoint. An arc waypoint returns only after
+  all of its sub-actions complete.
+- `stage`: complete one whole stage, including its semantic condition checks.
+
+An interval stop always takes priority over a coarser boundary, so `stage`
+cannot advance past a stop keypoint in the middle of that stage. The public
+update and reset fast-forward limits are independent; both default to `10000`.
+See [Stages & Waypoints](../task-configuration/stages_and_waypoints.md#inclusive-task-interval-selection)
+for endpoint semantics and reporting.
+
+`PolicyEvaluator` / `aao-eval` accepts only the default `control_tick` boundary
+and rejects `execution.interval_selection`. An external policy must supply a
+new action at every control tick, so the evaluator cannot synthesize the
+intermediate actions required by either feature.
 
 ### Output
 

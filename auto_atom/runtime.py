@@ -17,6 +17,7 @@ from .framework import (
     ArcControlConfig,
     AutoAtomConfig,
     EefControlConfig,
+    IntervalSelectionConfig,
     Operation,
     OperationConditionType,
     OperationConstraint,
@@ -29,6 +30,10 @@ from .framework import (
     StageConfig,
     StageControlConfig,
     TaskFileConfig,
+    TaskKeypointConfig,
+    TaskPhase,
+    UpdateBoundary,
+    _phase_waypoint_count,
 )
 from .utils.pose import (
     PoseState,
@@ -281,6 +286,9 @@ class PrimitiveAction:
     resolved_pose: Optional[PoseControlConfig] = None
     arc_snapshot: Optional[ArcExecutionSnapshot] = None
     arc_cumulative_angle: Optional[float] = None
+    phase: Optional[TaskPhase] = None
+    waypoint: Optional[int] = None
+    completes_keypoint: bool = True
 
 
 @dataclass
@@ -314,6 +322,34 @@ class StageExecutionPlan:
     @property
     def stage_name(self) -> str:
         return self.stage.name or f"stage_{self.stage_index}"
+
+
+@dataclass(frozen=True)
+class _ResolvedTaskKeypoint:
+    stage_index: int
+    stage_name: str
+    phase: TaskPhase
+    waypoint: int
+
+    def matches(self, configured: TaskKeypointConfig) -> bool:
+        return (
+            self.stage_name == configured.stage
+            and self.phase == configured.phase
+            and self.waypoint == configured.waypoint
+        )
+
+
+@dataclass(frozen=True)
+class _EnvUpdateEvent:
+    """Boundaries crossed by one internal controller update."""
+
+    control_tick: bool = False
+    primitive_reached: bool = False
+    keypoint_reached: bool = False
+    stage_succeeded: bool = False
+    failed: bool = False
+    completed_position: Optional[_ResolvedTaskKeypoint] = None
+    completed_keypoint: Optional[_ResolvedTaskKeypoint] = None
 
 
 @dataclass
@@ -369,6 +405,7 @@ class _EnvRuntimeState:
     phase_step: Optional[int] = None
     latest_status: StageExecutionStatus = StageExecutionStatus.PENDING
     latest_details: Dict[str, Any] = field(default_factory=dict)
+    reported_keypoint: Optional[_ResolvedTaskKeypoint] = None
 
 
 class ComponentRegistry:
@@ -435,23 +472,41 @@ class TaskFlowBuilder:
             actions, last_orientation = TaskFlowBuilder._build_pose_actions(
                 TaskFlowBuilder._require_moves(stage, control, "pre_move"),
                 last_orientation,
+                phase=TaskPhase.PRE_MOVE,
             )
         else:
             actions, last_orientation = TaskFlowBuilder._build_pose_actions(
-                control.pre_move, last_orientation
+                control.pre_move,
+                last_orientation,
+                phase=TaskPhase.PRE_MOVE,
             )
 
         if stage.operation == Operation.GRASP:
             actions.append(
-                PrimitiveAction(kind="eef", eef=TaskFlowBuilder._grasp_eef(control))
+                PrimitiveAction(
+                    kind="eef",
+                    eef=TaskFlowBuilder._grasp_eef(control),
+                    phase=TaskPhase.EEF,
+                    waypoint=0,
+                )
             )
         elif stage.operation == Operation.RELEASE:
             actions.append(
-                PrimitiveAction(kind="eef", eef=TaskFlowBuilder._release_eef(control))
+                PrimitiveAction(
+                    kind="eef",
+                    eef=TaskFlowBuilder._release_eef(control),
+                    phase=TaskPhase.EEF,
+                    waypoint=0,
+                )
             )
         elif stage.operation in {Operation.PICK, Operation.PULL}:
             actions.append(
-                PrimitiveAction(kind="eef", eef=TaskFlowBuilder._grasp_eef(control))
+                PrimitiveAction(
+                    kind="eef",
+                    eef=TaskFlowBuilder._grasp_eef(control),
+                    phase=TaskPhase.EEF,
+                    waypoint=0,
+                )
             )
             for i, pm in enumerate(control.post_move):
                 if pm.reference == PoseReference.OBJECT_WORLD or (
@@ -465,22 +520,41 @@ class TaskFlowBuilder:
                     )
         elif stage.operation == Operation.PLACE:
             actions.append(
-                PrimitiveAction(kind="eef", eef=TaskFlowBuilder._release_eef(control))
+                PrimitiveAction(
+                    kind="eef",
+                    eef=TaskFlowBuilder._release_eef(control),
+                    phase=TaskPhase.EEF,
+                    waypoint=0,
+                )
             )
         elif stage.operation == Operation.PRESS:
             actions.append(
-                PrimitiveAction(kind="eef", eef=TaskFlowBuilder._grasp_eef(control))
+                PrimitiveAction(
+                    kind="eef",
+                    eef=TaskFlowBuilder._grasp_eef(control),
+                    phase=TaskPhase.EEF,
+                    waypoint=0,
+                )
             )
         elif stage.operation == Operation.PUSH:
             if control.eef is not None:
-                actions.append(PrimitiveAction(kind="eef", eef=control.eef))
+                actions.append(
+                    PrimitiveAction(
+                        kind="eef",
+                        eef=control.eef,
+                        phase=TaskPhase.EEF,
+                        waypoint=0,
+                    )
+                )
         elif stage.operation != Operation.MOVE:
             raise NotImplementedError(
                 f"Unsupported operation '{stage.operation.value}'."
             )
 
         post_actions, last_orientation = TaskFlowBuilder._build_pose_actions(
-            control.post_move, last_orientation
+            control.post_move,
+            last_orientation,
+            phase=TaskPhase.POST_MOVE,
         )
         actions.extend(post_actions)
         return actions, last_orientation
@@ -502,9 +576,11 @@ class TaskFlowBuilder:
     def _build_pose_actions(
         poses: List[PoseControlConfig],
         last_orientation: Optional[Orientation] = None,
+        *,
+        phase: TaskPhase = TaskPhase.PRE_MOVE,
     ) -> tuple[List[PrimitiveAction], Optional[Orientation]]:
         actions: List[PrimitiveAction] = []
-        for pose in poses:
+        for waypoint, pose in enumerate(poses):
             effective_pose = pose
             if pose.orientation:
                 last_orientation = pose.orientation
@@ -520,24 +596,42 @@ class TaskFlowBuilder:
             if effective_pose.arc is not None:
                 sub_poses = TaskFlowBuilder._split_arc(effective_pose)
                 if effective_pose.arc.absolute:
-                    for sp in sub_poses:
-                        actions.append(PrimitiveAction(kind="pose", pose=sp))
+                    for sub_index, sp in enumerate(sub_poses):
+                        actions.append(
+                            PrimitiveAction(
+                                kind="pose",
+                                pose=sp,
+                                phase=phase,
+                                waypoint=waypoint,
+                                completes_keypoint=sub_index == len(sub_poses) - 1,
+                            )
+                        )
                 else:
                     arc_snapshot = ArcExecutionSnapshot()
                     cumulative_angle = 0.0
-                    for sp in sub_poses:
+                    for sub_index, sp in enumerate(sub_poses):
                         assert sp.arc is not None
                         cumulative_angle += sp.arc.angle
                         actions.append(
                             PrimitiveAction(
                                 kind="pose",
                                 pose=sp,
+                                phase=phase,
+                                waypoint=waypoint,
+                                completes_keypoint=sub_index == len(sub_poses) - 1,
                                 arc_snapshot=arc_snapshot,
                                 arc_cumulative_angle=cumulative_angle,
                             )
                         )
             else:
-                actions.append(PrimitiveAction(kind="pose", pose=effective_pose))
+                actions.append(
+                    PrimitiveAction(
+                        kind="pose",
+                        pose=effective_pose,
+                        phase=phase,
+                        waypoint=waypoint,
+                    )
+                )
         return actions, last_orientation
 
     @staticmethod
@@ -593,6 +687,8 @@ class TaskRunner:
         self._records: List[ExecutionRecord] = []
         self._env_states: List[_EnvRuntimeState] = []
         self._has_reset: np.ndarray = np.zeros(0, dtype=bool)
+        self._public_internal_updates: np.ndarray = np.zeros(0, dtype=np.int64)
+        self._last_execution_details: List[Dict[str, Any]] = []
 
     @property
     def records(self) -> List[ExecutionRecord]:
@@ -607,15 +703,28 @@ class TaskRunner:
         elapsed_time_sec: float = 0.0,
     ) -> ExecutionSummary:
         dt = self._context.backend.dt_per_update if self._context else 0.0
-        return _build_execution_summary(
-            update=update or self._build_task_update(),
+        task_update = update or self._build_task_update()
+        public_internal_updates = (
+            int(np.max(self._public_internal_updates))
+            if self._public_internal_updates.size
+            else 0
+        )
+        summary = _build_execution_summary(
+            update=task_update,
             records=self._records,
             total_stages=len(self._plan),
             max_updates=max_updates,
             updates_used=updates_used,
             elapsed_time_sec=elapsed_time_sec,
-            sim_time_sec=updates_used * dt,
+            sim_time_sec=public_internal_updates * dt,
         )
+        if dt > 0:
+            summary.env_completion_sim_time_sec = np.where(
+                np.asarray(task_update.done, dtype=bool),
+                self._public_internal_updates.astype(np.float64) * dt,
+                np.nan,
+            )
+        return summary
 
     def from_yaml(self, path: str | Path) -> "TaskRunner":
         from .config_loader import load_task_file
@@ -635,12 +744,134 @@ class TaskRunner:
             task_file=config,
         )
         self._plan = self.builder.build(self._context)
+        selection = config.execution.interval_selection
+        if (
+            config.execution.update_boundary == UpdateBoundary.KEYPOINT
+            or selection is not None
+        ):
+            self._validate_keypoint_boundary_actions()
+        if selection is not None:
+            self._validate_interval_actions(selection)
         self._context.plan = self._plan
         self._context.backend.setup(self._context.config)
         self._env_states = [_EnvRuntimeState() for _ in range(backend.batch_size)]
         self._has_reset = np.zeros(backend.batch_size, dtype=bool)
+        self._public_internal_updates = np.zeros(backend.batch_size, dtype=np.int64)
+        self._last_execution_details = [{} for _ in range(backend.batch_size)]
         self._records = []
         return self
+
+    def _validate_keypoint_boundary_actions(self) -> None:
+        """Validate the configured keypoint identity emitted by the active builder."""
+        for plan in self._plan:
+            actions, _ = self.builder.build_actions(
+                plan.stage, plan.last_orientation_before
+            )
+            groups: List[tuple[tuple[TaskPhase, int], List[int]]] = []
+            for action_index, action in enumerate(actions):
+                if not isinstance(action.phase, TaskPhase) or not isinstance(
+                    action.waypoint, int
+                ):
+                    raise ValueError(
+                        "Keypoint-aware execution requires every action emitted by "
+                        f"{type(self.builder).__name__} to define a TaskPhase phase "
+                        f"and integer waypoint; {plan.stage_name} action "
+                        f"{action_index} does not"
+                    )
+                waypoint = action.waypoint
+                count = _phase_waypoint_count(plan.stage, action.phase)
+                if waypoint < 0 or waypoint >= count:
+                    raise ValueError(
+                        f"{type(self.builder).__name__} emitted invalid keypoint "
+                        f"{plan.stage_name}.{action.phase.value}[{waypoint}] for "
+                        f"action {action_index}"
+                    )
+                if not isinstance(action.completes_keypoint, bool):
+                    raise ValueError(
+                        f"{type(self.builder).__name__} must emit a boolean "
+                        f"completes_keypoint for {plan.stage_name} action "
+                        f"{action_index}"
+                    )
+
+                identity = (action.phase, waypoint)
+                if not groups or groups[-1][0] != identity:
+                    if any(group_identity == identity for group_identity, _ in groups):
+                        raise ValueError(
+                            f"{type(self.builder).__name__} emitted non-contiguous "
+                            f"primitives for keypoint "
+                            f"{plan.stage_name}.{action.phase.value}[{waypoint}]"
+                        )
+                    groups.append((identity, []))
+                groups[-1][1].append(action_index)
+
+            for (phase, waypoint), action_indices in groups:
+                completion_indices = [
+                    action_index
+                    for action_index in action_indices
+                    if actions[action_index].completes_keypoint
+                ]
+                if completion_indices != [action_indices[-1]]:
+                    raise ValueError(
+                        f"{type(self.builder).__name__} must mark only the final "
+                        f"primitive of keypoint "
+                        f"{plan.stage_name}.{phase.value}[{waypoint}] with "
+                        "completes_keypoint=True"
+                    )
+
+    def _validate_interval_actions(
+        self,
+        selection: IntervalSelectionConfig,
+    ) -> None:
+        """Verify that the active builder emits both configured boundaries."""
+        keypoints: List[_ResolvedTaskKeypoint] = []
+        for plan in self._plan:
+            actions, _ = self.builder.build_actions(
+                plan.stage, plan.last_orientation_before
+            )
+            for action in actions:
+                if (
+                    not action.completes_keypoint
+                    or action.phase is None
+                    or action.waypoint is None
+                ):
+                    continue
+                keypoints.append(
+                    _ResolvedTaskKeypoint(
+                        stage_index=plan.stage_index,
+                        stage_name=plan.stage_name,
+                        phase=action.phase,
+                        waypoint=action.waypoint,
+                    )
+                )
+
+        def resolve(field_name: str, configured: TaskKeypointConfig) -> int:
+            matches = [
+                index
+                for index, keypoint in enumerate(keypoints)
+                if keypoint.matches(configured)
+            ]
+            if not matches:
+                raise ValueError(
+                    f"execution.interval_selection.{field_name} is not emitted by "
+                    f"{type(self.builder).__name__}: "
+                    f"{configured.stage}.{configured.phase.value}"
+                    f"[{configured.waypoint}]"
+                )
+            if len(matches) > 1:
+                raise ValueError(
+                    f"execution.interval_selection.{field_name} is emitted more than "
+                    "once by "
+                    f"{type(self.builder).__name__}: "
+                    f"{configured.stage}.{configured.phase.value}"
+                    f"[{configured.waypoint}]"
+                )
+            return matches[0]
+
+        if resolve("start", selection.start) > resolve("stop", selection.stop):
+            raise ValueError(
+                "execution.interval_selection.start must not come after "
+                "execution.interval_selection.stop in the active TaskFlowBuilder"
+            )
 
     def reset(self, env_mask: Optional[np.ndarray] = None) -> TaskUpdate:
         context = self._require_context()
@@ -653,6 +884,28 @@ class TaskRunner:
                     env_index
                 ].latest_details = self._collect_reset_details(env_index, context)
         self._has_reset[mask] = True
+        self._public_internal_updates[mask] = 0
+        self._last_execution_details = [
+            self._execution_details(
+                context,
+                event="reset",
+                internal_updates=0,
+            )
+            if mask[env_index]
+            else (
+                dict(self._last_execution_details[env_index])
+                if self._last_execution_details[env_index]
+                else self._execution_details(
+                    context,
+                    event="not_selected",
+                    internal_updates=0,
+                )
+            )
+            for env_index in range(len(self._env_states))
+        ]
+        selection = context.task_file.execution.interval_selection
+        if selection is not None:
+            self._fast_forward_to_interval_start(mask, context, selection)
         # self._set_interest_focus()
         return self._build_task_update()
 
@@ -660,12 +913,346 @@ class TaskRunner:
         context = self._require_context()
         mask = self._normalize_mask(env_mask)
         self._validate_update_mask(mask)
+        execution = context.task_file.execution
+        selection = execution.interval_selection
+        boundary = execution.update_boundary
+        max_updates = int(execution.max_internal_updates_per_update)
+        pending = mask.copy()
+        internal_updates = np.zeros(len(self._env_states), dtype=np.int64)
+
+        self._last_execution_details = [
+            self._execution_details(
+                context,
+                event=(
+                    "not_selected"
+                    if not mask[env_index]
+                    else "already_done"
+                    if self._env_states[env_index].done
+                    else "control_tick"
+                ),
+                internal_updates=0,
+            )
+            for env_index in range(len(self._env_states))
+        ]
+
         for env_index, state in enumerate(self._env_states):
             if not mask[env_index] or state.done:
+                pending[env_index] = False
                 continue
-            self._update_env(env_index, state, context)
+            state.reported_keypoint = None
+
+        while bool(np.any(pending)):
+            for env_index_value in np.flatnonzero(pending):
+                env_index = int(env_index_value)
+                state = self._env_states[env_index]
+                if internal_updates[env_index] >= max_updates:
+                    self._fail_internal_update_limit(
+                        env_index,
+                        state,
+                        context,
+                        int(internal_updates[env_index]),
+                    )
+                    self._last_execution_details[env_index] = self._execution_details(
+                        context,
+                        event="internal_update_limit_exceeded",
+                        internal_updates=int(internal_updates[env_index]),
+                    )
+                    pending[env_index] = False
+                    continue
+
+                event = self._update_env(env_index, state, context)
+                if event.control_tick:
+                    internal_updates[env_index] += 1
+                    self._public_internal_updates[env_index] += 1
+
+                if event.failed:
+                    self._last_execution_details[env_index] = self._execution_details(
+                        context,
+                        event="execution_failed",
+                        internal_updates=int(internal_updates[env_index]),
+                    )
+                    pending[env_index] = False
+                    continue
+
+                completed_keypoint = event.completed_keypoint
+                if (
+                    selection is not None
+                    and completed_keypoint is not None
+                    and completed_keypoint.matches(selection.stop)
+                ):
+                    self._finish_interval(state, completed_keypoint, selection)
+                    self._last_execution_details[env_index] = self._execution_details(
+                        context,
+                        event="interval_stop_reached",
+                        internal_updates=int(internal_updates[env_index]),
+                    )
+                    pending[env_index] = False
+                    continue
+
+                boundary_event = self._reached_update_boundary(boundary, event)
+                if boundary_event is None:
+                    if state.done:
+                        self._last_execution_details[env_index] = (
+                            self._execution_details(
+                                context,
+                                event="task_succeeded",
+                                internal_updates=int(internal_updates[env_index]),
+                            )
+                        )
+                        pending[env_index] = False
+                    continue
+                if boundary != UpdateBoundary.CONTROL_TICK:
+                    state.reported_keypoint = event.completed_position
+                self._last_execution_details[env_index] = self._execution_details(
+                    context,
+                    event=boundary_event,
+                    internal_updates=int(internal_updates[env_index]),
+                )
+                pending[env_index] = False
         # self._set_interest_focus()
         return self._build_task_update()
+
+    @staticmethod
+    def _reached_update_boundary(
+        boundary: UpdateBoundary,
+        event: _EnvUpdateEvent,
+    ) -> Optional[str]:
+        if boundary == UpdateBoundary.CONTROL_TICK and event.control_tick:
+            return "control_tick"
+        if boundary == UpdateBoundary.PRIMITIVE and event.primitive_reached:
+            return "primitive_reached"
+        if boundary == UpdateBoundary.KEYPOINT and event.keypoint_reached:
+            return "keypoint_reached"
+        if boundary == UpdateBoundary.STAGE and event.stage_succeeded:
+            return "stage_succeeded"
+        return None
+
+    @staticmethod
+    def _execution_details(
+        context: ExecutionContext,
+        *,
+        event: str,
+        internal_updates: int,
+    ) -> Dict[str, Any]:
+        execution = context.task_file.execution
+        return {
+            "event": event,
+            "update_boundary": execution.update_boundary.value,
+            "internal_updates": internal_updates,
+            "max_internal_updates_per_update": int(
+                execution.max_internal_updates_per_update
+            ),
+        }
+
+    def _fail_internal_update_limit(
+        self,
+        env_index: int,
+        state: _EnvRuntimeState,
+        context: ExecutionContext,
+        internal_updates: int,
+    ) -> None:
+        max_updates = int(context.task_file.execution.max_internal_updates_per_update)
+        details = {
+            "event": "internal_update_limit_exceeded",
+            "failure_stage": "execution",
+            "failure_category": "internal_update_limit_exceeded",
+            "failure_reason": (
+                "update() did not reach the configured execution.update_boundary "
+                f"within {max_updates} internal updates"
+            ),
+            "internal_updates": internal_updates,
+        }
+        if state.active is not None:
+            self._record_failure(env_index, state.active.plan, details)
+        elif state.stage_cursor < len(self._plan):
+            self._record_failure(env_index, self._plan[state.stage_cursor], details)
+        state.active = None
+        state.done = True
+        state.success = False
+        state.latest_status = StageExecutionStatus.FAILED
+        state.latest_details = details
+        state.phase = None
+        state.phase_step = None
+        state.reported_keypoint = None
+
+    def _fast_forward_to_interval_start(
+        self,
+        mask: np.ndarray,
+        context: ExecutionContext,
+        selection: IntervalSelectionConfig,
+    ) -> None:
+        """Advance selected environments through the inclusive start keypoint."""
+        pending = np.asarray(mask, dtype=bool).copy()
+        ticks = np.zeros(len(self._env_states), dtype=np.int64)
+        reached = np.zeros(len(self._env_states), dtype=bool)
+        reached_keypoints: List[Optional[_ResolvedTaskKeypoint]] = [
+            None for _ in self._env_states
+        ]
+        max_updates = int(selection.max_fast_forward_updates)
+        reset_details = [dict(state.latest_details) for state in self._env_states]
+        record_start = len(self._records)
+
+        while bool(np.any(pending)):
+            for env_index in np.flatnonzero(pending):
+                index = int(env_index)
+                state = self._env_states[index]
+                if ticks[index] >= max_updates:
+                    self._fail_interval_fast_forward(
+                        index,
+                        state,
+                        context,
+                        int(ticks[index]),
+                        max_updates=max_updates,
+                    )
+                    pending[index] = False
+                    continue
+
+                event = self._update_env(index, state, context)
+                if event.control_tick:
+                    ticks[index] += 1
+                if event.failed:
+                    pending[index] = False
+                    continue
+
+                completed = event.completed_keypoint
+                if completed is not None and completed.matches(selection.start):
+                    reached[index] = True
+                    reached_keypoints[index] = completed
+                    pending[index] = False
+                    continue
+                if state.done:
+                    if state.success:
+                        self._fail_interval_fast_forward(
+                            index,
+                            state,
+                            context,
+                            int(ticks[index]),
+                            max_updates=max_updates,
+                            failure_category="interval_start_not_reached",
+                            failure_reason=(
+                                "task completed before interval_selection.start "
+                                "was reached"
+                            ),
+                        )
+                    pending[index] = False
+
+        # Prefix execution prepares physical state but is outside the selected
+        # rollout. Never expose its successful stage records, including when a
+        # later prefix action fails; preserve only the actual failure record.
+        prefix_records = self._records[record_start:]
+        self._records = self._records[:record_start] + [
+            record
+            for record in prefix_records
+            if record.status == StageExecutionStatus.FAILED
+        ]
+
+        for env_index in np.flatnonzero(mask):
+            index = int(env_index)
+            state = self._env_states[index]
+            interval_details = {
+                "event": "interval_start_reached"
+                if reached[index]
+                else "interval_fast_forward_failed",
+                "start": selection.start.model_dump(mode="json"),
+                "stop": selection.stop.model_dump(mode="json"),
+                "fast_forward_updates": int(ticks[index]),
+                "max_fast_forward_updates": max_updates,
+            }
+            self._last_execution_details[index] = self._execution_details(
+                context,
+                event=(
+                    "interval_start_reached"
+                    if reached[index]
+                    else "interval_fast_forward_failed"
+                ),
+                internal_updates=0,
+            )
+            if not reached[index]:
+                state.latest_details = {
+                    **reset_details[index],
+                    **state.latest_details,
+                    "interval_selection": interval_details,
+                }
+                continue
+
+            keypoint = reached_keypoints[index]
+            assert keypoint is not None
+            state.done = False
+            state.success = False
+            state.latest_status = StageExecutionStatus.PENDING
+            state.latest_details = {
+                **reset_details[index],
+                **state.latest_details,
+                "interval_selection": interval_details,
+            }
+            state.reported_keypoint = keypoint
+            state.phase = keypoint.phase.value
+            state.phase_step = keypoint.waypoint
+            if keypoint.matches(selection.stop):
+                self._finish_interval(state, keypoint, selection)
+                self._last_execution_details[index] = self._execution_details(
+                    context,
+                    event="interval_stop_reached",
+                    internal_updates=0,
+                )
+
+    def _fail_interval_fast_forward(
+        self,
+        env_index: int,
+        state: _EnvRuntimeState,
+        context: ExecutionContext,
+        ticks: int,
+        *,
+        max_updates: int,
+        failure_category: str = "interval_fast_forward_timeout",
+        failure_reason: Optional[str] = None,
+    ) -> None:
+        details = {
+            "event": failure_category,
+            "failure_stage": "reset",
+            "failure_category": failure_category,
+            "failure_reason": failure_reason
+            or (
+                "reset() did not reach interval_selection.start within "
+                f"{max_updates} internal updates"
+            ),
+            "fast_forward_updates": ticks,
+        }
+        if state.active is not None:
+            self._record_failure(env_index, state.active.plan, details)
+        elif state.stage_cursor < len(self._plan):
+            self._record_failure(env_index, self._plan[state.stage_cursor], details)
+        state.active = None
+        state.done = True
+        state.success = False
+        state.latest_status = StageExecutionStatus.FAILED
+        state.latest_details = details
+        state.phase = None
+        state.phase_step = None
+        state.reported_keypoint = None
+
+    @staticmethod
+    def _finish_interval(
+        state: _EnvRuntimeState,
+        keypoint: _ResolvedTaskKeypoint,
+        selection: IntervalSelectionConfig,
+    ) -> None:
+        previous_interval_details = state.latest_details.get("interval_selection", {})
+        state.done = True
+        state.success = True
+        state.latest_status = StageExecutionStatus.SUCCEEDED
+        state.latest_details = {
+            **state.latest_details,
+            "interval_selection": {
+                **previous_interval_details,
+                "event": "interval_stop_reached",
+                "start": selection.start.model_dump(mode="json"),
+                "stop": selection.stop.model_dump(mode="json"),
+            },
+        }
+        state.phase = keypoint.phase.value
+        state.phase_step = keypoint.waypoint
+        state.reported_keypoint = keypoint
 
     def get_env(self) -> EnvProtocol:
         """Return the underlying environment object managed by this runner."""
@@ -680,20 +1267,22 @@ class TaskRunner:
         self._records = []
         self._env_states = []
         self._has_reset = np.zeros(0, dtype=bool)
+        self._public_internal_updates = np.zeros(0, dtype=np.int64)
+        self._last_execution_details = []
 
     def _update_env(
         self,
         env_index: int,
         state: _EnvRuntimeState,
         context: ExecutionContext,
-    ) -> None:
+    ) -> _EnvUpdateEvent:
         if state.stage_cursor >= len(self._plan):
             state.done = True
             state.success = True
             state.latest_status = StageExecutionStatus.SUCCEEDED
             state.phase = None
             state.phase_step = None
-            return
+            return _EnvUpdateEvent()
 
         if state.active is None:
             plan = self._plan[state.stage_cursor]
@@ -713,7 +1302,7 @@ class TaskRunner:
                 state.success = False
                 state.latest_status = StageExecutionStatus.FAILED
                 state.latest_details = failure
-                return
+                return _EnvUpdateEvent(failed=True)
             state.active = self._start_stage(env_index, context, plan)
             state.latest_status = StageExecutionStatus.RUNNING
 
@@ -765,15 +1354,37 @@ class TaskRunner:
             details["arc"] = arc_info
 
         if signal == ControlSignal.RUNNING:
-            phase, phase_step = self._action_phase(active.actions, active.action_index)
+            phase, phase_step = self._action_phase(
+                active.actions,
+                active.action_index,
+                use_configured_identity=(
+                    context.task_file.execution.interval_selection is not None
+                    or context.task_file.execution.update_boundary
+                    != UpdateBoundary.CONTROL_TICK
+                ),
+            )
             state.latest_status = StageExecutionStatus.RUNNING
             state.latest_details = details
             state.phase = phase
             state.phase_step = phase_step
-            return
+            return _EnvUpdateEvent(control_tick=True)
 
         if signal == ControlSignal.REACHED:
             completed_action = action
+            completed_position = (
+                _ResolvedTaskKeypoint(
+                    stage_index=active.plan.stage_index,
+                    stage_name=active.plan.stage_name,
+                    phase=completed_action.phase,
+                    waypoint=completed_action.waypoint,
+                )
+                if isinstance(completed_action.phase, TaskPhase)
+                and isinstance(completed_action.waypoint, int)
+                else None
+            )
+            completed_keypoint = (
+                completed_position if completed_action.completes_keypoint else None
+            )
             active.action_index += 1
             op = active.plan.stage.operation
             mid_failure: Optional[Dict[str, Any]] = None
@@ -815,17 +1426,36 @@ class TaskRunner:
                 state.latest_details = mid_failure
                 state.phase = None
                 state.phase_step = None
-                return
+                return _EnvUpdateEvent(
+                    control_tick=True,
+                    primitive_reached=True,
+                    keypoint_reached=completed_keypoint is not None,
+                    failed=True,
+                    completed_position=completed_position,
+                    completed_keypoint=completed_keypoint,
+                )
 
             if active.action_index < len(active.actions):
                 phase, phase_step = self._action_phase(
-                    active.actions, active.action_index
+                    active.actions,
+                    active.action_index,
+                    use_configured_identity=(
+                        context.task_file.execution.interval_selection is not None
+                        or context.task_file.execution.update_boundary
+                        != UpdateBoundary.CONTROL_TICK
+                    ),
                 )
                 state.latest_status = StageExecutionStatus.RUNNING
                 state.latest_details = details
                 state.phase = phase
                 state.phase_step = phase_step
-                return
+                return _EnvUpdateEvent(
+                    control_tick=True,
+                    primitive_reached=True,
+                    keypoint_reached=completed_keypoint is not None,
+                    completed_position=completed_position,
+                    completed_keypoint=completed_keypoint,
+                )
 
             # Resolve target object pose for PLACED condition
             target_object_pose: Optional[PoseState] = None
@@ -864,7 +1494,14 @@ class TaskRunner:
                 state.latest_details = success_failure
                 state.phase = None
                 state.phase_step = None
-                return
+                return _EnvUpdateEvent(
+                    control_tick=True,
+                    primitive_reached=True,
+                    keypoint_reached=completed_keypoint is not None,
+                    failed=True,
+                    completed_position=completed_position,
+                    completed_keypoint=completed_keypoint,
+                )
 
             self._records.append(
                 ExecutionRecord(
@@ -890,7 +1527,14 @@ class TaskRunner:
                 state.success = True
             else:
                 state.success = False
-            return
+            return _EnvUpdateEvent(
+                control_tick=True,
+                primitive_reached=True,
+                keypoint_reached=completed_keypoint is not None,
+                stage_succeeded=True,
+                completed_position=completed_position,
+                completed_keypoint=completed_keypoint,
+            )
 
         failure = self._build_action_failure_details(active.plan, details, signal)
         self._record_failure(env_index, active.plan, failure)
@@ -901,6 +1545,7 @@ class TaskRunner:
         state.latest_details = failure
         state.phase = None
         state.phase_step = None
+        return _EnvUpdateEvent(control_tick=True, failed=True)
 
     def _record_failure(
         self,
@@ -1411,8 +2056,21 @@ class TaskRunner:
 
     @staticmethod
     def _action_phase(
-        actions: List[PrimitiveAction], action_index: int
+        actions: List[PrimitiveAction],
+        action_index: int,
+        *,
+        use_configured_identity: bool = False,
     ) -> tuple[str, Optional[int]]:
+        action = actions[action_index]
+        if (
+            use_configured_identity
+            and isinstance(action.phase, TaskPhase)
+            and isinstance(action.waypoint, int)
+        ):
+            return action.phase.value, action.waypoint
+
+        # Compatibility fallback for PrimitiveAction instances constructed
+        # outside TaskFlowBuilder without configured keypoint metadata.
         eef_idx: Optional[int] = None
         for idx, action in enumerate(actions):
             if action.kind == "eef":
@@ -1440,6 +2098,11 @@ class TaskRunner:
         )
 
     def _build_task_update(self) -> TaskUpdate:
+        selection = (
+            self._context.task_file.execution.interval_selection
+            if self._context is not None
+            else None
+        )
         stage_index: List[int] = []
         stage_name: List[str] = []
         status: List[StageExecutionStatus] = []
@@ -1448,8 +2111,11 @@ class TaskRunner:
         details: List[Dict[str, Any]] = []
         phase: List[Optional[str]] = []
         phase_step: List[int] = []
-        for state in self._env_states:
-            if state.active is not None:
+        for env_index, state in enumerate(self._env_states):
+            if state.reported_keypoint is not None:
+                stage_index.append(state.reported_keypoint.stage_index)
+                stage_name.append(state.reported_keypoint.stage_name)
+            elif state.active is not None:
                 stage_index.append(state.active.plan.stage_index)
                 stage_name.append(state.active.plan.stage_name)
             elif state.stage_cursor < len(self._plan):
@@ -1461,9 +2127,43 @@ class TaskRunner:
             status.append(state.latest_status)
             done.append(state.done)
             success.append(state.success)
-            details.append(dict(state.latest_details))
-            phase.append(state.phase)
-            phase_step.append(-1 if state.phase_step is None else state.phase_step)
+            state_details = dict(state.latest_details)
+            if selection is not None:
+                interval_details = dict(state_details.get("interval_selection", {}))
+                interval_details.setdefault(
+                    "event",
+                    (
+                        "interval_pending"
+                        if not self._has_reset[env_index]
+                        else (
+                            "interval_failed"
+                            if state.done and not state.success
+                            else "interval_running"
+                        )
+                    ),
+                )
+                interval_details.setdefault(
+                    "start", selection.start.model_dump(mode="json")
+                )
+                interval_details.setdefault(
+                    "stop", selection.stop.model_dump(mode="json")
+                )
+                interval_details.setdefault(
+                    "max_fast_forward_updates",
+                    int(selection.max_fast_forward_updates),
+                )
+                state_details["interval_selection"] = interval_details
+            if env_index < len(self._last_execution_details):
+                state_details["execution"] = dict(
+                    self._last_execution_details[env_index]
+                )
+            details.append(state_details)
+            if state.reported_keypoint is not None:
+                phase.append(state.reported_keypoint.phase.value)
+                phase_step.append(state.reported_keypoint.waypoint)
+            else:
+                phase.append(state.phase)
+                phase_step.append(-1 if state.phase_step is None else state.phase_step)
         return TaskUpdate(
             stage_index=np.asarray(stage_index, dtype=np.int64),
             stage_name=stage_name,

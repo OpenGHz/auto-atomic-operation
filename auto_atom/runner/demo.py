@@ -78,6 +78,7 @@ def main(cfg: DictConfig) -> None:
                 "viewer": viewer_cfg is not None,
                 "rounds": rounds,
                 "max_updates": max_updates,
+                "execution": task_file.execution.model_dump(mode="json"),
             },
         )
     finally:

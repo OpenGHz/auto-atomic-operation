@@ -35,20 +35,24 @@ There are two layers involved:
 
 Typical sequences:
 
-- `move`: `pre_move`
-- `grasp`: `eef`
-- `release`: `eef`
+- `move`: `pre_move -> post_move` when post-move waypoints are configured
+- `grasp`: by default `eef`; configured moves produce `pre_move -> eef -> post_move`
+- `release`: by default `eef`; configured moves produce `pre_move -> eef -> post_move`
 - `pick`: `pre_move -> eef -> post_move`
 - `place`: `pre_move -> eef -> post_move`
 - `push`: `pre_move -> post_move` and optionally `eef`
 - `pull`: `pre_move -> eef -> post_move`
 - `press`: `pre_move -> eef -> post_move`
 
-The runner maps the active primitive action into a phase label:
+Each primitive action keeps the configured phase and YAML waypoint index from
+which it was built:
 
-- actions before the first `eef` action are `pre_move`
-- the `eef` action itself is `eef`
-- actions after the `eef` action are `post_move`
+- `pre_move` entries are labelled `pre_move` with their list index
+- the single end-effector action is labelled `eef` / waypoint `0`
+- `post_move` entries are labelled `post_move` with their own list index
+
+This explicit identity matters for stages without an `eef` action and for arc
+waypoints that expand into several internal primitive actions.
 
 ## Primitive Completion Rules
 
@@ -129,6 +133,39 @@ For the active primitive action:
 
 This means primitive completion is a prerequisite for stage progression, but it is not the same thing as stage completion.
 
+`TaskRunner.update()` can compose these controller updates into a larger public
+step through `execution.update_boundary`:
+
+| Boundary | One public `update()` returns after |
+| --- | --- |
+| `control_tick` | One controller update (default, backward-compatible behavior) |
+| `primitive` | The active runtime primitive reaches completion |
+| `keypoint` | The active YAML waypoint reaches completion |
+| `stage` | The active stage reaches successful completion |
+
+A YAML waypoint and a runtime primitive are usually the same boundary, but an
+arc waypoint can expand into several primitives. `primitive` returns after
+each arc sub-action; `keypoint` returns only after the final sub-action for
+that YAML waypoint. `stage` also waits for the stage's semantic condition
+checks described below.
+
+When using a custom `TaskFlowBuilder` with
+`execution.update_boundary: keypoint`, every emitted `PrimitiveAction` must
+define a valid configured `phase` and `waypoint`. If several primitives belong
+to one keypoint (for example, arc sub-actions), they must be contiguous and
+only the final one may set `completes_keypoint=True`. Interval selection uses
+the same contract. `TaskRunner.from_config()` validates this before execution
+and fails fast with `ValueError`, because the runner otherwise cannot determine
+a stable YAML keypoint boundary.
+
+Macro boundaries do not teleport or bypass the state machine. They repeat the
+same control flow internally, up to
+`execution.max_internal_updates_per_update` controller updates per selected
+environment (default `10000`). Reaching this limit is an explicit terminal
+failure. In a batch, each environment stops at its own first requested
+boundary, so a faster environment never crosses an extra boundary while
+another catches up.
+
 ## Where Stage Conditions Are Checked
 
 Stage conditions are defined by `OPERATION_CONDITIONS` and evaluated by `TaskRunner._check_stage_condition()`.
@@ -183,13 +220,13 @@ So the relationship is:
 
 ### `grasp`
 
-- Stage runs only `eef`
+- Stage normally runs only `eef`; optional configured moves run before and after it
 - Before execution, runner checks `released`
 - After `eef` reaches completion, runner checks `grasped`
 
 ### `release`
 
-- Stage runs only `eef`
+- Stage normally runs only `eef`; optional configured moves run before and after it
 - Before execution, runner checks `grasped`
 - After `eef` reaches completion, runner checks `released`
 
@@ -227,6 +264,37 @@ This is the most explicit example of primitive completion being separate from st
 - Stage runs `pre_move -> eef -> post_move`
 - After `eef`, runner immediately checks `SUCCESS = contacted`
 - Final stage success is decided from that mid-stage contact check rather than a final post-stage success check
+
+## Interval boundaries
+
+When `execution.interval_selection` is configured, the same completion flow is
+reused for both endpoints:
+
+1. `reset()` repeatedly performs normal internal control updates until the
+   configured `start` keypoint is fully `REACHED`.
+2. The reset observation exposes that start state; the first public
+   `TaskRunner.update()` advances beyond it.
+3. Public updates continue normally until the configured `stop` keypoint is
+   fully `REACHED` and any condition attached to that boundary passes.
+4. The environment then reports successful completion without executing the
+   next keypoint.
+
+Both endpoints are included. When they are equal, reset reaches the single
+point and returns `done=true` immediately. Interval stop takes priority over a
+coarser `execution.update_boundary`: a stop keypoint in the middle of a stage,
+for example, returns without completing the rest of that stage even when the
+boundary is `stage`.
+
+Reset fast-forward and public macro updates have independent safeguards:
+
+- `execution.interval_selection.max_fast_forward_updates` limits controller
+  updates used by `reset()` to reach `start` (default `10000`).
+- `execution.max_internal_updates_per_update` limits controller updates made by
+  one public `update()` (default `10000`).
+
+See
+[Stages & Waypoints](stages_and_waypoints.md#inclusive-task-interval-selection)
+for the schema, validation, and reporting details.
 
 ## Flowchart
 

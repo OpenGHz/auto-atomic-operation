@@ -4,6 +4,8 @@ from .config_loader import load_config, load_task_file, load_task_file_hydra
 from .framework import (
     AutoAtomConfig,
     EefControlConfig,
+    ExecutionConfig,
+    IntervalSelectionConfig,
     OperatorConfig,
     OperatorRandomizationConfig,
     PoseControlConfig,
@@ -13,6 +15,9 @@ from .framework import (
     StageConfig,
     StageControlConfig,
     TaskFileConfig,
+    TaskKeypointConfig,
+    TaskPhase,
+    UpdateBoundary,
 )
 from .mock import MockOperatorHandler, MockSceneBackend
 from .policy_eval import ConfigDrivenDemoPolicy, PolicyEvaluator
@@ -57,7 +62,9 @@ __all__ = [
     "ExecutionSummary",
     "EnvProtocol",
     "EefControlConfig",
+    "ExecutionConfig",
     "IKSolver",
+    "IntervalSelectionConfig",
     "MockOperatorHandler",
     "MockSceneBackend",
     "ObjectHandler",
@@ -75,10 +82,13 @@ __all__ = [
     "StageConfig",
     "StageControlConfig",
     "StageExecutionStatus",
+    "TaskKeypointConfig",
+    "TaskPhase",
     "TaskFileConfig",
     "TaskFlowBuilder",
     "TaskRunner",
     "TaskUpdate",
+    "UpdateBoundary",
     "load_config",
     "load_task_file",
     "load_task_file_hydra",

@@ -70,6 +70,61 @@ task_file = load_task_file_hydra(
 Clear the registry before loading a new task in a reused worker process so a
 closed environment from an earlier run cannot be selected accidentally.
 
+To collect only an inclusive keypoint interval with `TaskRunner`, add
+`execution.interval_selection` through Hydra overrides. For example, start
+from the completed pick retract and collect through the completed place
+retract, exposing one complete YAML waypoint per public update:
+
+```python
+overrides=[
+    "+execution.update_boundary=keypoint",
+    "+execution.interval_selection.start.stage=pick_source",
+    "+execution.interval_selection.start.phase=post_move",
+    "+execution.interval_selection.start.waypoint=0",
+    "+execution.interval_selection.stop.stage=place_source",
+    "+execution.interval_selection.stop.phase=post_move",
+    "+execution.interval_selection.stop.waypoint=0",
+]
+```
+
+`runner.reset()` executes the prefix internally and returns with the start
+keypoint already reached. Consequently, `writer.write_initial()` receives the
+inclusive start observation, while no pre-start frames are exposed to the host
+collection loop. The update that reaches stop reports terminal success, and
+the host's post-update observation captures that inclusive stop state. See
+[Stages & Waypoints](../task-configuration/stages_and_waypoints.md#inclusive-task-interval-selection).
+
+`execution.update_boundary` supports four collection granularities:
+
+| Value | One host-visible `runner.update()` |
+|---|---|
+| `control_tick` | Advances one controller update; default and backward-compatible |
+| `primitive` | Completes one runtime primitive; each arc sub-action is a separate boundary |
+| `keypoint` | Completes one YAML waypoint; an arc's sub-actions remain grouped |
+| `stage` | Completes one whole task stage |
+
+For macro boundaries, AAO still executes the same physics and controller
+updates internally. The host receives only the boundary state because there is
+currently no public per-internal-update observation callback. Use the default
+`control_tick` for dense trajectory collection; use `primitive`, `keypoint`, or
+`stage` only when boundary-only samples are intentional.
+
+Two independent safeguards both default to `10000` controller updates per
+environment:
+
+- `execution.max_internal_updates_per_update` limits one public macro
+  `runner.update()`.
+- `execution.interval_selection.max_fast_forward_updates` limits the prefix
+  executed by `runner.reset()` to reach interval `start`.
+
+An interval stop takes priority over a coarser update boundary, so a stop in
+the middle of a stage is captured without executing the rest of the stage.
+
+These execution options are specific to `TaskRunner` / `aao-demo`.
+`PolicyEvaluator` / `aao-eval` rejects interval selection and every
+non-`control_tick` boundary because an external policy must supply a fresh
+action for each control tick.
+
 ## Core Runner Contract
 
 `TaskRunner` exposes the lifecycle required by a host collector:
@@ -78,7 +133,7 @@ closed environment from an earlier run cannot be selected accidentally.
 |---|---|
 | `TaskRunner().from_config(task_file)` | Construct the backend, task plan, and environment |
 | `runner.reset(env_mask=None)` | Reset all or selected environments, including AAO randomization |
-| `runner.update(env_mask=None)` | Advance the configured task by one control update |
+| `runner.update(env_mask=None)` | Advance to the configured `execution.update_boundary` |
 | `runner.get_env()` | Return the environment used by the runner |
 | `env.capture_observation()` | Capture timestamped measurements and current command targets |
 | `runner.records` | Return accumulated stage-level execution records |
@@ -202,6 +257,11 @@ def collect(
 `runner.records` accumulates for the lifetime of the runner. Snapshot its
 length at the start of a round, as above, when the writer needs only that
 round's records.
+
+`max_updates` in this host loop counts public `runner.update()` calls. With a
+macro boundary, one such call can contain many controller updates; use
+`TaskUpdate.details[env_index]["execution"]["internal_updates"]` when the
+distinction matters for diagnostics or metadata.
 
 ## Embed AAO in an Existing Collector State Machine
 

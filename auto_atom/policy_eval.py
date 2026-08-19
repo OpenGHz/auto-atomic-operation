@@ -17,6 +17,7 @@ from .framework import (
     OperationConditionType,
     PoseControlConfig,
     TaskFileConfig,
+    UpdateBoundary,
 )
 from .runtime import (
     ControlSignal,
@@ -268,6 +269,17 @@ class PolicyEvaluator:
     def from_config(
         self, config: TaskFileConfig, sim_loop_frequency: float = 0.0
     ) -> "PolicyEvaluator":
+        if config.execution.interval_selection is not None:
+            raise ValueError(
+                "execution.interval_selection is supported by TaskRunner/aao-demo only; "
+                "PolicyEvaluator cannot fast-forward external policy actions during reset()."
+            )
+        if config.execution.update_boundary != UpdateBoundary.CONTROL_TICK:
+            raise ValueError(
+                "PolicyEvaluator only supports "
+                "execution.update_boundary='control_tick'; got "
+                f"{config.execution.update_boundary.value!r}."
+            )
         backend = config.backend(config.task, config.task_operators)
         if not isinstance(backend, SceneBackend):
             raise TypeError(

@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from enum import Enum
 from typing import Dict, List, Optional, Tuple, Union
 
@@ -6,6 +7,8 @@ from pydantic import (
     ConfigDict,
     Field,
     ImportString,
+    NonNegativeInt,
+    PositiveInt,
     field_validator,
     model_validator,
 )
@@ -138,6 +141,30 @@ class PoseReference(str, Enum):
     """The reference is equivalent to moving the origin of the world system to the operator's end-effector position at the moment the action starts, while keeping the coordinate system direction unchanged. The target pose is snapshotted once at action start and does not track subsequent EEF movement."""
     AUTO = "auto"
     """The pose reference is automatically determined based on the context of the operation. For example, if an object is specified in the stage configuration, the reference will be set to OBJECT_WORLD; if no object is specified, the reference will be set to BASE."""
+
+
+class TaskPhase(str, Enum):
+    """A configured phase within a task stage."""
+
+    PRE_MOVE = "pre_move"
+    """A pose waypoint executed before the stage's end-effector action."""
+    EEF = "eef"
+    """The stage's single end-effector action."""
+    POST_MOVE = "post_move"
+    """A pose waypoint executed after the stage's end-effector action."""
+
+
+class UpdateBoundary(str, Enum):
+    """Boundary at which one public runner update returns."""
+
+    CONTROL_TICK = "control_tick"
+    """Return after one controller update, preserving the legacy behavior."""
+    PRIMITIVE = "primitive"
+    """Return after the active primitive action completes."""
+    KEYPOINT = "keypoint"
+    """Return after the active configured keypoint completes."""
+    STAGE = "stage"
+    """Return after the active task stage completes."""
 
 
 class ArcControlConfig(BaseModel):
@@ -454,6 +481,48 @@ class StageConfig(BaseModel):
     """Whether the operator should wait for the completion of the operation before proceeding to the next stage. If set to False, the operator will proceed to the next stage immediately after initiating the operation. However, if the operator in the next stage is the same as the current stage, the operator will still wait for the completion of the operation to avoid conflicts."""
 
 
+class TaskKeypointConfig(BaseModel, frozen=True):
+    """A stable reference to one configured task keypoint."""
+
+    model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid")
+
+    stage: str = Field(min_length=1)
+    """The stage name. Unnamed stages use their generated ``stage_N`` name."""
+    phase: TaskPhase
+    """The phase containing the keypoint: ``pre_move``, ``eef``, or ``post_move``."""
+    waypoint: NonNegativeInt
+    """Zero-based YAML waypoint index within the phase; ``eef`` only accepts 0."""
+
+
+class IntervalSelectionConfig(BaseModel, frozen=True):
+    """Inclusive start and stop keypoints for a TaskRunner rollout."""
+
+    model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid")
+
+    start: TaskKeypointConfig
+    """The keypoint reached by ``reset()`` and exposed as the initial state."""
+    stop: TaskKeypointConfig
+    """The last keypoint executed before the selected interval succeeds."""
+    max_fast_forward_updates: PositiveInt = 10_000
+    """Maximum controller updates per environment while ``reset()`` advances
+    to ``start``."""
+
+
+class ExecutionConfig(BaseModel, frozen=True):
+    """TaskRunner execution policy for one runnable task file."""
+
+    model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid")
+
+    interval_selection: Optional[IntervalSelectionConfig] = None
+    """Optional inclusive interval. ``reset()`` advances through ``start``, and
+    execution succeeds after ``stop`` is reached."""
+    update_boundary: UpdateBoundary = UpdateBoundary.CONTROL_TICK
+    """Boundary at which each public runner update returns."""
+    max_internal_updates_per_update: PositiveInt = 10_000
+    """Maximum controller updates performed internally by one public runner
+    update. Interval reset fast-forward has its own independent limit."""
+
+
 class OperatorRandomizationConfig(BaseModel):
     """Randomization options for an operator.
 
@@ -648,20 +717,69 @@ class OperatorConfig(BaseModel):
     Overrides the keyframe-defined values for the specified fields."""
 
 
+def _phase_waypoint_count(stage: StageConfig, phase: TaskPhase) -> int:
+    """Return the number of selectable configured points in a stage phase."""
+    if phase == TaskPhase.PRE_MOVE:
+        return len(stage.param.pre_move)
+    if phase == TaskPhase.POST_MOVE:
+        return len(stage.param.post_move)
+    if stage.operation in {
+        Operation.GRASP,
+        Operation.RELEASE,
+        Operation.PICK,
+        Operation.PLACE,
+        Operation.PULL,
+        Operation.PRESS,
+    }:
+        return 1
+    if stage.operation == Operation.PUSH and stage.param.eef is not None:
+        return 1
+    return 0
+
+
 class TaskFileConfig(BaseModel):
     """Top-level YAML schema for a runnable task file."""
 
-    model_config = ConfigDict(extra="allow", populate_by_name=True)
+    model_config = ConfigDict(
+        use_attribute_docstrings=True,
+        extra="allow",
+        populate_by_name=True,
+    )
 
     backend: ImportString
     """The backend to execute this task file. The backend should be registered in the ComponentRegistry and should be compatible with the selected scene."""
     task: AutoAtomConfig
     """The task-level configuration describing stages, scene, and environment selection."""
+    execution: ExecutionConfig = ExecutionConfig()
+    """Runner execution policy. Defaults preserve one-control-tick updates over
+    the complete task."""
     task_operators: Dict[str, OperatorConfig] = {}
     """The operator definitions available to the selected backend for this task file,
     keyed by operator name. Using a mapping (rather than a list) lets Hydra overrides
     target individual operators by key, e.g. ``task_operators.arm.control.tolerance.position=0.01``.
     Use ``task_operators`` in YAML; ``env.operators`` is reserved for environment-level operator bindings."""
+
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_top_level_execution_fields(cls, value: object) -> object:
+        if not isinstance(value, Mapping):
+            return value
+        for field_name in (
+            "interval_selection",
+            "update_boundary",
+            "max_internal_updates_per_update",
+            "max_fast_forward_updates",
+        ):
+            if field_name in value:
+                target = (
+                    "execution.interval_selection.max_fast_forward_updates"
+                    if field_name == "max_fast_forward_updates"
+                    else f"execution.{field_name}"
+                )
+                raise ValueError(
+                    f"Top-level {field_name} is not supported; use {target} instead"
+                )
+        return value
 
     @field_validator("task_operators", mode="after")
     @classmethod
@@ -677,3 +795,68 @@ class TaskFileConfig(BaseModel):
                     "Either omit the name field or make it match the key."
                 )
         return value
+
+    @model_validator(mode="after")
+    def _validate_interval_selection(self) -> "TaskFileConfig":
+        selection = self.execution.interval_selection
+        if selection is None:
+            return self
+
+        stages_by_name: Dict[str, List[Tuple[int, StageConfig]]] = {}
+        for index, stage in enumerate(self.task.stages):
+            effective_name = stage.name or f"stage_{index}"
+            stages_by_name.setdefault(effective_name, []).append((index, stage))
+
+        phase_order = {
+            TaskPhase.PRE_MOVE: 0,
+            TaskPhase.EEF: 1,
+            TaskPhase.POST_MOVE: 2,
+        }
+
+        def resolve(
+            field_name: str,
+            keypoint: TaskKeypointConfig,
+        ) -> Tuple[int, int, int]:
+            matches = stages_by_name.get(keypoint.stage, [])
+            if not matches:
+                available = ", ".join(stages_by_name) or "<none>"
+                raise ValueError(
+                    f"execution.interval_selection.{field_name}.stage "
+                    f"{keypoint.stage!r} "
+                    f"does not match a task stage; available stages: {available}"
+                )
+            if len(matches) > 1:
+                raise ValueError(
+                    f"execution.interval_selection.{field_name}.stage "
+                    f"{keypoint.stage!r} "
+                    "is ambiguous because multiple stages use that name"
+                )
+
+            stage_index, stage = matches[0]
+            count = _phase_waypoint_count(stage, keypoint.phase)
+            if count == 0:
+                raise ValueError(
+                    f"execution.interval_selection.{field_name} references phase "
+                    f"{keypoint.phase.value!r}, but stage {keypoint.stage!r} "
+                    "does not execute that phase"
+                )
+            if keypoint.waypoint >= count:
+                raise ValueError(
+                    f"execution.interval_selection.{field_name}.waypoint "
+                    f"{keypoint.waypoint} is out of range for "
+                    f"{keypoint.stage}.{keypoint.phase.value}; expected 0..{count - 1}"
+                )
+            return (
+                stage_index,
+                phase_order[keypoint.phase],
+                int(keypoint.waypoint),
+            )
+
+        start_order = resolve("start", selection.start)
+        stop_order = resolve("stop", selection.stop)
+        if start_order > stop_order:
+            raise ValueError(
+                "execution.interval_selection.start must not come after "
+                "execution.interval_selection.stop in task execution order"
+            )
+        return self

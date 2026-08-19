@@ -78,14 +78,21 @@ def run_example_rounds(
         env_completion_steps = np.full(batch_size, -1, dtype=np.int64)
         env_completion_time_sec = np.full(batch_size, np.nan, dtype=np.float64)
 
+        reset_done_mask = np.asarray(update.done, dtype=bool)
+        env_completion_steps[reset_done_mask] = 0
+        env_completion_time_sec[reset_done_mask] = 0.0
+        steps_used = 0
+
         # Warmup step 0: may trigger JIT compilation; exclude from timing.
-        update = hooks.step_fn(0, update)
-        steps_used = 1
-        print("Step 0 (warmup):" + "=" * 40)
-        pprint(update, sort_dicts=False)
-        if bool(np.all(update.done)):
-            env_completion_steps[np.asarray(update.done, dtype=bool)] = 1
-            env_completion_time_sec[np.asarray(update.done, dtype=bool)] = 0.0
+        if not bool(np.all(reset_done_mask)):
+            update = hooks.step_fn(0, update)
+            steps_used = 1
+            print("Step 0 (warmup):" + "=" * 40)
+            pprint(update, sort_dicts=False)
+            done_mask = np.asarray(update.done, dtype=bool)
+            newly_done = done_mask & (env_completion_steps < 0)
+            env_completion_steps[newly_done] = 1
+            env_completion_time_sec[newly_done] = 0.0
 
         start_time = perf_counter()
         for step in range(1, hooks.max_updates or 10**18):
@@ -117,14 +124,21 @@ def run_example_rounds(
         )
         summary.env_completion_steps = env_completion_steps
         summary.env_completion_time_sec = env_completion_time_sec
-        if summary.sim_time_sec > 0 and summary.updates_used > 0:
-            dt = summary.sim_time_sec / summary.updates_used
-            sim_times = np.where(
-                env_completion_steps >= 0,
-                env_completion_steps.astype(np.float64) * dt,
-                np.nan,
-            )
-            summary.env_completion_sim_time_sec = sim_times
+        if summary.env_completion_sim_time_sec is None:
+            if summary.updates_used == 0:
+                summary.env_completion_sim_time_sec = np.where(
+                    env_completion_steps == 0,
+                    0.0,
+                    np.nan,
+                )
+            elif summary.sim_time_sec > 0:
+                dt = summary.sim_time_sec / summary.updates_used
+                sim_times = np.where(
+                    env_completion_steps >= 0,
+                    env_completion_steps.astype(np.float64) * dt,
+                    np.nan,
+                )
+                summary.env_completion_sim_time_sec = sim_times
         summary.completed_stage_info = _group_completed_stage_info(summary)
 
         print()
