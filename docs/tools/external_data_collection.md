@@ -77,13 +77,13 @@ retract, exposing one complete YAML waypoint per public update:
 
 ```python
 overrides=[
-    "+execution.update_boundary=keypoint",
-    "+execution.interval_selection.start.stage=pick_source",
-    "+execution.interval_selection.start.phase=post_move",
-    "+execution.interval_selection.start.waypoint=0",
-    "+execution.interval_selection.stop.stage=place_source",
-    "+execution.interval_selection.stop.phase=post_move",
-    "+execution.interval_selection.stop.waypoint=0",
+    "execution.update_boundary=keypoint",
+    "execution.interval_selection.start.stage=pick_source",
+    "execution.interval_selection.start.phase=post_move",
+    "execution.interval_selection.start.waypoint=0",
+    "execution.interval_selection.stop.stage=place_source",
+    "execution.interval_selection.stop.phase=post_move",
+    "execution.interval_selection.stop.waypoint=0",
 ]
 ```
 
@@ -109,6 +109,10 @@ currently no public per-internal-update observation callback. Use the default
 `control_tick` for dense trajectory collection; use `primitive`, `keypoint`, or
 `stage` only when boundary-only samples are intentional.
 
+`execution.render_internal_updates: false` only coalesces passive-viewer
+refreshes and skips viewer `step_delay`; it does not change which observations
+the host captures or how many physics ticks run.
+
 Two independent safeguards both default to `10000` controller updates per
 environment:
 
@@ -121,9 +125,9 @@ An interval stop takes priority over a coarser update boundary, so a stop in
 the middle of a stage is captured without executing the rest of the stage.
 
 These execution options are specific to `TaskRunner` / `aao-demo`.
-`PolicyEvaluator` / `aao-eval` rejects interval selection and every
-non-`control_tick` boundary because an external policy must supply a fresh
-action for each control tick.
+`PolicyEvaluator` / `aao-eval` rejects interval selection, every
+non-`control_tick` boundary, and `render_internal_updates: false` because an
+external policy must supply a fresh action for each control tick.
 
 ## Core Runner Contract
 

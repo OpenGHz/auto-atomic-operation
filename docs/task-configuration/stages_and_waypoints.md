@@ -3,9 +3,9 @@
 This page documents four less-obvious fields on task / stage / waypoint
 configuration that are easy to miss but frequently needed:
 
-- `TaskFileConfig.execution` — select the public `TaskRunner.update()` boundary
-  and, optionally, run only an inclusive range between two configured
-  keypoints.
+- `TaskFileConfig.execution` — select the public `TaskRunner.update()` boundary,
+  choose whether internal ticks are rendered, and optionally run only an
+  inclusive range between two configured keypoints.
 - `StageConfig.site` — re-base `object_world` / `object` references onto a
   site or geometry instead of the stage object's body origin.
 - `PoseControlConfig.static` — freeze a tracking reference at the first
@@ -23,6 +23,7 @@ top-level `execution` section, alongside the update-boundary policy:
 ```yaml
 execution:
   update_boundary: control_tick
+  render_internal_updates: true
   max_internal_updates_per_update: 10000
   interval_selection:
     start:
@@ -48,7 +49,7 @@ Each endpoint contains:
 | `phase` | `pre_move`, `eef`, or `post_move` |
 | `waypoint` | Zero-based index in that phase; `eef` is a singleton and only accepts `0` |
 
-Top-level `interval_selection`, `update_boundary`,
+Top-level `interval_selection`, `update_boundary`, `render_internal_updates`,
 `max_internal_updates_per_update`, and `max_fast_forward_updates` are rejected
 with their expected `execution...` path so misplaced settings cannot be
 silently ignored.
@@ -84,6 +85,21 @@ The endpoints refer to YAML waypoints, not internal controller ticks. If an
 arc waypoint expands into several primitive actions, the keypoint is reached
 only after the final arc sub-action completes.
 
+### Viewer updates at public boundaries
+
+`execution.render_internal_updates` controls only the interactive viewer:
+
+- `true` (default) refreshes after every controller update and applies
+  `env.viewer.step_delay` each time, preserving the previous animation.
+- `false` runs all internal physics and controller updates without refreshing
+  or sleeping, then refreshes the viewer once when `reset()` or the public
+  `update()` returns. The final boundary refresh does not apply `step_delay`.
+
+This setting does not teleport the robot, skip collision/contact handling, or
+change camera observations. It only coalesces passive-viewer refreshes. With a
+long `stage` boundary, the viewer may appear unresponsive until that public
+update reaches its boundary.
+
 ### Inclusive reset and stop behavior
 
 - `reset()` performs the normal backend reset, then runs the existing control
@@ -105,9 +121,9 @@ only after the final arc sub-action completes.
   success.
 
 Fast-forward uses the same physics, IK, contact handling, randomization, pose
-references, and timeouts as ordinary updates. It does not teleport state and
-does not necessarily look instantaneous when a viewer has `step_delay`
-enabled.
+references, and timeouts as ordinary updates. It does not teleport state.
+Set `execution.render_internal_updates: false` to show only the final start
+keypoint instead of animating the reset prefix.
 
 `TaskUpdate.details[env_index]["interval_selection"]` reports the selected
 endpoints, current interval event, configured safety limit, and (on reset)
@@ -122,8 +138,9 @@ names, absent phases, out-of-range waypoint indexes, and `start` ordered after
 full-task execution; omitting all of `execution` also preserves the default
 one-control-tick update behavior.
 
-> `execution.interval_selection` and non-`control_tick` update boundaries apply
-> to `TaskRunner` / `aao-demo`. `PolicyEvaluator` / `aao-eval` rejects both:
+> `execution.interval_selection`, non-`control_tick` update boundaries, and
+> `render_internal_updates: false` apply to `TaskRunner` / `aao-demo`.
+> `PolicyEvaluator` / `aao-eval` rejects them:
 > reset cannot synthesize external policy actions, and every policy control
 > tick requires a newly supplied action.
 

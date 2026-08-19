@@ -26,10 +26,11 @@ To discover which configs are runnable tasks, use [`aao-info`](#aao-info).
 | `task.seed=N` | int | (from config) | Override the randomization seed |
 | `+env.viewer.disable=true` | bool | false | Run headless (no viewer window) |
 | `env.hide_operators_in_camera=true` | bool | false | Exclude configured operators from native MuJoCo RGB/depth/mask rendering without changing physics |
-| `+execution.update_boundary=...` | enum | `control_tick` | Public `update()` boundary: `control_tick`, `primitive`, `keypoint`, or `stage` |
-| `+execution.max_internal_updates_per_update=N` | int | 10000 | Per-environment controller-update limit within one public `update()` |
-| `+execution.interval_selection...` | mapping | unset | Run an inclusive `stage` / `phase` / `waypoint` interval; `reset()` reaches the start point |
-| `+execution.interval_selection.max_fast_forward_updates=N` | int | 10000 | Per-environment controller-update limit while `reset()` advances to the interval start |
+| `[+]execution.update_boundary=...` | enum | `control_tick` | Public `update()` boundary: `control_tick`, `primitive`, `keypoint`, or `stage` |
+| `[+]execution.render_internal_updates=false` | bool | true | Keep internal physics but refresh the viewer only once at each public boundary; boundary refreshes do not apply `step_delay` |
+| `[+]execution.max_internal_updates_per_update=N` | int | 10000 | Per-environment controller-update limit within one public `update()` |
+| `[+]execution.interval_selection...` | mapping | unset | Run an inclusive `stage` / `phase` / `waypoint` interval; `reset()` reaches the start point |
+| `[+]execution.interval_selection.max_fast_forward_updates=N` | int | 10000 | Per-environment controller-update limit while `reset()` advances to the interval start |
 
 Any key present in the YAML config can be overridden on the command line following Hydra syntax:
 
@@ -51,17 +52,19 @@ keypoint interval without copying the task config:
 
 ```bash
 aao-demo --config-name pick_and_place \
-  +execution.update_boundary=keypoint \
-  +execution.interval_selection.start.stage=pick_source \
-  +execution.interval_selection.start.phase=post_move \
-  +execution.interval_selection.start.waypoint=0 \
-  +execution.interval_selection.stop.stage=place_source \
-  +execution.interval_selection.stop.phase=post_move \
-  +execution.interval_selection.stop.waypoint=0
+  execution.update_boundary=keypoint \
+  execution.render_internal_updates=false \
+  execution.interval_selection.start.stage=pick_source \
+  execution.interval_selection.start.phase=post_move \
+  execution.interval_selection.start.waypoint=0 \
+  execution.interval_selection.stop.stage=place_source \
+  execution.interval_selection.stop.phase=post_move \
+  execution.interval_selection.stop.waypoint=0
 ```
 
-The leading `+` is required because shipped task YAML files leave these
-optional fields unset. The boundary choices are:
+The selected `pick_and_place` config already defines these fields, so its
+overrides do not use `+`. For a task that omits `execution` or one of its
+optional fields, add that missing path with `+`. The boundary choices are:
 
 - `control_tick`: return after one controller update; this default preserves
   the previous behavior.
@@ -74,13 +77,17 @@ optional fields unset. The boundary choices are:
 An interval stop always takes priority over a coarser boundary, so `stage`
 cannot advance past a stop keypoint in the middle of that stage. The public
 update and reset fast-forward limits are independent; both default to `10000`.
+With `execution.render_internal_updates=false`, all of those internal updates
+still run, but their viewer refreshes and `step_delay` calls are coalesced into
+one delay-free refresh at the public boundary.
 See [Stages & Waypoints](../task-configuration/stages_and_waypoints.md#inclusive-task-interval-selection)
 for endpoint semantics and reporting.
 
 `PolicyEvaluator` / `aao-eval` accepts only the default `control_tick` boundary
-and rejects `execution.interval_selection`. An external policy must supply a
+and rejects `execution.interval_selection` and
+`execution.render_internal_updates=false`. An external policy must supply a
 new action at every control tick, so the evaluator cannot synthesize the
-intermediate actions required by either feature.
+intermediate actions required by the TaskRunner-only execution modes.
 
 ### Output
 

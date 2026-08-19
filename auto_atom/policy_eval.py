@@ -280,6 +280,11 @@ class PolicyEvaluator:
                 "execution.update_boundary='control_tick'; got "
                 f"{config.execution.update_boundary.value!r}."
             )
+        if not config.execution.render_internal_updates:
+            raise ValueError(
+                "execution.render_internal_updates=false is supported by "
+                "TaskRunner/aao-demo only."
+            )
         backend = config.backend(config.task, config.task_operators)
         if not isinstance(backend, SceneBackend):
             raise TypeError(

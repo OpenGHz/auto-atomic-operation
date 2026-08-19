@@ -12,8 +12,9 @@
 from __future__ import annotations
 
 import logging
+from contextlib import contextmanager
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, Iterator, Optional
 
 import mujoco
 import numpy as np
@@ -2109,6 +2110,13 @@ class BatchedUnifiedMujocoEnv:
 
     def refresh_viewer(self) -> None:
         self.envs[self.config.viewer_env_index].refresh_viewer()
+
+    @contextmanager
+    def defer_viewer_updates(self) -> Iterator[None]:
+        """Coalesce refreshes for the one replica that owns the viewer."""
+        viewer_env = self.envs[self.config.viewer_env_index]
+        with viewer_env.defer_viewer_updates():
+            yield
 
     def close(self) -> None:
         for env in self.envs:

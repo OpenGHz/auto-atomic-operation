@@ -142,6 +142,7 @@ def test_default_update_boundary_matches_explicit_control_tick() -> None:
             "max_internal_updates_per_update",
             "execution.max_internal_updates_per_update",
         ),
+        ("render_internal_updates", "execution.render_internal_updates"),
         (
             "max_fast_forward_updates",
             "execution.interval_selection.max_fast_forward_updates",
@@ -156,7 +157,12 @@ def test_top_level_execution_fields_are_rejected_with_migration_path(
         env_name=f"boundary_top_level_{field_name}",
         stages=[_move_stage("move", 0.1)],
     )
-    payload[field_name] = 1 if field_name != "update_boundary" else "keypoint"
+    if field_name == "update_boundary":
+        payload[field_name] = "keypoint"
+    elif field_name == "render_internal_updates":
+        payload[field_name] = False
+    else:
+        payload[field_name] = 1
 
     with pytest.raises(ValidationError, match=target):
         TaskFileConfig.model_validate(payload)
@@ -369,6 +375,7 @@ def test_internal_update_cap_is_an_explicit_terminal_failure() -> None:
         assert update.details[0]["execution"] == {
             "event": "internal_update_limit_exceeded",
             "update_boundary": "primitive",
+            "render_internal_updates": True,
             "internal_updates": 1,
             "max_internal_updates_per_update": 1,
         }

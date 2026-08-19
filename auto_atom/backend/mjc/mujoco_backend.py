@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Union
+from typing import Any, Callable, Dict, Iterator, List, Optional, Set, Tuple, Union
 
 import mujoco
 import numpy as np
@@ -881,6 +882,11 @@ class MujocoTaskBackend(SceneBackend):
         if self.camera_randomization:
             self._apply_camera_randomization(mask)
         self.env.refresh_viewer()
+
+    @contextmanager
+    def defer_viewer_updates(self) -> Iterator[None]:
+        with self.env.defer_viewer_updates():
+            yield
 
     def teardown(self) -> None:
         self.env.close()

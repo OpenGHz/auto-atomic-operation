@@ -1,8 +1,8 @@
 # TaskRunner Update 粒度与关键点步进方案分析
 
-> `execution.update_boundary` 与 `execution.interval_selection` 均已实现。
-> 本文同时保留其他实现方案的对比，以及 viewer 快进和内部观测 callback 的
-> 后续演进建议。
+> `execution.update_boundary`、`execution.interval_selection` 与 viewer 边界刷新
+> 均已实现。本文同时保留其他实现方案的对比，以及内部观测 callback 的后续
+> 演进建议。
 
 本文分析 `aao-demo --config-name pick_and_place` 为什么需要多次
 `TaskRunner.update()` 才能完成一个配置点位，并比较“每次外部 update
@@ -22,8 +22,8 @@
 - `primitive` 或 `keypoint` 模式可表现为 8 次外部调用；
 - `stage` 模式可表现为 2 次外部调用；
 - 内部仍执行相同的物理控制周期，因此不会自动缩短仿真时间，但可以减少
-  外部交互次数。只在 boundary 刷新 viewer 仍是后续能力，不是当前宏步配置的
-  隐含行为。
+  外部交互次数；配置 `render_internal_updates: false` 后，viewer 只显示每次
+  公开调用的最终 boundary 状态。
 
 如果要求物理状态真正瞬时跳到点位，只能使用 kinematic teleport 或状态
 snapshot。这两类方案会绕过正常接触动力学，不适合作为 pick/place
@@ -36,6 +36,7 @@ snapshot。这两类方案会绕过正常接触动力学，不适合作为 pick/
 ```yaml
 execution:
   update_boundary: keypoint
+  render_internal_updates: false
   max_internal_updates_per_update: 10000
   interval_selection:
     start:
@@ -51,6 +52,8 @@ execution:
 
 - `update_boundary` 支持 `control_tick`、`primitive`、`keypoint`、`stage`；
 - 默认 `control_tick`，保持历史行为；
+- `render_internal_updates` 默认 `true`；设为 `false` 时内部物理照常运行，但
+  viewer 只在公开边界刷新一次；
 - `reset()` 复用正常状态机和物理控制，执行并包含 start，reset observation
   就是 start 状态；
 - 后续公开 `update()` 按 `update_boundary` 返回；
@@ -389,20 +392,19 @@ return
 两个目标 boundary。任务结束、失败、timeout、内部上限失败和 interval stop 也会
 立即把该环境从 pending 集合移除。
 
-### Viewer 快进应是独立开关
+### 已实现：Viewer 快进独立开关
 
 Runner 宏步只改变外部调用粒度。如果内部每个物理 tick 仍然同步 viewer 并执行
 `step_delay`，画面仍会逐步运动，只是调用方被阻塞在一次函数调用中。
 
-当前没有 viewer-only fast-forward 配置：宏步改变的是公开调用粒度，不保证画面
-瞬移。后续可以把以下行为分开配置：
+viewer-only fast-forward 独立于公开调用粒度配置：
 
 - `render_internal_updates=true`：显示完整运动过程；
 - `render_internal_updates=false`：内部不 sync/sleep，只在 boundary 刷新一次；
-- `record_internal_updates=true`：即使 viewer 快进，仍保留每个内部观测。
 
-这样“外部一次 update”“画面是否跳变”和“是否保留密集数据”不会被错误地绑定
-成同一个选项。
+boundary 的最终刷新本身不执行 `step_delay`。两种模式执行相同的物理 tick、IK、
+接触、抓取判定与 timeout，也不影响显式 `capture_observation()` 或 camera render。
+尚未实现的 dense-recording callback 将继续与 viewer 策略保持独立。
 
 ### 数据采集影响
 
@@ -434,6 +436,7 @@ AIRDC 当前按主循环 tick 调用 `runner.update(update_mask)`，采样器也
 
 - 任意 `execution.interval_selection`；
 - 任意非 `control_tick` 的 `execution.update_boundary`。
+- `execution.render_internal_updates=false`。
 
 `aao-demo` 的 `max_updates` 和外部采集循环中的同名限制都表示公开
 `TaskRunner.update()` 调用次数，不表示内部 controller tick 数。内部消耗通过
@@ -453,6 +456,7 @@ AIRDC 当前按主循环 tick 调用 `runner.update(update_mask)`，采样器也
 ```yaml
 execution:
   update_boundary: keypoint
+  render_internal_updates: false
   max_internal_updates_per_update: 10000
   interval_selection:
     start: {stage: pick_source, phase: post_move, waypoint: 0}
@@ -462,9 +466,9 @@ execution:
 
 区间 endpoint 强依赖 stage 定义，但它选择的是“本次如何执行现有任务”，不是任务
 本身有哪些阶段；集中在 `execution` 既保留依赖关系，也避免把 rollout policy 混入
-可复用的任务语义。误放在顶层的 `interval_selection`、`update_boundary` 和两个
-安全上限字段会被配置校验明确拒绝，并提示对应的 `execution...` 路径，避免静默
-失效。
+可复用的任务语义。误放在顶层的 `interval_selection`、`update_boundary`、
+`render_internal_updates` 和两个安全上限字段会被配置校验明确拒绝，并提示对应的
+`execution...` 路径，避免静默失效。
 
 ## 测试覆盖与后续验证
 
@@ -477,6 +481,7 @@ execution:
 - `max_internal_updates_per_update` 耗尽后显式失败；
 - interval stop 抢占更粗的 stage boundary；
 - `PolicyEvaluator` 拒绝 interval 和非 `control_tick` boundary；
+- viewer 内部刷新可折叠为一次 boundary 刷新，异常退出后仍恢复正常刷新；
 - 宏步 summary 使用每个环境的实际内部 update 数计算模拟时间。
 
 ### 仍值得持续验证
@@ -484,7 +489,7 @@ execution:
 - 固定 seed 的 `pick_and_place` 成功完成；
 - primitive/keypoint boundary 数严格为 8，stage boundary 数严格为 2；
 - 宏步与逐 tick 的最终 success、stage records、object state 和模拟时间一致；
-- 未来 viewer fast-forward 不改变物理结果；
+- viewer fast-forward 与逐 tick viewer 模式的最终物理结果一致；
 - teleport 模式明确验证抓取物体不会被错误假定为自动跟随。
 
 ### 数据与兼容性测试
@@ -497,10 +502,9 @@ execution:
 
 ## 后续演进顺序
 
-1. 增加 viewer boundary-only 刷新，并保持它与 update boundary 独立。
-2. 根据 AIRDC 是否需要密集轨迹，加入 internal observation callback 或 buffer。
-3. 为 boundary-only 与 dense-recording metadata 明确 outer/internal 索引。
-4. 真机或异步控制需求明确后，再评估 trajectory/action-server 架构。
+1. 根据 AIRDC 是否需要密集轨迹，加入 internal observation callback 或 buffer。
+2. 为 boundary-only 与 dense-recording metadata 明确 outer/internal 索引。
+3. 真机或异步控制需求明确后，再评估 trajectory/action-server 架构。
 
 ## Related
 

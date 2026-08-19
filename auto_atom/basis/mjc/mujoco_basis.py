@@ -10,10 +10,11 @@ stepping.  It deliberately does **not** provide ``step(action)`` or
 import copy
 import logging
 import time
+from contextlib import contextmanager
 from enum import Enum
 from math import pi, tan
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Set, Tuple
+from typing import Any, Callable, Dict, Iterator, List, Optional, Set, Tuple
 
 import mujoco
 import numpy as np
@@ -99,7 +100,8 @@ class ViewerConfig(BaseModel, frozen=True):
     elevation: float | None = None
     """Camera elevation angle in degrees. Uses Mujoco default if None."""
     step_delay: float = 0.0
-    """Seconds to sleep after each update step."""
+    """Seconds to sleep after each rendered update step. TaskRunner skips this
+    delay while coalescing internal viewer updates at public boundaries."""
     hold_seconds: float = 0.0
     """Seconds to keep the viewer open after close() is called."""
     disable: bool = False
@@ -538,6 +540,8 @@ class MujocoBasis:
         # reset() explicitly, so freejoint-based home poses wouldn't be seen.
         self.reset()
 
+        self._viewer_update_defer_depth = 0
+        self._viewer_update_pending = False
         self._viewer = None
         if config.viewer is not None:
             self._launch_viewer()
@@ -572,11 +576,28 @@ class MujocoBasis:
                 return False
         return True
 
-    def _sync_viewer(self) -> None:
+    def _sync_viewer(self) -> bool:
+        if self._viewer_update_defer_depth > 0:
+            self._viewer_update_pending = True
+            return False
         try:
             self._viewer.sync()
+            return True
         except Exception:
-            pass
+            return False
+
+    @contextmanager
+    def defer_viewer_updates(self) -> Iterator[None]:
+        """Coalesce viewer refreshes and skip per-update delays in this scope."""
+        self._viewer_update_defer_depth += 1
+        try:
+            yield
+        finally:
+            self._viewer_update_defer_depth -= 1
+            if self._viewer_update_defer_depth == 0 and self._viewer_update_pending:
+                self._viewer_update_pending = False
+                if self._viewer_running():
+                    self._sync_viewer()
 
     def _shutdown_viewer(self) -> None:
         try:
@@ -991,8 +1012,8 @@ class MujocoBasis:
                     cb(self.model, self.data)
                 mujoco.mj_step(self.model, self.data)
         if self._viewer_running():
-            self._sync_viewer()
-            if self.config.viewer.step_delay > 0.0:
+            refreshed = self._sync_viewer()
+            if refreshed and self.config.viewer.step_delay > 0.0:
                 time.sleep(self.config.viewer.step_delay)
 
     def is_updated(self) -> bool:

@@ -518,6 +518,10 @@ class ExecutionConfig(BaseModel, frozen=True):
     execution succeeds after ``stop`` is reached."""
     update_boundary: UpdateBoundary = UpdateBoundary.CONTROL_TICK
     """Boundary at which each public runner update returns."""
+    render_internal_updates: bool = True
+    """Whether the viewer renders every controller update inside a public
+    runner update. When false, physics still advances normally and the viewer
+    refreshes once at the public boundary."""
     max_internal_updates_per_update: PositiveInt = 10_000
     """Maximum controller updates performed internally by one public runner
     update. Interval reset fast-forward has its own independent limit."""
@@ -767,6 +771,7 @@ class TaskFileConfig(BaseModel):
         for field_name in (
             "interval_selection",
             "update_boundary",
+            "render_internal_updates",
             "max_internal_updates_per_update",
             "max_fast_forward_updates",
         ):

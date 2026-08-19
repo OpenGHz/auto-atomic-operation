@@ -15,6 +15,15 @@ env:
     step_delay: 0.03
     hold_seconds: 1.0
 
+execution:
+  update_boundary: keypoint # control_tick | primitive | keypoint | stage
+  render_internal_updates: false
+  max_internal_updates_per_update: 10000
+  interval_selection:
+    start: { stage: pick_source, phase: post_move, waypoint: 0 }
+    stop: { stage: place_source, phase: post_move, waypoint: 0 }
+    max_fast_forward_updates: 10000
+
 task:
   # randomization_debug: true
   # Pose randomization applied at each reset.

@@ -166,6 +166,12 @@ failure. In a batch, each environment stops at its own first requested
 boundary, so a faster environment never crosses an extra boundary while
 another catches up.
 
+`execution.render_internal_updates: false` can hide those internal ticks from
+the passive viewer without removing them from this flow. Viewer refresh and
+`step_delay` are suppressed inside one public call, followed by one delay-free
+refresh at its final boundary. Physics, conditions, camera observations, and
+the internal-update counters are unchanged.
+
 ## Where Stage Conditions Are Checked
 
 Stage conditions are defined by `OPERATION_CONDITIONS` and evaluated by `TaskRunner._check_stage_condition()`.

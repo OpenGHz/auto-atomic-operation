@@ -4,11 +4,22 @@ from __future__ import annotations
 
 import math
 from abc import ABC, abstractmethod
+from contextlib import contextmanager, nullcontext
 from copy import deepcopy
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Any, ClassVar, Dict, List, Optional, Protocol, runtime_checkable
+from typing import (
+    Any,
+    ClassVar,
+    ContextManager,
+    Dict,
+    Iterator,
+    List,
+    Optional,
+    Protocol,
+    runtime_checkable,
+)
 
 import numpy as np
 
@@ -227,6 +238,16 @@ class SceneBackend(ABC):
         Returns 0.0 by default (unknown).
         """
         return 0.0
+
+    @contextmanager
+    def defer_viewer_updates(self) -> Iterator[None]:
+        """Defer viewer refreshes until a compound runner update completes.
+
+        Backends without an interactive viewer keep the default no-op
+        implementation. Viewer-backed implementations should coalesce all
+        refresh requests inside this context into one final refresh.
+        """
+        yield
 
     def is_object_displaced(
         self,
@@ -876,6 +897,14 @@ class TaskRunner:
     def reset(self, env_mask: Optional[np.ndarray] = None) -> TaskUpdate:
         context = self._require_context()
         mask = self._normalize_mask(env_mask)
+        with self._viewer_update_context(context):
+            return self._reset_impl(mask, context)
+
+    def _reset_impl(
+        self,
+        mask: np.ndarray,
+        context: ExecutionContext,
+    ) -> TaskUpdate:
         context.backend.reset(mask)
         for env_index, enabled in enumerate(mask):
             if enabled:
@@ -913,6 +942,22 @@ class TaskRunner:
         context = self._require_context()
         mask = self._normalize_mask(env_mask)
         self._validate_update_mask(mask)
+        with self._viewer_update_context(context):
+            return self._update_impl(mask, context)
+
+    @staticmethod
+    def _viewer_update_context(
+        context: ExecutionContext,
+    ) -> ContextManager[None]:
+        if context.task_file.execution.render_internal_updates:
+            return nullcontext()
+        return context.backend.defer_viewer_updates()
+
+    def _update_impl(
+        self,
+        mask: np.ndarray,
+        context: ExecutionContext,
+    ) -> TaskUpdate:
         execution = context.task_file.execution
         selection = execution.interval_selection
         boundary = execution.update_boundary
@@ -1038,6 +1083,7 @@ class TaskRunner:
         return {
             "event": event,
             "update_boundary": execution.update_boundary.value,
+            "render_internal_updates": bool(execution.render_internal_updates),
             "internal_updates": internal_updates,
             "max_internal_updates_per_update": int(
                 execution.max_internal_updates_per_update
