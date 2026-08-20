@@ -53,6 +53,15 @@ env:
     step_delay: 0.005
     hold_seconds: 0.5
 
+execution:
+  update_boundary: keypoint # control_tick | primitive | keypoint | stage
+  render_internal_updates: false
+  max_internal_updates_per_update: 10000
+  interval_selection:
+    start: { stage: pick_cube_yellow_2, phase: pre_move, waypoint: 1 }
+    stop: { stage: place_cube_orange_3_in_disk, phase: post_move, waypoint: 0 }
+    max_fast_forward_updates: 10000
+
 task:
   initial_pose:
     cube_blue:
