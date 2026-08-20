@@ -227,6 +227,9 @@ mask 循环中每个 object 都调用 `batch_update_gaussians(body_pos, body_qua
 > 测试工具: `tests/run_bench_suite.py` + `tests/plot_bench_results.py`
 > 注意事项: task-level 第一步作为 warmup 不纳入计时，避免 CUDA JIT 编译影响结果
 
+重跑此 benchmark 时，当前 runner 会关闭逐步 `TaskUpdate` 输出，并只累计非
+warmup `step_fn` 的执行时间；交互等待、对象格式化和日志 I/O 不进入循环频率。
+
 ### Task-Level 循环频率
 
 | batch_size | task update | task update + obs | obs 带来的每步开销 | env 吞吐量 |

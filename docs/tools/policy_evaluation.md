@@ -53,16 +53,21 @@ evaluator = PolicyEvaluator(
 
 update = evaluator.reset()
 max_updates = None
-step = -1
+updates_used = 0
 
-for step in range(max_updates or 10**18):
+while not update.done.all() and (
+    max_updates is None or updates_used < max_updates
+):
     observation = evaluator.get_observation()
     action = policy.act(observation, update=update, evaluator=evaluator)
     update = evaluator.update(action)
-    if update.done.all():
-        break
+    updates_used += 1
 
-summary = evaluator.summarize(update, max_updates=max_updates, updates_used=step + 1)
+summary = evaluator.summarize(
+    update,
+    max_updates=max_updates,
+    updates_used=updates_used,
+)
 records = evaluator.records
 ```
 
@@ -96,6 +101,8 @@ Returned by `summarize(...)`.
 Use it for final aggregate metrics:
 
 - `updates_used`
+- `timed_updates` (`None` for direct `summarize(...)` calls; populated by the CLI rollout loop)
+- `elapsed_time_sec`
 - `completed_stage_count`
 - `final_stage_index`
 - `final_stage_name`
@@ -372,15 +379,17 @@ info = evaluator.get_info()
 
 # Same API as PolicyEvaluator
 update = evaluator.reset()
+updates_used = 0
 
-for step in range(max_steps):
+for _ in range(max_steps):
     obs = evaluator.get_observation()
     action = policy.act(obs, update)
     update = evaluator.update(action)
+    updates_used += 1
     if update.done.all():
         break
 
-summary = evaluator.summarize(max_updates=max_steps, updates_used=step + 1)
+summary = evaluator.summarize(max_updates=max_steps, updates_used=updates_used)
 records = evaluator.records
 evaluator.close()
 ```

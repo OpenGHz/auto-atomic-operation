@@ -24,6 +24,9 @@
 ```
 
 脚本会严格串行执行所有 benchmark，不会并发跑多个命令，以避免资源竞争影响测试稳定性。
+任务级 benchmark 还会自动设置 `print_updates=false`，避免逐步格式化和日志 I/O
+污染 `loop_frequency_hz`。第一步仍作为 warmup 执行，但不计入
+`timed_updates` 或 `elapsed_time_sec`。
 
 基准执行完成后，再生成图表和分析：
 

@@ -36,6 +36,7 @@ def main(cfg: DictConfig) -> None:
     use_input = bool(cfg.get("use_input", False))
     max_updates = int(cfg.get("max_updates", 600))
     perf_count = bool(cfg.get("perf_count", False))
+    print_updates = bool(cfg.get("print_updates", True))
     _last_obs = [None]  # mutable container to hold observation across steps
 
     def _step_fn(_step, _update):
@@ -62,6 +63,7 @@ def main(cfg: DictConfig) -> None:
                 reset_label="Reset task",
                 start_label="Scene reset complete; viewer refreshed. Starting task updates...",
                 max_updates=max_updates,
+                print_updates=print_updates,
             ),
         )
         print_final_summary(round_summaries, init_time_sec=init_time)
@@ -75,6 +77,7 @@ def main(cfg: DictConfig) -> None:
                 "config_name": hydra_cfg.job.config_name,
                 "batch_size": runner._context.backend.batch_size,
                 "perf_count": perf_count,
+                "print_updates": print_updates,
                 "viewer": viewer_cfg is not None,
                 "rounds": rounds,
                 "max_updates": max_updates,

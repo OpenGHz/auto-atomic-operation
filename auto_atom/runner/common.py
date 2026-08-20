@@ -33,6 +33,7 @@ class ExampleLoopHooks:
     reset_label: str = "Reset"
     start_label: str = "Starting updates..."
     max_updates: Optional[int] = None
+    print_updates: bool = True
 
 
 def get_config_dir() -> Path:
@@ -58,6 +59,9 @@ def run_example_rounds(
     use_input: bool,
     hooks: ExampleLoopHooks,
 ) -> List[ExecutionSummary]:
+    if hooks.max_updates is not None and hooks.max_updates < 0:
+        raise ValueError("max_updates must be non-negative or None")
+
     round_summaries: List[ExecutionSummary] = []
 
     for r in range(rounds):
@@ -70,7 +74,8 @@ def run_example_rounds(
 
         print(hooks.reset_label)
         update = hooks.reset_fn()
-        pprint(update, sort_dicts=False)
+        if hooks.print_updates:
+            pprint(update, sort_dicts=False)
         print(hooks.start_label)
         print()
 
@@ -82,46 +87,50 @@ def run_example_rounds(
         env_completion_steps[reset_done_mask] = 0
         env_completion_time_sec[reset_done_mask] = 0.0
         steps_used = 0
+        timed_updates = 0
+        elapsed_time_sec = 0.0
+        done_mask = reset_done_mask
+        all_done = bool(np.all(done_mask))
 
-        # Warmup step 0: may trigger JIT compilation; exclude from timing.
-        if not bool(np.all(reset_done_mask)):
-            update = hooks.step_fn(0, update)
-            steps_used = 1
-            print("Step 0 (warmup):" + "=" * 40)
-            pprint(update, sort_dicts=False)
-            done_mask = np.asarray(update.done, dtype=bool)
-            newly_done = done_mask & (env_completion_steps < 0)
-            env_completion_steps[newly_done] = 1
-            env_completion_time_sec[newly_done] = 0.0
-
-        start_time = perf_counter()
-        for step in range(1, hooks.max_updates or 10**18):
-            if bool(np.all(update.done)):
-                break
+        while not all_done and (
+            hooks.max_updates is None or steps_used < hooks.max_updates
+        ):
+            step = steps_used
+            is_warmup = step == 0
             if use_input:
                 input("Press Enter to continue...")
 
-            update = hooks.step_fn(step, update)
+            if is_warmup:
+                # The first real update may trigger JIT compilation.
+                update = hooks.step_fn(step, update)
+            else:
+                step_start = perf_counter()
+                update = hooks.step_fn(step, update)
+                elapsed_time_sec += perf_counter() - step_start
+                timed_updates += 1
+
             steps_used += 1
-            elapsed_now = perf_counter() - start_time
             done_mask = np.asarray(update.done, dtype=bool)
             newly_done = done_mask & (env_completion_steps < 0)
             env_completion_steps[newly_done] = steps_used
-            env_completion_time_sec[newly_done] = elapsed_now
-            print(f"Step {step}:" + "=" * 40)
-            pprint(update, sort_dicts=False)
-        else:
-            if not bool(np.all(update.done)):
-                assert hooks.max_updates is not None
-                print(f"Reached max_updates={hooks.max_updates}, stopping rollout.")
+            env_completion_time_sec[newly_done] = elapsed_time_sec
+            all_done = bool(np.all(done_mask))
 
-        elapsed_time_sec = perf_counter() - start_time
+            if hooks.print_updates:
+                label = f"Step {step} (warmup):" if is_warmup else f"Step {step}:"
+                print(label + "=" * 40)
+                pprint(update, sort_dicts=False)
+
+        if not all_done and hooks.max_updates is not None:
+            print(f"Reached max_updates={hooks.max_updates}, stopping rollout.")
+
         summary = hooks.summarize_fn(
             update,
             steps_used,
             hooks.max_updates,
             elapsed_time_sec,
         )
+        summary.timed_updates = timed_updates
         summary.env_completion_steps = env_completion_steps
         summary.env_completion_time_sec = env_completion_time_sec
         if summary.env_completion_sim_time_sec is None:
@@ -184,15 +193,18 @@ def print_final_summary(
         round_env_success = _count_env_successes(summary)
         batch_size = len(summary.final_success)
         failure_lines = _format_failure_lines(summary)
-        loop_freq = (
-            summary.updates_used / summary.elapsed_time_sec
-            if summary.elapsed_time_sec > 0
-            else float("inf")
+        timed_updates = _timed_update_count(summary)
+        loop_freq = _loop_frequency_hz(summary)
+        loop_frequency = (
+            f"{loop_freq:.1f} Hz ({timed_updates} timed steps in "
+            f"{summary.elapsed_time_sec:.3f}s, {summary.updates_used} total)"
+            if loop_freq is not None
+            else f"N/A ({timed_updates} timed steps, {summary.updates_used} total)"
         )
         round_payload = {
             "status": tag,
             "success_rate": f"{round_env_success}/{batch_size}",
-            "loop_frequency": f"{loop_freq:.1f} Hz ({summary.updates_used} steps in {summary.elapsed_time_sec:.3f}s)",
+            "loop_frequency": loop_frequency,
             "completed_stage_info": _format_completed_stage_info(
                 summary.completed_stage_info
             ),
@@ -235,16 +247,14 @@ def save_final_summary(
 
     rounds_data: List[Dict[str, Any]] = []
     for summary in round_summaries:
-        loop_freq = (
-            summary.updates_used / summary.elapsed_time_sec
-            if summary.elapsed_time_sec > 0
-            else float("inf")
-        )
+        timed_updates = _timed_update_count(summary)
+        loop_freq = _loop_frequency_hz(summary)
         entry: Dict[str, Any] = {
             "status": "OK" if bool(np.all(summary.final_success)) else "FAIL",
             "success_rate": f"{_count_env_successes(summary)}/{len(summary.final_success)}",
-            "loop_frequency_hz": round(loop_freq, 1),
+            "loop_frequency_hz": None if loop_freq is None else round(loop_freq, 1),
             "updates_used": summary.updates_used,
+            "timed_updates": timed_updates,
             "elapsed_time_sec": round(summary.elapsed_time_sec, 3),
             "completed_stage_info": _format_completed_stage_info(
                 summary.completed_stage_info
@@ -339,6 +349,19 @@ def _format_completed_stage_info(
 
 def _count_env_successes(summary: ExecutionSummary) -> int:
     return int(np.count_nonzero(np.asarray(summary.final_success, dtype=bool)))
+
+
+def _timed_update_count(summary: ExecutionSummary) -> int:
+    if summary.timed_updates is None:
+        return summary.updates_used
+    return summary.timed_updates
+
+
+def _loop_frequency_hz(summary: ExecutionSummary) -> Optional[float]:
+    timed_updates = _timed_update_count(summary)
+    if timed_updates == 0 or summary.elapsed_time_sec <= 0:
+        return None
+    return timed_updates / summary.elapsed_time_sec
 
 
 def _format_optional_int_list(values: Optional[np.ndarray]) -> List[Optional[int]]:

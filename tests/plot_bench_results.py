@@ -164,6 +164,9 @@ def write_analysis(
         "不是单个 env 的观测延迟。"
     )
     lines.append(
+        "> 该频率使用 `timed_updates`，排除第一步 warmup、交互等待和逐步日志输出。"
+    )
+    lines.append(
         "> 对于这个 GS 任务，`batch_size=1` 和 `batch_size=2` 都走同一个 "
         "`BatchedGSUnifiedMujocoEnv` 观测实现；差别在于 batched renderer 的输入规模不同，"
         "因此 `batch_size=2` 的 batch loop Hz 高于 `batch_size=1` 仍然可能成立。"

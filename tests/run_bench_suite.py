@@ -162,6 +162,7 @@ def run_task_benchmark(
         config_name,
         "env.viewer=null",
         f"+perf_count={'true' if perf_count else 'false'}",
+        "+print_updates=false",
         f"env.batch_size={batch_size}",
         f"+max_updates={max_updates}",
         f"hydra.run.dir={scenario_dir.as_posix()}",
@@ -183,6 +184,11 @@ def run_task_benchmark(
     summary = json.loads(summary_path.read_text())
 
     round0 = _first_round(summary)
+    if round0["loop_frequency_hz"] is None or round0["timed_updates"] == 0:
+        raise RuntimeError(
+            "Task benchmark completed before any timed update; increase the "
+            "rollout workload to measure loop frequency."
+        )
     normalized = {
         "scenario": scenario,
         "batch_size": batch_size,
@@ -192,6 +198,7 @@ def run_task_benchmark(
         "loop_frequency_hz": round0["loop_frequency_hz"],
         "elapsed_time_sec": round0["elapsed_time_sec"],
         "updates_used": round0["updates_used"],
+        "timed_updates": round0["timed_updates"],
         "success_rate": summary.get("success_rate"),
         "gpu_memory_peak_mb": result["gpu_memory_peak_mb"],
         "gpu_memory_samples": result["gpu_memory_samples"],

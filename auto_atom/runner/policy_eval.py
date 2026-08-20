@@ -134,6 +134,7 @@ def main(cfg: DictConfig) -> None:
     rounds = int(cfg.get("rounds", 1))
     use_input = bool(cfg.get("use_input", False))
     get_obs = bool(cfg.get("get_obs", False))
+    print_updates = bool(cfg.get("print_updates", True))
 
     evaluator = PolicyEvaluator(
         action_applier=action_applier,
@@ -167,6 +168,7 @@ def main(cfg: DictConfig) -> None:
                 reset_label="Reset evaluator",
                 start_label="Starting policy rollout...",
                 max_updates=max_updates,
+                print_updates=print_updates,
             ),
         )
     finally:

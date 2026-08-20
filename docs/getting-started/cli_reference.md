@@ -19,9 +19,10 @@ To discover which configs are runnable tasks, use [`aao-info`](#aao-info).
 | Override | Type | Default | Description |
 |---|---|---|---|
 | `[+]rounds=N` | int | 1 | Number of demo rounds to run |
-| `[+]use_input=true` | bool | false | Pause between steps (press Enter to continue) |
+| `[+]use_input=true` | bool | false | Pause before every step, including warmup (press Enter to continue) |
 | `[+]max_updates=N` | int | 600 | Maximum public `TaskRunner.update()` calls per round; macro-boundary internal controller updates are limited separately |
 | `[+]perf_count=true` | bool | false | Capture observations each step for performance analysis |
+| `[+]print_updates=false` | bool | true | Disable reset/step `TaskUpdate` dumps while retaining summaries |
 | `env.batch_size=N` | int | (from config) | Override the number of parallel environments |
 | `task.seed=N` | int | (from config) | Override the randomization seed |
 | `+env.viewer.disable=true` | bool | false | Run headless (no viewer window) |
@@ -91,7 +92,11 @@ intermediate actions required by the TaskRunner-only execution modes.
 
 ### Output
 
-Each run writes a `summary.json` to the Hydra output directory (`outputs/<date>/<time>/summary.json`) containing per-round success rates, completion steps, timing, and failure reasons.
+Each run writes a `summary.json` to the Hydra output directory
+(`outputs/<date>/<time>/summary.json`) containing per-round success rates,
+completion steps, timing, and failure reasons. `updates_used` includes the
+untimed warmup update; `timed_updates` and `loop_frequency_hz` exclude it.
+Timing covers only update execution, not interactive waits or console output.
 
 ## aao-eval
 
@@ -108,8 +113,9 @@ aao-eval --config-name policy_eval_mock     # mock backend evaluation
 |---|---|---|---|
 | `max_updates=N` | int | None | Maximum steps before stopping (None = unlimited) |
 | `rounds=N` | int | 1 | Number of evaluation rounds |
-| `use_input=true` | bool | false | Pause between steps |
+| `use_input=true` | bool | false | Pause before every step, including warmup |
 | `get_obs=true` | bool | false | Call `capture_observation()` and pass to policy each step |
+| `print_updates=false` | bool | true | Disable reset/step `TaskUpdate` dumps while retaining summaries |
 
 ### Custom policy
 

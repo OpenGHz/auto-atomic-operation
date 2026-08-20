@@ -56,6 +56,7 @@ def test_execution_summary_roundtrip_preserves_simulation_times() -> None:
         total_stages=1,
         max_updates=5,
         updates_used=1,
+        timed_updates=1,
         completed_stage_count=np.asarray([1, 1], dtype=np.int64),
         final_stage_index=np.asarray([0, 0], dtype=np.int64),
         final_stage_name=["move", "move"],
@@ -71,6 +72,7 @@ def test_execution_summary_roundtrip_preserves_simulation_times() -> None:
 
     restored = deserialize_execution_summary(serialize_execution_summary(summary))
 
+    assert restored.timed_updates == 1
     assert restored.sim_time_sec == 1.0
     np.testing.assert_array_equal(
         restored.final_success,
@@ -80,6 +82,26 @@ def test_execution_summary_roundtrip_preserves_simulation_times() -> None:
         restored.env_completion_sim_time_sec,
         np.asarray([0.25, 1.0], dtype=np.float64),
     )
+
+
+def test_execution_summary_deserialize_defaults_timed_updates_for_legacy_data() -> None:
+    summary = ExecutionSummary(
+        total_stages=1,
+        max_updates=5,
+        updates_used=1,
+        completed_stage_count=np.asarray([1], dtype=np.int64),
+        final_stage_index=np.asarray([0], dtype=np.int64),
+        final_stage_name=["move"],
+        final_status=np.asarray([StageExecutionStatus.SUCCEEDED], dtype=object),
+        final_done=np.asarray([True], dtype=bool),
+        final_success=np.asarray([True], dtype=bool),
+    )
+    wire = serialize_execution_summary(summary)
+    del wire["timed_updates"]
+
+    restored = deserialize_execution_summary(wire)
+
+    assert restored.timed_updates is None
 
 
 def test_task_update_roundtrip_preserves_batched_success() -> None:

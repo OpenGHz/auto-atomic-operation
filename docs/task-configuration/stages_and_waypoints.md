@@ -127,10 +127,12 @@ keypoint instead of animating the reset prefix.
 
 `TaskUpdate.details[env_index]["interval_selection"]` reports the selected
 endpoints, current interval event, configured safety limit, and (on reset)
-`fast_forward_updates`. In execution summaries, `updates_used` counts public
-rollout `update()` calls, while `sim_time_sec` uses the controller updates
-actually executed inside those calls. Reset fast-forward ticks are excluded
-from both rollout metrics.
+`fast_forward_updates`. In execution summaries, `updates_used` counts all public
+rollout `update()` calls, while `timed_updates` excludes the first warmup call.
+`elapsed_time_sec` accumulates only those timed calls, without interactive waits
+or console output, and `sim_time_sec` uses the controller updates actually
+executed inside all public calls. Reset fast-forward ticks are excluded from
+these rollout metrics.
 
 Invalid selections fail during config validation: unknown or ambiguous stage
 names, absent phases, out-of-range waypoint indexes, and `start` ordered after

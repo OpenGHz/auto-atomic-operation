@@ -403,6 +403,7 @@ class ExecutionSummary:
     env_completion_sim_time_sec: Optional[np.ndarray] = None
     completed_stage_info: Dict[str, List[Optional[str]]] = field(default_factory=dict)
     records: List[ExecutionRecord] = field(default_factory=list)
+    timed_updates: Optional[int] = None
 
 
 @dataclass
