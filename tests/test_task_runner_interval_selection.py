@@ -7,9 +7,11 @@ import pytest
 from pydantic import ValidationError
 
 from auto_atom.framework import (
+    IntervalSelectionConfig,
     PoseControlConfig,
     StageConfig,
     TaskFileConfig,
+    TaskKeypointConfig,
     TaskPhase,
 )
 from auto_atom.policy_eval import PolicyEvaluator
@@ -78,8 +80,17 @@ def _task_payload(*, batch_size: int = 1, interval: dict | None = None) -> dict:
     return payload
 
 
-def _keypoint(stage: str, phase: str, waypoint: int) -> dict:
-    return {"stage": stage, "phase": phase, "waypoint": waypoint}
+def _keypoint(
+    stage: str,
+    phase: str,
+    waypoint: int,
+    *,
+    side: str | None = None,
+) -> dict:
+    point = {"stage": stage, "phase": phase, "waypoint": waypoint}
+    if side is not None:
+        point["side"] = side
+    return point
 
 
 def _operator_positions(runner: TaskRunner) -> np.ndarray:
@@ -146,9 +157,134 @@ def test_top_level_interval_selection_is_rejected_with_migration_path() -> None:
         TaskFileConfig.model_validate(payload)
 
 
-def test_reset_reaches_start_and_update_stops_after_inclusive_stop() -> None:
+def test_task_keypoint_side_defaults_to_none_outside_interval_selection() -> None:
+    point = TaskKeypointConfig(
+        stage="selected",
+        phase=TaskPhase.PRE_MOVE,
+        waypoint=0,
+    )
+
+    assert point.side is None
+    assert point.model_dump(mode="json")["side"] is None
+
+
+def test_interval_endpoint_sides_have_role_specific_defaults() -> None:
+    config = TaskFileConfig.model_validate(
+        _task_payload(
+            interval={
+                "start": _keypoint("selected", "pre_move", 0),
+                "stop": _keypoint("selected", "post_move", 1),
+            }
+        )
+    )
+
+    selection = config.execution.interval_selection
+    assert selection is not None
+    assert selection.start.__class__ is TaskKeypointConfig
+    assert selection.stop.__class__ is TaskKeypointConfig
+    assert selection.start.side is not None
+    assert selection.stop.side is not None
+    assert selection.start.side.value == "before"
+    assert selection.stop.side.value == "after"
+    assert selection.model_dump(mode="json") == {
+        "start": {
+            "stage": "selected",
+            "phase": "pre_move",
+            "waypoint": 0,
+            "side": "before",
+        },
+        "stop": {
+            "stage": "selected",
+            "phase": "post_move",
+            "waypoint": 1,
+            "side": "after",
+        },
+        "max_fast_forward_updates": 10_000,
+    }
+
+
+def test_interval_resolves_task_keypoint_config_instance_sides_by_role() -> None:
+    point = TaskKeypointConfig(
+        stage="selected",
+        phase=TaskPhase.PRE_MOVE,
+        waypoint=0,
+    )
+
+    selection = IntervalSelectionConfig(start=point, stop=point)
+
+    assert selection.start.side is not None
+    assert selection.stop.side is not None
+    assert selection.start.side.value == "before"
+    assert selection.stop.side.value == "after"
+
+
+def test_interval_treats_explicit_none_side_as_role_adaptive() -> None:
+    point = {
+        "stage": "selected",
+        "phase": "pre_move",
+        "waypoint": 0,
+        "side": None,
+    }
+
+    selection = IntervalSelectionConfig(start=point, stop=point)
+
+    assert selection.start.side is not None
+    assert selection.stop.side is not None
+    assert selection.start.side.value == "before"
+    assert selection.stop.side.value == "after"
+
+
+def test_interval_preserves_explicit_endpoint_sides() -> None:
+    selection = IntervalSelectionConfig(
+        start=TaskKeypointConfig(
+            stage="selected",
+            phase=TaskPhase.PRE_MOVE,
+            waypoint=0,
+            side="after",
+        ),
+        stop=TaskKeypointConfig(
+            stage="selected",
+            phase=TaskPhase.POST_MOVE,
+            waypoint=0,
+            side="before",
+        ),
+    )
+
+    assert selection.start.side is not None
+    assert selection.stop.side is not None
+    assert selection.start.side.value == "after"
+    assert selection.stop.side.value == "before"
+    dumped = selection.model_dump(mode="json")
+    assert dumped["start"]["side"] == "after"
+    assert dumped["stop"]["side"] == "before"
+
+
+def test_default_start_before_first_keypoint_performs_no_fast_forward_ticks() -> None:
+    point = _keypoint("selected", "pre_move", 0)
+    runner = TaskRunner().from_config(
+        TaskFileConfig.model_validate(
+            _task_payload(interval={"start": point, "stop": point})
+        )
+    )
+    try:
+        update = runner.reset()
+
+        assert _operator_positions(runner)[0, 0] == pytest.approx(0.2)
+        assert update.done.tolist() == [False]
+        assert update.stage_name == ["selected"]
+        assert update.phase == ["pre_move"]
+        assert update.phase_step.tolist() == [0]
+        assert update.details[0]["interval_selection"]["fast_forward_updates"] == 0
+        assert update.details[0]["interval_selection"]["start"]["side"] == ("before")
+    finally:
+        runner.close()
+
+
+def test_explicit_after_start_is_reached_and_default_stop_runs_through_keypoint() -> (
+    None
+):
     interval = {
-        "start": _keypoint("selected", "post_move", 0),
+        "start": _keypoint("selected", "post_move", 0, side="after"),
         "stop": _keypoint("selected", "post_move", 1),
     }
     runner = TaskRunner().from_config(
@@ -192,6 +328,112 @@ def test_reset_reaches_start_and_update_stops_after_inclusive_stop() -> None:
         runner.close()
 
 
+def test_stop_before_finishes_without_executing_the_target_keypoint() -> None:
+    runner = TaskRunner().from_config(
+        TaskFileConfig.model_validate(
+            _task_payload(
+                interval={
+                    "start": _keypoint("selected", "pre_move", 0),
+                    "stop": _keypoint("selected", "pre_move", 1, side="before"),
+                }
+            )
+        )
+    )
+    try:
+        reset_update = runner.reset()
+        assert reset_update.done.tolist() == [False]
+
+        running_update = runner.update()
+        assert running_update.done.tolist() == [False]
+        final_update = runner.update()
+
+        assert final_update.done.tolist() == [True]
+        assert final_update.success.tolist() == [True]
+        assert _operator_positions(runner)[0, 0] == pytest.approx(0.1)
+        assert final_update.stage_name == ["selected"]
+        assert final_update.phase == ["pre_move"]
+        assert final_update.phase_step.tolist() == [1]
+        assert final_update.details[0]["interval_selection"]["stop"]["side"] == (
+            "before"
+        )
+        assert "action" not in final_update.details[0]
+        assert "action_index" not in final_update.details[0]
+    finally:
+        runner.close()
+
+
+def test_same_keypoint_before_to_after_executes_exactly_that_keypoint() -> None:
+    point = _keypoint("selected", "pre_move", 0)
+    runner = TaskRunner().from_config(
+        TaskFileConfig.model_validate(
+            _task_payload(interval={"start": point, "stop": point})
+        )
+    )
+    try:
+        reset_update = runner.reset()
+        assert reset_update.done.tolist() == [False]
+        assert _operator_positions(runner)[0, 0] == pytest.approx(0.2)
+
+        running_update = runner.update()
+        assert running_update.done.tolist() == [False]
+        final_update = runner.update()
+
+        assert final_update.done.tolist() == [True]
+        assert final_update.success.tolist() == [True]
+        assert _operator_positions(runner)[0, 0] == pytest.approx(0.1)
+        assert final_update.phase == ["pre_move"]
+        assert final_update.phase_step.tolist() == [0]
+    finally:
+        runner.close()
+
+
+def test_same_keypoint_before_to_before_finishes_at_reset_state() -> None:
+    point = _keypoint("selected", "pre_move", 0, side="before")
+    runner = TaskRunner().from_config(
+        TaskFileConfig.model_validate(
+            _task_payload(interval={"start": point, "stop": point})
+        )
+    )
+    try:
+        update = runner.reset()
+
+        assert update.done.tolist() == [True]
+        assert update.success.tolist() == [True]
+        assert _operator_positions(runner)[0, 0] == pytest.approx(0.2)
+        assert update.phase == ["pre_move"]
+        assert update.phase_step.tolist() == [0]
+        assert update.details[0]["interval_selection"]["fast_forward_updates"] == 0
+        assert update.details[0]["execution"]["event"] == "interval_stop_reached"
+    finally:
+        runner.close()
+
+
+def test_adjacent_after_to_before_finishes_at_the_shared_state() -> None:
+    runner = TaskRunner().from_config(
+        TaskFileConfig.model_validate(
+            _task_payload(
+                interval={
+                    "start": _keypoint("selected", "pre_move", 0, side="after"),
+                    "stop": _keypoint("selected", "pre_move", 1, side="before"),
+                }
+            )
+        )
+    )
+    try:
+        update = runner.reset()
+
+        assert update.done.tolist() == [True]
+        assert update.success.tolist() == [True]
+        assert _operator_positions(runner)[0, 0] == pytest.approx(0.1)
+        assert update.phase == ["pre_move"]
+        assert update.phase_step.tolist() == [1]
+        assert update.details[0]["interval_selection"]["fast_forward_updates"] == 2
+        assert "action" not in update.details[0]
+        assert runner.records == []
+    finally:
+        runner.close()
+
+
 def test_interval_crosses_stage_boundaries_without_entering_stage_after_stop() -> None:
     payload = _task_payload()
     payload["task"]["stages"].append(
@@ -205,7 +447,7 @@ def test_interval_crosses_stage_boundaries_without_entering_stage_after_stop() -
     )
     payload["execution"] = {
         "interval_selection": {
-            "start": _keypoint("selected", "post_move", 1),
+            "start": _keypoint("selected", "post_move", 1, side="after"),
             "stop": _keypoint("excluded", "pre_move", 0),
         }
     }
@@ -232,8 +474,8 @@ def test_interval_crosses_stage_boundaries_without_entering_stage_after_stop() -
         runner.close()
 
 
-def test_equal_start_and_stop_finishes_during_reset() -> None:
-    point = _keypoint("selected", "post_move", 0)
+def test_same_keypoint_after_to_after_finishes_during_reset() -> None:
+    point = _keypoint("selected", "post_move", 0, side="after")
     runner = TaskRunner().from_config(
         TaskFileConfig.model_validate(
             _task_payload(interval={"start": point, "stop": point})
@@ -260,7 +502,7 @@ def test_equal_start_and_stop_finishes_during_reset() -> None:
 
 
 def test_example_loop_does_not_step_an_interval_completed_by_reset() -> None:
-    point = _keypoint("selected", "post_move", 0)
+    point = _keypoint("selected", "post_move", 0, side="after")
     runner = TaskRunner().from_config(
         TaskFileConfig.model_validate(
             _task_payload(interval={"start": point, "stop": point})
@@ -315,7 +557,7 @@ def test_eef_is_selectable_as_singleton_waypoint_zero() -> None:
             },
         }
     ]
-    point = _keypoint("push", "eef", 0)
+    point = _keypoint("push", "eef", 0, side="after")
     payload["execution"] = {"interval_selection": {"start": point, "stop": point}}
     runner = TaskRunner().from_config(TaskFileConfig.model_validate(payload))
     try:
@@ -326,6 +568,44 @@ def test_eef_is_selectable_as_singleton_waypoint_zero() -> None:
         assert update.phase == ["eef"]
         assert update.phase_step.tolist() == [0]
         assert _operator_positions(runner)[0, 0] == pytest.approx(0.1)
+    finally:
+        runner.close()
+
+
+def test_eef_before_to_after_executes_the_eef_keypoint() -> None:
+    payload = _task_payload()
+    payload["task"]["stages"] = [
+        {
+            "name": "push",
+            "object": "block",
+            "operation": "push",
+            "operator": "arm",
+            "param": {
+                "pre_move": [_pose(0.1)],
+                "eef": {"close": True},
+                "post_move": [_pose(0.2)],
+            },
+        }
+    ]
+    point = _keypoint("push", "eef", 0)
+    payload["execution"] = {"interval_selection": {"start": point, "stop": point}}
+    runner = TaskRunner().from_config(TaskFileConfig.model_validate(payload))
+    try:
+        reset_update = runner.reset()
+
+        assert reset_update.done.tolist() == [False]
+        assert reset_update.phase == ["eef"]
+        assert reset_update.phase_step.tolist() == [0]
+        assert _operator_positions(runner)[0, 0] == pytest.approx(0.1)
+
+        running_update = runner.update()
+        assert running_update.done.tolist() == [False]
+        final_update = runner.update()
+
+        assert final_update.done.tolist() == [True]
+        assert final_update.success.tolist() == [True]
+        assert final_update.phase == ["eef"]
+        assert final_update.phase_step.tolist() == [0]
     finally:
         runner.close()
 
@@ -346,7 +626,7 @@ def test_fast_forward_condition_failure_is_not_overwritten_as_success() -> None:
     ]
     payload["execution"] = {
         "interval_selection": {
-            "start": _keypoint("pick", "eef", 0),
+            "start": _keypoint("pick", "eef", 0, side="after"),
             "stop": _keypoint("pick", "post_move", 0),
         }
     }
@@ -369,7 +649,7 @@ def test_fast_forward_condition_failure_is_not_overwritten_as_success() -> None:
 
 
 def test_configurable_fast_forward_limit_fails_instead_of_hanging_reset() -> None:
-    point = _keypoint("selected", "post_move", 0)
+    point = _keypoint("selected", "post_move", 0, side="after")
     interval = {
         "start": point,
         "stop": point,
@@ -401,7 +681,7 @@ def test_failed_fast_forward_does_not_expose_successful_prefix_stage_records() -
     ]
     payload["execution"] = {
         "interval_selection": {
-            "start": _keypoint("selected", "pre_move", 0),
+            "start": _keypoint("selected", "pre_move", 0, side="after"),
             "stop": _keypoint("selected", "pre_move", 0),
             "max_fast_forward_updates": 3,
         }
@@ -439,7 +719,7 @@ def test_stop_condition_failure_is_not_overwritten_as_interval_success() -> None
     ]
     payload["execution"] = {
         "interval_selection": {
-            "start": _keypoint("pick", "pre_move", 0),
+            "start": _keypoint("pick", "pre_move", 0, side="after"),
             "stop": _keypoint("pick", "eef", 0),
         }
     }
@@ -500,6 +780,20 @@ def test_stop_condition_failure_is_not_overwritten_as_interval_success() -> None
             },
             "start must not come after",
         ),
+        (
+            {
+                "start": _keypoint("selected", "pre_move", 0, side="after"),
+                "stop": _keypoint("selected", "pre_move", 0, side="before"),
+            },
+            "start must not come after",
+        ),
+        (
+            {
+                "start": _keypoint("selected", "pre_move", 0, side="during"),
+                "stop": _keypoint("selected", "post_move", 0),
+            },
+            "before|after",
+        ),
     ],
 )
 def test_invalid_interval_points_are_rejected(interval: dict, message: str) -> None:
@@ -541,7 +835,7 @@ def test_active_builder_must_emit_configured_interval_keypoints() -> None:
             ], orientation
 
     interval = {
-        "start": _keypoint("selected", "post_move", 0),
+        "start": _keypoint("selected", "post_move", 0, side="after"),
         "stop": _keypoint("selected", "post_move", 1),
     }
     config = TaskFileConfig.model_validate(_task_payload(interval=interval))
@@ -576,7 +870,7 @@ def test_interval_rejects_invalid_builder_keypoint_completion_marker() -> None:
 
 def test_interval_fast_forward_respects_partial_reset_mask() -> None:
     interval = {
-        "start": _keypoint("selected", "post_move", 0),
+        "start": _keypoint("selected", "post_move", 0, side="after"),
         "stop": _keypoint("selected", "post_move", 1),
     }
     runner = TaskRunner().from_config(
@@ -630,6 +924,50 @@ def test_arc_subactions_keep_the_configured_waypoint_identity() -> None:
     assert [action.phase for action in actions] == [TaskPhase.PRE_MOVE] * 3
     assert [action.waypoint for action in actions] == [0, 0, 0]
     assert [action.completes_keypoint for action in actions] == [False, False, True]
+
+
+def test_arc_before_to_after_executes_all_primitives_as_one_keypoint() -> None:
+    payload = _task_payload()
+    payload["task"]["stages"] = [
+        {
+            "name": "arc_move",
+            "object": "block",
+            "operation": "move",
+            "operator": "arm",
+            "param": {
+                "pre_move": [
+                    {
+                        "reference": "world",
+                        "arc": {
+                            "pivot": [0.0, 0.0, 0.0],
+                            "axis": [0.0, 0.0, 1.0],
+                            "angle": 0.5,
+                            "max_step": 0.2,
+                        },
+                    }
+                ]
+            },
+        }
+    ]
+    point = _keypoint("arc_move", "pre_move", 0)
+    payload["execution"] = {"interval_selection": {"start": point, "stop": point}}
+    runner = TaskRunner().from_config(TaskFileConfig.model_validate(payload))
+    try:
+        update = runner.reset()
+        assert update.done.tolist() == [False]
+        assert update.details[0]["interval_selection"]["fast_forward_updates"] == 0
+
+        updates = 0
+        while not bool(update.done[0]):
+            update = runner.update()
+            updates += 1
+
+        assert updates == 6
+        assert update.success.tolist() == [True]
+        assert update.phase == ["pre_move"]
+        assert update.phase_step.tolist() == [0]
+    finally:
+        runner.close()
 
 
 def test_primitive_action_preserves_existing_positional_constructor_order() -> None:

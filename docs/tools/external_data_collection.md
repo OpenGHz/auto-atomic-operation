@@ -70,29 +70,40 @@ task_file = load_task_file_hydra(
 Clear the registry before loading a new task in a reused worker process so a
 closed environment from an earlier run cannot be selected accidentally.
 
-To collect only an inclusive keypoint interval with `TaskRunner`, add
-`execution.interval_selection` through Hydra overrides. For example, start
-from the completed pick retract and collect through the completed place
-retract, exposing one complete YAML waypoint per public update:
+To collect only a keypoint interval with `TaskRunner`, add
+`execution.interval_selection` through Hydra overrides. For example, expose
+one complete YAML waypoint per public update, starting in the state after the
+completed pick retract and ending in the state after the completed place
+retract:
 
 ```python
 overrides=[
-    "execution.update_boundary=keypoint",
-    "execution.interval_selection.start.stage=pick_source",
-    "execution.interval_selection.start.phase=post_move",
-    "execution.interval_selection.start.waypoint=0",
-    "execution.interval_selection.stop.stage=place_source",
-    "execution.interval_selection.stop.phase=post_move",
-    "execution.interval_selection.stop.waypoint=0",
+    "+execution.update_boundary=keypoint",
+    "+execution.interval_selection.start.stage=pick_source",
+    "+execution.interval_selection.start.phase=post_move",
+    "+execution.interval_selection.start.waypoint=0",
+    "+execution.interval_selection.start.side=after",
+    "+execution.interval_selection.stop.stage=place_source",
+    "+execution.interval_selection.stop.phase=post_move",
+    "+execution.interval_selection.stop.waypoint=0",
+    "+execution.interval_selection.stop.side=after",
 ]
 ```
 
 `runner.reset()` executes the prefix internally and returns with the start
-keypoint already reached. Consequently, `writer.write_initial()` receives the
-inclusive start observation, while no pre-start frames are exposed to the host
-collection loop. The update that reaches stop reports terminal success, and
-the host's post-update observation captures that inclusive stop state. See
-[Stages & Waypoints](../task-configuration/stages_and_waypoints.md#inclusive-task-interval-selection).
+keypoint fully completed because this example explicitly uses
+`start.side=after`. Consequently, `writer.write_initial()` receives the
+state after that keypoint, while no prefix frames are exposed to the host
+collection loop. The update that completes the stop keypoint and its
+completion-bound condition reports terminal success; the host's post-update
+observation captures the resulting state. See
+[Stages & Waypoints](../task-configuration/stages_and_waypoints.md#task-interval-boundary-selection).
+
+`side=before` instead exposes the state immediately before the referenced
+keypoint, without running that keypoint's action or completion-bound
+condition. The start default is `before`; the stop default is `after`. This
+example spells out both sides because its start deliberately overrides
+the default.
 
 `execution.update_boundary` supports four collection granularities:
 
@@ -119,10 +130,12 @@ environment:
 - `execution.max_internal_updates_per_update` limits one public macro
   `runner.update()`.
 - `execution.interval_selection.max_fast_forward_updates` limits the prefix
-  executed by `runner.reset()` to reach interval `start`.
+  executed by `runner.reset()` to reach the interval start boundary.
 
-An interval stop takes priority over a coarser update boundary, so a stop in
-the middle of a stage is captured without executing the rest of the stage.
+An interval stop takes priority over a coarser update boundary. With
+`stop.side=before`, a stop in the middle of a stage is captured without
+executing the referenced keypoint or the rest of the stage; with `after`, the
+referenced keypoint and its completion-bound condition finish first.
 
 These execution options are specific to `TaskRunner` / `aao-demo`.
 `PolicyEvaluator` / `aao-eval` rejects interval selection, every

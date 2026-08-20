@@ -58,8 +58,8 @@ execution:
   render_internal_updates: false
   max_internal_updates_per_update: 10000
   interval_selection:
-    start: { stage: pick_cube_yellow_2, phase: pre_move, waypoint: 1 }
-    stop: { stage: place_cube_orange_3_in_disk, phase: post_move, waypoint: 0 }
+    start: { stage: pick_cube_yellow_2, phase: pre_move, waypoint: 1, side: before }
+    stop: { stage: place_cube_orange_3_in_disk, phase: post_move, waypoint: 0, side: after }
     max_fast_forward_updates: 10000
 
 task:

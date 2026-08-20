@@ -5,7 +5,7 @@ configuration that are easy to miss but frequently needed:
 
 - `TaskFileConfig.execution` — select the public `TaskRunner.update()` boundary,
   choose whether internal ticks are rendered, and optionally run only an
-  inclusive range between two configured keypoints.
+  interval delimited by states before or after two configured keypoints.
 - `StageConfig.site` — re-base `object_world` / `object` references onto a
   site or geometry instead of the stage object's body origin.
 - `PoseControlConfig.static` — freeze a tracking reference at the first
@@ -14,11 +14,11 @@ configuration that are easy to miss but frequently needed:
   distance an object must move before the `displaced` post-condition is
   satisfied.
 
-## Inclusive task interval selection
+## Task interval boundary selection
 
 `execution.interval_selection` restricts `TaskRunner` / `aao-demo` to an
-inclusive range of configured keypoints. It belongs to the task file's
-top-level `execution` section, alongside the update-boundary policy:
+interval between two explicit keypoint boundaries. It belongs to the task
+file's top-level `execution` section, alongside the update-boundary policy:
 
 ```yaml
 execution:
@@ -30,10 +30,12 @@ execution:
       stage: pick_source
       phase: post_move
       waypoint: 0
+      side: before
     stop:
       stage: place_source
       phase: post_move
       waypoint: 0
+      side: after
     max_fast_forward_updates: 10000
 
 task:
@@ -48,6 +50,29 @@ Each endpoint contains:
 | `stage` | Exact stage `name`; unnamed stages can use their generated `stage_N` name |
 | `phase` | `pre_move`, `eef`, or `post_move` |
 | `waypoint` | Zero-based index in that phase; `eef` is a singleton and only accepts `0` |
+| `side` | `before` or `after` the referenced keypoint; defaults to `before` for `start` and `after` for `stop` |
+
+Both endpoints use the same `TaskKeypointConfig` schema. Its standalone
+`side` default is `None`; `IntervalSelectionConfig` resolves that adaptive
+value by endpoint role and exposes the concrete `before` / `after` value when
+serialized.
+
+`side` selects one of the two state boundaries around a keypoint:
+
+- `before` is the state immediately before the referenced configured
+  keypoint executes. Neither that keypoint's action nor a condition bound to
+  its completion has run.
+- `after` is the state after the entire configured keypoint completes,
+  including any condition attached to its completion boundary.
+
+The role-specific defaults therefore run from immediately before `start`
+through immediately after `stop`. Set either field explicitly when a config
+should remain self-describing.
+
+Migration note: interval configs created before `side` existed effectively
+started at `after`. They still validate when `side` is omitted, but now use
+the requested `start.side: before` default. Add `start.side: after` to
+preserve the previous reset and first-update behavior.
 
 Top-level `interval_selection`, `update_boundary`, `render_internal_updates`,
 `max_internal_updates_per_update`, and `max_fast_forward_updates` are rejected
@@ -82,8 +107,8 @@ Increasing one limit does not change the other, and controller-level timeouts
 still apply independently.
 
 The endpoints refer to YAML waypoints, not internal controller ticks. If an
-arc waypoint expands into several primitive actions, the keypoint is reached
-only after the final arc sub-action completes.
+arc waypoint expands into several primitive actions, `before` is before its
+first sub-action and `after` is only after its final sub-action completes.
 
 ### Viewer updates at public boundaries
 
@@ -100,30 +125,41 @@ change camera observations. It only coalesces passive-viewer refreshes. With a
 long `stage` boundary, the viewer may appear unresponsive until that public
 update reaches its boundary.
 
-### Inclusive reset and stop behavior
+### Reset and stop boundary behavior
 
-- `reset()` performs the normal backend reset, then runs the existing control
-  state machine through `start`. The reset observation is therefore already at
-  the start keypoint, and the first public `update()` proceeds after it.
-- When `stop` returns `REACHED`, any operation condition attached to that
-  boundary is checked first. The interval then returns `done=true` and
-  `success=true` without executing the following keypoint.
+- With `start.side: before`, `reset()` fast-forwards only to the state
+  before `start`; the first public `update()` begins executing that keypoint.
+  If `start` is the task's first keypoint, reset performs no prefix updates.
+- With `start.side: after`, reset runs the existing control state machine
+  through `start`, including a condition attached to its completion. The
+  first public `update()` proceeds to the following keypoint.
+- With `stop.side: before`, the interval reports successful completion at
+  the state before `stop`; that keypoint and its completion condition do not
+  run.
+- With `stop.side: after`, `stop` completes and any condition attached to
+  its completion passes before the interval returns `done=true` and
+  `success=true`. The following keypoint does not run.
 - Interval stop has priority over `execution.update_boundary`. For example, a
-  stop in the middle of a stage returns immediately even when the configured
-  public boundary is `stage`.
-- `start == stop` is valid. `reset()` reaches that one point and immediately
-  returns a successful terminal update.
+  stop boundary in the middle of a stage returns immediately even when the
+  configured public boundary is `stage`.
+- Boundary order is `before(K0) < after(K0) < before(K1) < after(K1) ...`.
+  For one keypoint, `before -> after` executes exactly that keypoint;
+  `before -> before` and `after -> after` are valid empty intervals that
+  finish during reset; `after -> before` is invalid. `after(K)` and
+  `before(next K)` describe the same physical state, so that adjacent pair is
+  also an empty interval completed during reset.
 - A stop in the middle of a stage completes the selected interval but does not
   fabricate a successful stage-level `ExecutionRecord`. A stop at the final
-  stage action still runs the normal stage post-condition.
+  stage action with `side: after` still runs the normal stage
+  post-condition.
 - A controller failure, timeout, or operation-condition failure during reset
   fast-forward remains a task failure; it is never overwritten as interval
   success.
 
 Fast-forward uses the same physics, IK, contact handling, randomization, pose
 references, and timeouts as ordinary updates. It does not teleport state.
-Set `execution.render_internal_updates: false` to show only the final start
-keypoint instead of animating the reset prefix.
+Set `execution.render_internal_updates: false` to show only the selected start
+boundary state instead of animating the reset prefix.
 
 `TaskUpdate.details[env_index]["interval_selection"]` reports the selected
 endpoints, current interval event, configured safety limit, and (on reset)
@@ -136,7 +172,8 @@ these rollout metrics.
 
 Invalid selections fail during config validation: unknown or ambiguous stage
 names, absent phases, out-of-range waypoint indexes, and `start` ordered after
-`stop` are rejected. Omitting `execution.interval_selection` preserves
+`stop` after accounting for `side` are rejected. Omitting
+`execution.interval_selection` preserves
 full-task execution; omitting all of `execution` also preserves the default
 one-control-tick update behavior.
 

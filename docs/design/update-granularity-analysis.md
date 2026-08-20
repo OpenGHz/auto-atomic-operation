@@ -31,7 +31,7 @@ snapshot。这两类方案会绕过正常接触动力学，不适合作为 pick/
 
 ## 已实现：统一执行配置
 
-执行粒度和闭区间选择统一位于任务文件顶层的 `execution` 节：
+执行粒度和关键点边界选择统一位于任务文件顶层的 `execution` 节：
 
 ```yaml
 execution:
@@ -43,10 +43,12 @@ execution:
       stage: pick_source
       phase: post_move
       waypoint: 0
+      side: before
     stop:
       stage: place_source
       phase: post_move
       waypoint: 0
+      side: after
     max_fast_forward_updates: 10000
 ```
 
@@ -54,12 +56,19 @@ execution:
 - 默认 `control_tick`，保持历史行为；
 - `render_internal_updates` 默认 `true`；设为 `false` 时内部物理照常运行，但
   viewer 只在公开边界刷新一次；
-- `reset()` 复用正常状态机和物理控制，执行并包含 start，reset observation
-  就是 start 状态；
+- endpoint 的 `side` 支持 `before` 和 `after`；`before` 是关键点执行前的
+  状态，关键点 action 及其完成边界上的 condition 尚未运行；`after` 是整个
+  关键点及该 condition 完成后的状态；
+- `start.side` 默认 `before`，`stop.side` 默认 `after`；
+- `side` 出现前的区间配置仍可省略该字段继续加载，但旧实现的 start 实际等价于
+  `after`；如需保持旧 reset 行为，应显式配置 `start.side: after`；
+- `reset()` 复用正常状态机和物理控制，快进到 start 指定的边界状态；
 - 后续公开 `update()` 按 `update_boundary` 返回；
-- stop 完整到达且相关 condition 通过后，任务成功结束，不再执行下一点；
+- stop 为 `before` 时不执行该关键点及其完成 condition；为 `after` 时在关键点
+  和相关 condition 完成后结束；
 - stop 优先于更粗的 update boundary，例如 `stage` 不会越过 stage 中间的 stop；
-- `start == stop` 时，reset 到达该点后直接返回成功；
+- 同一关键点的 `before -> after` 恰好执行该点，`before -> before` 和
+  `after -> after` 是 reset 中完成的空区间，`after -> before` 顺序非法；
 - arc 的内部拆分不会暴露为多个可选择 waypoint；`eef` 使用唯一索引 0。
 
 两个安全上限相互独立：
@@ -74,7 +83,7 @@ execution:
 fast-forward timeout；修改其中一个不会影响另一个。
 
 详细配置与校验规则见
-[Stages & Waypoints](../task-configuration/stages_and_waypoints.md#inclusive-task-interval-selection)。
+[Stages & Waypoints](../task-configuration/stages_and_waypoints.md#task-interval-boundary-selection)。
 
 ## 当前任务与执行粒度
 
@@ -459,8 +468,8 @@ execution:
   render_internal_updates: false
   max_internal_updates_per_update: 10000
   interval_selection:
-    start: {stage: pick_source, phase: post_move, waypoint: 0}
-    stop: {stage: place_source, phase: post_move, waypoint: 0}
+    start: {stage: pick_source, phase: post_move, waypoint: 0, side: before}
+    stop: {stage: place_source, phase: post_move, waypoint: 0, side: after}
     max_fast_forward_updates: 10000
 ```
 
@@ -480,6 +489,7 @@ execution:
 - batch 中不同环境以不同速度完成，但每个环境只跨一个边界；
 - `max_internal_updates_per_update` 耗尽后显式失败；
 - interval stop 抢占更粗的 stage boundary；
+- interval endpoint 的默认 `before` / `after`、显式 `side` 和同点边界顺序正确；
 - `PolicyEvaluator` 拒绝 interval 和非 `control_tick` boundary；
 - viewer 内部刷新可折叠为一次 boundary 刷新，异常退出后仍恢复正常刷新；
 - 宏步 summary 使用每个环境的实际内部 update 数计算模拟时间。

@@ -276,20 +276,28 @@ This is the most explicit example of primitive completion being separate from st
 When `execution.interval_selection` is configured, the same completion flow is
 reused for both endpoints:
 
-1. `reset()` repeatedly performs normal internal control updates until the
-   configured `start` keypoint is fully `REACHED`.
-2. The reset observation exposes that start state; the first public
-   `TaskRunner.update()` advances beyond it.
-3. Public updates continue normally until the configured `stop` keypoint is
-   fully `REACHED` and any condition attached to that boundary passes.
-4. The environment then reports successful completion without executing the
-   next keypoint.
+1. `reset()` repeatedly performs normal internal control updates until it
+   reaches the configured `start` boundary.
+2. With `start.side: before`, reset stops immediately before executing the
+   start keypoint. With `start.side: after`, it executes the whole
+   keypoint and any condition attached to its completion before returning.
+3. Public updates continue normally until the configured `stop` boundary.
+4. With `stop.side: before`, the environment reports success without
+   executing the stop keypoint or its completion condition. With
+   `stop.side: after`, it first completes both and then reports success.
 
-Both endpoints are included. When they are equal, reset reaches the single
-point and returns `done=true` immediately. Interval stop takes priority over a
-coarser `execution.update_boundary`: a stop keypoint in the middle of a stage,
+`start.side` defaults to `before`; `stop.side` defaults to `after`.
+These values directly describe concrete states around a keypoint. Interval
+stop takes priority over a
+coarser `execution.update_boundary`: a stop boundary in the middle of a stage,
 for example, returns without completing the rest of that stage even when the
 boundary is `stage`.
+
+Boundary order is `before(K0) < after(K0) < before(K1) < after(K1) ...`.
+Thus the same keypoint with `before -> after` executes that one keypoint;
+`before -> before` or `after -> after` is an empty interval completed during
+reset; and `after -> before` is rejected. Since `after(K)` and
+`before(next K)` share one physical state, that adjacent pair is also empty.
 
 Reset fast-forward and public macro updates have independent safeguards:
 
@@ -299,7 +307,7 @@ Reset fast-forward and public macro updates have independent safeguards:
   one public `update()` (default `10000`).
 
 See
-[Stages & Waypoints](stages_and_waypoints.md#inclusive-task-interval-selection)
+[Stages & Waypoints](stages_and_waypoints.md#task-interval-boundary-selection)
 for the schema, validation, and reporting details.
 
 ## Flowchart

@@ -154,6 +154,15 @@ class TaskPhase(str, Enum):
     """A pose waypoint executed after the stage's end-effector action."""
 
 
+class KeypointSide(str, Enum):
+    """A boundary side relative to a configured task keypoint."""
+
+    BEFORE = "before"
+    """The state immediately before the keypoint executes."""
+    AFTER = "after"
+    """The state immediately after the keypoint fully executes."""
+
+
 class UpdateBoundary(str, Enum):
     """Boundary at which one public runner update returns."""
 
@@ -492,20 +501,45 @@ class TaskKeypointConfig(BaseModel, frozen=True):
     """The phase containing the keypoint: ``pre_move``, ``eef``, or ``post_move``."""
     waypoint: NonNegativeInt
     """Zero-based YAML waypoint index within the phase; ``eef`` only accepts 0."""
+    side: Optional[KeypointSide] = None
+    """Boundary side relative to the keypoint. Within ``interval_selection``,
+    an omitted value resolves to ``before`` for ``start`` and ``after`` for
+    ``stop``."""
 
 
 class IntervalSelectionConfig(BaseModel, frozen=True):
-    """Inclusive start and stop keypoints for a TaskRunner rollout."""
+    """Start and stop boundaries for a TaskRunner rollout."""
 
     model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid")
 
     start: TaskKeypointConfig
-    """The keypoint reached by ``reset()`` and exposed as the initial state."""
+    """The boundary reached by ``reset()`` and exposed as the initial state."""
     stop: TaskKeypointConfig
-    """The last keypoint executed before the selected interval succeeds."""
+    """The boundary at which the selected interval succeeds."""
     max_fast_forward_updates: PositiveInt = 10_000
     """Maximum controller updates per environment while ``reset()`` advances
     to ``start``."""
+
+    @model_validator(mode="before")
+    @classmethod
+    def _resolve_endpoint_sides(cls, value: object) -> object:
+        if not isinstance(value, Mapping):
+            return value
+        normalized = dict(value)
+        default_sides = {
+            "start": KeypointSide.BEFORE,
+            "stop": KeypointSide.AFTER,
+        }
+        for field_name, default_side in default_sides.items():
+            endpoint = normalized.get(field_name)
+            if isinstance(endpoint, TaskKeypointConfig):
+                endpoint = endpoint.model_dump()
+            if isinstance(endpoint, Mapping):
+                endpoint = dict(endpoint)
+                if endpoint.get("side") is None:
+                    endpoint["side"] = default_side
+                normalized[field_name] = endpoint
+        return normalized
 
 
 class ExecutionConfig(BaseModel, frozen=True):
@@ -514,8 +548,8 @@ class ExecutionConfig(BaseModel, frozen=True):
     model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid")
 
     interval_selection: Optional[IntervalSelectionConfig] = None
-    """Optional inclusive interval. ``reset()`` advances through ``start``, and
-    execution succeeds after ``stop`` is reached."""
+    """Optional task interval. ``reset()`` advances to the configured start
+    boundary, and execution succeeds at the configured stop boundary."""
     update_boundary: UpdateBoundary = UpdateBoundary.CONTROL_TICK
     """Boundary at which each public runner update returns."""
     render_internal_updates: bool = True
@@ -817,11 +851,15 @@ class TaskFileConfig(BaseModel):
             TaskPhase.EEF: 1,
             TaskPhase.POST_MOVE: 2,
         }
+        side_order = {
+            KeypointSide.BEFORE: 0,
+            KeypointSide.AFTER: 1,
+        }
 
         def resolve(
             field_name: str,
             keypoint: TaskKeypointConfig,
-        ) -> Tuple[int, int, int]:
+        ) -> Tuple[int, int, int, int]:
             matches = stages_by_name.get(keypoint.stage, [])
             if not matches:
                 available = ", ".join(stages_by_name) or "<none>"
@@ -851,10 +889,15 @@ class TaskFileConfig(BaseModel):
                     f"{keypoint.waypoint} is out of range for "
                     f"{keypoint.stage}.{keypoint.phase.value}; expected 0..{count - 1}"
                 )
+            if keypoint.side is None:
+                raise ValueError(
+                    f"execution.interval_selection.{field_name}.side was not resolved"
+                )
             return (
                 stage_index,
                 phase_order[keypoint.phase],
                 int(keypoint.waypoint),
+                side_order[keypoint.side],
             )
 
         start_order = resolve("start", selection.start)

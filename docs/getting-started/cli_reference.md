@@ -30,8 +30,9 @@ To discover which configs are runnable tasks, use [`aao-info`](#aao-info).
 | `[+]execution.update_boundary=...` | enum | `control_tick` | Public `update()` boundary: `control_tick`, `primitive`, `keypoint`, or `stage` |
 | `[+]execution.render_internal_updates=false` | bool | true | Keep internal physics but refresh the viewer only once at each public boundary; boundary refreshes do not apply `step_delay` |
 | `[+]execution.max_internal_updates_per_update=N` | int | 10000 | Per-environment controller-update limit within one public `update()` |
-| `[+]execution.interval_selection...` | mapping | unset | Run an inclusive `stage` / `phase` / `waypoint` interval; `reset()` reaches the start point |
-| `[+]execution.interval_selection.max_fast_forward_updates=N` | int | 10000 | Per-environment controller-update limit while `reset()` advances to the interval start |
+| `[+]execution.interval_selection...` | mapping | unset | Run between states immediately before or after configured `stage` / `phase` / `waypoint` keypoints |
+| `[+]execution.interval_selection.{start,stop}.side=...` | enum | `before` / `after` | Endpoint side relative to its keypoint; the start default is `before`, while the stop default is `after` |
+| `[+]execution.interval_selection.max_fast_forward_updates=N` | int | 10000 | Per-environment controller-update limit while `reset()` advances to the interval start boundary |
 
 Any key present in the YAML config can be overridden on the command line following Hydra syntax:
 
@@ -48,24 +49,26 @@ aao-demo --config-name stack_color_blocks +rounds=3 env.batch_size=4 +max_update
 aao-demo task.stages.0.param.pre_move.0.position="[0.4, 0.0, 0.1]"
 ```
 
-Make each public update complete one YAML waypoint, and select an inclusive
-keypoint interval without copying the task config:
+Make each public update complete one YAML waypoint, beginning immediately
+before the pick retract and ending immediately after the place retract:
 
 ```bash
 aao-demo --config-name pick_and_place \
-  execution.update_boundary=keypoint \
-  execution.render_internal_updates=false \
-  execution.interval_selection.start.stage=pick_source \
-  execution.interval_selection.start.phase=post_move \
-  execution.interval_selection.start.waypoint=0 \
-  execution.interval_selection.stop.stage=place_source \
-  execution.interval_selection.stop.phase=post_move \
-  execution.interval_selection.stop.waypoint=0
+  +execution.update_boundary=keypoint \
+  +execution.render_internal_updates=false \
+  +execution.interval_selection.start.stage=pick_source \
+  +execution.interval_selection.start.phase=post_move \
+  +execution.interval_selection.start.waypoint=0 \
+  +execution.interval_selection.start.side=before \
+  +execution.interval_selection.stop.stage=place_source \
+  +execution.interval_selection.stop.phase=post_move \
+  +execution.interval_selection.stop.waypoint=0 \
+  +execution.interval_selection.stop.side=after
 ```
 
-The selected `pick_and_place` config already defines these fields, so its
-overrides do not use `+`. For a task that omits `execution` or one of its
-optional fields, add that missing path with `+`. The boundary choices are:
+The shipped `pick_and_place` config leaves this example commented out, so the
+command adds the paths with `+`. When a selected config already defines a
+path, override it without `+`. The public update boundary choices are:
 
 - `control_tick`: return after one controller update; this default preserves
   the previous behavior.
@@ -75,13 +78,23 @@ optional fields, add that missing path with `+`. The boundary choices are:
   all of its sub-actions complete.
 - `stage`: complete one whole stage, including its semantic condition checks.
 
+`before` is the state before a referenced keypoint executes; neither its
+action nor a condition bound to its completion has run. `after` is the state
+after the entire keypoint and its completion-bound condition finish. The
+explicit sides above match their defaults and make the command's intent
+clear.
+
+Configs written before `side` was available effectively started at
+`after`. They still parse without the field, but the new start default is
+`before`; add `start.side=after` when preserving the old reset behavior.
+
 An interval stop always takes priority over a coarser boundary, so `stage`
-cannot advance past a stop keypoint in the middle of that stage. The public
+cannot advance past a stop boundary in the middle of that stage. The public
 update and reset fast-forward limits are independent; both default to `10000`.
 With `execution.render_internal_updates=false`, all of those internal updates
 still run, but their viewer refreshes and `step_delay` calls are coalesced into
 one delay-free refresh at the public boundary.
-See [Stages & Waypoints](../task-configuration/stages_and_waypoints.md#inclusive-task-interval-selection)
+See [Stages & Waypoints](../task-configuration/stages_and_waypoints.md#task-interval-boundary-selection)
 for endpoint semantics and reporting.
 
 `PolicyEvaluator` / `aao-eval` accepts only the default `control_tick` boundary

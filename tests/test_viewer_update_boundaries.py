@@ -212,7 +212,12 @@ def _clear_component_registry():
 
 def test_interval_reset_defers_all_fast_forward_ticks_in_one_scope() -> None:
     interval = {
-        "start": {"stage": "selected", "phase": "pre_move", "waypoint": 1},
+        "start": {
+            "stage": "selected",
+            "phase": "pre_move",
+            "waypoint": 1,
+            "side": "after",
+        },
         "stop": {"stage": "selected", "phase": "pre_move", "waypoint": 2},
     }
     runner = _runner(

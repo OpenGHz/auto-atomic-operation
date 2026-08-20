@@ -591,7 +591,12 @@ def test_precondition_failure_does_not_count_a_simulated_control_tick(
 
 def test_interval_stop_preempts_stage_boundary_and_truncates_stage() -> None:
     interval = {
-        "start": {"stage": "selected", "phase": "pre_move", "waypoint": 0},
+        "start": {
+            "stage": "selected",
+            "phase": "pre_move",
+            "waypoint": 0,
+            "side": "after",
+        },
         "stop": {"stage": "selected", "phase": "pre_move", "waypoint": 1},
     }
     runner = _runner(

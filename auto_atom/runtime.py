@@ -29,6 +29,7 @@ from .framework import (
     AutoAtomConfig,
     EefControlConfig,
     IntervalSelectionConfig,
+    KeypointSide,
     Operation,
     OperationConditionType,
     OperationConstraint,
@@ -707,6 +708,7 @@ class TaskRunner:
         self._context: Optional[ExecutionContext] = None
         self._plan: List[StageExecutionPlan] = []
         self._records: List[ExecutionRecord] = []
+        self._interval_keypoints: List[_ResolvedTaskKeypoint] = []
         self._env_states: List[_EnvRuntimeState] = []
         self._has_reset: np.ndarray = np.zeros(0, dtype=bool)
         self._public_internal_updates: np.ndarray = np.zeros(0, dtype=np.int64)
@@ -766,6 +768,7 @@ class TaskRunner:
             task_file=config,
         )
         self._plan = self.builder.build(self._context)
+        self._interval_keypoints = []
         selection = config.execution.interval_selection
         if (
             config.execution.update_boundary == UpdateBoundary.KEYPOINT
@@ -773,7 +776,7 @@ class TaskRunner:
         ):
             self._validate_keypoint_boundary_actions()
         if selection is not None:
-            self._validate_interval_actions(selection)
+            self._interval_keypoints = self._validate_interval_actions(selection)
         self._context.plan = self._plan
         self._context.backend.setup(self._context.config)
         self._env_states = [_EnvRuntimeState() for _ in range(backend.batch_size)]
@@ -843,7 +846,7 @@ class TaskRunner:
     def _validate_interval_actions(
         self,
         selection: IntervalSelectionConfig,
-    ) -> None:
+    ) -> List[_ResolvedTaskKeypoint]:
         """Verify that the active builder emits both configured boundaries."""
         keypoints: List[_ResolvedTaskKeypoint] = []
         for plan in self._plan:
@@ -889,11 +892,58 @@ class TaskRunner:
                 )
             return matches[0]
 
-        if resolve("start", selection.start) > resolve("stop", selection.stop):
+        start_order = 2 * resolve("start", selection.start) + int(
+            selection.start.side == KeypointSide.AFTER
+        )
+        stop_order = 2 * resolve("stop", selection.stop) + int(
+            selection.stop.side == KeypointSide.AFTER
+        )
+        if start_order > stop_order:
             raise ValueError(
                 "execution.interval_selection.start must not come after "
                 "execution.interval_selection.stop in the active TaskFlowBuilder"
             )
+        return keypoints
+
+    def _interval_keypoint_index(self, configured: TaskKeypointConfig) -> int:
+        matches = [
+            index
+            for index, keypoint in enumerate(self._interval_keypoints)
+            if keypoint.matches(configured)
+        ]
+        if len(matches) != 1:
+            raise RuntimeError(
+                "Interval keypoints must be resolved exactly once before execution"
+            )
+        return matches[0]
+
+    def _interval_boundary_state_index(
+        self,
+        boundary: TaskKeypointConfig,
+    ) -> int:
+        """Return the physical state boundary reached after N keypoints."""
+        if boundary.side is None:
+            raise RuntimeError("Interval endpoint side was not resolved")
+        return self._interval_keypoint_index(boundary) + int(
+            boundary.side == KeypointSide.AFTER
+        )
+
+    def _interval_boundary_keypoint(
+        self,
+        boundary: TaskKeypointConfig,
+    ) -> _ResolvedTaskKeypoint:
+        return self._interval_keypoints[self._interval_keypoint_index(boundary)]
+
+    def _completed_interval_state_index(
+        self,
+        completed: _ResolvedTaskKeypoint,
+    ) -> int:
+        for index, keypoint in enumerate(self._interval_keypoints):
+            if keypoint == completed:
+                return index + 1
+        raise RuntimeError(
+            "Completed keypoint is absent from the resolved interval plan"
+        )
 
     def reset(self, env_mask: Optional[np.ndarray] = None) -> TaskUpdate:
         context = self._require_context()
@@ -1024,9 +1074,14 @@ class TaskRunner:
                 if (
                     selection is not None
                     and completed_keypoint is not None
-                    and completed_keypoint.matches(selection.stop)
+                    and self._completed_interval_state_index(completed_keypoint)
+                    == self._interval_boundary_state_index(selection.stop)
                 ):
-                    self._finish_interval(state, completed_keypoint, selection)
+                    self._finish_interval(
+                        state,
+                        self._interval_boundary_keypoint(selection.stop),
+                        selection,
+                    )
                     self._last_execution_details[env_index] = self._execution_details(
                         context,
                         event="interval_stop_reached",
@@ -1128,13 +1183,17 @@ class TaskRunner:
         context: ExecutionContext,
         selection: IntervalSelectionConfig,
     ) -> None:
-        """Advance selected environments through the inclusive start keypoint."""
+        """Advance selected environments to the configured start boundary."""
         pending = np.asarray(mask, dtype=bool).copy()
         ticks = np.zeros(len(self._env_states), dtype=np.int64)
         reached = np.zeros(len(self._env_states), dtype=bool)
-        reached_keypoints: List[Optional[_ResolvedTaskKeypoint]] = [
-            None for _ in self._env_states
-        ]
+        start_state_index = self._interval_boundary_state_index(selection.start)
+        stop_state_index = self._interval_boundary_state_index(selection.stop)
+        start_keypoint = self._interval_boundary_keypoint(selection.start)
+        stop_keypoint = self._interval_boundary_keypoint(selection.stop)
+        if start_state_index == 0:
+            reached[pending] = True
+            pending[:] = False
         max_updates = int(selection.max_fast_forward_updates)
         reset_details = [dict(state.latest_details) for state in self._env_states]
         record_start = len(self._records)
@@ -1162,9 +1221,12 @@ class TaskRunner:
                     continue
 
                 completed = event.completed_keypoint
-                if completed is not None and completed.matches(selection.start):
+                if (
+                    completed is not None
+                    and self._completed_interval_state_index(completed)
+                    == start_state_index
+                ):
                     reached[index] = True
-                    reached_keypoints[index] = completed
                     pending[index] = False
                     continue
                 if state.done:
@@ -1222,21 +1284,23 @@ class TaskRunner:
                 }
                 continue
 
-            keypoint = reached_keypoints[index]
-            assert keypoint is not None
             state.done = False
             state.success = False
             state.latest_status = StageExecutionStatus.PENDING
+            reached_details = (
+                reset_details[index]
+                if selection.start.side == KeypointSide.BEFORE
+                else {**reset_details[index], **state.latest_details}
+            )
             state.latest_details = {
-                **reset_details[index],
-                **state.latest_details,
+                **reached_details,
                 "interval_selection": interval_details,
             }
-            state.reported_keypoint = keypoint
-            state.phase = keypoint.phase.value
-            state.phase_step = keypoint.waypoint
-            if keypoint.matches(selection.stop):
-                self._finish_interval(state, keypoint, selection)
+            state.reported_keypoint = start_keypoint
+            state.phase = start_keypoint.phase.value
+            state.phase_step = start_keypoint.waypoint
+            if start_state_index == stop_state_index:
+                self._finish_interval(state, stop_keypoint, selection)
                 self._last_execution_details[index] = self._execution_details(
                     context,
                     event="interval_stop_reached",
@@ -1285,11 +1349,20 @@ class TaskRunner:
         selection: IntervalSelectionConfig,
     ) -> None:
         previous_interval_details = state.latest_details.get("interval_selection", {})
+        if selection.stop.side == KeypointSide.BEFORE:
+            latest_details = {
+                field_name: state.latest_details[field_name]
+                for field_name in ("initial_poses",)
+                if field_name in state.latest_details
+            }
+            latest_details["event"] = "interval_stop_reached"
+        else:
+            latest_details = dict(state.latest_details)
         state.done = True
         state.success = True
         state.latest_status = StageExecutionStatus.SUCCEEDED
         state.latest_details = {
-            **state.latest_details,
+            **latest_details,
             "interval_selection": {
                 **previous_interval_details,
                 "event": "interval_stop_reached",
@@ -1312,6 +1385,7 @@ class TaskRunner:
         self._context = None
         self._plan = []
         self._records = []
+        self._interval_keypoints = []
         self._env_states = []
         self._has_reset = np.zeros(0, dtype=bool)
         self._public_internal_updates = np.zeros(0, dtype=np.int64)
