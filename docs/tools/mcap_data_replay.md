@@ -13,6 +13,21 @@ driven by the `DataReplayRunner` class.  It supports two data sources:
 The MCAP format is detected automatically from the channel schema; no flag is
 needed to select between them. See [MCAP Formats](#mcap-formats) below.
 
+## Canonical recording seam
+
+The source readers feed a `ReplayTrajectory` in
+`auto_atom.runner.replay_recording`. NPZ, ROS2 CDR, and Foxglove flatbuffer
+inputs share the same channel and timestamp invariants before the runner sees
+an action. The MCAP readers remain iterator-driven: unrelated topics are not
+decoded, and action dictionaries are created only when `ReplayTimeline.act()`
+emits a frame.
+
+Only operations that require random access materialize arrays. Timestamp
+alignment and actuator reordering may allocate an aligned channel; batch
+selection prefers NumPy views, while scale and clip preparation can update
+arrays owned by the trajectory in place. `load_on_initialize: false` and
+`set_demo_path(..., load=False)` still defer source loading until `reset()`.
+
 ## Quick Start
 
 ```bash

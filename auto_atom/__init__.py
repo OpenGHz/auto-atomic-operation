@@ -30,6 +30,7 @@ from .runner.data_replay import (
     DataReplayRunner,
     DataReplayTaskFileConfig,
 )
+from .runner.replay_recording import ReplayTimeline, ReplayTrajectory
 from .runtime import (
     ComponentRegistry,
     ControlResult,
@@ -81,6 +82,8 @@ __all__ = [
     "RandomizationReference",
     "PrimitiveAction",
     "RunnerBase",
+    "ReplayTimeline",
+    "ReplayTrajectory",
     "StageConfig",
     "StageControlConfig",
     "StageExecutionStatus",

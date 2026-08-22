@@ -13,6 +13,7 @@ from .data_replay import (
     DataReplayTaskFileConfig,
     preprocess_replay_dictconfig,
 )
+from .replay_recording import ReplayTimeline, ReplayTrajectory
 from .task_info import (
     TaskInfo,
     build_vocabulary,
@@ -27,6 +28,8 @@ __all__ = [
     "DataReplayTaskFileConfig",
     "ExampleLoopHooks",
     "RunnerBase",
+    "ReplayTimeline",
+    "ReplayTrajectory",
     "TaskInfo",
     "build_vocabulary",
     "collect_task_infos",

@@ -20,6 +20,25 @@ from auto_atom.policy_eval import PolicyEvaluator
 from auto_atom.runtime import ExecutionContext, TaskUpdate
 
 from .base import RunnerBase
+from .replay_recording import (
+    NpzRecordingAdapter,
+    ReplayTrajectory,
+)
+from .replay_recording import (
+    ReplayPolicy as CanonicalReplayPolicy,
+)
+from .replay_recording import (
+    load_mcap_recording as load_canonical_mcap_recording,
+)
+from .replay_recording import (
+    normalize_demo_for_batch as normalize_canonical_demo_for_batch,
+)
+from .replay_recording import (
+    prepare_joint_trajectory as prepare_canonical_joint_trajectory,
+)
+from .replay_recording import (
+    subsample_demo as subsample_canonical_demo,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -266,16 +285,8 @@ class DataReplayTaskFileConfig(TaskFileConfig):
 
 
 def _load_low_dim_map(demo_data: np.lib.npyio.NpzFile) -> Dict[str, np.ndarray]:
-    if "low_dim_keys" not in demo_data:
-        raise KeyError("NPZ missing 'low_dim_keys'.")
-    low_dim_keys = [str(key) for key in np.asarray(demo_data["low_dim_keys"])]
-    low_dim_map: Dict[str, np.ndarray] = {}
-    for idx, key in enumerate(low_dim_keys):
-        data_key = f"low_dim_data__{idx}"
-        if data_key not in demo_data:
-            raise KeyError(f"NPZ missing '{data_key}' for low-dimensional key '{key}'.")
-        low_dim_map[key] = np.asarray(demo_data[data_key], dtype=np.float32)
-    return low_dim_map
+    """Compatibility wrapper around the NPZ recording adapter."""
+    return NpzRecordingAdapter._load_low_dim_map(demo_data)
 
 
 def _load_optional_base_pose_channels(
@@ -284,65 +295,22 @@ def _load_optional_base_pose_channels(
     *,
     operator_name: str = "arm",
 ) -> None:
-    """Attach optional replay-time operator base pose channels to *result*.
-
-    The operator-specific key is preferred, while the shorter
-    ``action/base/pose/*`` pair is accepted for externally-generated demos.
-    """
-
-    candidate_pairs = (
-        (
-            f"action/{operator_name}/base_pose/position",
-            f"action/{operator_name}/base_pose/orientation",
-        ),
-        ("action/base/pose/position", "action/base/pose/orientation"),
+    """Compatibility wrapper around the NPZ recording adapter."""
+    NpzRecordingAdapter._attach_optional_base_pose(
+        low_dim,
+        result,
+        operator_name=operator_name,
     )
-    for position_key, orientation_key in candidate_pairs:
-        has_position = position_key in low_dim
-        has_orientation = orientation_key in low_dim
-        if not has_position and not has_orientation:
-            continue
-        if has_position != has_orientation:
-            missing_key = orientation_key if has_position else position_key
-            raise KeyError(
-                "Base pose replay channels must provide both position and "
-                f"orientation; missing '{missing_key}'."
-            )
-        result["base_position"] = low_dim[position_key]
-        result["base_orientation"] = low_dim[orientation_key]
-        return
 
 
 def _load_pose_demo(demo_data: np.lib.npyio.NpzFile) -> Dict[str, np.ndarray]:
-    """Load pose + gripper arrays for pose-mode replay."""
-    low_dim = _load_low_dim_map(demo_data)
-    result: Dict[str, np.ndarray] = {
-        "position": low_dim["action/arm/pose/position"],
-        "orientation": low_dim["action/arm/pose/orientation"],
-    }
-    gripper_key = (
-        "action/gripper/joint_state/position"
-        if "action/gripper/joint_state/position" in low_dim
-        else "action/eef/joint_state/position"
-    )
-    if gripper_key in low_dim:
-        result["gripper"] = low_dim[gripper_key]
-    _load_optional_base_pose_channels(low_dim, result)
-    return result
+    """Compatibility wrapper around the NPZ recording adapter."""
+    return NpzRecordingAdapter().load(demo_data, "pose").to_demo_dict()
 
 
 def _load_ctrl_demo(demo_data: np.lib.npyio.NpzFile) -> Dict[str, np.ndarray]:
-    """Load joint ctrl arrays for ctrl-mode replay."""
-    low_dim = _load_low_dim_map(demo_data)
-    arm = low_dim["action/arm/joint_state/position"]
-    eef_key = "action/eef/joint_state/position"
-    if eef_key in low_dim:
-        ctrl = np.concatenate([arm, low_dim[eef_key]], axis=-1)
-    else:
-        ctrl = arm
-    result: Dict[str, np.ndarray] = {"ctrl": ctrl}
-    _load_optional_base_pose_channels(low_dim, result)
-    return result
+    """Compatibility wrapper around the NPZ recording adapter."""
+    return NpzRecordingAdapter().load(demo_data, "ctrl").to_demo_dict()
 
 
 def _get_operator_actuator_split(op_cfg: Any) -> tuple[list[str], list[str]]:
@@ -423,6 +391,10 @@ class McapDemo:
             reorder.append(mapped_names.index(act_name))
         self.joint = self.joint[:, reorder]
         self.joint_names = [actuator_names[i] for i in range(len(actuator_names))]
+
+    def to_trajectory(self) -> ReplayTrajectory:
+        """Return the canonical recording view used by the replay runner."""
+        return ReplayTrajectory.from_mcap_demo(self)
 
 
 def _nearest_sample_indices(
@@ -1233,7 +1205,7 @@ def _select_transform_reset_message_index(
         if jump_indices.size > 0:
             before_index = int(jump_indices[0])
             selected_index = before_index + 1
-            logger.debug(
+            logger.info(
                 f"[transform_reset] topic={tr.topic!r} selector='first_jump' "
                 f"selected_index={selected_index} differs from first frame; "
                 f"jump_from={before_index} jump_to={selected_index} "
@@ -1241,10 +1213,10 @@ def _select_transform_reset_message_index(
                 f"ori_delta={float(ori_delta[before_index]):.6f}rad"
             )
             return selected_index
-        # logger.warning(
-        #     f"[transform_reset] topic={tr.topic!r} selector='first_jump' found no "
-        #     "jump; falling back to first message."
-        # )
+        logger.info(
+            f"[transform_reset] topic={tr.topic!r} selector='first_jump' found no "
+            "jump; falling back to first message."
+        )
         return 0
     raise ValueError(f"Unknown TransformResetConfig.message_selector: {selector!r}")
 
@@ -1307,249 +1279,21 @@ def normalize_demo_for_batch(
     batch_size: int,
     mode: str,
 ) -> Dict[str, np.ndarray]:
-    """Slice a (T, B_rec, dim) demo to match the replay *batch_size*."""
-
-    def normalize_series(arr: np.ndarray, label: str) -> np.ndarray:
-        arr = np.asarray(arr)
-        if arr.ndim == 2:
-            # Unbatched trajectories are intentionally accepted for any
-            # replay batch size; the env action APIs broadcast single-row
-            # commands to selected envs.
-            return arr
-        if arr.ndim < 3:
-            raise ValueError(
-                f"{label} must have shape (T, dim) or (T, B, dim), got {arr.shape}."
-            )
-        rec_bs = arr.shape[1]
-        if batch_size > rec_bs:
-            raise ValueError(
-                f"{label} recorded with batch_size={rec_bs}, "
-                f"but replay requires batch_size={batch_size}."
-            )
-        arr = arr[:, :batch_size, ...]
-        return arr[:, 0, ...] if batch_size == 1 else arr
-
-    def attach_optional_base_pose(result: Dict[str, np.ndarray]) -> None:
-        has_position = "base_position" in demo
-        has_orientation = "base_orientation" in demo
-        if not has_position and not has_orientation:
-            return
-        if has_position != has_orientation:
-            missing_key = "base_orientation" if has_position else "base_position"
-            raise KeyError(
-                "Base pose replay actions must provide both base_position and "
-                f"base_orientation; missing '{missing_key}'."
-            )
-        result["base_position"] = normalize_series(
-            demo["base_position"], "base_position"
-        )
-        result["base_orientation"] = normalize_series(
-            demo["base_orientation"], "base_orientation"
-        )
-
-    def attach_optional_scene_joint(result: Dict[str, Any]) -> None:
-        has_joint = "scene_joint" in demo
-        has_names = "scene_joint_names" in demo
-        if not has_joint and not has_names:
-            return
-        if has_joint != has_names:
-            missing_key = "scene_joint_names" if has_joint else "scene_joint"
-            raise KeyError(
-                "Scene joint replay actions must provide both scene_joint and "
-                f"scene_joint_names; missing '{missing_key}'."
-            )
-        result["scene_joint"] = normalize_series(demo["scene_joint"], "scene_joint")
-        result["scene_joint_names"] = list(demo["scene_joint_names"])
-
-    def attach_optional_joint_times(result: Dict[str, Any]) -> None:
-        # Per-step times are 1D (T,) and shared across the batch — never sliced.
-        if "joint_times" in demo and demo["joint_times"] is not None:
-            result["joint_times"] = np.asarray(demo["joint_times"])
-
-    if mode == "pose":
-        result: Dict[str, np.ndarray] = {
-            "position": normalize_series(demo["position"], "pose position"),
-            "orientation": normalize_series(demo["orientation"], "pose orientation"),
-        }
-        if "gripper" in demo:
-            result["gripper"] = normalize_series(demo["gripper"], "gripper")
-        attach_optional_base_pose(result)
-        attach_optional_scene_joint(result)
-        attach_optional_joint_times(result)
-        return result
-
-    if mode == "joint":
-        joint = demo["joint"]
-        result = (
-            {"joint": joint}
-            if joint.ndim == 2
-            else {"joint": normalize_series(joint, "joint")}
-        )
-        attach_optional_base_pose(result)
-        attach_optional_scene_joint(result)
-        attach_optional_joint_times(result)
-        return result
-
-    result = {"ctrl": normalize_series(demo["ctrl"], "ctrl")}
-    attach_optional_base_pose(result)
-    attach_optional_scene_joint(result)
-    attach_optional_joint_times(result)
-    return result
+    """Compatibility wrapper around the canonical recording trajectory."""
+    return normalize_canonical_demo_for_batch(demo, batch_size, mode)
 
 
-def subsample_demo(demo: Dict[str, np.ndarray], stride: int) -> Dict[str, np.ndarray]:
-    """Return *demo* with only every ``stride``-th frame kept along the time axis.
-
-    Approach-1 replay downsampling: fewer recorded frames -> fewer replay
-    actions -> fewer simulation steps and fewer saved frames, at the cost of a
-    coarser (lower-fidelity) trajectory. ``stride <= 1`` is a no-op. The final
-    frame is always retained so the recorded success condition is preserved.
-
-    Every time-series array (leading dimension equal to the recorded frame
-    count) is sliced: ``joint`` / ``position`` / ``orientation`` / ``gripper`` /
-    ``ctrl`` / ``base_position`` / ``base_orientation`` / ``scene_joint`` /
-    ``joint_times``. Non-time entries such as ``scene_joint_names`` (a per-joint
-    label list) are passed through untouched.
-    """
-    if stride <= 1:
-        return demo
-    lead = None
-    for key in ("joint", "position", "ctrl"):
-        value = demo.get(key)
-        if value is not None:
-            lead = value
-            break
-    if lead is None:
-        return demo
-    num_frames = len(lead)
-    indices = list(range(0, num_frames, stride))
-    if indices and indices[-1] != num_frames - 1:
-        indices.append(num_frames - 1)
-    index = np.asarray(indices, dtype=np.int64)
-    result: Dict[str, np.ndarray] = {}
-    for key, value in demo.items():
-        if key == "scene_joint_names" or value is None:
-            result[key] = value
-        elif hasattr(value, "__len__") and len(value) == num_frames:
-            result[key] = np.asarray(value)[index]
-        else:
-            result[key] = value
-    logger.info(
-        "[demo_stride] subsampled demo from %d to %d frame(s) (stride=%d).",
-        num_frames,
-        len(index),
-        stride,
-    )
-    return result
+def subsample_demo(
+    demo: Dict[str, np.ndarray],
+    stride: int,
+) -> Dict[str, np.ndarray]:
+    """Compatibility wrapper around the canonical recording timeline."""
+    return subsample_canonical_demo(demo, stride)
 
 
-# ---------------------------------------------------------------------------
-# ReplayPolicy
-# ---------------------------------------------------------------------------
+ReplayPolicy = CanonicalReplayPolicy
 
 
-class ReplayPolicy:
-    """Replays recorded actions step by step (index-based, no observation)."""
-
-    def __init__(self, demo: Dict[str, np.ndarray], mode: str) -> None:
-        self._demo = demo
-        self._mode = mode
-        if mode == "pose":
-            self._max = len(demo["position"]) - 1
-        elif mode == "joint":
-            self._max = len(demo["joint"]) - 1
-        else:
-            self._max = len(demo["ctrl"]) - 1
-        self._step = 0
-        # Zero-anchored per-step log times (ns). Present only for MCAP-sourced
-        # demos; npz/ctrl replays leave this None so callers fall back to the
-        # simulator clock.
-        times = demo.get("joint_times") if isinstance(demo, dict) else None
-        self._times: np.ndarray | None = (
-            np.asarray(times, dtype=np.int64) if times is not None else None
-        )
-
-    def current_log_time_ns(self) -> int | None:
-        """Zero-anchored MCAP log time (ns) for the most recently emitted action.
-
-        Returns ``None`` when no times were loaded (e.g. npz replay) or when
-        no action has been emitted yet. The first frame (after ``act()`` once)
-        returns ``0``; the last frame returns the total recorded duration.
-        """
-        if self._times is None or self._step <= 0:
-            return None
-        idx = min(self._step - 1, len(self._times) - 1)
-        return int(self._times[idx])
-
-    def reset(self, start_step: int = 0) -> None:
-        self._step = max(0, int(start_step))
-
-    @property
-    def num_steps(self) -> int:
-        return self._max + 1
-
-    @property
-    def remaining_steps(self) -> int:
-        return max(self._max - self._step + 1, 0)
-
-    def _action_at(self, index: int) -> Dict[str, Any]:
-        i = min(max(0, index), self._max)
-        if self._mode == "pose":
-            action: Dict[str, Any] = {
-                "position": self._demo["position"][i],
-                "orientation": self._demo["orientation"][i],
-            }
-            if "gripper" in self._demo:
-                action["gripper"] = self._demo["gripper"][i]
-            return self._attach_optional_state_action(action, i)
-        if self._mode == "joint":
-            return self._attach_optional_state_action(
-                {"joint": self._demo["joint"][i]}, i
-            )
-        return self._attach_optional_state_action({"ctrl": self._demo["ctrl"][i]}, i)
-
-    def _attach_optional_state_action(
-        self, action: Dict[str, Any], index: int
-    ) -> Dict[str, Any]:
-        has_position = "base_position" in self._demo
-        has_orientation = "base_orientation" in self._demo
-        if has_position or has_orientation:
-            if has_position != has_orientation:
-                missing_key = "base_orientation" if has_position else "base_position"
-                raise KeyError(
-                    "Base pose replay actions must provide both base_position and "
-                    f"base_orientation; missing '{missing_key}'."
-                )
-            action["base_position"] = self._demo["base_position"][index]
-            action["base_orientation"] = self._demo["base_orientation"][index]
-
-        has_scene_joint = "scene_joint" in self._demo
-        has_scene_joint_names = "scene_joint_names" in self._demo
-        if has_scene_joint or has_scene_joint_names:
-            if has_scene_joint != has_scene_joint_names:
-                missing_key = "scene_joint_names" if has_scene_joint else "scene_joint"
-                raise KeyError(
-                    "Scene joint replay actions must provide both scene_joint and "
-                    f"scene_joint_names; missing '{missing_key}'."
-                )
-            action["scene_joint_positions"] = self._demo["scene_joint"][index]
-            action["scene_joint_names"] = list(self._demo["scene_joint_names"])
-        return action
-
-    def apply_first_frame_as_reset(self) -> Dict[str, Any] | None:
-        if self.num_steps <= 0:
-            return None
-        action = self._action_at(0)
-        self._step = min(1, self.num_steps)
-        return action
-
-    def act(self) -> Dict[str, Any]:
-        action = self._action_at(self._step)
-        self._step += 1
-        return action
-
-
-# ---------------------------------------------------------------------------
 # Action helpers
 # ---------------------------------------------------------------------------
 
@@ -2083,7 +1827,7 @@ def preprocess_replay_dictconfig(
 
     op_cfg = cfg.env.operators.arm
     arm_actuators, eef_actuators = _get_operator_actuator_split(op_cfg)
-    mcap_demo = _load_mcap_demo(
+    trajectory = load_canonical_mcap_recording(
         mcap_path,
         replay_cfg.arm_topic,
         replay_cfg.gripper_topic,
@@ -2095,9 +1839,15 @@ def preprocess_replay_dictconfig(
     replay_cfg.mode = "joint"
 
     actuator_names = arm_actuators + eef_actuators
-    _prepare_mcap_demo_for_replay(mcap_demo, actuator_names, replay_cfg)
+    trajectory = prepare_canonical_joint_trajectory(
+        trajectory,
+        actuator_names,
+        joint_name_mapping=replay_cfg.joint_name_mapping,
+        joint_axis_scale=replay_cfg.joint_axis_scale,
+        joint_clip=replay_cfg.joint_clip,
+    )
 
-    init_jpos = mcap_demo.first_frame_joint_positions()
+    init_jpos = trajectory.first_frame_joint_positions()
     # When eef_mapper is configured, the mcap eef values are in user-space
     # (e.g. finger distance), not raw joint values.  Exclude them from
     # initial_joint_positions (which writes directly to qpos) — the reset
@@ -2359,7 +2109,7 @@ class DataReplayRunner(RunnerBase):
             env = ComponentRegistry.get_env(config.task.env_name)
             op_binding = env.config.operators.get("arm")
             arm_actuators, eef_actuators = _get_operator_actuator_split(op_binding)
-            mcap_demo = _load_mcap_demo(
+            trajectory = load_canonical_mcap_recording(
                 mcap_path,
                 rcfg.arm_topic,
                 rcfg.gripper_topic,
@@ -2371,18 +2121,13 @@ class DataReplayRunner(RunnerBase):
             rcfg.mode = "joint"
 
             actuator_names = arm_actuators + eef_actuators
-            _prepare_mcap_demo_for_replay(mcap_demo, actuator_names, rcfg)
-
-            demo: Dict[str, np.ndarray] = {"joint": mcap_demo.joint}
-            if mcap_demo.base_position is not None:
-                demo["base_position"] = mcap_demo.base_position
-            if mcap_demo.base_orientation is not None:
-                demo["base_orientation"] = mcap_demo.base_orientation
-            if mcap_demo.scene_joint is not None:
-                demo["scene_joint"] = mcap_demo.scene_joint
-                demo["scene_joint_names"] = list(mcap_demo.scene_joint_names)
-            if mcap_demo.joint_times is not None:
-                demo["joint_times"] = mcap_demo.joint_times
+            trajectory = prepare_canonical_joint_trajectory(
+                trajectory,
+                actuator_names,
+                joint_name_mapping=rcfg.joint_name_mapping,
+                joint_axis_scale=rcfg.joint_axis_scale,
+                joint_clip=rcfg.joint_clip,
+            )
         else:
             demo_name = rcfg.demo_name or "demo"
             demo_dir = rcfg.demo_dir or os.path.join(
@@ -2391,11 +2136,8 @@ class DataReplayRunner(RunnerBase):
             demo_npz_path = os.path.join(demo_dir, f"{demo_name}.npz")
             if not os.path.exists(demo_npz_path):
                 raise FileNotFoundError(f"Demo file not found: {demo_npz_path}")
-            demo_data = np.load(demo_npz_path)
-            if rcfg.mode == "pose":
-                demo = _load_pose_demo(demo_data)
-            elif rcfg.mode == "ctrl":
-                demo = _load_ctrl_demo(demo_data)
+            trajectory = NpzRecordingAdapter().load(demo_npz_path, rcfg.mode)
+            if rcfg.mode == "ctrl":
                 actuator_names: list[str] = []
                 from auto_atom import ComponentRegistry
 
@@ -2403,22 +2145,15 @@ class DataReplayRunner(RunnerBase):
                 op_binding = env.config.operators.get("arm")
                 if op_binding is not None:
                     actuator_names = _get_operator_actuator_names(op_binding)
-                demo["ctrl"] = _apply_joint_axis_scale(
-                    demo["ctrl"],
-                    rcfg.joint_axis_scale,
-                    joint_names=actuator_names or None,
-                    label="npz ctrl replay",
+                trajectory = prepare_canonical_joint_trajectory(
+                    trajectory,
+                    (),
+                    joint_axis_scale=rcfg.joint_axis_scale,
                 )
-            else:
-                raise ValueError(
-                    f"Unknown replay mode: {rcfg.mode!r} "
-                    f"(expected 'pose', 'ctrl', or set mcap_path)"
-                )
-
-        demo = subsample_demo(demo, rcfg.demo_stride)
+        trajectory = trajectory.subsample(rcfg.demo_stride)
         batch_size = self._require_evaluator().batch_size
-        demo = normalize_demo_for_batch(demo, batch_size=batch_size, mode=rcfg.mode)
-        self._policy = ReplayPolicy(demo, rcfg.mode)
+        trajectory = trajectory.normalize_for_batch(batch_size)
+        self._policy = CanonicalReplayPolicy(trajectory)
 
     def _require_replay_cfg(self) -> DataReplayConfig:
         if self._replay_cfg is None:
