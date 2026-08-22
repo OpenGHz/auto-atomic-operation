@@ -20,6 +20,10 @@ import mujoco
 import numpy as np
 from numpy.typing import NDArray
 
+from auto_atom.basis.mjc.batch_execution import (
+    BatchExecutionAdapter,
+    BatchExecutionMode,
+)
 from auto_atom.basis.mjc.mujoco_basis import (
     CameraSpec,
     DataType,
@@ -1731,72 +1735,115 @@ class BatchedUnifiedMujocoEnv:
         if config.name:
             ComponentRegistry.register_env(config.name, self)
         self._key_creator = KeyCreator(self.config.structured)
+        self._batch_execution = BatchExecutionAdapter(self.envs, self.batch_size)
+
+    def _batch_adapter(self) -> BatchExecutionAdapter:
+        """Return the adapter matching the current logical/physical layout.
+
+        GS shared-physics environments construct the parent with one physical
+        replica and then expose virtual aliases.  Rebuilding lazily keeps that
+        initialization detail out of every batched operation while also making
+        object-level test doubles easy to construct.
+        """
+        mode = (
+            BatchExecutionMode.SHARED
+            if bool(getattr(self, "_share_physics", False))
+            else BatchExecutionMode.REPLICATED
+        )
+        adapter = getattr(self, "_batch_execution", None)
+        if (
+            adapter is None
+            or adapter.batch_size != self.batch_size
+            or adapter.mode != mode
+            or len(adapter.envs) != len(self.envs)
+            or any(left is not right for left, right in zip(adapter.envs, self.envs))
+        ):
+            adapter = BatchExecutionAdapter(self.envs, self.batch_size, mode)
+            self._batch_execution = adapter
+        return adapter
 
     def register_operator(self, *args, **kwargs) -> None:
-        for env in self.envs:
+        for env in self._batch_adapter().physical_envs:
             env.register_operator(*args, **kwargs)
 
     def set_joint_limit_warning_enabled(self, enabled: bool) -> None:
         """Propagate the IK joint-limit-proximity warning toggle to every replica."""
-        for env in self.envs:
+        for env in self._batch_adapter().physical_envs:
             env.set_joint_limit_warning_enabled(enabled)
 
     def get_operator_ik_failure_streak(self, op_name: str) -> np.ndarray:
         """Per-replica consecutive IK-failure counts for ``op_name``."""
         return np.asarray(
-            [env.get_operator_ik_failure_streak(op_name) for env in self.envs],
+            self._batch_adapter().collect(
+                lambda env: env.get_operator_ik_failure_streak(op_name)
+            ),
             dtype=np.int64,
         )
 
     def world_to_base(
         self, op_name: str, pos_w: np.ndarray, quat_w: np.ndarray
     ) -> tuple[np.ndarray, np.ndarray]:
-        pos_w = np.asarray(pos_w)
-        quat_w = np.asarray(quat_w)
-        if pos_w.ndim == 1:
-            pos_w = np.repeat(pos_w.reshape(1, 3), self.batch_size, axis=0)
-        if quat_w.ndim == 1:
-            quat_w = np.repeat(quat_w.reshape(1, 4), self.batch_size, axis=0)
-        pos_out = []
-        quat_out = []
-        for env_index, env in enumerate(self.envs):
-            p, q = env.world_to_base(op_name, pos_w[env_index], quat_w[env_index])
-            pos_out.append(p)
-            quat_out.append(q)
-        return np.stack(pos_out), np.stack(quat_out)
+        adapter = self._batch_adapter()
+        positions = adapter.broadcast_rows(pos_w, label="world position", width=3)
+        orientations = adapter.broadcast_rows(
+            quat_w,
+            label="world orientation",
+            width=4,
+        )
+        values = adapter.map_rows(
+            lambda env, _index, position, orientation: env.world_to_base(
+                op_name,
+                position,
+                orientation,
+            ),
+            (positions, orientations),
+        )
+        return (
+            np.stack([position for position, _ in values]),
+            np.stack([orientation for _, orientation in values]),
+        )
 
     def base_to_world(
         self, op_name: str, pos_b: np.ndarray, quat_b: np.ndarray
     ) -> tuple[np.ndarray, np.ndarray]:
-        pos_b = np.asarray(pos_b)
-        quat_b = np.asarray(quat_b)
-        if pos_b.ndim == 1:
-            pos_b = np.repeat(pos_b.reshape(1, 3), self.batch_size, axis=0)
-        if quat_b.ndim == 1:
-            quat_b = np.repeat(quat_b.reshape(1, 4), self.batch_size, axis=0)
-        pos_out = []
-        quat_out = []
-        for env_index, env in enumerate(self.envs):
-            p, q = env.base_to_world(op_name, pos_b[env_index], quat_b[env_index])
-            pos_out.append(p)
-            quat_out.append(q)
-        return np.stack(pos_out), np.stack(quat_out)
+        adapter = self._batch_adapter()
+        positions = adapter.broadcast_rows(pos_b, label="base position", width=3)
+        orientations = adapter.broadcast_rows(
+            quat_b,
+            label="base orientation",
+            width=4,
+        )
+        values = adapter.map_rows(
+            lambda env, _index, position, orientation: env.base_to_world(
+                op_name,
+                position,
+                orientation,
+            ),
+            (positions, orientations),
+        )
+        return (
+            np.stack([position for position, _ in values]),
+            np.stack([orientation for _, orientation in values]),
+        )
 
     def get_operator_eef_pose_in_base(
         self, op_name: str
     ) -> tuple[np.ndarray, np.ndarray]:
-        poses = [env.get_operator_eef_pose_in_base(op_name) for env in self.envs]
-        return np.stack([p for p, _ in poses]), np.stack([q for _, q in poses])
+        return self._batch_adapter().stack_pairs(
+            lambda env: env.get_operator_eef_pose_in_base(op_name)
+        )
 
     def get_operator_eef_pose_in_world(
         self, op_name: str
     ) -> tuple[np.ndarray, np.ndarray]:
-        poses = [env.get_operator_eef_pose_in_world(op_name) for env in self.envs]
-        return np.stack([p for p, _ in poses]), np.stack([q for _, q in poses])
+        return self._batch_adapter().stack_pairs(
+            lambda env: env.get_operator_eef_pose_in_world(op_name)
+        )
 
     def get_operator_base_pose(self, op_name: str) -> tuple[np.ndarray, np.ndarray]:
-        poses = [env.get_operator_base_pose(op_name) for env in self.envs]
-        return np.stack([p for p, _ in poses]), np.stack([q for _, q in poses])
+        return self._batch_adapter().stack_pairs(
+            lambda env: env.get_operator_base_pose(op_name)
+        )
 
     def override_operator_base_pose(
         self,
@@ -1805,24 +1852,22 @@ class BatchedUnifiedMujocoEnv:
         quat_w: np.ndarray,
         env_mask: np.ndarray | None = None,
     ) -> None:
-        pos_w = np.asarray(pos_w)
-        quat_w = np.asarray(quat_w)
-        if pos_w.ndim == 1:
-            pos_w = np.repeat(pos_w.reshape(1, 3), self.batch_size, axis=0)
-        if quat_w.ndim == 1:
-            quat_w = np.repeat(quat_w.reshape(1, 4), self.batch_size, axis=0)
-        mask = (
-            np.ones(self.batch_size, dtype=bool)
-            if env_mask is None
-            else np.asarray(env_mask, dtype=bool).reshape(-1)
+        adapter = self._batch_adapter()
+        positions = adapter.broadcast_rows(pos_w, label="base position", width=3)
+        orientations = adapter.broadcast_rows(
+            quat_w,
+            label="base orientation",
+            width=4,
         )
-        for env_index, env in enumerate(self.envs):
-            if mask[env_index]:
-                env.override_operator_base_pose(
-                    op_name,
-                    pos_w[env_index],
-                    quat_w[env_index],
-                )
+        adapter.dispatch_rows(
+            lambda env, _index, position, orientation: env.override_operator_base_pose(
+                op_name,
+                position,
+                orientation,
+            ),
+            (positions, orientations),
+            env_mask,
+        )
 
     def set_operator_base_pose(
         self,
@@ -1831,24 +1876,22 @@ class BatchedUnifiedMujocoEnv:
         quat_w: np.ndarray,
         env_mask: np.ndarray | None = None,
     ) -> None:
-        pos_w = np.asarray(pos_w)
-        quat_w = np.asarray(quat_w)
-        if pos_w.ndim == 1:
-            pos_w = np.repeat(pos_w.reshape(1, 3), self.batch_size, axis=0)
-        if quat_w.ndim == 1:
-            quat_w = np.repeat(quat_w.reshape(1, 4), self.batch_size, axis=0)
-        mask = (
-            np.ones(self.batch_size, dtype=bool)
-            if env_mask is None
-            else np.asarray(env_mask, dtype=bool).reshape(-1)
+        adapter = self._batch_adapter()
+        positions = adapter.broadcast_rows(pos_w, label="base position", width=3)
+        orientations = adapter.broadcast_rows(
+            quat_w,
+            label="base orientation",
+            width=4,
         )
-        for env_index, env in enumerate(self.envs):
-            if mask[env_index]:
-                env.set_operator_base_pose(
-                    op_name,
-                    pos_w[env_index],
-                    quat_w[env_index],
-                )
+        adapter.dispatch_rows(
+            lambda env, _index, position, orientation: env.set_operator_base_pose(
+                op_name,
+                position,
+                orientation,
+            ),
+            (positions, orientations),
+            env_mask,
+        )
 
     def step_operator_toward_target(
         self,
@@ -1857,18 +1900,26 @@ class BatchedUnifiedMujocoEnv:
         target_quat_b: np.ndarray,
         env_mask: np.ndarray | None = None,
     ) -> None:
-        mask = (
-            np.ones(self.batch_size, dtype=bool)
-            if env_mask is None
-            else np.asarray(env_mask, dtype=bool).reshape(-1)
+        adapter = self._batch_adapter()
+        positions = adapter.broadcast_rows(
+            target_pos_b,
+            label="target position",
+            width=3,
         )
-        for env_index, env in enumerate(self.envs):
-            if mask[env_index]:
-                env.step_operator_toward_target(
-                    op_name,
-                    np.asarray(target_pos_b[env_index]),
-                    np.asarray(target_quat_b[env_index]),
-                )
+        orientations = adapter.broadcast_rows(
+            target_quat_b,
+            label="target orientation",
+            width=4,
+        )
+        adapter.dispatch_rows(
+            lambda env, _index, position, orientation: env.step_operator_toward_target(
+                op_name,
+                position,
+                orientation,
+            ),
+            (positions, orientations),
+            env_mask,
+        )
 
     def teleport_operator(
         self,
@@ -1877,26 +1928,28 @@ class BatchedUnifiedMujocoEnv:
         quat_w: np.ndarray,
         env_mask: np.ndarray | None = None,
     ) -> None:
-        mask = (
-            np.ones(self.batch_size, dtype=bool)
-            if env_mask is None
-            else np.asarray(env_mask, dtype=bool).reshape(-1)
+        adapter = self._batch_adapter()
+        positions = adapter.broadcast_rows(pos_w, label="world position", width=3)
+        orientations = adapter.broadcast_rows(
+            quat_w,
+            label="world orientation",
+            width=4,
         )
-        pos_w = np.asarray(pos_w)
-        quat_w = np.asarray(quat_w)
-        for env_index, env in enumerate(self.envs):
-            if mask[env_index]:
-                env.teleport_operator(op_name, pos_w[env_index], quat_w[env_index])
+        adapter.dispatch_rows(
+            lambda env, _index, position, orientation: env.teleport_operator(
+                op_name,
+                position,
+                orientation,
+            ),
+            (positions, orientations),
+            env_mask,
+        )
 
     def home_operator(self, op_name: str, env_mask: np.ndarray | None = None) -> None:
-        mask = (
-            np.ones(self.batch_size, dtype=bool)
-            if env_mask is None
-            else np.asarray(env_mask, dtype=bool).reshape(-1)
+        self._batch_adapter().dispatch(
+            lambda env, _index: env.home_operator(op_name),
+            env_mask,
         )
-        for env_index, env in enumerate(self.envs):
-            if mask[env_index]:
-                env.home_operator(op_name)
 
     def set_operator_home_eef_pose(
         self,
@@ -1905,51 +1958,46 @@ class BatchedUnifiedMujocoEnv:
         quat_w: np.ndarray,
         env_mask: np.ndarray | None = None,
     ) -> None:
-        pos_w = np.asarray(pos_w)
-        quat_w = np.asarray(quat_w)
-        if pos_w.ndim == 1:
-            pos_w = np.repeat(pos_w.reshape(1, 3), self.batch_size, axis=0)
-        if quat_w.ndim == 1:
-            quat_w = np.repeat(quat_w.reshape(1, 4), self.batch_size, axis=0)
-        mask = (
-            np.ones(self.batch_size, dtype=bool)
-            if env_mask is None
-            else np.asarray(env_mask, dtype=bool).reshape(-1)
+        adapter = self._batch_adapter()
+        positions = adapter.broadcast_rows(pos_w, label="home position", width=3)
+        orientations = adapter.broadcast_rows(
+            quat_w,
+            label="home orientation",
+            width=4,
         )
-        for env_index, env in enumerate(self.envs):
-            if mask[env_index]:
-                env.set_operator_home_eef_pose(
-                    op_name,
-                    pos_w[env_index],
-                    quat_w[env_index],
-                )
+        adapter.dispatch_rows(
+            lambda env, _index, position, orientation: env.set_operator_home_eef_pose(
+                op_name,
+                position,
+                orientation,
+            ),
+            (positions, orientations),
+            env_mask,
+        )
 
     def get_body_pose(self, body_name: str) -> tuple[np.ndarray, np.ndarray]:
-        poses = [env.get_body_pose(body_name) for env in self.envs]
-        return np.stack([p for p, _ in poses]), np.stack([q for _, q in poses])
+        return self._batch_adapter().stack_pairs(
+            lambda env: env.get_body_pose(body_name)
+        )
 
     def get_site_pose(self, site_name: str) -> tuple[np.ndarray, np.ndarray]:
-        poses = [env.get_site_pose(site_name) for env in self.envs]
-        return np.stack([p for p, _ in poses]), np.stack([q for _, q in poses])
+        return self._batch_adapter().stack_pairs(
+            lambda env: env.get_site_pose(site_name)
+        )
 
     def step(self, action: np.ndarray, env_mask: np.ndarray | None = None) -> None:
-        action = np.asarray(action, dtype=np.float64)
-        if action.ndim == 1:
-            raise ValueError(
-                f"Batched step expects shape (B, action_dim), got {action.shape}"
-            )
-        if action.shape[0] != self.batch_size:
-            raise ValueError(
-                f"Expected action shape ({self.batch_size}, action_dim), got {action.shape}"
-            )
-        mask = (
-            np.ones(self.batch_size, dtype=bool)
-            if env_mask is None
-            else np.asarray(env_mask, dtype=bool).reshape(-1)
+        adapter = self._batch_adapter()
+        rows = adapter.broadcast_rows(
+            action,
+            label="Batched step action",
+            dtype=np.float64,
+            allow_scalar=False,
         )
-        for env_index, env in enumerate(self.envs):
-            if mask[env_index]:
-                env.step(action[env_index])
+        adapter.dispatch_rows(
+            lambda env, _index, row: env.step(row),
+            (rows,),
+            env_mask,
+        )
 
     def apply_joint_action(
         self,
@@ -1972,17 +2020,21 @@ class BatchedUnifiedMujocoEnv:
             When True, directly set qpos (no physics step).
             See ``UnifiedMujocoEnv.apply_joint_action``.
         """
-        action = np.asarray(action, dtype=np.float64)
-        if action.ndim == 1:
-            action = np.repeat(action.reshape(1, -1), self.batch_size, axis=0)
-        mask = (
-            np.ones(self.batch_size, dtype=bool)
-            if env_mask is None
-            else np.asarray(env_mask, dtype=bool).reshape(-1)
+        adapter = self._batch_adapter()
+        rows = adapter.broadcast_rows(
+            action,
+            label="joint action",
+            dtype=np.float64,
         )
-        for i, env in enumerate(self.envs):
-            if mask[i]:
-                env.apply_joint_action(operator, action[i], kinematic=kinematic)
+        adapter.dispatch_rows(
+            lambda env, _index, row: env.apply_joint_action(
+                operator,
+                row,
+                kinematic=kinematic,
+            ),
+            (rows,),
+            env_mask,
+        )
 
     def apply_pose_action(
         self,
@@ -2007,51 +2059,48 @@ class BatchedUnifiedMujocoEnv:
             When True, teleport the operator to the target pose directly
             (no physics step).  See ``UnifiedMujocoEnv.apply_pose_action``.
         """
-        pos = np.asarray(position)
-        ori = np.asarray(orientation)
-        if pos.ndim == 1:
-            pos = np.repeat(pos.reshape(1, 3), self.batch_size, axis=0)
-        if ori.ndim == 1:
-            ori = np.repeat(ori.reshape(1, 4), self.batch_size, axis=0)
-        g = None
-        if gripper is not None:
-            g = np.asarray(gripper, dtype=np.float64)
-            if g.ndim == 1:
-                g = np.repeat(g.reshape(1, -1), self.batch_size, axis=0)
-        mask = (
-            np.ones(self.batch_size, dtype=bool)
-            if env_mask is None
-            else np.asarray(env_mask, dtype=bool).reshape(-1)
+        adapter = self._batch_adapter()
+        positions = adapter.broadcast_rows(position, label="pose position", width=3)
+        orientations = adapter.broadcast_rows(
+            orientation,
+            label="pose orientation",
+            width=4,
         )
-        for i, env in enumerate(self.envs):
-            if mask[i]:
-                env.apply_pose_action(
-                    operator,
-                    pos[i],
-                    ori[i],
-                    g[i] if g is not None else None,
-                    kinematic=kinematic,
-                )
+        gripper_rows = None
+        if gripper is not None:
+            gripper_rows = adapter.broadcast_rows(
+                gripper,
+                label="gripper action",
+                dtype=np.float64,
+            )
+        rows = (
+            (positions, orientations)
+            if gripper_rows is None
+            else (positions, orientations, gripper_rows)
+        )
+
+        def apply(env, _index, position_row, orientation_row, *gripper_row) -> None:
+            env.apply_pose_action(
+                operator,
+                position_row,
+                orientation_row,
+                gripper_row[0] if gripper_row else None,
+                kinematic=kinematic,
+            )
+
+        adapter.dispatch_rows(apply, rows, env_mask)
 
     def update(self, env_mask: np.ndarray | None = None) -> None:
-        mask = (
-            np.ones(self.batch_size, dtype=bool)
-            if env_mask is None
-            else np.asarray(env_mask, dtype=bool).reshape(-1)
+        self._batch_adapter().dispatch(
+            lambda env, _index: env.update(),
+            env_mask,
         )
-        for env_index, env in enumerate(self.envs):
-            if mask[env_index]:
-                env.update()
 
     def reset(self, env_mask: np.ndarray | None = None) -> None:
-        mask = (
-            np.ones(self.batch_size, dtype=bool)
-            if env_mask is None
-            else np.asarray(env_mask, dtype=bool).reshape(-1)
+        self._batch_adapter().dispatch(
+            lambda env, _index: env.reset(),
+            env_mask,
         )
-        for env_index, env in enumerate(self.envs):
-            if mask[env_index]:
-                env.reset()
 
     def set_interest_objects_and_operations(
         self,
@@ -2066,39 +2115,27 @@ class BatchedUnifiedMujocoEnv:
             raise ValueError(
                 "Expected either broadcast length 1 or per-env length equal to batch_size."
             )
-        broadcast = len(object_names) == 1
-        for env_index, env in enumerate(self.envs):
-            obj = object_names[0] if broadcast else object_names[env_index]
-            op = operation_names[0] if broadcast else operation_names[env_index]
+        objects = (
+            object_names * self.batch_size if len(object_names) == 1 else object_names
+        )
+        operations = (
+            operation_names * self.batch_size
+            if len(operation_names) == 1
+            else operation_names
+        )
+
+        def set_interest(env, env_index: int) -> None:
+            obj = objects[env_index]
+            op = operations[env_index]
             if obj and op:
                 env.set_interest_objects_and_operations([obj], [op])
             else:
                 env.set_interest_objects_and_operations([], [])
 
+        self._batch_adapter().dispatch(set_interest)
+
     def capture_observation(self) -> dict[str, dict[str, Any]]:
-        obs_per_env = [env.capture_observation() for env in self.envs]
-        keys = set().union(*(obs.keys() for obs in obs_per_env))
-        batched: dict[str, dict[str, Any]] = {}
-        for key in keys:
-            items = [obs[key] for obs in obs_per_env if key in obs]
-            if len(items) != self.batch_size:
-                raise KeyError(
-                    f"Observation key '{key}' missing from some env replicas."
-                )
-            first_data = items[0]["data"]
-            if isinstance(first_data, dict):
-                batched[key] = {
-                    "data": [item["data"] for item in items],
-                    "t": np.asarray([item["t"] for item in items]),
-                }
-            else:
-                batched[key] = {
-                    "data": np.stack(
-                        [np.asarray(item["data"]) for item in items], axis=0
-                    ),
-                    "t": np.asarray([item["t"] for item in items]),
-                }
-        return batched
+        return self._batch_adapter().capture_observation()
 
     def get_info(self) -> dict[str, Any]:
         info = self.envs[0].get_info()
@@ -2106,7 +2143,7 @@ class BatchedUnifiedMujocoEnv:
         return info
 
     def is_updated(self) -> NDArray[np.bool]:
-        return np.array([env.is_updated() for env in self.envs])
+        return self._batch_adapter().probe_bool(lambda env: env.is_updated())
 
     def refresh_viewer(self) -> None:
         self.envs[self.config.viewer_env_index].refresh_viewer()
@@ -2119,5 +2156,5 @@ class BatchedUnifiedMujocoEnv:
             yield
 
     def close(self) -> None:
-        for env in self.envs:
+        for env in self._batch_adapter().physical_envs:
             env.close()

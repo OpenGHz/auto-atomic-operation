@@ -2084,7 +2084,8 @@ class BatchedGSUnifiedMujocoEnv(BatchedUnifiedMujocoEnv):
             # Expose N aliases of the single physics env so external code
             # (backends, eval scripts) can index ``env.envs[i]`` for any i in
             # ``[0, N)``. Parent methods that iterate ``self.envs`` see N, so
-            # the step-like methods below override them to avoid N× work.
+            # the canonical batch adapter routes step-like calls to the sole
+            # physical replica to avoid N× work.
             self.envs = [self.envs[0]] * self._virtual_batch_size
         else:
             super().__init__(config, **kwargs)
@@ -2338,83 +2339,6 @@ class BatchedGSUnifiedMujocoEnv(BatchedUnifiedMujocoEnv):
         self._pending_gs_config = base
 
     # ------------------------------------------------------------------
-    # shared-physics step-like overrides (run the single physics env once)
-    # ------------------------------------------------------------------
-    #
-    # In shared-physics mode ``self.envs`` is N aliases of the same underlying
-    # ``UnifiedMujocoEnv``. Parent methods that iterate ``for env in self.envs``
-    # therefore call the same env N times; for getters that is cheap (identity
-    # rows stacked), but for anything that advances / mutates physics it is a
-    # waste at best, and incorrect (last-wins on different inputs) at worst.
-    # Override the hot step-like methods to apply element ``[0]`` of any
-    # ``(N, …)`` input exactly once.
-
-    @staticmethod
-    def _any_in_mask(batch_size: int, env_mask) -> bool:
-        if env_mask is None:
-            return True
-        return bool(np.asarray(env_mask, dtype=bool).reshape(-1).any())
-
-    def step(self, action: np.ndarray, env_mask: np.ndarray | None = None) -> None:
-        if not self._share_physics:
-            return super().step(action, env_mask)
-        action = np.asarray(action, dtype=np.float64)
-        if action.ndim == 1:
-            raise ValueError(
-                f"Batched step expects shape (B, action_dim), got {action.shape}"
-            )
-        if action.shape[0] != self.batch_size:
-            raise ValueError(
-                f"Expected action shape ({self.batch_size}, action_dim), got {action.shape}"
-            )
-        if self._any_in_mask(self.batch_size, env_mask):
-            self.envs[0].step(action[0])
-
-    def update(self, env_mask: np.ndarray | None = None) -> None:
-        if not self._share_physics:
-            return super().update(env_mask)
-        if self._any_in_mask(self.batch_size, env_mask):
-            self.envs[0].update()
-
-    def apply_joint_action(
-        self,
-        operator: str,
-        action,
-        env_mask: np.ndarray | None = None,
-        kinematic: bool = False,
-    ) -> None:
-        if not self._share_physics:
-            return super().apply_joint_action(operator, action, env_mask, kinematic)
-        action = np.asarray(action, dtype=np.float64)
-        first = action if action.ndim == 1 else action[0]
-        if self._any_in_mask(self.batch_size, env_mask):
-            self.envs[0].apply_joint_action(operator, first, kinematic=kinematic)
-
-    def apply_pose_action(
-        self,
-        operator: str,
-        position,
-        orientation,
-        gripper=None,
-        env_mask: np.ndarray | None = None,
-        kinematic: bool = False,
-    ) -> None:
-        if not self._share_physics:
-            return super().apply_pose_action(
-                operator, position, orientation, gripper, env_mask, kinematic
-            )
-        pos = np.asarray(position)
-        ori = np.asarray(orientation)
-        p0 = pos if pos.ndim == 1 else pos[0]
-        o0 = ori if ori.ndim == 1 else ori[0]
-        g0 = None
-        if gripper is not None:
-            g = np.asarray(gripper, dtype=np.float64)
-            g0 = g if g.ndim == 1 else g[0]
-        if self._any_in_mask(self.batch_size, env_mask):
-            self.envs[0].apply_pose_action(operator, p0, o0, g0, kinematic=kinematic)
-
-    # ------------------------------------------------------------------
     # background lifecycle
     # ------------------------------------------------------------------
 
@@ -2453,13 +2377,11 @@ class BatchedGSUnifiedMujocoEnv(BatchedUnifiedMujocoEnv):
             self._setup_gs_render_state()
             # print(f"GS render state setup took {time.perf_counter() - start:.3f} seconds")
 
-        if self._share_physics:
-            # Partial per-env resets aren't meaningful when physics is shared;
-            # reset the single replica iff any virtual env asked for it.
-            if self._any_in_mask(self.batch_size, env_mask):
-                self.envs[0].reset()
-        else:
-            super().reset(env_mask)
+        # ``BatchedUnifiedMujocoEnv`` routes this through the canonical batch
+        # adapter.  In shared-physics mode the adapter validates ``env_mask``
+        # and invokes the sole physical replica once when any logical row is
+        # active; in replicated mode it preserves per-row dispatch.
+        super().reset(env_mask)
         if (
             self._is_multi_bg
             and self.config.gaussian_render.randomize_background_on_reset
@@ -2476,17 +2398,9 @@ class BatchedGSUnifiedMujocoEnv(BatchedUnifiedMujocoEnv):
             super().refresh_viewer()
 
     def is_updated(self) -> np.ndarray:
-        if not self._share_physics:
-            return super().is_updated()
-        # ``UnifiedMujocoEnv.is_updated()`` is stateful: it advances the
-        # env's cached ``_last_time`` when reporting ``True``. In shared
-        # physics mode ``self.envs`` contains N aliases of the same env, so
-        # calling the parent implementation would yield
-        # ``[True, False, False, ...]`` for a single physics tick, causing
-        # downstream batched samplers to only record env 0. Probe the shared
-        # physics replica once and broadcast the result to all virtual envs.
-        updated = bool(self.envs[0].is_updated())
-        return np.full(self.batch_size, updated, dtype=bool)
+        # The canonical adapter performs one stateful probe for shared physics
+        # and broadcasts its result to all logical rows.
+        return super().is_updated()
 
     def set_background_transform(
         self, pose: BackgroundPose | list[float]
@@ -2516,38 +2430,17 @@ class BatchedGSUnifiedMujocoEnv(BatchedUnifiedMujocoEnv):
     # ------------------------------------------------------------------
 
     def capture_observation(self) -> dict[str, dict[str, Any]]:
-        if self._share_physics:
-            # Bypass parent's N-fold loop: in shared mode ``self.envs`` is N
-            # aliases of the same env, so parent would call
-            # ``env.capture_observation()`` N times redundantly.
-            obs = self._broadcast_single_obs(self.envs[0].capture_observation())
-        else:
-            obs = super().capture_observation()
+        # The canonical adapter stacks replicated observations or broadcasts a
+        # single shared-physics observation exactly once.
+        obs = super().capture_observation()
         self._inject_batched_gs_renders(obs)
         return obs
 
     def _broadcast_single_obs(
         self, obs_one: dict[str, dict[str, Any]]
     ) -> dict[str, dict[str, Any]]:
-        """Replicate a single-env obs dict into the batched ``(N, ...)`` format."""
-        n = self.batch_size
-        batched: dict[str, dict[str, Any]] = {}
-        for key, entry in obs_one.items():
-            data = entry["data"]
-            t = entry["t"]
-            if isinstance(data, dict):
-                # Structured entries: list-of-N where each row is the same dict.
-                batched[key] = {
-                    "data": [data] * n,
-                    "t": np.asarray([t] * n),
-                }
-            else:
-                arr = np.asarray(data)
-                batched[key] = {
-                    "data": np.broadcast_to(arr[None, ...], (n,) + arr.shape).copy(),
-                    "t": np.asarray([t] * n),
-                }
-        return batched
+        """Compatibility wrapper for the canonical observation adapter."""
+        return self._batch_adapter().broadcast_observation(obs_one)
 
     def _inject_batched_gs_renders(self, obs: dict[str, dict[str, Any]]) -> None:
         """Batch-render GS color/depth/mask across all envs and cameras.
