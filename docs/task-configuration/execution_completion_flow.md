@@ -18,7 +18,9 @@ There are two layers involved:
    - Implemented by backend handlers such as `MujocoOperatorHandler.move_to_pose()` and `MujocoOperatorHandler.control_eef()`.
    - Produces `ControlSignal.RUNNING`, `REACHED`, `TIMED_OUT`, or `FAILED`.
 2. Stage execution
-   - Implemented by `TaskRunner`.
+   - Implemented by the shared `StageExecution` module.
+   - `TaskRunner` supplies backend primitive results; `PolicyEvaluator` supplies
+     policy feedback without changing external model actions.
    - Consumes primitive action results and decides whether to:
      - keep the current action running
      - advance to the next action in the stage
@@ -118,7 +120,9 @@ That distinction matters because stage success may still require an additional s
 
 ## Stage Progression Rules
 
-`TaskRunner._update_env()` processes one primitive action at a time.
+`StageExecution` processes one primitive action result at a time. `TaskRunner`
+invokes the active primitive through its backend adapter before handing the
+result to that shared state machine.
 
 For the active primitive action:
 

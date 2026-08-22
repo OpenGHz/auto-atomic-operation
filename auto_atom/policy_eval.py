@@ -5,7 +5,7 @@ from __future__ import annotations
 import threading
 import time
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
@@ -13,13 +13,12 @@ import numpy as np
 
 from .config_loader import load_task_file
 from .framework import (
-    Operation,
-    OperationConditionType,
     PoseControlConfig,
     TaskFileConfig,
     UpdateBoundary,
 )
 from .runtime import (
+    ActiveStageState,
     ControlSignal,
     EnvProtocol,
     ExecutionContext,
@@ -35,20 +34,10 @@ from .runtime import (
     TaskRunner,
     TaskUpdate,
     _build_execution_summary,
-    _check_stage_condition,
     _collect_reset_details,
     _EnvRuntimeState,
 )
-from .utils.pose import PoseState
-
-
-@dataclass
-class _PolicyStageState:
-    plan: StageExecutionPlan
-    operator: OperatorHandler
-    target: Optional[ObjectHandler]
-    initial_object_pose: Optional[PoseState] = None
-    completion_pose: Optional[PoseControlConfig] = None
+from .stage_execution import PolicyStageFeedback, StageExecution
 
 
 @dataclass
@@ -73,6 +62,7 @@ class PolicyActionFeedback:
     signals: List[Optional[ControlSignal]]
     details: List[Dict[str, Any]]
     stage_action_sequence_done: List[bool]
+    stage_actions: List[Optional[List[PrimitiveAction]]] = field(default_factory=list)
 
 
 class ConfigDrivenDemoPolicy:
@@ -82,12 +72,10 @@ class ConfigDrivenDemoPolicy:
         self.builder = builder or TaskFlowBuilder()
         self._cached_stage_indices: List[Optional[int]] = []
         self._cached_actions: List[List[PrimitiveAction]] = []
-        self._action_indices: List[int] = []
 
     def reset(self) -> None:
         self._cached_stage_indices = []
         self._cached_actions = []
-        self._action_indices = []
 
     def act(
         self,
@@ -111,7 +99,10 @@ class ConfigDrivenDemoPolicy:
                 continue
 
             actions = self._get_stage_actions(env_index, stage_index, evaluator)
-            action_index = min(self._action_indices[env_index], len(actions) - 1)
+            action_index = min(
+                evaluator.stage_action_index(env_index, stage_index),
+                len(actions) - 1,
+            )
             env_actions.append(
                 ConfigDrivenEnvAction(
                     stage_index=stage_index,
@@ -134,6 +125,7 @@ class ConfigDrivenDemoPolicy:
                 stage_action_sequence_done=[
                     False for _ in range(context.backend.batch_size)
                 ],
+                stage_actions=[None for _ in range(context.backend.batch_size)],
             )
         if not isinstance(action, ConfigDrivenPolicyAction):
             raise TypeError(
@@ -151,12 +143,15 @@ class ConfigDrivenDemoPolicy:
             stage_action_sequence_done=[
                 False for _ in range(context.backend.batch_size)
             ],
+            stage_actions=[None for _ in range(context.backend.batch_size)],
         )
 
         for env_index, env_action in enumerate(action.env_actions):
             if not mask[env_index] or env_action is None:
                 continue
             plan = context.plan[env_action.stage_index]
+            actions = self._cached_actions[env_index]
+            feedback.stage_actions[env_index] = actions
             result = TaskRunner._run_stage_action(
                 env_index=env_index,
                 plan=plan,
@@ -165,13 +160,8 @@ class ConfigDrivenDemoPolicy:
                 env_mask=self._single_env_mask(context.backend.batch_size, env_index),
             )
             if result.signals[env_index] == ControlSignal.REACHED:
-                actions = self._cached_actions[env_index]
-                next_index = self._action_indices[env_index] + 1
-                feedback.stage_action_sequence_done[env_index] = next_index >= len(
-                    actions
-                )
-                self._action_indices[env_index] = min(
-                    next_index, max(len(actions) - 1, 0)
+                feedback.stage_action_sequence_done[env_index] = (
+                    env_action.action is actions[-1]
                 )
             feedback.signals[env_index] = result.signals[env_index]
             feedback.details[env_index] = dict(result.details[env_index])
@@ -182,7 +172,6 @@ class ConfigDrivenDemoPolicy:
             return
         self._cached_stage_indices = [None for _ in range(batch_size)]
         self._cached_actions = [[] for _ in range(batch_size)]
-        self._action_indices = [0 for _ in range(batch_size)]
 
     def _get_stage_actions(
         self,
@@ -197,7 +186,6 @@ class ConfigDrivenDemoPolicy:
                 plan, self.builder, context
             )
             self._cached_stage_indices[env_index] = stage_index
-            self._action_indices[env_index] = 0
         return self._cached_actions[env_index]
 
     @staticmethod
@@ -242,7 +230,7 @@ class PolicyEvaluator:
         self._plan: List[StageExecutionPlan] = []
         self._records: List[ExecutionRecord] = []
         self._env_states: List[_EnvRuntimeState] = []
-        self._policy_states: List[Optional[_PolicyStageState]] = []
+        self._stage_execution: Optional[StageExecution] = None
         self._has_reset: np.ndarray = np.zeros(0, dtype=bool)
         self._sim_lock: threading.Lock = threading.Lock()
         self._sim_thread: Optional[threading.Thread] = None
@@ -299,10 +287,20 @@ class PolicyEvaluator:
         self._plan = self.builder.build(self._context)
         self._context.plan = self._plan
         self._context.backend.setup(self._context.config)
-        self._env_states = [_EnvRuntimeState() for _ in range(backend.batch_size)]
-        self._policy_states = [None for _ in range(backend.batch_size)]
+        self._stage_execution = StageExecution(
+            self._context,
+            self._plan,
+            actions_factory=lambda plan: deepcopy(
+                self.builder.build_actions(
+                    plan.stage,
+                    plan.last_orientation_before,
+                )[0]
+            ),
+            completion_pose_resolver=self._resolve_completion_pose,
+        )
+        self._env_states = self._stage_execution.states
         self._has_reset = np.zeros(backend.batch_size, dtype=bool)
-        self._records = []
+        self._records = self._stage_execution.records
         self._pending_sim_loop_freq = float(sim_loop_frequency)
         return self
 
@@ -311,13 +309,10 @@ class PolicyEvaluator:
         mask = self._normalize_mask(env_mask)
         with self._sim_lock:
             context.backend.reset(mask)
-        for env_index, enabled in enumerate(mask):
-            if enabled:
-                self._env_states[env_index] = _EnvRuntimeState()
-                self._env_states[env_index].latest_details = _collect_reset_details(
-                    env_index, context
-                )
-                self._policy_states[env_index] = None
+        self._require_stage_execution().reset(
+            mask,
+            lambda env_index: _collect_reset_details(env_index, context),
+        )
         self._has_reset[mask] = True
         # self._set_interest_focus()
         if self._pending_sim_loop_freq > 0 and not self.sim_loop_running:
@@ -369,7 +364,7 @@ class PolicyEvaluator:
         self._plan = []
         self._records = []
         self._env_states = []
-        self._policy_states = []
+        self._stage_execution = None
         self._has_reset = np.zeros(0, dtype=bool)
 
     # ------------------------------------------------------------------
@@ -466,208 +461,35 @@ class PolicyEvaluator:
         context: ExecutionContext,
         action_feedback: Optional[PolicyActionFeedback] = None,
     ) -> None:
-        if state.stage_cursor >= len(self._plan):
-            state.done = True
-            state.success = True
-            state.latest_status = StageExecutionStatus.SUCCEEDED
-            state.phase = None
-            state.phase_step = None
-            return
-
-        policy_state = self._policy_states[env_index]
-        if policy_state is None:
-            plan = self._plan[state.stage_cursor]
-            failure = (
-                None
-                if plan.stage.operation == Operation.PULL
-                else _check_stage_condition(
-                    env_index=env_index,
-                    context=context,
-                    plan=plan,
-                    condition_type=OperationConditionType.PERFORM,
-                )
-            )
-            if failure is not None:
-                self._record_failure(env_index, plan, failure)
-                state.done = True
-                state.success = False
-                state.latest_status = StageExecutionStatus.FAILED
-                state.latest_details = failure
-                return
-            policy_state = self._start_stage(env_index, context, plan)
-            self._policy_states[env_index] = policy_state
-            state.latest_status = StageExecutionStatus.RUNNING
-            state.phase = "policy"
-            state.phase_step = None
-
-        assert policy_state is not None
+        if state is not self._env_states[env_index] or context is not self._context:
+            raise RuntimeError("Stage execution received state from another evaluator.")
+        feedback = None
         if action_feedback is not None:
-            signal = action_feedback.signals[env_index]
-            if signal in {ControlSignal.TIMED_OUT, ControlSignal.FAILED}:
-                details = {
-                    "env_index": env_index,
-                    **action_feedback.details[env_index],
-                }
-                failure = TaskRunner._build_action_failure_details(
-                    policy_state.plan,
-                    details,
-                    signal,
-                )
-                self._record_failure(env_index, policy_state.plan, failure)
-                self._policy_states[env_index] = None
-                state.done = True
-                state.success = False
-                state.latest_status = StageExecutionStatus.FAILED
-                state.latest_details = failure
-                state.phase = None
-                state.phase_step = None
-                return
-            if not action_feedback.stage_action_sequence_done[env_index]:
-                state.latest_status = StageExecutionStatus.RUNNING
-                state.latest_details = {
-                    "event": "stage_action_sequence_running",
-                    "env_index": env_index,
-                    "evaluation_mode": "policy",
-                    **action_feedback.details[env_index],
-                }
-                state.phase = "policy"
-                state.phase_step = None
-                return
-
-        success_failure = _check_stage_condition(
-            env_index=env_index,
-            context=context,
-            plan=policy_state.plan,
-            condition_type=OperationConditionType.SUCCESS,
-            initial_pose=policy_state.initial_object_pose,
-            completion_pose=policy_state.completion_pose,
-        )
-        success_details = {
-            "event": "stage_success_condition_met",
-            "env_index": env_index,
-            "evaluation_mode": "policy",
-            "operator": policy_state.plan.operator_name,
-            "operation": policy_state.plan.stage.operation.value,
-            "target_object": policy_state.plan.stage.object,
-        }
-
-        if success_failure is None:
-            self._records.append(
-                ExecutionRecord(
-                    env_index=env_index,
-                    stage_index=policy_state.plan.stage_index,
-                    stage_name=policy_state.plan.stage_name,
-                    operator=policy_state.plan.operator_name,
-                    operation=policy_state.plan.stage.operation.value,
-                    target_object=policy_state.plan.stage.object,
-                    blocking=policy_state.plan.stage.blocking,
-                    status=StageExecutionStatus.SUCCEEDED,
-                    details=success_details,
-                )
+            stage_actions = (
+                action_feedback.stage_actions[env_index]
+                if action_feedback.stage_actions
+                else None
             )
-            state.stage_cursor += 1
-            self._policy_states[env_index] = None
-            state.latest_status = StageExecutionStatus.SUCCEEDED
-            state.latest_details = success_details
-            state.phase = None
-            state.phase_step = None
-            if state.stage_cursor >= len(self._plan):
-                state.done = True
-                state.success = True
-            else:
-                state.success = False
-            return
-
-        if (
-            action_feedback is not None
-            and action_feedback.stage_action_sequence_done[env_index]
-        ):
-            self._record_failure(env_index, policy_state.plan, success_failure)
-            self._policy_states[env_index] = None
-            state.done = True
-            state.success = False
-            state.latest_status = StageExecutionStatus.FAILED
-            state.latest_details = success_failure
-            state.phase = None
-            state.phase_step = None
-            return
-
-        state.latest_status = StageExecutionStatus.RUNNING
-        state.latest_details = {
-            "event": "stage_success_condition_pending",
-            "env_index": env_index,
-            "evaluation_mode": "policy",
-            **success_failure,
-        }
-        state.phase = "policy"
-        state.phase_step = None
-
-    def _start_stage(
-        self,
-        env_index: int,
-        context: ExecutionContext,
-        plan: StageExecutionPlan,
-    ) -> _PolicyStageState:
-        operator = context.backend.get_operator_handler(plan.operator_name)
-        target = context.backend.get_object_handler(plan.stage.object)
-        initial_object_pose: Optional[PoseState] = None
-        if target is not None:
-            initial_object_pose = target.get_pose().select(env_index)
-
-        actions, _ = self.builder.build_actions(
-            plan.stage, plan.last_orientation_before
-        )
-        completion_action = actions[-1] if actions else None
-        completion_pose: Optional[PoseControlConfig] = None
-        if completion_action is not None and completion_action.kind == "pose":
-            completion_pose = _resolve_policy_completion_pose(
-                env_index=env_index,
-                operator=operator,
-                target=target,
-                backend=context.backend,
-                action=completion_action,
-                reference_site=plan.stage.site,
+            feedback = PolicyStageFeedback(
+                signal=action_feedback.signals[env_index],
+                details=dict(action_feedback.details[env_index]),
+                stage_actions=stage_actions,
             )
-        return _PolicyStageState(
-            plan=plan,
-            operator=operator,
-            target=target,
-            initial_object_pose=initial_object_pose,
-            completion_pose=completion_pose,
-        )
-
-    def _record_failure(
-        self,
-        env_index: int,
-        plan: StageExecutionPlan,
-        details: Dict[str, Any],
-    ) -> None:
-        self._records.append(
-            ExecutionRecord(
-                env_index=env_index,
-                stage_index=plan.stage_index,
-                stage_name=plan.stage_name,
-                operator=plan.operator_name,
-                operation=plan.stage.operation.value,
-                target_object=plan.stage.object,
-                blocking=plan.stage.blocking,
-                status=StageExecutionStatus.FAILED,
-                details=details,
-            )
-        )
+        self._require_stage_execution().advance_policy(env_index, feedback)
+        return
 
     def _set_interest_focus(self) -> None:
         context = self._require_context()
         object_names: List[str] = []
         operation_names: List[str] = []
         for env_index, state in enumerate(self._env_states):
-            policy_state = self._policy_states[env_index]
-            if state.done or policy_state is None:
+            active = state.active
+            if state.done or active is None:
                 object_names.append("")
                 operation_names.append("")
             else:
-                object_names.append(policy_state.plan.stage.object)
-                operation_names.append(policy_state.plan.stage.operation.value)
+                object_names.append(active.plan.stage.object)
+                operation_names.append(active.plan.stage.operation.value)
         context.backend.set_interest_objects_and_operations(
             object_names, operation_names
         )
@@ -682,10 +504,10 @@ class PolicyEvaluator:
         phase: List[Optional[str]] = []
         phase_step: List[int] = []
         for env_index, state in enumerate(self._env_states):
-            policy_state = self._policy_states[env_index]
-            if policy_state is not None:
-                stage_index.append(policy_state.plan.stage_index)
-                stage_name.append(policy_state.plan.stage_name)
+            active = state.active
+            if active is not None:
+                stage_index.append(active.plan.stage_index)
+                stage_name.append(active.plan.stage_name)
             elif state.stage_cursor < len(self._plan):
                 stage_index.append(self._plan[state.stage_cursor].stage_index)
                 stage_name.append(self._plan[state.stage_cursor].stage_name)
@@ -736,6 +558,39 @@ class PolicyEvaluator:
                 "PolicyEvaluator is not initialized. Call from_yaml() first."
             )
         return self._context
+
+    def _require_stage_execution(self) -> StageExecution:
+        if self._stage_execution is None:
+            raise RuntimeError(
+                "PolicyEvaluator is not initialized. Call from_yaml() first."
+            )
+        return self._stage_execution
+
+    def stage_action_index(self, env_index: int, stage_index: int) -> int:
+        state = self._env_states[env_index]
+        active = state.active
+        if active is None or active.plan.stage_index != stage_index:
+            return 0
+        return active.action_index
+
+    def _resolve_completion_pose(
+        self,
+        env_index: int,
+        active: ActiveStageState,
+    ) -> Optional[PoseControlConfig]:
+        if not active.actions:
+            return None
+        action = active.actions[-1]
+        if action.kind != "pose":
+            return None
+        return _resolve_policy_completion_pose(
+            env_index=env_index,
+            operator=active.operator,
+            target=active.target,
+            backend=self._require_context().backend,
+            action=action,
+            reference_site=active.plan.stage.site,
+        )
 
 
 def _resolve_policy_completion_pose(

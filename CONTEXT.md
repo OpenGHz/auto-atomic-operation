@@ -23,3 +23,8 @@ _Avoid_: Primitive, control point
 One configured task operation containing an ordered sequence of keypoints and its
 operation conditions.
 _Avoid_: Phase
+
+**Stage execution**:
+The progression of one stage from its perform condition, through its primitive
+sequence, to a succeeded or failed terminal status.
+_Avoid_: Stage lifecycle, rollout

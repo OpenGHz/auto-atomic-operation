@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 from typing import (
+    TYPE_CHECKING,
     Any,
     ClassVar,
     ContextManager,
@@ -24,17 +25,13 @@ from typing import (
 import numpy as np
 
 from .framework import (
-    OPERATION_CONDITIONS,
     ArcControlConfig,
     AutoAtomConfig,
     EefControlConfig,
     IntervalSelectionConfig,
     KeypointSide,
     Operation,
-    OperationConditionType,
-    OperationConstraint,
     Orientation,
-    PlacedToleranceConfig,
     PoseControlConfig,
     PoseReference,
     Position,
@@ -52,13 +49,12 @@ from .utils.pose import (
     compose_pose,
     euler_to_quaternion,
     inverse_pose,
-    orientation_within_tolerance_nullable,
     pose_config_to_pose_state,
-    position_within_tolerance,
-    position_within_tolerance_nullable,
-    quaternion_angular_distance,
     rotate_pose_around_axis,
 )
+
+if TYPE_CHECKING:
+    from .stage_execution import StageExecution
 
 
 class StageExecutionStatus(str, Enum):
@@ -416,6 +412,7 @@ class ActiveStageState:
     action_index: int = 0
     initial_object_pose: Optional[PoseState] = None
     held_object_name: Optional[str] = None
+    completion_pose: Optional[PoseControlConfig] = None
 
 
 @dataclass
@@ -713,6 +710,7 @@ class TaskRunner:
         self._has_reset: np.ndarray = np.zeros(0, dtype=bool)
         self._public_internal_updates: np.ndarray = np.zeros(0, dtype=np.int64)
         self._last_execution_details: List[Dict[str, Any]] = []
+        self._stage_execution: Optional["StageExecution"] = None
 
     @property
     def records(self) -> List[ExecutionRecord]:
@@ -756,6 +754,8 @@ class TaskRunner:
         return self.from_config(load_task_file(path))
 
     def from_config(self, config: TaskFileConfig) -> "TaskRunner":
+        from .stage_execution import StageExecution
+
         backend = config.backend(config.task, config.task_operators)
         if not isinstance(backend, SceneBackend):
             raise TypeError(
@@ -779,11 +779,29 @@ class TaskRunner:
             self._interval_keypoints = self._validate_interval_actions(selection)
         self._context.plan = self._plan
         self._context.backend.setup(self._context.config)
-        self._env_states = [_EnvRuntimeState() for _ in range(backend.batch_size)]
+        self._stage_execution = StageExecution(
+            self._context,
+            self._plan,
+            actions_factory=lambda plan: self._build_stage_actions(
+                plan,
+                self.builder,
+                self._require_context(),
+            ),
+            action_runner=lambda env_index, plan, action, env_mask: (
+                self._run_stage_action(
+                    env_index=env_index,
+                    plan=plan,
+                    action=action,
+                    backend=self._require_context().backend,
+                    env_mask=env_mask,
+                )
+            ),
+        )
+        self._env_states = self._stage_execution.states
         self._has_reset = np.zeros(backend.batch_size, dtype=bool)
         self._public_internal_updates = np.zeros(backend.batch_size, dtype=np.int64)
         self._last_execution_details = [{} for _ in range(backend.batch_size)]
-        self._records = []
+        self._records = self._stage_execution.records
         return self
 
     def _validate_keypoint_boundary_actions(self) -> None:
@@ -957,12 +975,10 @@ class TaskRunner:
         context: ExecutionContext,
     ) -> TaskUpdate:
         context.backend.reset(mask)
-        for env_index, enabled in enumerate(mask):
-            if enabled:
-                self._env_states[env_index] = _EnvRuntimeState()
-                self._env_states[
-                    env_index
-                ].latest_details = self._collect_reset_details(env_index, context)
+        self._require_stage_execution().reset(
+            mask,
+            lambda env_index: self._collect_reset_details(env_index, context),
+        )
         self._has_reset[mask] = True
         self._public_internal_updates[mask] = 0
         self._last_execution_details = [
@@ -1249,7 +1265,7 @@ class TaskRunner:
         # rollout. Never expose its successful stage records, including when a
         # later prefix action fails; preserve only the actual failure record.
         prefix_records = self._records[record_start:]
-        self._records = self._records[:record_start] + [
+        self._records[record_start:] = [
             record
             for record in prefix_records
             if record.status == StageExecutionStatus.FAILED
@@ -1390,6 +1406,7 @@ class TaskRunner:
         self._has_reset = np.zeros(0, dtype=bool)
         self._public_internal_updates = np.zeros(0, dtype=np.int64)
         self._last_execution_details = []
+        self._stage_execution = None
 
     def _update_env(
         self,
@@ -1397,276 +1414,16 @@ class TaskRunner:
         state: _EnvRuntimeState,
         context: ExecutionContext,
     ) -> _EnvUpdateEvent:
-        if state.stage_cursor >= len(self._plan):
-            state.done = True
-            state.success = True
-            state.latest_status = StageExecutionStatus.SUCCEEDED
-            state.phase = None
-            state.phase_step = None
-            return _EnvUpdateEvent()
-
-        if state.active is None:
-            plan = self._plan[state.stage_cursor]
-            failure = (
-                None
-                if plan.stage.operation == Operation.PULL
-                else self._check_stage_condition(
-                    env_index=env_index,
-                    context=context,
-                    plan=plan,
-                    condition_type=OperationConditionType.PERFORM,
-                )
-            )
-            if failure is not None:
-                self._record_failure(env_index, plan, failure)
-                state.done = True
-                state.success = False
-                state.latest_status = StageExecutionStatus.FAILED
-                state.latest_details = failure
-                return _EnvUpdateEvent(failed=True)
-            state.active = self._start_stage(env_index, context, plan)
-            state.latest_status = StageExecutionStatus.RUNNING
-
-        assert state.active is not None
-        active = state.active
-        action = active.actions[active.action_index]
-        mask = self._mask_for_env(env_index)
-        result = TaskRunner._run_stage_action(
-            env_index=env_index,
-            plan=active.plan,
-            action=action,
-            backend=context.backend,
-            env_mask=mask,
+        if state is not self._env_states[env_index] or context is not self._context:
+            raise RuntimeError("Stage execution received state from another runner.")
+        return self._require_stage_execution().advance_control(
+            env_index,
+            use_configured_identity=(
+                context.task_file.execution.interval_selection is not None
+                or context.task_file.execution.update_boundary
+                != UpdateBoundary.CONTROL_TICK
+            ),
         )
-        signal = result.signals[env_index]
-        details = {
-            "env_index": env_index,
-            "action": action.kind,
-            "action_index": active.action_index,
-            **result.details[env_index],
-        }
-        if (
-            action.kind == "pose"
-            and action.pose is not None
-            and action.pose.arc is not None
-        ):
-            arc_cfg = action.pose.arc
-            arc_info: Dict[str, Any] = {
-                "pivot": arc_cfg.pivot
-                if isinstance(arc_cfg.pivot, str)
-                else [float(v) for v in arc_cfg.pivot],
-                "axis": [float(v) for v in arc_cfg.axis],
-                "angle": float(arc_cfg.angle),
-                "absolute": bool(arc_cfg.absolute),
-            }
-            if arc_cfg.absolute and isinstance(arc_cfg.pivot, str):
-                try:
-                    current_joint = float(
-                        context.backend.get_joint_angle(arc_cfg.pivot, env_index)
-                    )
-                    arc_info["current_joint_angle"] = current_joint
-                    arc_info["target_joint_angle"] = float(arc_cfg.angle)
-                    arc_info["delta_joint_angle"] = float(arc_cfg.angle) - current_joint
-                except (KeyError, NotImplementedError):
-                    pass
-            elif action.arc_cumulative_angle is not None:
-                arc_info["cumulative_angle"] = float(action.arc_cumulative_angle)
-            details["action"] = "arc"
-            details["arc"] = arc_info
-
-        if signal == ControlSignal.RUNNING:
-            phase, phase_step = self._action_phase(
-                active.actions,
-                active.action_index,
-                use_configured_identity=(
-                    context.task_file.execution.interval_selection is not None
-                    or context.task_file.execution.update_boundary
-                    != UpdateBoundary.CONTROL_TICK
-                ),
-            )
-            state.latest_status = StageExecutionStatus.RUNNING
-            state.latest_details = details
-            state.phase = phase
-            state.phase_step = phase_step
-            return _EnvUpdateEvent(control_tick=True)
-
-        if signal == ControlSignal.REACHED:
-            completed_action = action
-            completed_position = (
-                _ResolvedTaskKeypoint(
-                    stage_index=active.plan.stage_index,
-                    stage_name=active.plan.stage_name,
-                    phase=completed_action.phase,
-                    waypoint=completed_action.waypoint,
-                )
-                if isinstance(completed_action.phase, TaskPhase)
-                and isinstance(completed_action.waypoint, int)
-                else None
-            )
-            completed_keypoint = (
-                completed_position if completed_action.completes_keypoint else None
-            )
-            active.action_index += 1
-            op = active.plan.stage.operation
-            mid_failure: Optional[Dict[str, Any]] = None
-            if completed_action.kind == "eef":
-                if op == Operation.PULL:
-                    mid_failure = self._check_stage_condition(
-                        env_index=env_index,
-                        context=context,
-                        plan=active.plan,
-                        condition_type=OperationConditionType.PERFORM,
-                        initial_pose=active.initial_object_pose,
-                    )
-                elif op == Operation.PICK and not bool(
-                    context.backend.is_operator_grasping(active.operator.name)[
-                        env_index
-                    ]
-                ):
-                    mid_failure = self._check_stage_condition(
-                        env_index=env_index,
-                        context=context,
-                        plan=active.plan,
-                        condition_type=OperationConditionType.SUCCESS,
-                        initial_pose=active.initial_object_pose,
-                    )
-                elif op == Operation.PRESS:
-                    mid_failure = self._check_stage_condition(
-                        env_index=env_index,
-                        context=context,
-                        plan=active.plan,
-                        condition_type=OperationConditionType.SUCCESS,
-                        initial_pose=active.initial_object_pose,
-                    )
-            if mid_failure is not None:
-                self._record_failure(env_index, active.plan, mid_failure)
-                state.active = None
-                state.done = True
-                state.success = False
-                state.latest_status = StageExecutionStatus.FAILED
-                state.latest_details = mid_failure
-                state.phase = None
-                state.phase_step = None
-                return _EnvUpdateEvent(
-                    control_tick=True,
-                    primitive_reached=True,
-                    keypoint_reached=completed_keypoint is not None,
-                    failed=True,
-                    completed_position=completed_position,
-                    completed_keypoint=completed_keypoint,
-                )
-
-            if active.action_index < len(active.actions):
-                phase, phase_step = self._action_phase(
-                    active.actions,
-                    active.action_index,
-                    use_configured_identity=(
-                        context.task_file.execution.interval_selection is not None
-                        or context.task_file.execution.update_boundary
-                        != UpdateBoundary.CONTROL_TICK
-                    ),
-                )
-                state.latest_status = StageExecutionStatus.RUNNING
-                state.latest_details = details
-                state.phase = phase
-                state.phase_step = phase_step
-                return _EnvUpdateEvent(
-                    control_tick=True,
-                    primitive_reached=True,
-                    keypoint_reached=completed_keypoint is not None,
-                    completed_position=completed_position,
-                    completed_keypoint=completed_keypoint,
-                )
-
-            # Resolve target object pose for PLACED condition
-            target_object_pose: Optional[PoseState] = None
-            held_name: Optional[str] = active.held_object_name
-            if op == Operation.PLACE:
-                control = active.plan.stage.param
-                ref = getattr(control, "placed_reference", "object")
-                target_obj_name = active.plan.stage.object
-                if ref == "object" and target_obj_name:
-                    target_handler = context.backend.get_object_handler(target_obj_name)
-                    if target_handler is not None:
-                        target_object_pose = target_handler.get_pose().select(env_index)
-                else:
-                    target_object_pose = self._pre_move_end_pose(active)
-
-            success_failure = (
-                None
-                if op == Operation.PRESS
-                else self._check_stage_condition(
-                    env_index=env_index,
-                    context=context,
-                    plan=active.plan,
-                    condition_type=OperationConditionType.SUCCESS,
-                    initial_pose=active.initial_object_pose,
-                    completion_pose=self._completion_pose_from_active(active),
-                    target_object_pose=target_object_pose,
-                    held_object_name=held_name,
-                )
-            )
-            if success_failure is not None:
-                self._record_failure(env_index, active.plan, success_failure)
-                state.active = None
-                state.done = True
-                state.success = False
-                state.latest_status = StageExecutionStatus.FAILED
-                state.latest_details = success_failure
-                state.phase = None
-                state.phase_step = None
-                return _EnvUpdateEvent(
-                    control_tick=True,
-                    primitive_reached=True,
-                    keypoint_reached=completed_keypoint is not None,
-                    failed=True,
-                    completed_position=completed_position,
-                    completed_keypoint=completed_keypoint,
-                )
-
-            self._records.append(
-                ExecutionRecord(
-                    env_index=env_index,
-                    stage_index=active.plan.stage_index,
-                    stage_name=active.plan.stage_name,
-                    operator=active.operator.name,
-                    operation=active.plan.stage.operation.value,
-                    target_object=active.plan.stage.object,
-                    blocking=active.plan.stage.blocking,
-                    status=StageExecutionStatus.SUCCEEDED,
-                    details=details,
-                )
-            )
-            state.stage_cursor += 1
-            state.active = None
-            state.latest_status = StageExecutionStatus.SUCCEEDED
-            state.latest_details = details
-            state.phase = None
-            state.phase_step = None
-            if state.stage_cursor >= len(self._plan):
-                state.done = True
-                state.success = True
-            else:
-                state.success = False
-            return _EnvUpdateEvent(
-                control_tick=True,
-                primitive_reached=True,
-                keypoint_reached=completed_keypoint is not None,
-                stage_succeeded=True,
-                completed_position=completed_position,
-                completed_keypoint=completed_keypoint,
-            )
-
-        failure = self._build_action_failure_details(active.plan, details, signal)
-        self._record_failure(env_index, active.plan, failure)
-        state.active = None
-        state.done = True
-        state.success = False
-        state.latest_status = StageExecutionStatus.FAILED
-        state.latest_details = failure
-        state.phase = None
-        state.phase_step = None
-        return _EnvUpdateEvent(control_tick=True, failed=True)
 
     def _record_failure(
         self,
@@ -1674,58 +1431,8 @@ class TaskRunner:
         plan: StageExecutionPlan,
         details: Dict[str, Any],
     ) -> None:
-        self._records.append(
-            ExecutionRecord(
-                env_index=env_index,
-                stage_index=plan.stage_index,
-                stage_name=plan.stage_name,
-                operator=plan.operator_name,
-                operation=plan.stage.operation.value,
-                target_object=plan.stage.object,
-                blocking=plan.stage.blocking,
-                status=StageExecutionStatus.FAILED,
-                details=details,
-            )
-        )
+        self._require_stage_execution().record_failure(env_index, plan, details)
 
-    def _start_stage(
-        self,
-        env_index: int,
-        context: ExecutionContext,
-        plan: StageExecutionPlan,
-    ) -> ActiveStageState:
-        operator = context.backend.get_operator_handler(plan.operator_name)
-        target = context.backend.get_object_handler(plan.stage.object)
-        initial_object_pose: Optional[PoseState] = None
-        if target is not None:
-            initial_object_pose = target.get_pose().select(env_index)
-        held_object_name: Optional[str] = None
-        if plan.stage.operation == Operation.PLACE:
-            held_object_name = self._find_grasped_object(
-                context.backend, plan.operator_name, env_index
-            )
-        actions = TaskRunner._build_stage_actions(plan, self.builder, context)
-        return ActiveStageState(
-            plan=plan,
-            operator=operator,
-            target=target,
-            actions=actions,
-            initial_object_pose=initial_object_pose,
-            held_object_name=held_object_name,
-        )
-
-    @staticmethod
-    def _find_grasped_object(
-        backend: SceneBackend, operator_name: str, env_index: int
-    ) -> Optional[str]:
-        """Return the name of the object currently grasped by the operator."""
-        handlers = getattr(backend, "object_handlers", {})
-        for name in handlers:
-            if backend.is_object_grasped(operator_name, name)[env_index]:
-                return name
-        return None
-
-    @staticmethod
     def _apply_waypoint_randomization(
         actions: List[PrimitiveAction],
         context: ExecutionContext,
@@ -1828,83 +1535,6 @@ class TaskRunner:
                     )
 
     @staticmethod
-    def _check_stage_condition(
-        env_index: int,
-        context: ExecutionContext,
-        plan: StageExecutionPlan,
-        condition_type: OperationConditionType,
-        initial_pose: Optional[PoseState] = None,
-        completion_pose: Optional[PoseControlConfig] = None,
-        target_object_pose: Optional[PoseState] = None,
-        held_object_name: Optional[str] = None,
-    ) -> Optional[Dict[str, Any]]:
-        return _check_stage_condition(
-            env_index=env_index,
-            context=context,
-            plan=plan,
-            condition_type=condition_type,
-            initial_pose=initial_pose,
-            completion_pose=completion_pose,
-            target_object_pose=target_object_pose,
-            held_object_name=held_object_name,
-        )
-
-    @staticmethod
-    def _build_action_failure_details(
-        plan: StageExecutionPlan,
-        details: Dict[str, Any],
-        signal: ControlSignal,
-    ) -> Dict[str, Any]:
-        enriched = dict(details)
-        enriched.setdefault("failure_stage", "execution")
-        enriched.setdefault("operator", plan.operator_name)
-        enriched.setdefault("operation", plan.stage.operation.value)
-        enriched.setdefault("target_object", plan.stage.object)
-
-        if signal == ControlSignal.TIMED_OUT:
-            enriched.setdefault("failure_category", "controller_timeout")
-            enriched.setdefault(
-                "failure_reason", "primitive action did not finish before timeout"
-            )
-        elif signal == ControlSignal.FAILED:
-            enriched.setdefault("failure_category", "controller_failure")
-            enriched.setdefault("failure_reason", "primitive action reported failure")
-        else:
-            enriched.setdefault("failure_category", "execution_failure")
-            enriched.setdefault(
-                "failure_reason", "primitive action failed during execution"
-            )
-        return enriched
-
-    @staticmethod
-    def _completion_pose_from_active(
-        active: ActiveStageState,
-    ) -> Optional[PoseControlConfig]:
-        for action in reversed(active.actions):
-            if action.kind == "pose" and action.resolved_pose is not None:
-                return action.resolved_pose
-        return None
-
-    @staticmethod
-    def _pre_move_end_pose(active: ActiveStageState) -> Optional[PoseState]:
-        """Return the resolved pose of the last pre_move waypoint (before the
-        first eef action) as a single-batch PoseState."""
-        last_pose = None
-        for action in active.actions:
-            if action.kind == "eef":
-                break
-            if action.kind == "pose" and action.resolved_pose is not None:
-                last_pose = action.resolved_pose
-        if last_pose is None:
-            return None
-        return PoseState(
-            position=np.asarray(last_pose.position, dtype=np.float64).reshape(1, 3),
-            orientation=np.asarray(last_pose.orientation, dtype=np.float64).reshape(
-                1, 4
-            ),
-        )
-
-    @staticmethod
     def _build_stage_actions(
         plan: StageExecutionPlan,
         builder: "TaskFlowBuilder",
@@ -1912,7 +1542,7 @@ class TaskRunner:
     ) -> List[PrimitiveAction]:
         """Build the primitive-action list for a stage.
 
-        Single source of truth shared by ``TaskRunner._start_stage`` and
+        Single source of truth shared by ``StageExecution`` and
         ``ConfigDrivenDemoPolicy._get_stage_actions`` so the two execution
         paths cannot drift on what gets handed to the controller (deepcopy +
         per-waypoint randomization).
@@ -2176,33 +1806,6 @@ class TaskRunner:
         return pose_config_to_pose_state(pose)
 
     @staticmethod
-    def _action_phase(
-        actions: List[PrimitiveAction],
-        action_index: int,
-        *,
-        use_configured_identity: bool = False,
-    ) -> tuple[str, Optional[int]]:
-        action = actions[action_index]
-        if (
-            use_configured_identity
-            and isinstance(action.phase, TaskPhase)
-            and isinstance(action.waypoint, int)
-        ):
-            return action.phase.value, action.waypoint
-
-        # Compatibility fallback for PrimitiveAction instances constructed
-        # outside TaskFlowBuilder without configured keypoint metadata.
-        eef_idx: Optional[int] = None
-        for idx, action in enumerate(actions):
-            if action.kind == "eef":
-                eef_idx = idx
-                break
-        if eef_idx is not None and action_index == eef_idx:
-            return "eef", None
-        if eef_idx is None or action_index < eef_idx:
-            return "pre_move", action_index
-        return "post_move", action_index - (eef_idx + 1)
-
     def _set_interest_focus(self) -> None:
         context = self._require_context()
         object_names: List[str] = []
@@ -2380,11 +1983,6 @@ class TaskRunner:
             )
         return mask
 
-    def _mask_for_env(self, env_index: int) -> np.ndarray:
-        mask = np.zeros(self._require_context().backend.batch_size, dtype=bool)
-        mask[env_index] = True
-        return mask
-
     def _validate_update_mask(self, env_mask: np.ndarray) -> None:
         missing = np.flatnonzero(env_mask & ~self._has_reset)
         if missing.size == 0:
@@ -2400,255 +1998,10 @@ class TaskRunner:
             raise RuntimeError("TaskRunner is not initialized. Call from_yaml() first.")
         return self._context
 
-
-def _check_stage_condition(
-    env_index: int,
-    context: ExecutionContext,
-    plan: StageExecutionPlan,
-    condition_type: OperationConditionType,
-    initial_pose: Optional[PoseState] = None,
-    completion_pose: Optional[PoseControlConfig] = None,
-    target_object_pose: Optional[PoseState] = None,
-    held_object_name: Optional[str] = None,
-) -> Optional[Dict[str, Any]]:
-    constraints = OPERATION_CONDITIONS.get(plan.stage.operation)
-    if not constraints:
-        return None
-
-    constraint = constraints.get(condition_type)
-    if constraint is None or constraint == OperationConstraint.NONE:
-        return None
-
-    operator_name = plan.operator_name
-    object_name = plan.stage.object
-    backend = context.backend
-    is_grasping = bool(backend.is_operator_grasping(operator_name)[env_index])
-
-    if constraint == OperationConstraint.GRASPED:
-        satisfied = is_grasping
-    elif constraint == OperationConstraint.RELEASED:
-        satisfied = not is_grasping
-    elif constraint == OperationConstraint.CONTACTED:
-        satisfied = bool(
-            backend.is_operator_contacting(operator_name, object_name)[env_index]
-        )
-    elif constraint == OperationConstraint.DISPLACED:
-        threshold = getattr(plan.stage.param, "displacement_threshold", None)
-        kwargs = {"threshold": float(threshold)} if threshold is not None else {}
-        satisfied = (
-            bool(
-                backend.is_object_displaced(object_name, initial_pose, **kwargs)[
-                    env_index
-                ]
-            )
-            if initial_pose is not None and object_name
-            else True
-        )
-    elif constraint == OperationConstraint.REACHED:
-        operator = backend.get_operator_handler(operator_name)
-        # Resolve effective tolerance: per-waypoint override > operator default
-        wp_tol = (
-            getattr(completion_pose, "tolerance", None) if completion_pose else None
-        )
-        op_tol = getattr(getattr(operator, "control", None), "tolerance", None)
-        eff_pos_tol = (
-            wp_tol.position
-            if wp_tol is not None and wp_tol.position is not None
-            else getattr(op_tol, "position", 0.01)
-        )
-        eff_ori_tol = (
-            wp_tol.orientation
-            if wp_tol is not None and wp_tol.orientation is not None
-            else getattr(op_tol, "orientation", 0.08)
-        )
-        if completion_pose is None:
-            satisfied = False
-        else:
-            current_pose = operator.get_end_effector_pose().select(env_index)
-            pos_diff = np.asarray(
-                current_pose.position[0], dtype=np.float64
-            ) - np.asarray(completion_pose.position, dtype=np.float64)
-            orientation_error = float(
-                quaternion_angular_distance(
-                    current_pose.orientation[0],
-                    np.asarray(completion_pose.orientation, dtype=np.float64),
-                )
-            )
-            satisfied = position_within_tolerance(
-                pos_diff, eff_pos_tol
-            ) and orientation_error <= float(eff_ori_tol)
-    elif constraint == OperationConstraint.PLACED:
-        if is_grasping:
-            satisfied = False
-        elif target_object_pose is None or not held_object_name:
-            # No target info or no held object recorded — fall back to released
-            satisfied = True
-        else:
-            handler = backend.get_object_handler(held_object_name)
-            if handler is None:
-                satisfied = True
-            else:
-                current = handler.get_pose()
-                pos_diff = np.asarray(
-                    current.position[env_index], dtype=np.float64
-                ) - np.asarray(target_object_pose.position[0], dtype=np.float64)
-                # Resolve tolerance: stage > operator > default
-                control = plan.stage.param
-                stage_pt: Optional[PlacedToleranceConfig] = getattr(
-                    control, "placed_tolerance", None
-                )
-                op_tol = getattr(
-                    getattr(
-                        backend.get_operator_handler(operator_name), "control", None
-                    ),
-                    "tolerance",
-                    None,
-                )
-                op_placed: Optional[PlacedToleranceConfig] = getattr(
-                    op_tol, "placed", None
-                )
-
-                def _is_configured(val):
-                    """True when val is an explicit tolerance, not all-None."""
-                    if val is None:
-                        return False
-                    if isinstance(val, (list, np.ndarray)):
-                        return any(v is not None for v in val)
-                    return True
-
-                stage_pos = stage_pt.position if stage_pt is not None else None
-                stage_ori = stage_pt.orientation if stage_pt is not None else None
-                op_pos = op_placed.position if op_placed is not None else None
-                op_ori = op_placed.orientation if op_placed is not None else None
-                # Resolution chain: stage > operator > None (no constraint).
-                # All-None (or unset) means "don't check that dimension".
-                eff_pos = (
-                    stage_pos
-                    if _is_configured(stage_pos)
-                    else op_pos
-                    if _is_configured(op_pos)
-                    else None
-                )
-                eff_ori = (
-                    stage_ori
-                    if _is_configured(stage_ori)
-                    else op_ori
-                    if _is_configured(op_ori)
-                    else None
-                )
-                pos_ok = position_within_tolerance_nullable(pos_diff, eff_pos)
-                ori_ok = orientation_within_tolerance_nullable(
-                    current.orientation[env_index],
-                    target_object_pose.orientation[0],
-                    eff_ori,
-                )
-                satisfied = pos_ok and ori_ok
-    else:
-        satisfied = True
-
-    if satisfied:
-        return None
-
-    phase = (
-        "precondition"
-        if condition_type == OperationConditionType.PERFORM
-        else "postcondition"
-    )
-    failure_category, failure_reason = {
-        OperationConstraint.GRASPED: (
-            "missing_grasp",
-            "operator is not grasping the required object",
-        ),
-        OperationConstraint.RELEASED: (
-            "unexpected_grasp",
-            "operator is still grasping when it should be empty-handed",
-        ),
-        OperationConstraint.CONTACTED: (
-            "no_contact",
-            f"operator end-effector is not in contact with '{object_name}'",
-        ),
-        OperationConstraint.DISPLACED: (
-            "no_displacement",
-            f"object '{object_name}' has not been displaced beyond the threshold",
-        ),
-        OperationConstraint.REACHED: (
-            "target_not_reached",
-            "operator end-effector is not within tolerance of the target pose",
-        ),
-        OperationConstraint.PLACED: (
-            "placement_failed",
-            "held object is not within tolerance of the target position",
-        ),
-    }.get(constraint, ("condition_mismatch", "stage condition is not satisfied"))
-    details = {
-        "event": f"stage_{phase}_failed",
-        "failure_stage": phase,
-        "failure_category": failure_category,
-        "failure_reason": failure_reason,
-        "condition_type": condition_type.value,
-        "required_constraint": constraint.value,
-        "operator": operator_name,
-        "operation": plan.stage.operation.value,
-        "target_object": object_name,
-        "is_operator_grasping": is_grasping,
-        "env_index": env_index,
-    }
-    if constraint == OperationConstraint.REACHED:
-        details["completion_pose_available"] = completion_pose is not None
-        if completion_pose is not None:
-            operator = backend.get_operator_handler(operator_name)
-            current_pose = operator.get_end_effector_pose().select(env_index)
-            details["target_pose"] = completion_pose.model_dump(mode="json")
-            details["current_pose"] = {
-                "position": [float(v) for v in current_pose.position[0]],
-                "orientation": [float(v) for v in current_pose.orientation[0]],
-            }
-            details["position_error"] = float(
-                np.linalg.norm(
-                    np.asarray(current_pose.position[0], dtype=np.float64)
-                    - np.asarray(completion_pose.position, dtype=np.float64)
-                )
-            )
-            details["orientation_error"] = float(
-                quaternion_angular_distance(
-                    current_pose.orientation[0],
-                    np.asarray(completion_pose.orientation, dtype=np.float64),
-                )
-            )
-    elif constraint == OperationConstraint.PLACED:
-        details["held_object"] = held_object_name or ""
-        details["placed_reference"] = getattr(
-            plan.stage.param, "placed_reference", "object"
-        )
-        if held_object_name and target_object_pose is not None:
-            handler = backend.get_object_handler(held_object_name)
-            if handler is not None:
-                current = handler.get_pose()
-                details["target_position"] = [
-                    float(v) for v in target_object_pose.position[0]
-                ]
-                details["current_position"] = [
-                    float(v) for v in current.position[env_index]
-                ]
-                details["position_error"] = float(
-                    np.linalg.norm(
-                        np.asarray(current.position[env_index], dtype=np.float64)
-                        - np.asarray(target_object_pose.position[0], dtype=np.float64)
-                    )
-                )
-                details["target_orientation"] = [
-                    float(v) for v in target_object_pose.orientation[0]
-                ]
-                details["current_orientation"] = [
-                    float(v) for v in current.orientation[env_index]
-                ]
-                details["orientation_error"] = float(
-                    quaternion_angular_distance(
-                        current.orientation[env_index],
-                        target_object_pose.orientation[0],
-                    )
-                )
-    return details
+    def _require_stage_execution(self) -> "StageExecution":
+        if self._stage_execution is None:
+            raise RuntimeError("TaskRunner is not initialized. Call from_yaml() first.")
+        return self._stage_execution
 
 
 def _collect_reset_details(

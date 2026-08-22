@@ -439,7 +439,9 @@ AIRDC 当前按主循环 tick 调用 `runner.update(update_mask)`，采样器也
 
 ### Policy evaluation 与兼容性
 
-`ConfigDrivenDemoPolicy` 和 `PolicyEvaluator` 有独立的 action 应用与状态推进路径。
+`ConfigDrivenDemoPolicy` 和外部 policy 保留各自的 action 应用路径，但与
+`TaskRunner` 共享 Stage 状态推进。配置驱动的示范 policy 复用配置中的 waypoint
+randomization；外部模型 action 不经过该随机化。
 外部 policy 每个 control tick 都需要提供新 action，因此当前
 `PolicyEvaluator` / `aao-eval` 明确拒绝：
 
