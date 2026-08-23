@@ -6,6 +6,7 @@ an arbitrary external policy and the configuration-driven scripted policy.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any
 
 import numpy as np
@@ -13,8 +14,17 @@ import pytest
 
 from auto_atom.framework import TaskFileConfig
 from auto_atom.mock import MockObjectHandler
-from auto_atom.policy_eval import ConfigDrivenDemoPolicy, PolicyEvaluator
-from auto_atom.runtime import ComponentRegistry, PoseState, StageExecutionStatus
+from auto_atom.policy_eval import (
+    ConfigDrivenDemoPolicy,
+    PolicyActionFeedback,
+    PolicyEvaluator,
+)
+from auto_atom.runtime import (
+    ComponentRegistry,
+    ControlSignal,
+    PoseState,
+    StageExecutionStatus,
+)
 
 
 def _world_pose(x: float, *, randomization: dict[str, Any] | None = None) -> dict:
@@ -120,6 +130,148 @@ def test_external_policy_target_ignores_waypoint_randomization() -> None:
             .position[0]
         )
         np.testing.assert_allclose(operator_position, nominal_position)
+    finally:
+        evaluator.close()
+
+
+def test_external_policy_press_waits_for_contact() -> None:
+    config = _task_file(
+        "stage_execution_external_press",
+        [
+            {
+                "name": "press_button",
+                "object": "button",
+                "operation": "press",
+                "operator": "arm",
+                "param": {"pre_move": [_world_pose(0.2)]},
+            }
+        ],
+    )
+    evaluator = PolicyEvaluator(
+        action_applier=lambda *_args, **_kwargs: None
+    ).from_config(config)
+    backend = evaluator._context.backend
+    backend.is_operator_contacting = lambda _operator, _object: np.asarray(
+        [False], dtype=bool
+    )
+    try:
+        evaluator.reset()
+        pending = evaluator.update(None)
+
+        assert pending.done.tolist() == [False]
+        assert pending.success.tolist() == [False]
+        assert pending.status.tolist() == [StageExecutionStatus.RUNNING]
+        assert pending.details[0]["failure_category"] == "no_contact"
+        assert evaluator.records == []
+
+        backend.is_operator_contacting = lambda _operator, _object: np.asarray(
+            [True], dtype=bool
+        )
+        completed = evaluator.update(None)
+
+        assert completed.done.tolist() == [True]
+        assert completed.success.tolist() == [True]
+        assert completed.status.tolist() == [StageExecutionStatus.SUCCEEDED]
+    finally:
+        evaluator.close()
+
+
+def test_legacy_policy_feedback_still_gates_stage_completion() -> None:
+    target_position = np.asarray([0.31, 0.0, 0.3], dtype=np.float64)
+    config = _task_file(
+        "stage_execution_legacy_feedback",
+        [_move_stage("move_with_feedback", _world_pose(float(target_position[0])))],
+    )
+    apply_count = 0
+
+    def action_applier(context: Any, _action: Any, _env_mask: Any = None):
+        nonlocal apply_count
+        apply_count += 1
+        operator = context.backend.get_operator_handler("arm")
+        operator.end_effector_pose.position[:] = target_position.reshape(1, 3)
+        return SimpleNamespace(
+            signals=[ControlSignal.REACHED],
+            details=[{"event": "legacy_feedback"}],
+            stage_action_sequence_done=np.asarray([apply_count >= 2], dtype=bool),
+        )
+
+    evaluator = PolicyEvaluator(action_applier=action_applier).from_config(config)
+    try:
+        evaluator.reset()
+        pending = evaluator.update(None)
+
+        assert pending.done.tolist() == [False]
+        assert pending.status.tolist() == [StageExecutionStatus.RUNNING]
+        assert pending.details[0]["event"] == "legacy_feedback"
+
+        completed = evaluator.update(None)
+
+        assert completed.done.tolist() == [True]
+        assert completed.success.tolist() == [True]
+        assert completed.status.tolist() == [StageExecutionStatus.SUCCEEDED]
+    finally:
+        evaluator.close()
+
+
+def test_legacy_policy_feedback_press_completion_requires_contact() -> None:
+    config = _task_file(
+        "stage_execution_legacy_press_feedback",
+        [
+            {
+                "name": "press_button",
+                "object": "button",
+                "operation": "press",
+                "operator": "arm",
+                "param": {"pre_move": [_world_pose(0.2)]},
+            }
+        ],
+    )
+
+    def action_applier(_context: Any, _action: Any, _env_mask: Any = None):
+        return SimpleNamespace(
+            signals=[ControlSignal.REACHED],
+            details=[{"event": "legacy_sequence_done"}],
+            stage_action_sequence_done=[True],
+        )
+
+    evaluator = PolicyEvaluator(action_applier=action_applier).from_config(config)
+    evaluator._context.backend.is_operator_contacting = (
+        lambda _operator, _object: np.asarray([False], dtype=bool)
+    )
+    try:
+        evaluator.reset()
+        failed = evaluator.update(None)
+
+        assert failed.done.tolist() == [True]
+        assert failed.success.tolist() == [False]
+        assert failed.details[0]["failure_category"] == "no_contact"
+    finally:
+        evaluator.close()
+
+
+def test_legacy_policy_failure_feedback_includes_env_index() -> None:
+    config = _task_file(
+        "stage_execution_legacy_failure",
+        [_move_stage("failed_move", _world_pose(0.2))],
+    )
+
+    def action_applier(_context: Any, _action: Any, _env_mask: Any = None):
+        return PolicyActionFeedback(
+            signals=[ControlSignal.FAILED],
+            details=[{"event": "forced_failure"}],
+            stage_action_sequence_done=[False],
+        )
+
+    evaluator = PolicyEvaluator(action_applier=action_applier).from_config(config)
+    try:
+        evaluator.reset()
+        failed = evaluator.update(None)
+
+        assert failed.done.tolist() == [True]
+        assert failed.success.tolist() == [False]
+        assert failed.details[0]["env_index"] == 0
+        assert failed.details[0]["failure_category"] == "controller_failure"
+        assert evaluator.records[0].details["env_index"] == 0
     finally:
         evaluator.close()
 

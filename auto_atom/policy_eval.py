@@ -465,15 +465,27 @@ class PolicyEvaluator:
             raise RuntimeError("Stage execution received state from another evaluator.")
         feedback = None
         if action_feedback is not None:
+            stage_actions_by_env = getattr(action_feedback, "stage_actions", None)
             stage_actions = (
-                action_feedback.stage_actions[env_index]
-                if action_feedback.stage_actions
+                stage_actions_by_env[env_index]
+                if stage_actions_by_env is not None and len(stage_actions_by_env) > 0
+                else None
+            )
+            sequence_done_by_env = getattr(
+                action_feedback,
+                "stage_action_sequence_done",
+                None,
+            )
+            sequence_done = (
+                bool(sequence_done_by_env[env_index])
+                if sequence_done_by_env is not None and len(sequence_done_by_env) > 0
                 else None
             )
             feedback = PolicyStageFeedback(
                 signal=action_feedback.signals[env_index],
                 details=dict(action_feedback.details[env_index]),
                 stage_actions=stage_actions,
+                stage_action_sequence_done=sequence_done,
             )
         self._require_stage_execution().advance_policy(env_index, feedback)
         return

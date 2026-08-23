@@ -47,11 +47,12 @@ ResetDetailsFactory = Callable[[int], Dict[str, Any]]
 
 @dataclass
 class PolicyStageFeedback:
-    """One environment's configured-policy feedback for a Stage execution tick."""
+    """One environment's feedback for a policy-driven Stage execution tick."""
 
     signal: Optional[ControlSignal]
     details: Dict[str, Any] = field(default_factory=dict)
     stage_actions: Optional[List[PrimitiveAction]] = None
+    stage_action_sequence_done: Optional[bool] = None
 
 
 class StageExecution:
@@ -149,7 +150,7 @@ class StageExecution:
         feedback: Optional[PolicyStageFeedback],
     ) -> _EnvUpdateEvent:
         state = self.states[env_index]
-        if feedback is None or feedback.stage_actions is None:
+        if feedback is None:
             start_event = self._ensure_started(
                 env_index,
                 state,
@@ -158,6 +159,8 @@ class StageExecution:
             if start_event is not None:
                 return start_event
             return self._poll_external_policy(env_index, state)
+        if feedback.stage_actions is None:
+            return self._consume_external_feedback(env_index, state, feedback)
 
         start_event = self._ensure_started(
             env_index,
@@ -177,6 +180,49 @@ class StageExecution:
             mode="policy",
             use_configured_identity=False,
         )
+
+    def _consume_external_feedback(
+        self,
+        env_index: int,
+        state: _EnvRuntimeState,
+        feedback: PolicyStageFeedback,
+    ) -> _EnvUpdateEvent:
+        start_event = self._ensure_started(
+            env_index,
+            state,
+            resolve_completion_pose=True,
+        )
+        if start_event is not None:
+            return start_event
+        active = state.active
+        if active is None:
+            return _EnvUpdateEvent()
+
+        if feedback.signal in {ControlSignal.TIMED_OUT, ControlSignal.FAILED}:
+            failure = self._build_action_failure_details(
+                active.plan,
+                feedback.details,
+                feedback.signal,
+                env_index=env_index,
+            )
+            self.record_failure(env_index, active.plan, failure)
+            self._set_failed(state, failure)
+            return _EnvUpdateEvent(failed=True)
+
+        if not feedback.stage_action_sequence_done:
+            self._set_policy_running(state, env_index, feedback.details)
+            return _EnvUpdateEvent()
+
+        success_failure = self._final_stage_failure(env_index, active)
+        if success_failure is not None:
+            self.record_failure(env_index, active.plan, success_failure)
+            self._set_failed(state, success_failure)
+            return _EnvUpdateEvent(failed=True)
+
+        details = self._policy_success_details(env_index, active.plan)
+        self._record_success(env_index, active.plan, details)
+        self._set_succeeded(state, details)
+        return _EnvUpdateEvent(stage_succeeded=True)
 
     def _ensure_started(
         self,
@@ -280,7 +326,12 @@ class StageExecution:
             return _EnvUpdateEvent(control_tick=mode == "control")
 
         if signal in {ControlSignal.TIMED_OUT, ControlSignal.FAILED}:
-            failure = self._build_action_failure_details(active.plan, details, signal)
+            failure = self._build_action_failure_details(
+                active.plan,
+                details,
+                signal,
+                env_index=env_index,
+            )
             self.record_failure(env_index, active.plan, failure)
             self._set_failed(state, failure)
             return _EnvUpdateEvent(control_tick=mode == "control", failed=True)
@@ -317,7 +368,11 @@ class StageExecution:
                 completed_keypoint=completed_keypoint,
             )
 
-        success_failure = self._final_stage_failure(env_index, active)
+        success_failure = self._final_stage_failure(
+            env_index,
+            active,
+            press_checked_at_eef=any(action.kind == "eef" for action in active.actions),
+        )
         if success_failure is not None:
             self.record_failure(env_index, active.plan, success_failure)
             self._set_failed(state, success_failure)
@@ -407,8 +462,10 @@ class StageExecution:
         self,
         env_index: int,
         active: ActiveStageState,
+        *,
+        press_checked_at_eef: bool = False,
     ) -> Optional[Dict[str, Any]]:
-        if active.plan.stage.operation == Operation.PRESS:
+        if press_checked_at_eef and active.plan.stage.operation == Operation.PRESS:
             return None
         target_object_pose = self._target_object_pose(env_index, active)
         return check_stage_condition(
@@ -652,8 +709,12 @@ class StageExecution:
         plan: StageExecutionPlan,
         details: Dict[str, Any],
         signal: ControlSignal,
+        *,
+        env_index: Optional[int] = None,
     ) -> Dict[str, Any]:
         enriched = dict(details)
+        if env_index is not None:
+            enriched.setdefault("env_index", env_index)
         enriched.setdefault("failure_stage", "execution")
         enriched.setdefault("operator", plan.operator_name)
         enriched.setdefault("operation", plan.stage.operation.value)
