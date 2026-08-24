@@ -32,12 +32,12 @@ from auto_atom.runtime import ComponentRegistry, TaskRunner
 
 # Configs chosen to cover:
 #   - pick_and_place: no `site`, no waypoint randomization (baseline)
-#   - open_door_airbot_play: uses `site: handle_grasp_front_site` AND has
+#   - open_door_airbot_play_g2p: uses `site: handle_grasp_front_site` AND has
 #     per-waypoint `randomization` on the grasp pose — covers exactly the
 #     fields whose missing forwarding caused the original eval regression.
 PARITY_CASES = [
     ("pick_and_place", []),
-    ("open_door_airbot_play", []),
+    ("open_door_airbot_play_g2p", []),
 ]
 
 
