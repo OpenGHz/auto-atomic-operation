@@ -673,8 +673,7 @@ class StageExecution:
         if self.timeline is not None:
             # External policy adapters may provide a runtime action sequence
             # whose shape differs from the nominal timeline.  In that case
-            # the compiled lookup is intentionally best-effort; preserve the
-            # historical phase/waypoint fallback for custom actions.
+            # the compiled lookup is intentionally best-effort.
             try:
                 compiled = self.timeline.keypoint_for_action(
                     plan.stage_index,
@@ -686,18 +685,6 @@ class StageExecution:
                 compiled.phase == action.phase and compiled.waypoint == action.waypoint
             ):
                 return compiled
-        return self._completed_position(plan, action)
-
-    @staticmethod
-    def _completed_position(
-        plan: StageExecutionPlan,
-        action: PrimitiveAction,
-    ) -> Optional[_ResolvedTaskKeypoint]:
-        """Resolve metadata without requiring a compiled timeline.
-
-        Kept as a static compatibility seam for adapters that used this
-        private helper before ``ExecutionTimeline`` was introduced.
-        """
         if not isinstance(action.phase, TaskPhase) or not isinstance(
             action.waypoint, int
         ):

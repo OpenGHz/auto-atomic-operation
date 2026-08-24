@@ -167,9 +167,8 @@ to one keypoint (for example, arc sub-actions), they must be contiguous and
 only the final one may set `completes_keypoint=True`. Interval selection uses
 the same contract. `TaskRunner.from_config()` validates this before execution
 and fails fast with `ValueError`, because the runner otherwise cannot determine
-a stable YAML keypoint boundary. A legacy `TaskFlowBuilder.build()` override may
-still shape the plan list, but it must preserve the zero-based contiguous
-`stage_index` values used by both runner adapters.
+a stable YAML keypoint boundary. Override `build_actions()` to customize this
+compiled primitive sequence; Stage order and identity come from the task config.
 
 Macro boundaries do not teleport or bypass the state machine. They repeat the
 same control flow internally, up to

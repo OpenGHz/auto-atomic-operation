@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import numpy as np
-import pytest
 
 from auto_atom.execution_timeline import ExecutionTimeline
 from auto_atom.framework import TaskFileConfig
@@ -56,20 +55,6 @@ class _CountingBuilder(TaskFlowBuilder):
         return super().build_actions(stage, last_orientation)
 
 
-class _LegacyFilteringBuilder(_CountingBuilder):
-    """Exercise the pre-timeline ``build`` extension seam."""
-
-    def build(self, context):
-        return super().build(context)[:1]
-
-
-class _SparseLegacyBuilder(_CountingBuilder):
-    def build(self, context):
-        plans = super().build(context)
-        plans[0].stage_index = 10
-        return plans
-
-
 def test_task_runner_compiles_each_stage_once_and_reuses_templates() -> None:
     ComponentRegistry.clear()
     builder = _CountingBuilder()
@@ -89,31 +74,6 @@ def test_task_runner_compiles_each_stage_once_and_reuses_templates() -> None:
         runner.reset(np.asarray([True, False], dtype=bool))
 
         assert builder.calls == ["first", "second"]
-    finally:
-        runner.close()
-        ComponentRegistry.clear()
-
-
-def test_legacy_build_override_shapes_timeline_without_duplicate_action_builds() -> (
-    None
-):
-    ComponentRegistry.clear()
-    builder = _LegacyFilteringBuilder()
-    runner = TaskRunner(builder=builder).from_config(_config("timeline_legacy_build"))
-    try:
-        assert [plan.stage_name for plan in runner._plan] == ["first"]
-        assert builder.calls == ["first", "second"]
-    finally:
-        runner.close()
-        ComponentRegistry.clear()
-
-
-def test_legacy_build_override_must_preserve_stage_index_ordinals() -> None:
-    ComponentRegistry.clear()
-    runner = TaskRunner(builder=_SparseLegacyBuilder())
-    try:
-        with pytest.raises(ValueError, match="preserve contiguous stage indices"):
-            runner.from_config(_config("timeline_sparse_legacy_build"))
     finally:
         runner.close()
         ComponentRegistry.clear()

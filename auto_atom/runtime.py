@@ -42,7 +42,6 @@ from .framework import (
     TaskKeypointConfig,
     TaskPhase,
     UpdateBoundary,
-    _phase_waypoint_count,
 )
 from .utils.pose import (
     PoseState,
@@ -336,7 +335,6 @@ class StageExecutionPlan:
     stage_index: int
     stage: StageConfig
     operator_name: str
-    last_orientation_before: Optional[Orientation] = None
 
     @property
     def stage_name(self) -> str:
@@ -469,62 +467,11 @@ class TaskFlowBuilder:
 
         from .execution_timeline import ExecutionTimeline
 
-        # ``build`` was the extension hook before the timeline existed.  Let
-        # an overridden implementation still shape the stage plans, while
-        # the default path compiles directly so each stage's actions are
-        # materialized only once.
-        legacy_plans = None
-        legacy_action_cache = None
-        if type(self).build is not TaskFlowBuilder.build:
-            legacy_action_cache = {}
-            had_legacy_cache = hasattr(self, "_legacy_compile_action_cache")
-            previous_legacy_cache = getattr(
-                self,
-                "_legacy_compile_action_cache",
-                None,
-            )
-            self._legacy_compile_action_cache = legacy_action_cache
-            try:
-                legacy_plans = self.build(context)
-            finally:
-                if had_legacy_cache:
-                    self._legacy_compile_action_cache = previous_legacy_cache
-                else:
-                    del self._legacy_compile_action_cache
         return ExecutionTimeline.compile(
             self,
             context,
-            action_cache=legacy_action_cache,
-            plans=legacy_plans,
             validate_boundaries=validate_boundaries,
         )
-
-    def build(self, context: ExecutionContext) -> List[StageExecutionPlan]:
-        """Build stage plans (legacy public API retained for extensions)."""
-
-        plans: List[StageExecutionPlan] = []
-        last_orientation: Optional[Orientation] = None
-        action_cache = getattr(self, "_legacy_compile_action_cache", None)
-        for index, stage in enumerate(context.config.stages):
-            operator_name = self._select_operator(stage, context.backend)
-            orientation_before = last_orientation
-            actions, last_orientation = self.build_actions(stage, last_orientation)
-            if action_cache is not None:
-                action_cache[index] = (
-                    stage,
-                    orientation_before,
-                    actions,
-                    last_orientation,
-                )
-            plans.append(
-                StageExecutionPlan(
-                    stage_index=index,
-                    stage=stage,
-                    operator_name=operator_name,
-                    last_orientation_before=orientation_before,
-                )
-            )
-        return plans
 
     @staticmethod
     def _select_operator(stage: StageConfig, backend: SceneBackend) -> str:
@@ -757,7 +704,6 @@ class TaskRunner:
         self._context: Optional[ExecutionContext] = None
         self._plan: List[StageExecutionPlan] = []
         self._records: List[ExecutionRecord] = []
-        self._interval_keypoints: List[_ResolvedTaskKeypoint] = []
         self._env_states: List[_EnvRuntimeState] = []
         self._has_reset: np.ndarray = np.zeros(0, dtype=bool)
         self._public_internal_updates: np.ndarray = np.zeros(0, dtype=np.int64)
@@ -825,7 +771,6 @@ class TaskRunner:
             validate_boundaries=True,
         )
         self._plan = list(self._timeline.stage_plans)
-        self._interval_keypoints = list(self._timeline.interval_keypoints)
         self._context.plan = self._plan
         self._context.backend.setup(self._context.config)
         self._stage_execution = StageExecution(
@@ -858,30 +803,6 @@ class TaskRunner:
         actions = timeline.clone_stage_actions(plan.stage_index)
         TaskRunner._apply_waypoint_randomization(actions, self._require_context())
         return actions
-
-    def _validate_keypoint_boundary_actions(self) -> None:
-        """Compatibility hook; validation is performed during compilation."""
-
-        self._require_timeline()
-
-    def _validate_interval_actions(
-        self,
-        selection: IntervalSelectionConfig,
-    ) -> List[_ResolvedTaskKeypoint]:
-        """Compatibility hook returning compiled keypoint identities."""
-
-        timeline = self._require_timeline()
-        start_order = timeline.boundary_order_index(selection.start)
-        stop_order = timeline.boundary_order_index(selection.stop)
-        if start_order > stop_order:
-            raise ValueError(
-                "execution.interval_selection.start must not come after "
-                "execution.interval_selection.stop in the active TaskFlowBuilder"
-            )
-        return list(timeline.interval_keypoints)
-
-    def _interval_keypoint_index(self, configured: TaskKeypointConfig) -> int:
-        return self._require_timeline().interval_keypoint_index(configured)
 
     def _interval_boundary_state_index(
         self,
@@ -1066,21 +987,6 @@ class TaskRunner:
                 pending[env_index] = False
         # self._set_interest_focus()
         return self._build_task_update()
-
-    @staticmethod
-    def _reached_update_boundary(
-        boundary: UpdateBoundary,
-        event: _EnvUpdateEvent,
-    ) -> Optional[str]:
-        if boundary == UpdateBoundary.CONTROL_TICK and event.control_tick:
-            return "control_tick"
-        if boundary == UpdateBoundary.PRIMITIVE and event.primitive_reached:
-            return "primitive_reached"
-        if boundary == UpdateBoundary.KEYPOINT and event.keypoint_reached:
-            return "keypoint_reached"
-        if boundary == UpdateBoundary.STAGE and event.stage_succeeded:
-            return "stage_succeeded"
-        return None
 
     def _execution_details(
         self,
@@ -1337,7 +1243,6 @@ class TaskRunner:
         self._context = None
         self._plan = []
         self._records = []
-        self._interval_keypoints = []
         self._env_states = []
         self._has_reset = np.zeros(0, dtype=bool)
         self._public_internal_updates = np.zeros(0, dtype=np.int64)
@@ -1470,24 +1375,6 @@ class TaskRunner:
                     action.pose = action.pose.model_copy(
                         update={"orientation": tuple(float(v) for v in new_ori)}
                     )
-
-    @staticmethod
-    def _build_stage_actions(
-        plan: StageExecutionPlan,
-        builder: "TaskFlowBuilder",
-        context: ExecutionContext,
-    ) -> List[PrimitiveAction]:
-        """Legacy helper for callers that still materialize actions directly.
-
-        Normal execution uses the compiled :class:`ExecutionTimeline`; this
-        compatibility path intentionally retains the previous builder-based
-        behavior for integrations that call the private helper explicitly.
-        """
-        actions = deepcopy(
-            builder.build_actions(plan.stage, plan.last_orientation_before)[0]
-        )
-        TaskRunner._apply_waypoint_randomization(actions, context)
-        return actions
 
     @staticmethod
     def _run_stage_action(

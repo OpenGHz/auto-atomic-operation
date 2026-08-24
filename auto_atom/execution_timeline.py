@@ -11,14 +11,11 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Mapping, Optional, Sequence
+from typing import TYPE_CHECKING, Mapping, Optional
 
 from .framework import (
-    ExecutionConfig,
     IntervalSelectionConfig,
     KeypointSide,
-    Orientation,
-    StageConfig,
     TaskKeypointConfig,
     TaskPhase,
     UpdateBoundary,
@@ -55,7 +52,6 @@ class ExecutionTimeline:
     stage_plans: tuple[StageExecutionPlan, ...]
     keypoints: tuple[CompiledKeypoint, ...]
     _stage_action_templates: tuple[tuple[PrimitiveAction, ...], ...] = field(repr=False)
-    interval_keypoints: tuple[_ResolvedTaskKeypoint, ...] = ()
     interval_selection: Optional[IntervalSelectionConfig] = None
     update_boundary: UpdateBoundary = UpdateBoundary.CONTROL_TICK
     max_internal_updates_per_update: int = 10_000
@@ -66,11 +62,6 @@ class ExecutionTimeline:
     )
     _stage_ranges: tuple[tuple[int, int], ...] = field(
         default=(),
-        repr=False,
-        compare=False,
-    )
-    _stage_ordinals: Mapping[int, int] = field(
-        default_factory=dict,
         repr=False,
         compare=False,
     )
@@ -89,29 +80,15 @@ class ExecutionTimeline:
         builder: "TaskFlowBuilder",
         context: "ExecutionContext",
         *,
-        execution: Optional[ExecutionConfig] = None,
-        action_cache: Optional[
-            Mapping[
-                int,
-                tuple[
-                    StageConfig,
-                    Optional[Orientation],
-                    list[PrimitiveAction],
-                    Optional[Orientation],
-                ],
-            ]
-        ] = None,
-        plans: Optional[Sequence[StageExecutionPlan]] = None,
         validate_boundaries: bool = True,
     ) -> "ExecutionTimeline":
         """Compile plans, nominal actions, and boundary metadata once."""
 
-        execution = execution or context.task_file.execution
+        execution = context.task_file.execution
         compiled_plans: list[StageExecutionPlan] = []
         templates: list[tuple[PrimitiveAction, ...]] = []
         compiled_keypoints: list[CompiledKeypoint] = []
         stage_ranges: list[tuple[int, int]] = []
-        stage_ordinals: dict[int, int] = {}
         last_orientation = None
         primitive_offset = 0
         strict = bool(
@@ -122,66 +99,17 @@ class ExecutionTimeline:
             )
         )
 
-        source: Sequence[Optional[StageExecutionPlan]] = (
-            tuple(plans)
-            if plans is not None
-            else tuple(None for _ in context.config.stages)
-        )
-        if plans is not None:
-            if any(plan is None for plan in source):
-                raise TypeError(
-                    "TaskFlowBuilder.build() must return StageExecutionPlan instances"
-                )
-            stage_indices = [plan.stage_index for plan in source if plan is not None]
-            if stage_indices != list(range(len(stage_indices))):
-                raise ValueError(
-                    "TaskFlowBuilder.build() must preserve contiguous stage indices "
-                    "when used with the compiled execution timeline"
-                )
-        last_orientation = None
-        for ordinal, supplied_plan in enumerate(source):
-            stage_index = (
-                ordinal if supplied_plan is None else supplied_plan.stage_index
+        for stage_index, stage in enumerate(context.config.stages):
+            operator_name = builder._select_operator(stage, context.backend)
+            actions, last_orientation = builder.build_actions(
+                stage,
+                last_orientation,
             )
-            if stage_index in stage_ordinals:
-                raise ValueError(
-                    "TaskFlowBuilder.build() returned duplicate stage indices; "
-                    "compiled timeline requires unique stage identities"
-                )
-            stage_ordinals[stage_index] = ordinal
-            if supplied_plan is None:
-                stage = context.config.stages[ordinal]
-                operator_name = builder._select_operator(stage, context.backend)
-                orientation_before = last_orientation
-                actions, last_orientation = builder.build_actions(
-                    stage,
-                    last_orientation,
-                )
-                plan = StageExecutionPlan(
-                    stage_index=stage_index,
-                    stage=stage,
-                    operator_name=operator_name,
-                    last_orientation_before=orientation_before,
-                )
-            else:
-                plan = supplied_plan
-                stage = plan.stage
-                orientation_before = plan.last_orientation_before
-                cached = (
-                    action_cache.get(plan.stage_index)
-                    if action_cache is not None
-                    else None
-                )
-                if cached is not None and (
-                    cached[0] is stage and cached[1] == orientation_before
-                ):
-                    actions = cached[2]
-                    last_orientation = cached[3]
-                else:
-                    actions, last_orientation = builder.build_actions(
-                        stage,
-                        orientation_before,
-                    )
+            plan = StageExecutionPlan(
+                stage_index=stage_index,
+                stage=stage,
+                operator_name=operator_name,
+            )
             compiled_plans.append(plan)
 
             # Deep-copy the complete list so relative arc primitives retain
@@ -222,7 +150,6 @@ class ExecutionTimeline:
             stage_plans=tuple(compiled_plans),
             keypoints=resolved_keypoints,
             _stage_action_templates=tuple(templates),
-            interval_keypoints=identities,
             interval_selection=selection,
             update_boundary=execution.update_boundary,
             max_internal_updates_per_update=int(
@@ -232,34 +159,29 @@ class ExecutionTimeline:
                 {identity: index for index, identity in enumerate(identities)}
             ),
             _stage_ranges=tuple(stage_ranges),
-            _stage_ordinals=MappingProxyType(stage_ordinals),
             _primitive_keypoints=tuple(primitive_keypoints),
             _configured_keypoint_indices=MappingProxyType(
                 {key: tuple(value) for key, value in configured_indices.items()}
             ),
         )
 
-    @property
-    def plans(self) -> tuple[StageExecutionPlan, ...]:
-        """Compatibility alias for callers that use ``timeline.plans``."""
-
-        return self.stage_plans
-
     def clone_stage_actions(self, stage_index: int) -> list[PrimitiveAction]:
         """Return an isolated, complete runtime copy for one stage."""
 
         try:
-            ordinal = self._stage_ordinals[stage_index]
-            template = self._stage_action_templates[ordinal]
-        except (KeyError, IndexError) as exc:
+            if stage_index < 0:
+                raise IndexError
+            template = self._stage_action_templates[stage_index]
+        except IndexError as exc:
             raise IndexError(f"Unknown stage index {stage_index}.") from exc
         return deepcopy(template)
 
     def stage_action_range(self, stage_index: int) -> range:
         try:
-            ordinal = self._stage_ordinals[stage_index]
-            start, stop = self._stage_ranges[ordinal]
-        except (KeyError, IndexError) as exc:
+            if stage_index < 0:
+                raise IndexError
+            start, stop = self._stage_ranges[stage_index]
+        except IndexError as exc:
             raise IndexError(f"Unknown stage index {stage_index}.") from exc
         return range(start, stop)
 
@@ -277,12 +199,13 @@ class ExecutionTimeline:
         action_index: int,
     ) -> Optional[_ResolvedTaskKeypoint]:
         try:
-            ordinal = self._stage_ordinals[stage_index]
-            start, stop = self._stage_ranges[ordinal]
+            if stage_index < 0:
+                raise IndexError
+            start, stop = self._stage_ranges[stage_index]
             flattened_index = start + action_index
             if action_index < 0 or action_index >= stop - start:
                 raise IndexError
-        except (KeyError, IndexError) as exc:
+        except IndexError as exc:
             raise IndexError(
                 f"Unknown action {action_index} for stage {stage_index}."
             ) from exc
@@ -317,7 +240,7 @@ class ExecutionTimeline:
         self,
         configured: TaskKeypointConfig,
     ) -> _ResolvedTaskKeypoint:
-        return self.interval_keypoints[self.interval_keypoint_index(configured)]
+        return self.keypoints[self.interval_keypoint_index(configured)].identity
 
     def completed_interval_state_index(
         self,
