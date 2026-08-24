@@ -53,7 +53,7 @@ def test_apply_first_frame_reset_uses_kinematic_joint_application():
         batch_size = 1
 
         def __init__(self) -> None:
-            self.calls: list[tuple[str, np.ndarray, bool]] = []
+            self.calls: list[tuple[str, np.ndarray, object, bool]] = []
 
         def apply_joint_action(
             self,
@@ -63,12 +63,20 @@ def test_apply_first_frame_reset_uses_kinematic_joint_application():
             kinematic: bool = False,
         ) -> None:
             self.calls.append(
-                (operator, np.asarray(action, dtype=np.float64), kinematic)
+                (
+                    operator,
+                    np.asarray(action, dtype=np.float64),
+                    env_mask,
+                    kinematic,
+                )
             )
 
     class DummyBackend:
         def __init__(self, env) -> None:
             self.env = env
+
+        def get_env(self):
+            return self.env
 
     class DummyContext:
         def __init__(self, env) -> None:
@@ -81,17 +89,26 @@ def test_apply_first_frame_reset_uses_kinematic_joint_application():
             self._context = DummyContext(env)
             self.sim_lock = threading.Lock()
 
+        def get_env(self):
+            return self._context.backend.get_env()
+
     demo = {"joint": np.asarray([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32)}
     policy = replay_demo.ReplayPolicy(demo, mode="joint")
     evaluator = DummyEvaluator(DummyEnv())
+    env_mask = np.asarray([True], dtype=bool)
 
-    reset_action = replay_demo.apply_first_frame_reset(evaluator, policy)
+    reset_action = replay_demo.apply_first_frame_reset(
+        evaluator,
+        policy,
+        env_mask=env_mask,
+    )
 
     assert reset_action is not None
-    assert len(evaluator._context.backend.env.calls) == 1
-    operator, action, kinematic = evaluator._context.backend.env.calls[0]
+    assert len(evaluator._context.backend.get_env().calls) == 1
+    operator, action, applied_mask, kinematic = evaluator.get_env().calls[0]
     assert operator == "arm"
     np.testing.assert_allclose(action, [1.0, 2.0])
+    np.testing.assert_array_equal(applied_mask, env_mask)
     assert kinematic is True
 
 
@@ -100,6 +117,7 @@ def test_observation_getter_keeps_frames_for_each_batch_env():
 
     class DummyEnv:
         def __init__(self) -> None:
+            self.batch_size = 2
             self.calls = 0
 
         def capture_observation(self) -> dict:
@@ -116,6 +134,10 @@ def test_observation_getter_keeps_frames_for_each_batch_env():
     class DummyBackend:
         def __init__(self, env) -> None:
             self.env = env
+            self.batch_size = env.batch_size
+
+        def get_env(self):
+            return self.env
 
     class DummyContext:
         def __init__(self, env) -> None:

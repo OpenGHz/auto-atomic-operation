@@ -10,14 +10,31 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Any, Dict, List, Literal, Optional
+from typing import (
+    Any,
+    Dict,
+    List,
+    Literal,
+    Optional,
+    Protocol,
+    Sequence,
+    runtime_checkable,
+)
 
 import numpy as np
 from pydantic import BaseModel, ConfigDict, Field, NonNegativeFloat, model_validator
 
 from auto_atom.framework import TaskFileConfig
 from auto_atom.policy_eval import PolicyEvaluator
-from auto_atom.runtime import ExecutionContext, TaskUpdate
+from auto_atom.runtime import (
+    EnvProtocol,
+    ExecutionContext,
+    JointActionEnvProtocol,
+    KinematicPoseActionEnvProtocol,
+    StepEnvProtocol,
+    TaskUpdate,
+    require_env_capability,
+)
 
 from .base import RunnerBase
 from .replay_recording import (
@@ -41,6 +58,121 @@ from .replay_recording import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+@runtime_checkable
+class ReplaySceneJointEnvProtocol(EnvProtocol, Protocol):
+    """Environment capability for restoring passive scene joints."""
+
+    def set_scene_joint_positions(
+        self,
+        joint_names: Sequence[str],
+        positions: Any,
+        /,
+        *,
+        env_mask: Optional[np.ndarray] = None,
+    ) -> None: ...
+
+
+@runtime_checkable
+class ReplayClockEnvProtocol(EnvProtocol, Protocol):
+    """Environment capability for aligning observations to recording time."""
+
+    def set_simulation_time(
+        self,
+        time_sec: float,
+        /,
+        *,
+        env_mask: Optional[np.ndarray] = None,
+    ) -> None: ...
+
+
+@runtime_checkable
+class ReplayBasePoseActionEnvProtocol(EnvProtocol, Protocol):
+    """Environment capability for replaying operator-base pose commands."""
+
+    def set_operator_base_pose(
+        self,
+        op_name: str,
+        pos_w: np.ndarray,
+        quat_w: np.ndarray,
+        /,
+        *,
+        env_mask: Optional[np.ndarray] = None,
+    ) -> None: ...
+
+
+@runtime_checkable
+class ReplayOperatorBasePoseQueryEnvProtocol(EnvProtocol, Protocol):
+    """Environment capability for querying an operator base pose."""
+
+    def get_operator_base_pose(
+        self,
+        op_name: str,
+        /,
+    ) -> tuple[np.ndarray, np.ndarray]: ...
+
+
+@runtime_checkable
+class ReplayOperatorBasePoseMutationEnvProtocol(EnvProtocol, Protocol):
+    """Environment capability for relocating an operator base pose."""
+
+    def override_operator_base_pose(
+        self,
+        op_name: str,
+        pos_w: np.ndarray,
+        quat_w: np.ndarray,
+        /,
+        *,
+        env_mask: Optional[np.ndarray] = None,
+    ) -> None: ...
+
+
+@runtime_checkable
+class ReplaySitePoseEnvProtocol(EnvProtocol, Protocol):
+    """Environment capability for querying a named simulation site."""
+
+    def get_site_pose(
+        self,
+        site_name: str,
+        /,
+    ) -> tuple[np.ndarray, np.ndarray]: ...
+
+
+@runtime_checkable
+class ReplayBodyPoseEnvProtocol(EnvProtocol, Protocol):
+    """Environment capability for querying a named simulation body."""
+
+    def get_body_pose(
+        self,
+        body_name: str,
+        /,
+    ) -> tuple[np.ndarray, np.ndarray]: ...
+
+
+@runtime_checkable
+class ReplayOperatorActuatorEnvProtocol(EnvProtocol, Protocol):
+    """Environment capability for exposing replay actuator ordering."""
+
+    def get_operator_actuator_names(
+        self,
+        op_name: str,
+        /,
+    ) -> tuple[Sequence[str], Sequence[str]]: ...
+
+
+def _require_replay_env_capability(
+    env: Any,
+    protocol: type,
+    *,
+    feature: str,
+) -> Any:
+    return require_env_capability(
+        env,
+        protocol,
+        feature=f"Data replay feature '{feature}'",
+    )
+
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -227,9 +359,10 @@ class DataReplayConfig(BaseModel):
     scene_joint_topic: str | None = Field(default=None)
     """Optional ROS2 ``sensor_msgs/JointState`` topic for scene joints.
 
-    The topic is aligned to arm joint timestamps and replayed by joint name
-    directly into MuJoCo ``qpos``. This is intended for passive articulated
-    scene elements such as doors and handles that are not operator actuators.
+    The topic is aligned to arm joint timestamps and replayed through the
+    environment's named scene-joint capability. This is intended for passive
+    articulated scene elements such as doors and handles that are not operator
+    actuators.
     """
     joint_name_mapping: Dict[str, str] = {"gripper": "eef_claw_joint"}
     joint_axis_scale: List[float] = Field(default_factory=list)
@@ -1322,12 +1455,12 @@ def _apply_base_pose_action(
             "Base pose replay action must provide both base_position and "
             f"base_orientation; missing '{missing_key}'."
         )
-    if not hasattr(env, "set_operator_base_pose"):
-        raise AttributeError(
-            "Replay action contains base_position/base_orientation, but the "
-            "backend env does not expose set_operator_base_pose()."
-        )
-    env.set_operator_base_pose(
+    capable_env = _require_replay_env_capability(
+        env,
+        ReplayBasePoseActionEnvProtocol,
+        feature="operator base pose actions",
+    )
+    capable_env.set_operator_base_pose(
         "arm",
         action["base_position"],
         action["base_orientation"],
@@ -1356,8 +1489,6 @@ def _apply_scene_joint_action(
             f"and scene_joint_names; missing '{missing_key}'."
         )
 
-    import mujoco
-
     names = [str(name) for name in action["scene_joint_names"]]
     positions = np.asarray(action["scene_joint_positions"], dtype=np.float64)
     if positions.ndim == 1:
@@ -1367,68 +1498,142 @@ def _apply_scene_joint_action(
             "scene_joint_positions width does not match scene_joint_names: "
             f"{positions.shape[-1]} vs {len(names)}"
         )
-
-    envs = getattr(env, "envs", None)
-    if envs is None:
-        raise AttributeError(
-            "Replay action contains scene_joint_positions, but the backend env "
-            "does not expose batched envs."
-        )
-    batch_size = getattr(env, "batch_size", len(envs))
-    mask = (
-        np.ones(batch_size, dtype=bool)
-        if env_mask is None
-        else np.asarray(env_mask, dtype=bool).reshape(-1)
+    capable_env = _require_replay_env_capability(
+        env,
+        ReplaySceneJointEnvProtocol,
+        feature="scene joint actions",
     )
-    if positions.shape[0] not in (1, batch_size):
-        raise ValueError(
-            "scene_joint_positions must have leading dimension 1 or batch_size; "
-            f"got {positions.shape[0]} with batch_size={batch_size}."
-        )
-
-    for env_index, single_env in enumerate(envs):
-        if env_index >= mask.shape[0] or not mask[env_index]:
-            continue
-        row = positions[0] if positions.shape[0] == 1 else positions[env_index]
-        for joint_name, joint_value in zip(names, row):
-            jid = mujoco.mj_name2id(
-                single_env.model, mujoco.mjtObj.mjOBJ_JOINT, joint_name
-            )
-            if jid < 0:
-                raise ValueError(
-                    f"Scene replay joint '{joint_name}' not found in model."
-                )
-            qadr = int(single_env.model.jnt_qposadr[jid])
-            dadr = int(single_env.model.jnt_dofadr[jid])
-            single_env.data.qpos[qadr] = float(joint_value)
-            single_env.data.qvel[dadr] = 0.0
-        mujoco.mj_forward(single_env.model, single_env.data)
+    capable_env.set_scene_joint_positions(names, positions, env_mask=env_mask)
     return True
 
 
-def _apply_reset_action(context: ExecutionContext, action: Any) -> None:
+def _set_replay_simulation_time(
+    env: Any,
+    time_sec: float,
+    env_mask: Optional[np.ndarray] = None,
+) -> None:
+    capable_env = _require_replay_env_capability(
+        env,
+        ReplayClockEnvProtocol,
+        feature="recording timestamps",
+    )
+    capable_env.set_simulation_time(time_sec, env_mask=env_mask)
+
+
+def _validate_replay_environment_capabilities(
+    env: Any,
+    replay_cfg: DataReplayConfig,
+    trajectory: ReplayTrajectory,
+) -> None:
+    """Reject unsupported replay features before reset or action execution."""
+    if trajectory.timestamps_ns is not None:
+        _require_replay_env_capability(
+            env,
+            ReplayClockEnvProtocol,
+            feature="recording timestamps",
+        )
+    if "base_position" in trajectory.arrays:
+        _require_replay_env_capability(
+            env,
+            ReplayBasePoseActionEnvProtocol,
+            feature="operator base pose actions",
+        )
+    if "scene_joint" in trajectory.arrays:
+        _require_replay_env_capability(
+            env,
+            ReplaySceneJointEnvProtocol,
+            feature="scene joint actions",
+        )
+    if replay_cfg.mcap_path is not None:
+        for transform_reset in replay_cfg.transform_resets:
+            for entity in (transform_reset.parent, transform_reset.child):
+                if entity.kind == "site":
+                    _require_replay_env_capability(
+                        env,
+                        ReplaySitePoseEnvProtocol,
+                        feature="site transform resets",
+                    )
+                elif entity.kind == "body":
+                    _require_replay_env_capability(
+                        env,
+                        ReplayBodyPoseEnvProtocol,
+                        feature="body transform resets",
+                    )
+                elif entity.kind == "operator_base":
+                    _require_replay_env_capability(
+                        env,
+                        ReplayOperatorBasePoseQueryEnvProtocol,
+                        feature="operator base pose queries",
+                    )
+            move_entity = (
+                transform_reset.parent
+                if transform_reset.move == "parent"
+                else transform_reset.child
+            )
+            if move_entity.kind == "operator_base":
+                _require_replay_env_capability(
+                    env,
+                    ReplayOperatorBasePoseMutationEnvProtocol,
+                    feature="operator base transform mutations",
+                )
+    action_capability = {
+        "joint": JointActionEnvProtocol,
+        "ctrl": StepEnvProtocol,
+        "pose": KinematicPoseActionEnvProtocol,
+    }[trajectory.mode]
+    _require_replay_env_capability(
+        env,
+        action_capability,
+        feature=f"{trajectory.mode} actions",
+    )
+
+
+def _apply_reset_action(
+    env: Any,
+    action: Any,
+    env_mask: Optional[np.ndarray] = None,
+) -> None:
     """Apply a recorded action as an exact reset state when possible."""
     if action is None:
         return
-    env = context.backend.env
-    _apply_base_pose_action(env, action)
-    _apply_scene_joint_action(env, action)
+    _apply_base_pose_action(env, action, env_mask=env_mask)
+    _apply_scene_joint_action(env, action, env_mask=env_mask)
     if "joint" in action:
-        env.apply_joint_action("arm", action["joint"], kinematic=True)
+        capable_env = _require_replay_env_capability(
+            env,
+            JointActionEnvProtocol,
+            feature="joint actions",
+        )
+        capable_env.apply_joint_action(
+            "arm",
+            action["joint"],
+            env_mask=env_mask,
+            kinematic=True,
+        )
     elif "ctrl" in action:
+        capable_env = _require_replay_env_capability(
+            env,
+            StepEnvProtocol,
+            feature="ctrl actions",
+        )
         ctrl = np.asarray(action["ctrl"], dtype=np.float64)
         if ctrl.ndim == 1:
-            ctrl = ctrl.reshape(1, -1).repeat(env.batch_size, axis=0)
-        env.step(ctrl)
+            ctrl = ctrl.reshape(1, -1).repeat(capable_env.batch_size, axis=0)
+        capable_env.step(ctrl, env_mask=env_mask)
     elif "position" in action and "orientation" in action:
-        env.apply_pose_action(
+        capable_env = _require_replay_env_capability(
+            env,
+            KinematicPoseActionEnvProtocol,
+            feature="pose actions",
+        )
+        capable_env.apply_pose_action(
             "arm",
             action["position"],
             action["orientation"],
             action.get("gripper"),
+            env_mask=env_mask,
             kinematic=True,
         )
-    _apply_scene_joint_action(env, action)
 
 
 def _make_replay_action_applier(kinematic: bool = False):
@@ -1441,20 +1646,35 @@ def _make_replay_action_applier(kinematic: bool = False):
     ) -> None:
         if action is None:
             return
-        env = context.backend.env
+        env = context.backend.get_env()
         _apply_base_pose_action(env, action, env_mask=env_mask)
         _apply_scene_joint_action(env, action, env_mask=env_mask)
         if "joint" in action:
-            env.apply_joint_action(
+            capable_env = _require_replay_env_capability(
+                env,
+                JointActionEnvProtocol,
+                feature="joint actions",
+            )
+            capable_env.apply_joint_action(
                 "arm", action["joint"], env_mask=env_mask, kinematic=kinematic
             )
         elif "ctrl" in action:
+            capable_env = _require_replay_env_capability(
+                env,
+                StepEnvProtocol,
+                feature="ctrl actions",
+            )
             ctrl = np.asarray(action["ctrl"], dtype=np.float64)
             if ctrl.ndim == 1:
-                ctrl = ctrl.reshape(1, -1).repeat(env.batch_size, axis=0)
-            env.step(ctrl, env_mask=env_mask)
+                ctrl = ctrl.reshape(1, -1).repeat(capable_env.batch_size, axis=0)
+            capable_env.step(ctrl, env_mask=env_mask)
         elif "position" in action and "orientation" in action:
-            env.apply_pose_action(
+            capable_env = _require_replay_env_capability(
+                env,
+                KinematicPoseActionEnvProtocol,
+                feature="pose actions",
+            )
+            capable_env.apply_pose_action(
                 "arm",
                 action["position"],
                 action["orientation"],
@@ -1462,7 +1682,6 @@ def _make_replay_action_applier(kinematic: bool = False):
                 env_mask=env_mask,
                 kinematic=kinematic,
             )
-        _apply_scene_joint_action(env, action, env_mask=env_mask)
 
     return replay_action_applier
 
@@ -1470,11 +1689,26 @@ def _make_replay_action_applier(kinematic: bool = False):
 def _query_entity_world(env: Any, ref: SimEntityRef) -> tuple[np.ndarray, np.ndarray]:
     """Return ``(B, 3), (B, 4)`` world pose of the referenced entity."""
     if ref.kind == "site":
-        return env.get_site_pose(ref.name)
+        capable_env = _require_replay_env_capability(
+            env,
+            ReplaySitePoseEnvProtocol,
+            feature="site transform resets",
+        )
+        return capable_env.get_site_pose(ref.name)
     if ref.kind == "body":
-        return env.get_body_pose(ref.name)
+        capable_env = _require_replay_env_capability(
+            env,
+            ReplayBodyPoseEnvProtocol,
+            feature="body transform resets",
+        )
+        return capable_env.get_body_pose(ref.name)
     if ref.kind == "operator_base":
-        return env.get_operator_base_pose(ref.name)
+        capable_env = _require_replay_env_capability(
+            env,
+            ReplayOperatorBasePoseQueryEnvProtocol,
+            feature="operator base pose queries",
+        )
+        return capable_env.get_operator_base_pose(ref.name)
     raise ValueError(f"Unsupported SimEntityRef.kind: {ref.kind!r}")
 
 
@@ -1488,7 +1722,17 @@ def _apply_entity_world(
     """Set the referenced entity's world pose (only kinds that support
     relocation can be used as a ``move`` target)."""
     if ref.kind == "operator_base":
-        env.override_operator_base_pose(ref.name, pos, quat, env_mask=env_mask)
+        capable_env = _require_replay_env_capability(
+            env,
+            ReplayOperatorBasePoseMutationEnvProtocol,
+            feature="operator base transform mutations",
+        )
+        capable_env.override_operator_base_pose(
+            ref.name,
+            pos,
+            quat,
+            env_mask=env_mask,
+        )
         return
     raise ValueError(
         f"SimEntityRef.kind={ref.kind!r} is not supported as a move target "
@@ -1679,12 +1923,7 @@ def _apply_transform_resets(
     if not os.path.exists(mcap_path):
         raise FileNotFoundError(f"MCAP file not found: {mcap_path}")
 
-    context = evaluator._context
-    if context is None:
-        raise RuntimeError(
-            "PolicyEvaluator must be initialized before applying transform resets."
-        )
-    env = context.backend.env
+    env = evaluator.get_env()
 
     # Rules whose topic is absent from the recording fall back to their
     # configured ``default`` transform when set, or are skipped with a warning
@@ -1784,16 +2023,14 @@ def _apply_transform_resets(
 def _apply_first_frame_reset(
     evaluator: PolicyEvaluator,
     policy: ReplayPolicy,
+    env_mask: Optional[np.ndarray] = None,
 ) -> Dict[str, Any] | None:
     """Apply the first recorded action as the post-reset initial state."""
     reset_action = policy.apply_first_frame_as_reset()
     if reset_action is None:
         return None
-    context = evaluator._context
-    if context is None:
-        raise RuntimeError("PolicyEvaluator must be initialized before applying reset.")
     with evaluator.sim_lock:
-        _apply_reset_action(context, reset_action)
+        _apply_reset_action(evaluator.get_env(), reset_action, env_mask=env_mask)
     return reset_action
 
 
@@ -1972,22 +2209,21 @@ class DataReplayRunner(RunnerBase):
         if self._replay_cfg is not None:
             _apply_transform_resets(evaluator, self._replay_cfg, env_mask)
             if self._replay_cfg.reset_from_first_frame:
-                _apply_first_frame_reset(evaluator, policy)
-        # Zero data.time so the first sampling-tick capture (which runs in
+                _apply_first_frame_reset(evaluator, policy, env_mask=env_mask)
+        # Zero the public simulation clock so the first sampling-tick capture
+        # (which runs in
         # SelfManager BEFORE AutoAtomManager applies the per-action override
         # in update()) starts from MCAP's zero-anchored clock instead of the
         # ~1s left over by env.reset()'s 500-step equality-constraint settle
         # loop (mujoco_basis.py:941-942). Without this, the very first
         # encoded frame's PTS is ~1.0s and every subsequent (correctly
         # overridden) frame looks non-monotonic to the video encoder.
-        try:
-            envs = evaluator.get_env().envs
-        except AttributeError:
-            envs = ()
-        for sub_env in envs:
-            data = getattr(sub_env, "data", None)
-            if data is not None:
-                data.time = 0.0
+        env = evaluator.get_env()
+        if policy.trajectory.timestamps_ns is not None or isinstance(
+            env,
+            ReplayClockEnvProtocol,
+        ):
+            _set_replay_simulation_time(env, 0.0, env_mask=env_mask)
         return update
 
     def update(self, env_mask: Optional[np.ndarray] = None) -> TaskUpdate:
@@ -2006,29 +2242,22 @@ class DataReplayRunner(RunnerBase):
 
         self._action_step += 1
 
-        # Stamp data.time with the MCAP log time of the action we're about
-        # to apply, BEFORE evaluator.update() runs mj_step + _collect_obs.
+        # Stamp the environment with the MCAP log time of the action we're
+        # about to apply, BEFORE evaluator.update() runs mj_step + _collect_obs.
         # Downstream code (``UnifiedMujocoEnv._collect_obs`` and
-        # ``GSUnifiedMujocoEnv._inject_gs_renders``) reads ``data.time`` to
-        # fill each observation's ``"t"`` field, which the video sampler
+        # ``GSUnifiedMujocoEnv._inject_gs_renders``) reads the simulation clock
+        # to fill each observation's ``"t"`` field, which the video sampler
         # then uses as PTS. Overriding after update() would leave the first
         # captured frame with the warmup-leftover clock and cause every
         # subsequent frame to look non-monotonic to the encoder.
         log_time_ns = policy.current_log_time_ns()
         if log_time_ns is not None:
             t_seconds = log_time_ns * 1e-9
-            try:
-                envs = evaluator.get_env().envs
-            except AttributeError:
-                envs = ()
-            # ``BatchedGSUnifiedMujocoEnv`` may share a single physics env
-            # across batch slots (``self.envs`` is N aliases of one object),
-            # so writing through every slot is harmless even when they're
-            # the same object.
-            for sub_env in envs:
-                data = getattr(sub_env, "data", None)
-                if data is not None:
-                    data.time = t_seconds
+            _set_replay_simulation_time(
+                evaluator.get_env(),
+                t_seconds,
+                env_mask=env_mask,
+            )
 
         task_update = evaluator.update(self._current_action, env_mask)
 
@@ -2069,7 +2298,7 @@ class DataReplayRunner(RunnerBase):
     def get_observation(self) -> Any:
         return self._require_evaluator().get_observation()
 
-    def get_env(self) -> Any:
+    def get_env(self) -> EnvProtocol:
         return self._require_evaluator().get_env()
 
     def summarize(
@@ -2095,7 +2324,6 @@ class DataReplayRunner(RunnerBase):
         """(Re)load demo data from the current replay config and build a new
         :class:`ReplayPolicy`."""
         rcfg = self._require_replay_cfg()
-        config = self._config
 
         if rcfg.mcap_path is not None:
             mcap_path = rcfg.mcap_path
@@ -2103,12 +2331,16 @@ class DataReplayRunner(RunnerBase):
                 mcap_path = os.path.join(os.getcwd(), mcap_path)
             if not os.path.exists(mcap_path):
                 raise FileNotFoundError(f"MCAP file not found: {mcap_path}")
-            # Align mcap column order to the YAML actuator declaration order.
-            from auto_atom import ComponentRegistry
-
-            env = ComponentRegistry.get_env(config.task.env_name)
-            op_binding = env.config.operators.get("arm")
-            arm_actuators, eef_actuators = _get_operator_actuator_split(op_binding)
+            # Align mcap columns to the environment's public actuator order.
+            env = self._require_evaluator().get_env()
+            capable_env = _require_replay_env_capability(
+                env,
+                ReplayOperatorActuatorEnvProtocol,
+                feature="operator actuator metadata",
+            )
+            arm_names, eef_names = capable_env.get_operator_actuator_names("arm")
+            arm_actuators = list(arm_names)
+            eef_actuators = list(eef_names)
             trajectory = load_canonical_mcap_recording(
                 mcap_path,
                 rcfg.arm_topic,
@@ -2138,13 +2370,6 @@ class DataReplayRunner(RunnerBase):
                 raise FileNotFoundError(f"Demo file not found: {demo_npz_path}")
             trajectory = NpzRecordingAdapter().load(demo_npz_path, rcfg.mode)
             if rcfg.mode == "ctrl":
-                actuator_names: list[str] = []
-                from auto_atom import ComponentRegistry
-
-                env = ComponentRegistry.get_env(config.task.env_name)
-                op_binding = env.config.operators.get("arm")
-                if op_binding is not None:
-                    actuator_names = _get_operator_actuator_names(op_binding)
                 trajectory = prepare_canonical_joint_trajectory(
                     trajectory,
                     (),
@@ -2153,6 +2378,11 @@ class DataReplayRunner(RunnerBase):
         trajectory = trajectory.subsample(rcfg.demo_stride)
         batch_size = self._require_evaluator().batch_size
         trajectory = trajectory.normalize_for_batch(batch_size)
+        _validate_replay_environment_capabilities(
+            self._require_evaluator().get_env(),
+            rcfg,
+            trajectory,
+        )
         self._policy = CanonicalReplayPolicy(trajectory)
 
     def _require_replay_cfg(self) -> DataReplayConfig:

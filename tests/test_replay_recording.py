@@ -12,7 +12,11 @@ from auto_atom.runner.replay_recording import (
     load_mcap_recording,
     prepare_joint_trajectory,
 )
-from auto_atom.runner.data_replay import DataReplayRunner, DataReplayTaskFileConfig
+from auto_atom.runner.data_replay import (
+    DataReplayConfig,
+    DataReplayRunner,
+    DataReplayTaskFileConfig,
+)
 from auto_atom.runtime import ComponentRegistry
 
 
@@ -204,3 +208,45 @@ def test_data_replay_runner_consumes_canonical_npz_timeline(tmp_path) -> None:
     finally:
         runner.close()
         ComponentRegistry.clear()
+
+
+def test_untimestamped_replay_resets_supported_simulation_clock() -> None:
+    class ClockEnv:
+        batch_size = 2
+
+        def __init__(self) -> None:
+            self.calls: list[tuple[float, object]] = []
+
+        def set_simulation_time(
+            self,
+            time_sec: float,
+            env_mask: np.ndarray | None = None,
+        ) -> None:
+            self.calls.append((time_sec, env_mask))
+
+    class Evaluator:
+        def __init__(self, env: ClockEnv) -> None:
+            self.env = env
+
+        def reset(self, env_mask: np.ndarray | None = None) -> object:
+            return object()
+
+        def get_env(self) -> ClockEnv:
+            return self.env
+
+    trajectory = ReplayTrajectory(
+        mode="joint",
+        arrays={"joint": np.zeros((2, 2), dtype=np.float32)},
+    )
+    env = ClockEnv()
+    runner = DataReplayRunner()
+    runner._evaluator = Evaluator(env)
+    runner._policy = ReplayTimeline(trajectory)
+    runner._replay_cfg = DataReplayConfig(reset_from_first_frame=False)
+    env_mask = np.asarray([False, True], dtype=bool)
+
+    runner.reset(env_mask)
+
+    assert len(env.calls) == 1
+    assert env.calls[0][0] == 0.0
+    np.testing.assert_array_equal(env.calls[0][1], env_mask)

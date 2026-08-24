@@ -14,7 +14,7 @@ from __future__ import annotations
 import logging
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Dict, Iterator, Optional
+from typing import TYPE_CHECKING, Any, Dict, Iterator, Optional, Sequence
 
 import mujoco
 import numpy as np
@@ -1113,6 +1113,57 @@ class UnifiedMujocoEnv(MujocoBasis):
             self.data.ctrl[:n] = ctrl[:n]
         self.update()
 
+    def set_scene_joint_positions(
+        self,
+        joint_names: Sequence[str],
+        positions: Any,
+    ) -> None:
+        """Set passive scene joints by name without exposing MuJoCo internals."""
+        names = tuple(str(name) for name in joint_names)
+        values = np.asarray(positions, dtype=np.float64).reshape(-1)
+        if values.shape != (len(names),):
+            raise ValueError(
+                "Scene joint positions must provide one value per joint name; "
+                f"got {values.shape[0]} value(s) for {len(names)} name(s)."
+            )
+        addresses: list[tuple[int, int]] = []
+        scalar_joint_types = {
+            int(mujoco.mjtJoint.mjJNT_HINGE),
+            int(mujoco.mjtJoint.mjJNT_SLIDE),
+        }
+        for joint_name in names:
+            joint_id = mujoco.mj_name2id(
+                self.model,
+                mujoco.mjtObj.mjOBJ_JOINT,
+                joint_name,
+            )
+            if joint_id < 0:
+                raise ValueError(
+                    f"Scene replay joint '{joint_name}' not found in model."
+                )
+            if int(self.model.jnt_type[joint_id]) not in scalar_joint_types:
+                raise ValueError(
+                    f"Scene replay joint '{joint_name}' must be a hinge or slide "
+                    "joint because its recording provides one scalar position."
+                )
+            addresses.append(
+                (
+                    int(self.model.jnt_qposadr[joint_id]),
+                    int(self.model.jnt_dofadr[joint_id]),
+                )
+            )
+        for (qpos_address, dof_address), joint_value in zip(addresses, values):
+            self.data.qpos[qpos_address] = float(joint_value)
+            self.data.qvel[dof_address] = 0.0
+        mujoco.mj_forward(self.model, self.data)
+
+    def set_simulation_time(self, time_sec: float) -> None:
+        """Set the simulation clock used to timestamp replay observations."""
+        value = float(time_sec)
+        if not np.isfinite(value):
+            raise ValueError(f"Simulation time must be finite, got {time_sec!r}.")
+        self.data.time = value
+
     def apply_joint_action(
         self, operator: str, action, kinematic: bool = False
     ) -> None:
@@ -1845,6 +1896,17 @@ class BatchedUnifiedMujocoEnv:
             lambda env: env.get_operator_base_pose(op_name)
         )
 
+    def get_operator_actuator_names(
+        self,
+        op_name: str,
+    ) -> tuple[tuple[str, ...], tuple[str, ...]]:
+        """Return arm and end-effector actuator order for recorded actions."""
+        binding = self.config.operators.get(op_name)
+        if binding is None:
+            known = ", ".join(sorted(self.config.operators)) or "<empty>"
+            raise KeyError(f"Unknown operator '{op_name}'. Known operators: {known}")
+        return tuple(binding.arm_actuators), tuple(binding.eef_actuators)
+
     def override_operator_base_pose(
         self,
         op_name: str,
@@ -1983,6 +2045,42 @@ class BatchedUnifiedMujocoEnv:
     def get_site_pose(self, site_name: str) -> tuple[np.ndarray, np.ndarray]:
         return self._batch_adapter().stack_pairs(
             lambda env: env.get_site_pose(site_name)
+        )
+
+    def set_scene_joint_positions(
+        self,
+        joint_names: Sequence[str],
+        positions: Any,
+        env_mask: np.ndarray | None = None,
+    ) -> None:
+        """Set named passive-scene joints across selected environments."""
+        names = tuple(str(name) for name in joint_names)
+        rows = np.asarray(positions, dtype=np.float64)
+        if rows.ndim == 2 and rows.shape[0] == 1:
+            rows = rows[0]
+        rows = self._batch_adapter().broadcast_rows(
+            rows,
+            label="scene joint positions",
+            width=len(names),
+        )
+        self._batch_adapter().dispatch_rows(
+            lambda env, _index, row: env.set_scene_joint_positions(names, row),
+            (rows,),
+            env_mask,
+        )
+
+    def set_simulation_time(
+        self,
+        time_sec: float,
+        env_mask: np.ndarray | None = None,
+    ) -> None:
+        """Set the observation clock across selected physical environments."""
+        value = float(time_sec)
+        if not np.isfinite(value):
+            raise ValueError(f"Simulation time must be finite, got {time_sec!r}.")
+        self._batch_adapter().dispatch(
+            lambda env, _index: env.set_simulation_time(value),
+            env_mask,
         )
 
     def step(self, action: np.ndarray, env_mask: np.ndarray | None = None) -> None:

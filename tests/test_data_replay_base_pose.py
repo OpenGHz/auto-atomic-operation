@@ -5,6 +5,7 @@ import logging
 import numpy as np
 
 from auto_atom.runner.data_replay import (
+    DataReplayConfig,
     ReplayPolicy,
     TransformResetConfig,
     _align_optional_scene_joint,
@@ -13,8 +14,10 @@ from auto_atom.runner.data_replay import (
     _extract_pose_stamped_xyzw,
     _make_replay_action_applier,
     _select_transform_reset_message_index,
+    _validate_replay_environment_capabilities,
     normalize_demo_for_batch,
 )
+from auto_atom.runner.replay_recording import ReplayTrajectory
 
 
 def test_replay_policy_includes_optional_base_pose_channels() -> None:
@@ -42,18 +45,18 @@ def test_replay_action_applier_moves_base_before_pose_action() -> None:
 
         def set_operator_base_pose(
             self,
-            operator: str,
-            position,
-            orientation,
+            op_name: str,
+            pos_w,
+            quat_w,
             env_mask=None,
         ) -> None:
             self.calls.append(
                 (
                     "base",
                     (
-                        operator,
-                        tuple(np.asarray(position, dtype=np.float64)),
-                        tuple(np.asarray(orientation, dtype=np.float64)),
+                        op_name,
+                        tuple(np.asarray(pos_w, dtype=np.float64)),
+                        tuple(np.asarray(quat_w, dtype=np.float64)),
                         env_mask,
                     ),
                 )
@@ -85,6 +88,9 @@ def test_replay_action_applier_moves_base_before_pose_action() -> None:
     class DummyBackend:
         def __init__(self, env: DummyEnv) -> None:
             self.env = env
+
+        def get_env(self) -> DummyEnv:
+            return self.env
 
     class DummyContext:
         def __init__(self, env: DummyEnv) -> None:
@@ -198,25 +204,25 @@ def test_optional_scene_joint_alignment_skips_missing_topic(caplog) -> None:
 
 
 def test_replay_action_applier_writes_scene_joints() -> None:
-    class DummyModel:
-        jnt_qposadr = np.asarray([1, 4], dtype=np.int32)
-        jnt_dofadr = np.asarray([2, 5], dtype=np.int32)
-
-    class DummyData:
-        def __init__(self) -> None:
-            self.qpos = np.zeros(8, dtype=np.float64)
-            self.qvel = np.ones(8, dtype=np.float64)
-
-    class DummySingleEnv:
-        def __init__(self) -> None:
-            self.model = DummyModel()
-            self.data = DummyData()
-
     class DummyEnv:
         batch_size = 1
 
         def __init__(self) -> None:
-            self.envs = [DummySingleEnv()]
+            self.scene_calls: list[tuple[list[str], np.ndarray, object]] = []
+
+        def set_scene_joint_positions(
+            self,
+            joint_names,
+            positions,
+            env_mask=None,
+        ) -> None:
+            self.scene_calls.append(
+                (
+                    list(joint_names),
+                    np.asarray(positions, dtype=np.float64).copy(),
+                    env_mask,
+                )
+            )
 
         def apply_joint_action(
             self,
@@ -231,43 +237,84 @@ def test_replay_action_applier_writes_scene_joints() -> None:
         def __init__(self, env: DummyEnv) -> None:
             self.env = env
 
+        def get_env(self) -> DummyEnv:
+            return self.env
+
     class DummyContext:
         def __init__(self, env: DummyEnv) -> None:
             self.backend = DummyBackend(env)
 
     env = DummyEnv()
     applier = _make_replay_action_applier(kinematic=True)
+    applier(
+        DummyContext(env),
+        {
+            "scene_joint_names": ["handle_hinge", "door_hinge"],
+            "scene_joint_positions": np.asarray([0.45, -0.25], dtype=np.float32),
+            "joint": np.asarray([0.1, 0.2], dtype=np.float32),
+        },
+    )
 
-    import mujoco
+    assert len(env.scene_calls) == 1
+    assert env.scene_calls[0][0] == ["handle_hinge", "door_hinge"]
+    np.testing.assert_allclose(env.scene_calls[0][1], [[0.45, -0.25]])
 
-    original_name2id = mujoco.mj_name2id
-    original_forward = mujoco.mj_forward
 
-    mapping = {"handle_hinge": 0, "door_hinge": 1}
+def test_replay_capability_validation_rejects_scene_joint_env_early() -> None:
+    trajectory = ReplayTrajectory(
+        mode="joint",
+        arrays={
+            "joint": np.zeros((1, 2), dtype=np.float32),
+            "scene_joint": np.zeros((1, 1), dtype=np.float32),
+        },
+        scene_joint_names=("door_hinge",),
+    )
 
-    def fake_name2id(model, obj_type, name):  # noqa: ANN001
-        return mapping.get(name, -1)
-
-    def fake_forward(model, data):  # noqa: ANN001
-        return None
-
-    mujoco.mj_name2id = fake_name2id
-    mujoco.mj_forward = fake_forward
-    try:
-        applier(
-            DummyContext(env),
-            {
-                "scene_joint_names": ["handle_hinge", "door_hinge"],
-                "scene_joint_positions": np.asarray([0.45, -0.25], dtype=np.float32),
-                "joint": np.asarray([0.1, 0.2], dtype=np.float32),
-            },
+    with np.testing.assert_raises_regex(
+        RuntimeError,
+        "scene joint actions.*set_scene_joint_positions",
+    ):
+        _validate_replay_environment_capabilities(
+            object(),
+            DataReplayConfig(),
+            trajectory,
         )
-    finally:
-        mujoco.mj_name2id = original_name2id
-        mujoco.mj_forward = original_forward
 
-    np.testing.assert_allclose(env.envs[0].data.qpos[[1, 4]], [0.45, -0.25])
-    np.testing.assert_allclose(env.envs[0].data.qvel[[2, 5]], [0.0, 0.0])
+
+def test_replay_capability_validation_rejects_timestamp_env_early() -> None:
+    trajectory = ReplayTrajectory(
+        mode="joint",
+        arrays={"joint": np.zeros((1, 2), dtype=np.float32)},
+        timestamps_ns=np.asarray([0], dtype=np.int64),
+    )
+
+    with np.testing.assert_raises_regex(
+        RuntimeError,
+        "recording timestamps.*set_simulation_time",
+    ):
+        _validate_replay_environment_capabilities(
+            object(),
+            DataReplayConfig(),
+            trajectory,
+        )
+
+
+def test_replay_capability_validation_rejects_core_action_env_early() -> None:
+    trajectory = ReplayTrajectory(
+        mode="joint",
+        arrays={"joint": np.zeros((1, 2), dtype=np.float32)},
+    )
+    env = type("ObservationOnlyEnv", (), {"batch_size": 1})()
+
+    with np.testing.assert_raises_regex(
+        RuntimeError,
+        "joint actions.*apply_joint_action",
+    ):
+        _validate_replay_environment_capabilities(
+            env,
+            DataReplayConfig(),
+            trajectory,
+        )
 
 
 def test_transform_reset_selector_supports_first_last_and_index() -> None:
