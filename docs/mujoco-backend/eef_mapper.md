@@ -51,7 +51,7 @@ the actuator's ctrl range:
 
 1. For each of `n_samples` evenly-spaced ctrl values from `ctrl_lo` to
    `ctrl_hi`:
-   - Reset to keyframe, set the gripper ctrl, run `mj_step` for 1500 steps
+   - Reset to keyframe, set the gripper ctrl, run `mj_step` for 3000 steps
      to let equality constraints settle
    - Record the resulting `(qpos, finger_distance)` pair, where
      `finger_distance` is the Euclidean distance between the left and right

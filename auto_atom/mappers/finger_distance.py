@@ -132,7 +132,7 @@ class FingerDistanceMapper:
                 if j >= 0:
                     data.ctrl[a] = data.qpos[model.jnt_qposadr[j]]
             data.ctrl[aid] = cv
-            for _ in range(1500):
+            for _ in range(3000):
                 mujoco.mj_step(model, data)
             qpos_samples[i] = float(data.qpos[qadr])
             dist_samples[i] = float(

@@ -692,6 +692,20 @@ class MujocoOperatorHandler(OperatorHandler):
                     se = self.env.envs[env_index]
                     for _ in range(200):
                         mujoco.mj_step(se.model, se.data)
+                    state = se._operator_states[self.operator_name]
+                    if state.joint_mode:
+                        if state.home_arm_qpos is not None:
+                            se.data.qpos[se._op_arm_qidx[self.operator_name]] = (
+                                state.home_arm_qpos
+                            )
+                    else:
+                        q = state.home_mocap_quat
+                        se._write_mocap_pose(
+                            state,
+                            state.home_mocap_pos,
+                            np.asarray([q[1], q[2], q[3], q[0]]),
+                            sync_freejoint=True,
+                        )
                     # Clear residual velocities and reset time so the
                     # settle phase is invisible to the rest of the sim.
                     se.data.qvel[:] = 0.0
