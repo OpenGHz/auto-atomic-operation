@@ -42,6 +42,8 @@ _ROBOT_CONFIGS: list[dict] = [
     {
         "id": "xf9600_airbot_play",
         "scene_xml": _ASSETS / "scenes" / "open_door" / "demo.xml",
+        "robot_xml": _ASSETS / "robots" / "airbot_play_with_xf9600.xml",
+        "initial_joint_positions": {},
         "actuator": "eef_claw_joint",
         "left_pad": "eef_left_finger_pad_upper",
         "right_pad": "eef_right_finger_pad_upper",
@@ -52,6 +54,16 @@ _ROBOT_CONFIGS: list[dict] = [
     {
         "id": "robotiq_pick_and_place",
         "scene_xml": _ASSETS / "scenes" / "pick_and_place" / "demo.xml",
+        "robot_xml": _ASSETS / "robots" / "robotiq.xml",
+        "initial_joint_positions": {
+            "robotiq_freejoint": [0.0, 0.0, 0.4, 1.0, 0.0, 0.0, 0.0],
+            "left_driver_joint": 0.00522882,
+            "left_spring_link_joint": 0.00541525,
+            "left_follower": 0.00562153,
+            "right_driver_joint": 0.00529892,
+            "right_spring_link_joint": 0.00548528,
+            "right_follower_joint": 0.00569143,
+        },
         "actuator": "fingers_actuator",
         "left_pad": "left_finger_pad",
         "right_pad": "right_finger_pad",
@@ -72,7 +84,20 @@ def _load_model(cfg: dict) -> tuple[mujoco.MjModel, mujoco.MjData]:
     scene = cfg["scene_xml"]
     if not scene.exists():
         pytest.skip(f"Scene XML not found: {scene}")
-    model = mujoco.MjModel.from_xml_path(str(scene))
+    robot = cfg["robot_xml"]
+    if not robot.exists():
+        pytest.skip(f"Robot XML not found: {robot}")
+    from auto_atom.utils.scene_loader import load_scene
+
+    model = load_scene(scene, [robot])
+    for joint_name, value in cfg["initial_joint_positions"].items():
+        jid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, joint_name)
+        assert jid >= 0, f"Joint not found in composed model: {joint_name}"
+        qpos_address = int(model.jnt_qposadr[jid])
+        values = np.asarray(value, dtype=np.float64).reshape(-1)
+        width = 7 if model.jnt_type[jid] == mujoco.mjtJoint.mjJNT_FREE else 1
+        assert values.size == width
+        model.qpos0[qpos_address : qpos_address + width] = values
     model.opt.timestep = 0.001  # keep the high-gain xf9600 gripper stable
     model.opt.gravity[:] = 0  # prevent robot from falling
     data = mujoco.MjData(model)
@@ -260,6 +285,8 @@ def test_capture_observation_obs_action_consistent(cfg: dict) -> None:
 
     env_cfg = EnvConfig(
         model_path=cfg["scene_xml"],
+        robot_paths=[cfg["robot_xml"]],
+        initial_joint_positions=cfg["initial_joint_positions"],
         operators=operators,
         enabled_sensors={DataType.JOINT_POSITION},
         structured=True,
@@ -353,6 +380,8 @@ def test_apply_joint_action_round_trip(cfg: dict) -> None:
 
     env_cfg = EnvConfig(
         model_path=cfg["scene_xml"],
+        robot_paths=[cfg["robot_xml"]],
+        initial_joint_positions=cfg["initial_joint_positions"],
         operators=operators,
         enabled_sensors={DataType.JOINT_POSITION},
         structured=False,
@@ -418,6 +447,8 @@ _MAPPER_CONFIGS: list[dict] = [
     {
         "id": "xf9600_airbot_play",
         "scene_xml": _ASSETS / "scenes" / "open_door" / "demo.xml",
+        "robot_xml": _ASSETS / "robots" / "airbot_play_with_xf9600.xml",
+        "initial_joint_positions": {},
         "actuator": "eef_claw_joint",
         "left_pad": "eef_left_finger_pad_upper",
         "right_pad": "eef_right_finger_pad_upper",
@@ -426,6 +457,16 @@ _MAPPER_CONFIGS: list[dict] = [
     {
         "id": "robotiq_pick_and_place",
         "scene_xml": _ASSETS / "scenes" / "pick_and_place" / "demo.xml",
+        "robot_xml": _ASSETS / "robots" / "robotiq.xml",
+        "initial_joint_positions": {
+            "robotiq_freejoint": [0.0, 0.0, 0.4, 1.0, 0.0, 0.0, 0.0],
+            "left_driver_joint": 0.00522882,
+            "left_spring_link_joint": 0.00541525,
+            "left_follower": 0.00562153,
+            "right_driver_joint": 0.00529892,
+            "right_spring_link_joint": 0.00548528,
+            "right_follower_joint": 0.00569143,
+        },
         "actuator": "fingers_actuator",
         "left_pad": "left_finger_pad",
         "right_pad": "right_finger_pad",
@@ -541,6 +582,7 @@ def test_framework_with_finger_distance_mapper() -> None:
     }
     env_cfg = EnvConfig(
         model_path=scene,
+        robot_paths=[_ASSETS / "robots" / "airbot_play_with_xf9600.xml"],
         operators=operators,
         enabled_sensors={DataType.JOINT_POSITION},
         structured=True,
