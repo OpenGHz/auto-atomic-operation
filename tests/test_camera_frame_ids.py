@@ -70,7 +70,7 @@ def test_create_image_data_rejects_unsupported() -> None:
     import pytest
 
     with pytest.raises(ValueError, match="unsupported dtype/channel"):
-        create_image_data(np.zeros((4, 6, 5), dtype=np.uint8), time_sec=0.0)
+        create_image_data(np.zeros((4, 6, 2), dtype=np.uint8), time_sec=0.0)
 
     with pytest.raises(ValueError, match="expected 2-D or 3-D"):
         create_image_data(np.zeros((4,), dtype=np.uint8), time_sec=0.0)
