@@ -152,7 +152,7 @@ external policy must supply a fresh action for each control tick.
 | `runner.reset(env_mask=None)` | Reset all or selected environments, including AAO randomization |
 | `runner.update(env_mask=None)` | Advance to the configured `execution.update_boundary` |
 | `runner.get_env()` | Return the environment used by the runner |
-| `env.capture_observation()` | Capture timestamped measurements and current command targets |
+| `ObservationEnvProtocol.capture_observation()` | Capture timestamped measurements and current command targets |
 | `runner.records` | Return accumulated stage-level execution records |
 | `runner.close()` | Tear down the backend and environment resources |
 
@@ -181,7 +181,13 @@ from typing import Any
 
 import numpy as np
 
-from auto_atom import ComponentRegistry, TaskRunner, load_task_file_hydra
+from auto_atom import (
+    ComponentRegistry,
+    ObservationEnvProtocol,
+    TaskRunner,
+    load_task_file_hydra,
+    require_env_capability,
+)
 
 
 def select_env(
@@ -216,7 +222,12 @@ def collect(
         ],
     )
     runner = TaskRunner().from_config(task_file)
-    env = runner.get_env()
+    env = require_env_capability(
+        runner.get_env(),
+        ObservationEnvProtocol,
+        feature="external data collection",
+        expected_batch_size=runner.batch_size,
+    )
 
     try:
         for round_index in range(rounds):
@@ -304,7 +315,13 @@ while host.is_running():
         continue
 
     update = runner.update(update_mask)
-    observation = runner.get_env().capture_observation()
+    env = require_env_capability(
+        runner.get_env(),
+        ObservationEnvProtocol,
+        feature="external data collection",
+        expected_batch_size=runner.batch_size,
+    )
+    observation = env.capture_observation()
     host.write_selected(observation, update_mask)
 
     new_done = update_mask & np.asarray(update.done) & ~handled

@@ -186,7 +186,7 @@ policy:
 
 The package runner ships with a default action applier that expects:
 
-- `backend.env.step(action, env_mask=...)`
+- a `StepEnvProtocol` capability on `backend.get_env()`
 
 This matches the MuJoCo basis environment's batched low-level action API.
 
@@ -232,9 +232,17 @@ Typical reasons:
 Example:
 
 ```python
+from auto_atom import StepEnvProtocol, require_env_capability
+
+
 def my_action_applier(context, action, env_mask=None):
     backend = context.backend
-    env = backend.env
+    env = require_env_capability(
+        backend.get_env(),
+        StepEnvProtocol,
+        feature="custom policy actions",
+        expected_batch_size=backend.batch_size,
+    )
 
     arm = action["arm"]
     gripper = action["gripper"]
@@ -244,17 +252,28 @@ def my_action_applier(context, action, env_mask=None):
 
 ## Observation Getter
 
-If you do not provide `observation_getter`, `PolicyEvaluator.get_observation()` tries:
+If you do not provide `observation_getter`, `PolicyEvaluator.get_observation()`
+requires `ObservationEnvProtocol` and calls:
 
-- `backend.env.capture_observation()`
+- `backend.get_env().capture_observation()`
 
 That is enough for the built-in MuJoCo setup.
 
 If your policy needs a different observation format, provide a custom getter:
 
 ```python
+from auto_atom import ObservationEnvProtocol, require_env_capability
+
+
 def my_observation_getter(context):
-    raw = context.backend.env.capture_observation()
+    backend = context.backend
+    env = require_env_capability(
+        backend.get_env(),
+        ObservationEnvProtocol,
+        feature="custom policy observations",
+        expected_batch_size=backend.batch_size,
+    )
+    raw = env.capture_observation()
     return convert_obs_for_model(raw)
 ```
 

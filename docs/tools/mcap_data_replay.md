@@ -176,8 +176,17 @@ replay:
 If `scene_joint_topic` is set, replay reads `sensor_msgs/JointState` messages
 from that topic and aligns them to the arm joint timestamps. Joint names are
 taken from the first message and later messages are reordered to match that
-name list. During replay, the aligned positions are written directly into the
-MuJoCo scene joints by name before and after the robot action for that frame.
+name list. During replay, the aligned positions are written once through the
+environment's `set_scene_joint_positions()` capability before the robot action
+for that frame. The built-in MuJoCo environment accepts named scalar
+hinge/slide joints; free and ball joints are rejected because one recorded
+scalar cannot represent their state. The replay runner no longer reaches into
+`model` or `data` directly.
+
+For a shared-physics batch there is only one physical scene state, so logical
+row 0 is canonical for state-changing per-row values. Use identical scene-joint
+rows across the logical batch; distinct per-row scene states require replicated
+physics.
 If the topic is configured but missing from a particular MCAP, replay logs a
 warning and skips scene-joint playback instead of failing.
 
@@ -382,16 +391,46 @@ parse, leaving the runner's existing demo in place. The lazy path returns
 
 ### Accessing the underlying environment
 
-`DataReplayRunner.get_env()` (inherited from `RunnerBase`) returns the
-`MujocoEnv` instance the runner is driving, e.g. for capturing observations
-without driving an action:
+Use `DataReplayRunner.get_observation()` to capture observations without
+driving an action:
 
 ```python
-obs = runner.get_env().capture_observation()
+obs = runner.get_observation()
 ```
 
-`TaskRunner` and `PolicyEvaluator` expose the same method, so any code that
-needs the env can stay agnostic to which runner type is in use.
+`DataReplayRunner.get_env()` (inherited from `RunnerBase`) returns the core
+basis environment. `TaskRunner` and `PolicyEvaluator` expose the same
+`get_env()` seam, so environment access can stay runner-agnostic. Optional
+methods on that environment must be narrowed with `require_env_capability()`
+before use.
+
+### Replay environment capabilities
+
+Replay validates required environment capabilities when the recording is
+loaded, before reset or action execution. Core modes require:
+
+| Replay mode | Environment capability |
+|---|---|
+| `ctrl` | `StepEnvProtocol.step()` |
+| `joint` | `JointActionEnvProtocol.apply_joint_action()` |
+| `pose` | `KinematicPoseActionEnvProtocol.apply_pose_action()` |
+
+Pose replay uses the kinematic keyword during first-frame reset even when the
+normal replay setting is dynamic. Optional recording channels add these
+requirements:
+
+| Recording feature | Environment capability |
+|---|---|
+| timestamps | `set_simulation_time()` |
+| MCAP joint ordering | `get_operator_actuator_names()` |
+| base-pose actions | `set_operator_base_pose()` |
+| scene-joint actions | `set_scene_joint_positions()` |
+| site/body transform reset | `get_site_pose()` / `get_body_pose()` |
+| operator-base transform reset | `get_operator_base_pose()` and `override_operator_base_pose()` |
+
+Missing capabilities produce a feature-specific error during loading rather
+than a later `AttributeError`. Custom environments may implement these methods
+without exposing MuJoCo internals.
 
 ### Kinematic vs physics replay
 

@@ -387,8 +387,10 @@ Semantics:
   or `relative` inside its `randomization` block.
 - The sampled numbers are always expressed in the waypoint's own `reference`
   frame, so the perturbation follows the frame the waypoint is anchored to.
-- Sampling happens once per `reset()` using the same RNG as entity
-  randomization, so `task.seed` reproduces per-waypoint offsets as well.
+- Sampling happens once per `reset()`. The runner uses the backend's public
+  `get_random_generator()` when provided, otherwise a runner-owned generator
+  seeded by a nonzero `task.seed`; per-waypoint offsets therefore remain
+  reproducible without depending on a private backend field.
 - Per-waypoint randomization is independent from entity randomization and does
   not participate in `collision_radius` rejection; keep ranges small enough that
   the resulting motion stays reachable.

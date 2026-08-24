@@ -23,9 +23,12 @@ import numpy as np
 
 from auto_atom import (
     ExecutionContext,
+    ObservationEnvProtocol,
     PolicyEvaluator,
+    PoseActionEnvProtocol,
     TaskUpdate,
     load_task_file_hydra,
+    require_env_capability,
 )
 
 CONFIG_NAME = "press_three_buttons_gs"
@@ -72,19 +75,33 @@ def load_demo(path: Path) -> dict:
 def action_applier(
     context: ExecutionContext, action: Any, env_mask: Optional[np.ndarray] = None
 ) -> None:
-    """Apply pose + gripper to the env (kinematic replay, no physics step)."""
+    """Apply one batched pose-and-gripper policy action to the environment."""
     if action is not None:
-        context.backend.env.apply_pose_action(
+        backend = context.backend
+        env = require_env_capability(
+            backend.get_env(),
+            PoseActionEnvProtocol,
+            feature="policy_eval_example pose actions",
+            expected_batch_size=backend.batch_size,
+        )
+        env.apply_pose_action(
             "arm",
             action["position"],
             action["orientation"],
             action["gripper"],
-            kinematic=False,
+            env_mask=env_mask,
         )
 
 
 def observation_getter(context: ExecutionContext) -> dict:
-    return context.backend.env.capture_observation()
+    backend = context.backend
+    env = require_env_capability(
+        backend.get_env(),
+        ObservationEnvProtocol,
+        feature="policy_eval_example observations",
+        expected_batch_size=backend.batch_size,
+    )
+    return env.capture_observation()
 
 
 # ---------------------------------------------------------------------------

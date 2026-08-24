@@ -147,7 +147,10 @@ env.apply_pose_action("arm", positions, orientations, grippers, env_mask=mask)
 ## Replay Example
 
 ```python
-from auto_atom import PolicyEvaluator, load_task_file_hydra
+import numpy as np
+
+from auto_atom import PoseActionEnvProtocol, require_env_capability
+from auto_atom.runner.data_replay import ReplayBasePoseActionEnvProtocol
 
 demo = np.load("assets/demos/press_three_buttons.npz")
 positions = demo_arrays["action/arm/pose/position"]       # (T, 3)
@@ -156,12 +159,24 @@ grippers = demo_arrays["action/eef/joint_state/position"]  # (T, 1)
 
 # In your action_applier:
 def action_applier(context, action, env_mask=None):
+    env = context.backend.get_env()
     if "base_position" in action:
-        context.backend.env.set_operator_base_pose(
+        base_env = require_env_capability(
+            env,
+            ReplayBasePoseActionEnvProtocol,
+            feature="recorded operator-base actions",
+        )
+        base_env.set_operator_base_pose(
             "arm", action["base_position"], action["base_orientation"], env_mask=env_mask,
         )
-    context.backend.env.apply_pose_action(
+    pose_env = require_env_capability(
+        env,
+        PoseActionEnvProtocol,
+        feature="recorded pose actions",
+    )
+    pose_env.apply_pose_action(
         "arm", action["position"], action["orientation"], action["gripper"],
+        env_mask=env_mask,
     )
 ```
 

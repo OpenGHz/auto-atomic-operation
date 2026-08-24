@@ -43,7 +43,11 @@ from omegaconf import DictConfig, OmegaConf, open_dict
 from PIL import Image
 from pydantic import Field
 
-from auto_atom import ExecutionContext
+from auto_atom import (
+    ExecutionContext,
+    ObservationEnvProtocol,
+    require_env_capability,
+)
 from auto_atom.runner.common import get_config_dir
 from auto_atom.runner.data_replay import (
     DataReplayConfig,
@@ -126,7 +130,14 @@ def make_observation_getter(
     }
 
     def observation_getter(context: ExecutionContext) -> dict:
-        obs = context.backend.env.capture_observation()
+        backend = context.backend
+        env = require_env_capability(
+            backend.get_env(),
+            ObservationEnvProtocol,
+            feature="replay_demo observations",
+            expected_batch_size=backend.batch_size,
+        )
+        obs = env.capture_observation()
         for cam in cameras:
             state = resolved[cam]
             if state["camera_key"] is None:

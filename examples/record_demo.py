@@ -114,7 +114,7 @@ def _inject_operator_base_pose_actions(
         if t is not None:
             break
     for op_name in backend.operator_handlers:
-        pos_w, quat_w = backend.env.get_operator_base_pose(op_name)
+        pos_w, quat_w = backend.get_env().get_operator_base_pose(op_name)
         obs[f"action/{op_name}/base_pose/position"] = {
             "data": np.asarray(pos_w, dtype=np.float32),
             "t": t,
@@ -232,7 +232,7 @@ def main(cfg: DictConfig) -> None:
         backend = runner._context and runner._context.backend
         if not isinstance(backend, MujocoTaskBackend):
             return
-        obs = backend.env.capture_observation()
+        obs = backend.get_env().capture_observation()
         _inject_operator_base_pose_actions(obs, backend)
         low_dim_observations.append(_extract_low_dim_observation(obs))
         nonlocal resolved_camera, resolved_camera_key

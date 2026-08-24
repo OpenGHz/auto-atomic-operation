@@ -17,7 +17,12 @@ from pathlib import Path
 
 import numpy as np
 
-from auto_atom import load_task_file_hydra
+from auto_atom import (
+    ObservationEnvProtocol,
+    SimulationLoopEnvProtocol,
+    load_task_file_hydra,
+    require_env_capability,
+)
 
 
 def _log_progress(message: str) -> None:
@@ -80,14 +85,26 @@ _log_progress("setting up backend")
 backend.setup(task_file.task)
 _log_progress("resetting environment")
 backend.reset()
-env = backend.env
+env = backend.get_env()
+observation_env = require_env_capability(
+    env,
+    ObservationEnvProtocol,
+    feature="bench_env observation capture",
+    expected_batch_size=backend.batch_size,
+)
+simulation_env = require_env_capability(
+    env,
+    SimulationLoopEnvProtocol,
+    feature="bench_env simulation update",
+    expected_batch_size=backend.batch_size,
+)
 
 print(f"config={CONFIG_NAME}  batch_size={backend.batch_size}  iterations={N}")
 
 # Warmup (exclude from stats)
 _log_progress("running warmup")
-env.capture_observation()
-env.update()
+observation_env.capture_observation()
+simulation_env.update()
 _log_progress("warmup complete")
 
 
@@ -97,9 +114,9 @@ def bench_loop():
     progress_every = max(1, min(10, N // 10 if N > 10 else 1))
     for i in range(N):
         t0 = time.perf_counter()
-        env.capture_observation()
+        observation_env.capture_observation()
         t1 = time.perf_counter()
-        env.update()
+        simulation_env.update()
         t2 = time.perf_counter()
         obs_times.append(t1 - t0)
         upd_times.append(t2 - t1)

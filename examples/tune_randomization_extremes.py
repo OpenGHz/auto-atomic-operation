@@ -375,7 +375,7 @@ class RandomizationInspector:
     ):
         self.root = root
         self.backend = backend
-        self.env = backend.env
+        self.env = backend.get_env()
         self.operator_initial_states = dict(operator_initial_states or {})
         self.reload_randomization_callback = reload_randomization_callback
         self.full_reload_callback = full_reload_callback
@@ -485,7 +485,7 @@ class RandomizationInspector:
         self.backend.initial_poses = dict(tuning_config.initial_poses)
         self.operator_initial_states = dict(tuning_config.operator_initial_states)
 
-        self.backend.env.reset()
+        self.backend.get_env().reset()
         for operator in self.backend.operator_handlers.values():
             operator.home()
         _apply_operator_initial_states(self.backend, self.operator_initial_states)
@@ -499,7 +499,7 @@ class RandomizationInspector:
         self.backend._default_operator_eef_poses.clear()  # type: ignore[attr-defined]
         self.backend._default_camera_poses.clear()  # type: ignore[attr-defined]
         self.backend._record_default_poses()  # type: ignore[attr-defined]
-        self.backend.env.refresh_viewer()
+        self.backend.get_env().refresh_viewer()
 
     def _collect_targets(self) -> List[RandomizationTarget]:
         targets: List[RandomizationTarget] = []
@@ -940,9 +940,9 @@ class RandomizationInspectorApp:
         # Surfacing borderline IK solutions is the whole point of this tool —
         # force the joint-limit-proximity warning on regardless of the env's
         # default (which is off, since it's noise during normal demos).
-        backend.env.set_joint_limit_warning_enabled(True)
+        backend.get_env().set_joint_limit_warning_enabled(True)
         backend.reset()
-        backend.env.refresh_viewer()
+        backend.get_env().refresh_viewer()
         tuning_config = self._extract_tuning_config(cfg)
         self.runner = runner
         self.backend = backend
@@ -1014,7 +1014,7 @@ def main(cfg: DictConfig) -> None:
 
         def tick():
             if app.backend is not None:
-                app.backend.env.refresh_viewer()
+                app.backend.get_env().refresh_viewer()
             root.after(50, tick)
 
         root.after(50, tick)

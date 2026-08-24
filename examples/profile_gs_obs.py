@@ -20,7 +20,12 @@ from torch.profiler import (
     tensorboard_trace_handler,
 )
 
-from auto_atom import load_task_file_hydra
+from auto_atom import (
+    ObservationEnvProtocol,
+    SimulationLoopEnvProtocol,
+    load_task_file_hydra,
+    require_env_capability,
+)
 
 
 def _parse_args(argv: list[str]) -> tuple[str, int, list[str]]:
@@ -57,14 +62,26 @@ task_file = load_task_file_hydra(config_name, overrides=overrides)
 backend = task_file.backend(task_file.task, task_file.task_operators)
 backend.setup(task_file.task)
 backend.reset()
-env = backend.env
+env = backend.get_env()
+observation_env = require_env_capability(
+    env,
+    ObservationEnvProtocol,
+    feature="profile_gs_obs observation capture",
+    expected_batch_size=backend.batch_size,
+)
+simulation_env = require_env_capability(
+    env,
+    SimulationLoopEnvProtocol,
+    feature="profile_gs_obs simulation update",
+    expected_batch_size=backend.batch_size,
+)
 
 print(f"[profile] batch_size={backend.batch_size}")
 
 # Warmup: trigger gsplat JIT, prime caches.
 for _ in range(2):
-    env.capture_observation()
-    env.update()
+    observation_env.capture_observation()
+    simulation_env.update()
 torch.cuda.synchronize()
 
 trace_dir = Path("outputs/bench/profiles") / f"{config_name}_b{backend.batch_size}"
@@ -82,9 +99,9 @@ with profile(
 ) as prof:
     for _ in range(iterations + 2):  # +2 for wait + warmup
         with torch.profiler.record_function("capture_observation"):
-            env.capture_observation()
+            observation_env.capture_observation()
         with torch.profiler.record_function("update"):
-            env.update()
+            simulation_env.update()
         prof.step()
 
 torch.cuda.synchronize()
