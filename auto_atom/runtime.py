@@ -54,6 +54,7 @@ from .utils.pose import (
 )
 
 if TYPE_CHECKING:
+    from .execution_timeline import ExecutionTimeline
     from .stage_execution import StageExecution
 
 
@@ -458,20 +459,71 @@ class ComponentRegistry:
 class TaskFlowBuilder:
     """Build stage plans and primitive action lists from validated config."""
 
+    def compile(
+        self,
+        context: ExecutionContext,
+        *,
+        validate_boundaries: bool = True,
+    ) -> "ExecutionTimeline":
+        """Compile the static execution timeline for this builder."""
+
+        from .execution_timeline import ExecutionTimeline
+
+        # ``build`` was the extension hook before the timeline existed.  Let
+        # an overridden implementation still shape the stage plans, while
+        # the default path compiles directly so each stage's actions are
+        # materialized only once.
+        legacy_plans = None
+        legacy_action_cache = None
+        if type(self).build is not TaskFlowBuilder.build:
+            legacy_action_cache = {}
+            had_legacy_cache = hasattr(self, "_legacy_compile_action_cache")
+            previous_legacy_cache = getattr(
+                self,
+                "_legacy_compile_action_cache",
+                None,
+            )
+            self._legacy_compile_action_cache = legacy_action_cache
+            try:
+                legacy_plans = self.build(context)
+            finally:
+                if had_legacy_cache:
+                    self._legacy_compile_action_cache = previous_legacy_cache
+                else:
+                    del self._legacy_compile_action_cache
+        return ExecutionTimeline.compile(
+            self,
+            context,
+            action_cache=legacy_action_cache,
+            plans=legacy_plans,
+            validate_boundaries=validate_boundaries,
+        )
+
     def build(self, context: ExecutionContext) -> List[StageExecutionPlan]:
+        """Build stage plans (legacy public API retained for extensions)."""
+
         plans: List[StageExecutionPlan] = []
         last_orientation: Optional[Orientation] = None
+        action_cache = getattr(self, "_legacy_compile_action_cache", None)
         for index, stage in enumerate(context.config.stages):
             operator_name = self._select_operator(stage, context.backend)
+            orientation_before = last_orientation
+            actions, last_orientation = self.build_actions(stage, last_orientation)
+            if action_cache is not None:
+                action_cache[index] = (
+                    stage,
+                    orientation_before,
+                    actions,
+                    last_orientation,
+                )
             plans.append(
                 StageExecutionPlan(
                     stage_index=index,
                     stage=stage,
                     operator_name=operator_name,
-                    last_orientation_before=last_orientation,
+                    last_orientation_before=orientation_before,
                 )
             )
-            _, last_orientation = self.build_actions(stage, last_orientation)
         return plans
 
     @staticmethod
@@ -710,6 +762,7 @@ class TaskRunner:
         self._has_reset: np.ndarray = np.zeros(0, dtype=bool)
         self._public_internal_updates: np.ndarray = np.zeros(0, dtype=np.int64)
         self._last_execution_details: List[Dict[str, Any]] = []
+        self._timeline: Optional["ExecutionTimeline"] = None
         self._stage_execution: Optional["StageExecution"] = None
 
     @property
@@ -767,26 +820,19 @@ class TaskRunner:
             backend=backend,
             task_file=config,
         )
-        self._plan = self.builder.build(self._context)
-        self._interval_keypoints = []
-        selection = config.execution.interval_selection
-        if (
-            config.execution.update_boundary == UpdateBoundary.KEYPOINT
-            or selection is not None
-        ):
-            self._validate_keypoint_boundary_actions()
-        if selection is not None:
-            self._interval_keypoints = self._validate_interval_actions(selection)
+        self._timeline = self.builder.compile(
+            self._context,
+            validate_boundaries=True,
+        )
+        self._plan = list(self._timeline.stage_plans)
+        self._interval_keypoints = list(self._timeline.interval_keypoints)
         self._context.plan = self._plan
         self._context.backend.setup(self._context.config)
         self._stage_execution = StageExecution(
             self._context,
             self._plan,
-            actions_factory=lambda plan: self._build_stage_actions(
-                plan,
-                self.builder,
-                self._require_context(),
-            ),
+            actions_factory=lambda plan: self._materialize_stage_actions(plan),
+            timeline=self._timeline,
             action_runner=lambda env_index, plan, action, env_mask: (
                 self._run_stage_action(
                     env_index=env_index,
@@ -804,164 +850,57 @@ class TaskRunner:
         self._records = self._stage_execution.records
         return self
 
+    def _materialize_stage_actions(
+        self,
+        plan: StageExecutionPlan,
+    ) -> List[PrimitiveAction]:
+        timeline = self._require_timeline()
+        actions = timeline.clone_stage_actions(plan.stage_index)
+        TaskRunner._apply_waypoint_randomization(actions, self._require_context())
+        return actions
+
     def _validate_keypoint_boundary_actions(self) -> None:
-        """Validate the configured keypoint identity emitted by the active builder."""
-        for plan in self._plan:
-            actions, _ = self.builder.build_actions(
-                plan.stage, plan.last_orientation_before
-            )
-            groups: List[tuple[tuple[TaskPhase, int], List[int]]] = []
-            for action_index, action in enumerate(actions):
-                if not isinstance(action.phase, TaskPhase) or not isinstance(
-                    action.waypoint, int
-                ):
-                    raise ValueError(
-                        "Keypoint-aware execution requires every action emitted by "
-                        f"{type(self.builder).__name__} to define a TaskPhase phase "
-                        f"and integer waypoint; {plan.stage_name} action "
-                        f"{action_index} does not"
-                    )
-                waypoint = action.waypoint
-                count = _phase_waypoint_count(plan.stage, action.phase)
-                if waypoint < 0 or waypoint >= count:
-                    raise ValueError(
-                        f"{type(self.builder).__name__} emitted invalid keypoint "
-                        f"{plan.stage_name}.{action.phase.value}[{waypoint}] for "
-                        f"action {action_index}"
-                    )
-                if not isinstance(action.completes_keypoint, bool):
-                    raise ValueError(
-                        f"{type(self.builder).__name__} must emit a boolean "
-                        f"completes_keypoint for {plan.stage_name} action "
-                        f"{action_index}"
-                    )
+        """Compatibility hook; validation is performed during compilation."""
 
-                identity = (action.phase, waypoint)
-                if not groups or groups[-1][0] != identity:
-                    if any(group_identity == identity for group_identity, _ in groups):
-                        raise ValueError(
-                            f"{type(self.builder).__name__} emitted non-contiguous "
-                            f"primitives for keypoint "
-                            f"{plan.stage_name}.{action.phase.value}[{waypoint}]"
-                        )
-                    groups.append((identity, []))
-                groups[-1][1].append(action_index)
-
-            for (phase, waypoint), action_indices in groups:
-                completion_indices = [
-                    action_index
-                    for action_index in action_indices
-                    if actions[action_index].completes_keypoint
-                ]
-                if completion_indices != [action_indices[-1]]:
-                    raise ValueError(
-                        f"{type(self.builder).__name__} must mark only the final "
-                        f"primitive of keypoint "
-                        f"{plan.stage_name}.{phase.value}[{waypoint}] with "
-                        "completes_keypoint=True"
-                    )
+        self._require_timeline()
 
     def _validate_interval_actions(
         self,
         selection: IntervalSelectionConfig,
     ) -> List[_ResolvedTaskKeypoint]:
-        """Verify that the active builder emits both configured boundaries."""
-        keypoints: List[_ResolvedTaskKeypoint] = []
-        for plan in self._plan:
-            actions, _ = self.builder.build_actions(
-                plan.stage, plan.last_orientation_before
-            )
-            for action in actions:
-                if (
-                    not action.completes_keypoint
-                    or action.phase is None
-                    or action.waypoint is None
-                ):
-                    continue
-                keypoints.append(
-                    _ResolvedTaskKeypoint(
-                        stage_index=plan.stage_index,
-                        stage_name=plan.stage_name,
-                        phase=action.phase,
-                        waypoint=action.waypoint,
-                    )
-                )
+        """Compatibility hook returning compiled keypoint identities."""
 
-        def resolve(field_name: str, configured: TaskKeypointConfig) -> int:
-            matches = [
-                index
-                for index, keypoint in enumerate(keypoints)
-                if keypoint.matches(configured)
-            ]
-            if not matches:
-                raise ValueError(
-                    f"execution.interval_selection.{field_name} is not emitted by "
-                    f"{type(self.builder).__name__}: "
-                    f"{configured.stage}.{configured.phase.value}"
-                    f"[{configured.waypoint}]"
-                )
-            if len(matches) > 1:
-                raise ValueError(
-                    f"execution.interval_selection.{field_name} is emitted more than "
-                    "once by "
-                    f"{type(self.builder).__name__}: "
-                    f"{configured.stage}.{configured.phase.value}"
-                    f"[{configured.waypoint}]"
-                )
-            return matches[0]
-
-        start_order = 2 * resolve("start", selection.start) + int(
-            selection.start.side == KeypointSide.AFTER
-        )
-        stop_order = 2 * resolve("stop", selection.stop) + int(
-            selection.stop.side == KeypointSide.AFTER
-        )
+        timeline = self._require_timeline()
+        start_order = timeline.boundary_order_index(selection.start)
+        stop_order = timeline.boundary_order_index(selection.stop)
         if start_order > stop_order:
             raise ValueError(
                 "execution.interval_selection.start must not come after "
                 "execution.interval_selection.stop in the active TaskFlowBuilder"
             )
-        return keypoints
+        return list(timeline.interval_keypoints)
 
     def _interval_keypoint_index(self, configured: TaskKeypointConfig) -> int:
-        matches = [
-            index
-            for index, keypoint in enumerate(self._interval_keypoints)
-            if keypoint.matches(configured)
-        ]
-        if len(matches) != 1:
-            raise RuntimeError(
-                "Interval keypoints must be resolved exactly once before execution"
-            )
-        return matches[0]
+        return self._require_timeline().interval_keypoint_index(configured)
 
     def _interval_boundary_state_index(
         self,
         boundary: TaskKeypointConfig,
     ) -> int:
         """Return the physical state boundary reached after N keypoints."""
-        if boundary.side is None:
-            raise RuntimeError("Interval endpoint side was not resolved")
-        return self._interval_keypoint_index(boundary) + int(
-            boundary.side == KeypointSide.AFTER
-        )
+        return self._require_timeline().boundary_state_index(boundary)
 
     def _interval_boundary_keypoint(
         self,
         boundary: TaskKeypointConfig,
     ) -> _ResolvedTaskKeypoint:
-        return self._interval_keypoints[self._interval_keypoint_index(boundary)]
+        return self._require_timeline().boundary_keypoint(boundary)
 
     def _completed_interval_state_index(
         self,
         completed: _ResolvedTaskKeypoint,
     ) -> int:
-        for index, keypoint in enumerate(self._interval_keypoints):
-            if keypoint == completed:
-                return index + 1
-        raise RuntimeError(
-            "Completed keypoint is absent from the resolved interval plan"
-        )
+        return self._require_timeline().completed_interval_state_index(completed)
 
     def reset(self, env_mask: Optional[np.ndarray] = None) -> TaskUpdate:
         context = self._require_context()
@@ -999,7 +938,7 @@ class TaskRunner:
             )
             for env_index in range(len(self._env_states))
         ]
-        selection = context.task_file.execution.interval_selection
+        selection = self._require_timeline().interval_selection
         if selection is not None:
             self._fast_forward_to_interval_start(mask, context, selection)
         # self._set_interest_focus()
@@ -1025,10 +964,10 @@ class TaskRunner:
         mask: np.ndarray,
         context: ExecutionContext,
     ) -> TaskUpdate:
-        execution = context.task_file.execution
-        selection = execution.interval_selection
-        boundary = execution.update_boundary
-        max_updates = int(execution.max_internal_updates_per_update)
+        timeline = self._require_timeline()
+        selection = timeline.interval_selection
+        boundary = timeline.update_boundary
+        max_updates = timeline.max_internal_updates_per_update
         pending = mask.copy()
         internal_updates = np.zeros(len(self._env_states), dtype=np.int64)
 
@@ -1061,7 +1000,6 @@ class TaskRunner:
                     self._fail_internal_update_limit(
                         env_index,
                         state,
-                        context,
                         int(internal_updates[env_index]),
                     )
                     self._last_execution_details[env_index] = self._execution_details(
@@ -1106,7 +1044,7 @@ class TaskRunner:
                     pending[env_index] = False
                     continue
 
-                boundary_event = self._reached_update_boundary(boundary, event)
+                boundary_event = self._require_timeline().reached_update_boundary(event)
                 if boundary_event is None:
                     if state.done:
                         self._last_execution_details[env_index] = (
@@ -1144,32 +1082,30 @@ class TaskRunner:
             return "stage_succeeded"
         return None
 
-    @staticmethod
     def _execution_details(
+        self,
         context: ExecutionContext,
         *,
         event: str,
         internal_updates: int,
     ) -> Dict[str, Any]:
         execution = context.task_file.execution
+        timeline = self._require_timeline()
         return {
             "event": event,
-            "update_boundary": execution.update_boundary.value,
+            "update_boundary": timeline.update_boundary.value,
             "render_internal_updates": bool(execution.render_internal_updates),
             "internal_updates": internal_updates,
-            "max_internal_updates_per_update": int(
-                execution.max_internal_updates_per_update
-            ),
+            "max_internal_updates_per_update": timeline.max_internal_updates_per_update,
         }
 
     def _fail_internal_update_limit(
         self,
         env_index: int,
         state: _EnvRuntimeState,
-        context: ExecutionContext,
         internal_updates: int,
     ) -> None:
-        max_updates = int(context.task_file.execution.max_internal_updates_per_update)
+        max_updates = self._require_timeline().max_internal_updates_per_update
         details = {
             "event": "internal_update_limit_exceeded",
             "failure_stage": "execution",
@@ -1406,6 +1342,7 @@ class TaskRunner:
         self._has_reset = np.zeros(0, dtype=bool)
         self._public_internal_updates = np.zeros(0, dtype=np.int64)
         self._last_execution_details = []
+        self._timeline = None
         self._stage_execution = None
 
     def _update_env(
@@ -1419,8 +1356,8 @@ class TaskRunner:
         return self._require_stage_execution().advance_control(
             env_index,
             use_configured_identity=(
-                context.task_file.execution.interval_selection is not None
-                or context.task_file.execution.update_boundary
+                self._require_timeline().interval_selection is not None
+                or self._require_timeline().update_boundary
                 != UpdateBoundary.CONTROL_TICK
             ),
         )
@@ -1540,12 +1477,11 @@ class TaskRunner:
         builder: "TaskFlowBuilder",
         context: ExecutionContext,
     ) -> List[PrimitiveAction]:
-        """Build the primitive-action list for a stage.
+        """Legacy helper for callers that still materialize actions directly.
 
-        Single source of truth shared by ``StageExecution`` and
-        ``ConfigDrivenDemoPolicy._get_stage_actions`` so the two execution
-        paths cannot drift on what gets handed to the controller (deepcopy +
-        per-waypoint randomization).
+        Normal execution uses the compiled :class:`ExecutionTimeline`; this
+        compatibility path intentionally retains the previous builder-based
+        behavior for integrations that call the private helper explicitly.
         """
         actions = deepcopy(
             builder.build_actions(plan.stage, plan.last_orientation_before)[0]
@@ -1823,9 +1759,7 @@ class TaskRunner:
 
     def _build_task_update(self) -> TaskUpdate:
         selection = (
-            self._context.task_file.execution.interval_selection
-            if self._context is not None
-            else None
+            self._timeline.interval_selection if self._timeline is not None else None
         )
         stage_index: List[int] = []
         stage_name: List[str] = []
@@ -1997,6 +1931,11 @@ class TaskRunner:
         if self._context is None:
             raise RuntimeError("TaskRunner is not initialized. Call from_yaml() first.")
         return self._context
+
+    def _require_timeline(self) -> "ExecutionTimeline":
+        if self._timeline is None:
+            raise RuntimeError("TaskRunner is not initialized. Call from_yaml() first.")
+        return self._timeline
 
     def _require_stage_execution(self) -> "StageExecution":
         if self._stage_execution is None:

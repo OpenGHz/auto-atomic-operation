@@ -111,6 +111,10 @@ pre_move[0] -> pre_move[1] -> eef -> post_move[0]
 配置展开成 primitive action。在默认 `control_tick` 模式下，
 `TaskRunner.update()` 对每个选中的环境只执行当前 primitive 的一个控制周期：
 
+任务绑定时由 `ExecutionTimeline` 一次性编译 Stage、Keypoint 和 Primitive 的
+静态顺序；运行时仍按环境惰性复制 action 模板，因此这次编译不会提前执行物理、
+随机化或 pose resolution。
+
 - 后端返回 `RUNNING`：保持当前 primitive，并立即返回；
 - 后端返回 `REACHED`：推进 action index，但不在同一次 update 中继续执行
   下一个 primitive；

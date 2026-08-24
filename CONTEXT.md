@@ -28,3 +28,8 @@ _Avoid_: Phase
 The progression of one stage from its perform condition, through its primitive
 sequence, to a succeeded or failed terminal status.
 _Avoid_: Stage lifecycle, rollout
+
+**Execution timeline**:
+The ordered view of a task's stages, keypoints, and primitives, including the
+before/after boundaries around each keypoint.
+_Avoid_: Rollout schedule, execution plan

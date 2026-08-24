@@ -12,6 +12,7 @@ from typing import Any, Callable, Dict, List, Optional
 import numpy as np
 
 from .config_loader import load_task_file
+from .execution_timeline import ExecutionTimeline
 from .framework import (
     PoseControlConfig,
     TaskFileConfig,
@@ -70,6 +71,7 @@ class ConfigDrivenDemoPolicy:
 
     def __init__(self, builder: Optional[TaskFlowBuilder] = None) -> None:
         self.builder = builder or TaskFlowBuilder()
+        self._use_evaluator_timeline = builder is None
         self._cached_stage_indices: List[Optional[int]] = []
         self._cached_actions: List[List[PrimitiveAction]] = []
 
@@ -181,9 +183,11 @@ class ConfigDrivenDemoPolicy:
     ) -> List[PrimitiveAction]:
         if self._cached_stage_indices[env_index] != stage_index:
             plan = evaluator.stage_plans[stage_index]
-            context = evaluator._require_context()
-            self._cached_actions[env_index] = TaskRunner._build_stage_actions(
-                plan, self.builder, context
+            self._cached_actions[env_index] = (
+                evaluator.materialize_policy_stage_actions(
+                    None if self._use_evaluator_timeline else self.builder,
+                    plan.stage_index,
+                )
             )
             self._cached_stage_indices[env_index] = stage_index
         return self._cached_actions[env_index]
@@ -229,6 +233,8 @@ class PolicyEvaluator:
         self._context: Optional[ExecutionContext] = None
         self._plan: List[StageExecutionPlan] = []
         self._records: List[ExecutionRecord] = []
+        self._timeline: Optional[ExecutionTimeline] = None
+        self._builder_timelines: Dict[int, ExecutionTimeline] = {}
         self._env_states: List[_EnvRuntimeState] = []
         self._stage_execution: Optional[StageExecution] = None
         self._has_reset: np.ndarray = np.zeros(0, dtype=bool)
@@ -284,18 +290,21 @@ class PolicyEvaluator:
             backend=backend,
             task_file=config,
         )
-        self._plan = self.builder.build(self._context)
+        self._timeline = self.builder.compile(
+            self._context,
+            validate_boundaries=False,
+        )
+        self._builder_timelines = {id(self.builder): self._timeline}
+        self._plan = list(self._timeline.stage_plans)
         self._context.plan = self._plan
         self._context.backend.setup(self._context.config)
         self._stage_execution = StageExecution(
             self._context,
             self._plan,
-            actions_factory=lambda plan: deepcopy(
-                self.builder.build_actions(
-                    plan.stage,
-                    plan.last_orientation_before,
-                )[0]
+            actions_factory=lambda plan: self._require_timeline().clone_stage_actions(
+                plan.stage_index
             ),
+            timeline=self._timeline,
             completion_pose_resolver=self._resolve_completion_pose,
         )
         self._env_states = self._stage_execution.states
@@ -364,6 +373,8 @@ class PolicyEvaluator:
         self._plan = []
         self._records = []
         self._env_states = []
+        self._timeline = None
+        self._builder_timelines = {}
         self._stage_execution = None
         self._has_reset = np.zeros(0, dtype=bool)
 
@@ -577,6 +588,41 @@ class PolicyEvaluator:
                 "PolicyEvaluator is not initialized. Call from_yaml() first."
             )
         return self._stage_execution
+
+    def _require_timeline(self) -> ExecutionTimeline:
+        if self._timeline is None:
+            raise RuntimeError(
+                "PolicyEvaluator is not initialized. Call from_yaml() first."
+            )
+        return self._timeline
+
+    def materialize_policy_stage_actions(
+        self,
+        builder: Optional[TaskFlowBuilder],
+        stage_index: int,
+    ) -> List[PrimitiveAction]:
+        """Clone one builder's nominal stage and apply scripted randomization.
+
+        The evaluator's own timeline is reused for the common builder. A
+        custom ``ConfigDrivenDemoPolicy(builder=...)`` gets one additional
+        cached compile, preserving its extension point without rebuilding on
+        every environment or reset.
+        """
+
+        if builder is None:
+            timeline = self._require_timeline()
+        else:
+            key = id(builder)
+            timeline = self._builder_timelines.get(key)
+            if timeline is None:
+                timeline = builder.compile(
+                    self._require_context(),
+                    validate_boundaries=False,
+                )
+                self._builder_timelines[key] = timeline
+        actions = timeline.clone_stage_actions(stage_index)
+        TaskRunner._apply_waypoint_randomization(actions, self._require_context())
+        return actions
 
     def stage_action_index(self, env_index: int, stage_index: int) -> int:
         state = self._env_states[env_index]

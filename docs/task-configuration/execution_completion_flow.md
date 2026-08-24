@@ -27,6 +27,13 @@ There are two layers involved:
      - fail the stage
      - mark the stage as succeeded
 
+Before either adapter starts a Stage, the `ExecutionTimeline` compiles the
+validated task's static `Stage → Keypoint → Primitive` ordering once. It owns
+keypoint identity and before/after interval boundaries; runtime action lists
+are still deep-copied lazily per environment and stage. Waypoint randomization,
+pose resolution, arc snapshots, and controller cursors therefore remain
+runtime state rather than eager preprocessing.
+
 ## How A Stage Becomes Actions
 
 `TaskFlowBuilder.build_actions()` expands one stage into a sequence of primitive actions:
@@ -160,7 +167,9 @@ to one keypoint (for example, arc sub-actions), they must be contiguous and
 only the final one may set `completes_keypoint=True`. Interval selection uses
 the same contract. `TaskRunner.from_config()` validates this before execution
 and fails fast with `ValueError`, because the runner otherwise cannot determine
-a stable YAML keypoint boundary.
+a stable YAML keypoint boundary. A legacy `TaskFlowBuilder.build()` override may
+still shape the plan list, but it must preserve the zero-based contiguous
+`stage_index` values used by both runner adapters.
 
 Macro boundaries do not teleport or bypass the state machine. They repeat the
 same control flow internally, up to

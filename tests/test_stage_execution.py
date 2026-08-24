@@ -6,6 +6,7 @@ an arbitrary external policy and the configuration-driven scripted policy.
 
 from __future__ import annotations
 
+from copy import deepcopy
 from types import SimpleNamespace
 from typing import Any
 
@@ -22,6 +23,7 @@ from auto_atom.policy_eval import (
 from auto_atom.runtime import (
     ComponentRegistry,
     ControlSignal,
+    PrimitiveAction,
     PoseState,
     StageExecutionStatus,
 )
@@ -209,6 +211,46 @@ def test_legacy_policy_feedback_still_gates_stage_completion() -> None:
         assert completed.done.tolist() == [True]
         assert completed.success.tolist() == [True]
         assert completed.status.tolist() == [StageExecutionStatus.SUCCEEDED]
+    finally:
+        evaluator.close()
+
+
+def test_policy_action_override_can_extend_nominal_timeline() -> None:
+    """Custom policy action metadata still works past the nominal action span."""
+
+    target_position = np.asarray([0.31, 0.0, 0.3], dtype=np.float64)
+    config = _task_file(
+        "stage_execution_custom_action_span",
+        [_move_stage("move_with_custom_span", _world_pose(float(target_position[0])))],
+    )
+    evaluator: PolicyEvaluator
+
+    def action_applier(_context: Any, _action: Any, _env_mask: Any = None):
+        operator = evaluator._context.backend.get_operator_handler("arm")
+        operator.end_effector_pose.position[:] = target_position.reshape(1, 3)
+        nominal = evaluator._require_timeline().clone_stage_actions(0)
+        # The custom adapter deliberately emits one extra primitive.  The
+        # compiled timeline must fall back to the action's own metadata for it.
+        custom_actions = [*nominal, deepcopy(nominal[0])]
+        assert all(isinstance(action, PrimitiveAction) for action in custom_actions)
+        for action in custom_actions:
+            if action.pose is not None:
+                action.resolved_pose = action.pose
+        return PolicyActionFeedback(
+            signals=[ControlSignal.REACHED],
+            details=[{"event": "custom_action_span"}],
+            stage_action_sequence_done=[False],
+            stage_actions=[custom_actions],
+        )
+
+    evaluator = PolicyEvaluator(action_applier=action_applier).from_config(config)
+    try:
+        evaluator.reset()
+        pending = evaluator.update(None)
+        assert pending.done.tolist() == [False]
+        completed = evaluator.update(None)
+        assert completed.done.tolist() == [True]
+        assert completed.success.tolist() == [True]
     finally:
         evaluator.close()
 

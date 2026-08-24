@@ -1,6 +1,7 @@
 """Import-friendly runtime package for the Auto Atomic Operation framework."""
 
 from .config_loader import load_config, load_task_file, load_task_file_hydra
+from .execution_timeline import CompiledKeypoint, ExecutionTimeline
 from .framework import (
     AutoAtomConfig,
     EefControlConfig,
@@ -56,10 +57,12 @@ __all__ = [
     "ControlResult",
     "ControlSignal",
     "ConfigDrivenDemoPolicy",
+    "CompiledKeypoint",
     "DataReplayConfig",
     "DataReplayRunner",
     "DataReplayTaskFileConfig",
     "ExecutionContext",
+    "ExecutionTimeline",
     "ExecutionRecord",
     "ExecutionSummary",
     "EnvProtocol",

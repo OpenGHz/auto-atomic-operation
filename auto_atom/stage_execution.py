@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
 
 import numpy as np
 
@@ -37,6 +37,9 @@ from .utils.pose import (
     quaternion_angular_distance,
 )
 
+if TYPE_CHECKING:
+    from .execution_timeline import ExecutionTimeline
+
 StageActionsFactory = Callable[[StageExecutionPlan], List[PrimitiveAction]]
 StageActionRunner = Callable[
     [int, StageExecutionPlan, PrimitiveAction, np.ndarray], ControlResult
@@ -66,12 +69,14 @@ class StageExecution:
         actions_factory: StageActionsFactory,
         action_runner: Optional[StageActionRunner] = None,
         completion_pose_resolver: Optional[CompletionPoseResolver] = None,
+        timeline: Optional["ExecutionTimeline"] = None,
     ) -> None:
         self.context = context
         self.plan = plan
         self.actions_factory = actions_factory
         self.action_runner = action_runner
         self.completion_pose_resolver = completion_pose_resolver
+        self.timeline = timeline
         self.states = [_EnvRuntimeState() for _ in range(context.backend.batch_size)]
         self.records: List[ExecutionRecord] = []
 
@@ -339,7 +344,11 @@ class StageExecution:
         if signal != ControlSignal.REACHED:
             raise RuntimeError(f"Unsupported control signal: {signal!r}")
 
-        completed_position = self._completed_position(active.plan, action)
+        completed_position = self._resolve_completed_position(
+            active.plan,
+            action,
+            active.action_index,
+        )
         completed_keypoint = completed_position if action.completes_keypoint else None
         active.action_index += 1
         mid_failure = self._mid_stage_failure(env_index, active, action)
@@ -655,11 +664,40 @@ class StageExecution:
         details["arc"] = arc_details
         return details
 
+    def _resolve_completed_position(
+        self,
+        plan: StageExecutionPlan,
+        action: PrimitiveAction,
+        action_index: int,
+    ) -> Optional[_ResolvedTaskKeypoint]:
+        if self.timeline is not None:
+            # External policy adapters may provide a runtime action sequence
+            # whose shape differs from the nominal timeline.  In that case
+            # the compiled lookup is intentionally best-effort; preserve the
+            # historical phase/waypoint fallback for custom actions.
+            try:
+                compiled = self.timeline.keypoint_for_action(
+                    plan.stage_index,
+                    action_index,
+                )
+            except IndexError:
+                compiled = None
+            if compiled is not None and (
+                compiled.phase == action.phase and compiled.waypoint == action.waypoint
+            ):
+                return compiled
+        return self._completed_position(plan, action)
+
     @staticmethod
     def _completed_position(
         plan: StageExecutionPlan,
         action: PrimitiveAction,
     ) -> Optional[_ResolvedTaskKeypoint]:
+        """Resolve metadata without requiring a compiled timeline.
+
+        Kept as a static compatibility seam for adapters that used this
+        private helper before ``ExecutionTimeline`` was introduced.
+        """
         if not isinstance(action.phase, TaskPhase) or not isinstance(
             action.waypoint, int
         ):
