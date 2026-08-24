@@ -288,7 +288,7 @@ class StageExecution:
             None if target is None else target.get_pose().select(env_index)
         )
         held_object_name = (
-            self._find_grasped_object(plan.operator_name, env_index)
+            backend.get_grasped_object_name(plan.operator_name, env_index)
             if plan.stage.operation == Operation.PLACE
             else None
         )
@@ -606,17 +606,6 @@ class StageExecution:
             details=details,
         )
 
-    def _find_grasped_object(
-        self,
-        operator_name: str,
-        env_index: int,
-    ) -> Optional[str]:
-        backend = self.context.backend
-        for name in getattr(backend, "object_handlers", {}):
-            if backend.is_object_grasped(operator_name, name)[env_index]:
-                return name
-        return None
-
     def _mask_for_env(self, env_index: int) -> np.ndarray:
         mask = np.zeros(self.context.backend.batch_size, dtype=bool)
         mask[env_index] = True
@@ -857,20 +846,18 @@ def check_stage_condition(
         waypoint_tolerance = (
             getattr(completion_pose, "tolerance", None) if completion_pose else None
         )
-        operator_tolerance = getattr(
-            getattr(operator, "control", None), "tolerance", None
-        )
+        operator_position, operator_orientation = operator.get_reached_tolerances()
         position_tolerance = (
             waypoint_tolerance.position
             if waypoint_tolerance is not None
             and waypoint_tolerance.position is not None
-            else getattr(operator_tolerance, "position", 0.01)
+            else operator_position
         )
         orientation_tolerance = (
             waypoint_tolerance.orientation
             if waypoint_tolerance is not None
             and waypoint_tolerance.orientation is not None
-            else getattr(operator_tolerance, "orientation", 0.08)
+            else operator_orientation
         )
         if completion_pose is None:
             satisfied = False
@@ -927,11 +914,13 @@ def _placed_condition_satisfied(
 ) -> bool:
     if is_grasping:
         return False
-    if target_object_pose is None or not held_object_name:
+    if target_object_pose is None:
         return True
+    if not held_object_name:
+        return False
     handler = context.backend.get_object_handler(held_object_name)
     if handler is None:
-        return True
+        return False
     current = handler.get_pose()
     position_difference = np.asarray(
         current.position[env_index], dtype=np.float64
@@ -942,29 +931,12 @@ def _placed_condition_satisfied(
         "placed_tolerance",
         None,
     )
-    operator_tolerance = getattr(
-        getattr(
-            context.backend.get_operator_handler(plan.operator_name),
-            "control",
-            None,
-        ),
-        "tolerance",
-        None,
-    )
-    operator_placed: Optional[PlacedToleranceConfig] = getattr(
-        operator_tolerance,
-        "placed",
-        None,
-    )
+    operator_position, operator_orientation = context.backend.get_operator_handler(
+        plan.operator_name
+    ).get_placed_tolerances()
     stage_position = stage_tolerance.position if stage_tolerance is not None else None
     stage_orientation = (
         stage_tolerance.orientation if stage_tolerance is not None else None
-    )
-    operator_position = (
-        operator_placed.position if operator_placed is not None else None
-    )
-    operator_orientation = (
-        operator_placed.orientation if operator_placed is not None else None
     )
     position_tolerance = (
         stage_position

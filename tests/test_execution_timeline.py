@@ -8,27 +8,42 @@ from auto_atom.policy_eval import ConfigDrivenDemoPolicy, PolicyEvaluator
 from auto_atom.runtime import ComponentRegistry, TaskFlowBuilder, TaskRunner
 
 
-def _pose(x: float) -> dict:
-    return {
+def _pose(x: float, *, randomization: dict | None = None) -> dict:
+    pose = {
         "reference": "world",
         "position": [x, 0.0, 0.3],
         "orientation": [0.0, 0.0, 0.0, 1.0],
     }
+    if randomization is not None:
+        pose["randomization"] = randomization
+    return pose
 
 
-def _config(env_name: str, *, execution: dict | None = None) -> TaskFileConfig:
+def _config(
+    env_name: str,
+    *,
+    execution: dict | None = None,
+    seed: int = 0,
+    waypoint_randomization: dict | None = None,
+) -> TaskFileConfig:
     ComponentRegistry.register_env(env_name, {"kind": "mock_env", "batch_size": 2})
     payload = {
         "backend": "auto_atom.mock.build_mock_backend",
         "task": {
             "env_name": env_name,
+            "seed": seed,
             "stages": [
                 {
                     "name": "first",
                     "object": "block",
                     "operation": "move",
                     "operator": "arm",
-                    "param": {"pre_move": [_pose(0.1), _pose(0.2)]},
+                    "param": {
+                        "pre_move": [
+                            _pose(0.1, randomization=waypoint_randomization),
+                            _pose(0.2),
+                        ]
+                    },
                 },
                 {
                     "name": "second",
@@ -76,6 +91,35 @@ def test_task_runner_compiles_each_stage_once_and_reuses_templates() -> None:
         assert builder.calls == ["first", "second"]
     finally:
         runner.close()
+        ComponentRegistry.clear()
+
+
+def test_waypoint_randomization_uses_task_seed_without_backend_private_rng() -> None:
+    ComponentRegistry.clear()
+    first = TaskRunner().from_config(
+        _config(
+            "timeline_seed_first",
+            seed=73,
+            waypoint_randomization={"x": [-0.05, 0.05]},
+        )
+    )
+    second = TaskRunner().from_config(
+        _config(
+            "timeline_seed_second",
+            seed=73,
+            waypoint_randomization={"x": [-0.05, 0.05]},
+        )
+    )
+    try:
+        assert not hasattr(first._require_context().backend, "_rng")
+        first_actions = first._materialize_stage_actions(first._plan[0])
+        second_actions = second._materialize_stage_actions(second._plan[0])
+        assert first_actions[0].pose is not None
+        assert second_actions[0].pose is not None
+        assert first_actions[0].pose.position == second_actions[0].pose.position
+    finally:
+        first.close()
+        second.close()
         ComponentRegistry.clear()
 
 

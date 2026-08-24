@@ -155,6 +155,10 @@ class MujocoObjectHandler(ObjectHandler):
             if env_mask is None
             else np.asarray(env_mask, dtype=bool).reshape(-1)
         )
+        if mask.shape != (self.env.batch_size,):
+            raise ValueError(
+                f"env_mask must have shape ({self.env.batch_size},), got {mask.shape}"
+            )
         for env_index, single_env in enumerate(self.env.envs):
             if not mask[env_index]:
                 continue
@@ -639,6 +643,16 @@ class MujocoOperatorHandler(OperatorHandler):
         pos, quat = self.env.get_operator_base_pose(self.operator_name)
         return PoseState(position=pos, orientation=quat)
 
+    def get_reached_tolerances(self) -> tuple[Any, Any]:
+        tolerance = self.control.tolerance
+        return tolerance.position, tolerance.orientation
+
+    def get_placed_tolerances(self) -> tuple[Any, Any]:
+        placed = self.control.tolerance.placed
+        if placed is None:
+            return None, None
+        return placed.position, placed.orientation
+
     def reset_state(self, env_mask: Optional[np.ndarray] = None) -> None:
         mask = self._normalize_mask(env_mask)
         for env_index, enabled in enumerate(mask):
@@ -844,6 +858,9 @@ class MujocoTaskBackend(SceneBackend):
         )
         self._rng = np.random.default_rng(self.random_seed)
 
+    def get_env(self) -> BatchedUnifiedMujocoEnv:
+        return self.env
+
     @property
     def batch_size(self) -> int:
         return self.env.batch_size
@@ -852,6 +869,24 @@ class MujocoTaskBackend(SceneBackend):
     def dt_per_update(self) -> float:
         e = self.env.envs[0]
         return e.model.opt.timestep * e._n_substeps
+
+    def get_random_generator(self) -> np.random.Generator:
+        return self._rng
+
+    def get_camera_reset_poses(self, env_index: int) -> Dict[str, PoseState]:
+        if not 0 <= env_index < self.batch_size:
+            raise IndexError(
+                f"env_index must be in [0, {self.batch_size}), got {env_index}"
+            )
+        poses: Dict[str, PoseState] = {}
+        for camera_name in self.camera_randomization:
+            try:
+                poses[camera_name] = self._get_camera_pose(camera_name).select(
+                    env_index
+                )
+            except KeyError:
+                continue
+        return poses
 
     def setup(self, config: AutoAtomConfig) -> None:
         for operator in self.operator_handlers.values():
@@ -1902,6 +1937,21 @@ class MujocoTaskBackend(SceneBackend):
         for object_name in self.object_handlers:
             result |= self.is_object_grasped(operator_name, object_name)
         return result
+
+    def get_grasped_object_name(
+        self,
+        operator_name: str,
+        env_index: int,
+    ) -> Optional[str]:
+        if not 0 <= env_index < self.batch_size:
+            raise IndexError(
+                f"env_index must be in [0, {self.batch_size}), got {env_index}"
+            )
+        operator = self.get_operator_handler(operator_name)
+        for object_name, target in self.object_handlers.items():
+            if operator._is_target_grasped(env_index, target):
+                return object_name
+        return None
 
     def is_operator_contacting(
         self, operator_name: str, object_name: str

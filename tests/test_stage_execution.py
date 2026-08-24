@@ -374,7 +374,7 @@ def test_config_driven_policy_uses_shared_stage_primitive_cursor() -> None:
         evaluator.close()
 
 
-def test_config_driven_place_checks_held_object_target_pose() -> None:
+def test_config_driven_place_uses_public_backend_contracts() -> None:
     config = _task_file(
         "stage_execution_place_condition",
         [
@@ -385,7 +385,6 @@ def test_config_driven_place_checks_held_object_target_pose() -> None:
                 "operator": "arm",
                 "param": {
                     "pre_move": [_world_pose(0.2)],
-                    "placed_tolerance": {"position": 0.01},
                 },
             }
         ],
@@ -402,13 +401,15 @@ def test_config_driven_place_checks_held_object_target_pose() -> None:
             orientation=(0.0, 0.0, 0.0, 1.0),
         ),
     )
-    backend.object_handlers = backend.objects
+    assert not hasattr(backend, "object_handlers")
     grasp_checks = iter((True, False))
     backend.is_operator_grasping = lambda _operator: np.asarray(
         [next(grasp_checks)], dtype=bool
     )
-    backend.is_object_grasped = lambda _operator, name: np.asarray(
-        [name == "held"], dtype=bool
+    backend.get_grasped_object_name = lambda _operator, _env_index: "held"
+    backend.get_operator_handler("arm").get_placed_tolerances = lambda: (
+        0.01,
+        None,
     )
     try:
         update = _run_config_policy(evaluator, policy)
@@ -416,6 +417,39 @@ def test_config_driven_place_checks_held_object_target_pose() -> None:
         assert update.success.tolist() == [False]
         assert update.details[0]["failure_category"] == "placement_failed"
         assert update.details[0]["held_object"] == "held"
+    finally:
+        evaluator.close()
+
+
+def test_config_driven_place_does_not_accept_unknown_released_object() -> None:
+    config = _task_file(
+        "stage_execution_place_unknown_held_object",
+        [
+            {
+                "name": "place_unknown_object",
+                "object": "target",
+                "operation": "place",
+                "operator": "arm",
+                "param": {"pre_move": [_world_pose(0.2)]},
+            }
+        ],
+    )
+    policy = ConfigDrivenDemoPolicy()
+    evaluator = PolicyEvaluator(action_applier=policy.action_applier).from_config(
+        config
+    )
+    backend = evaluator._context.backend
+    grasp_checks = iter((True, False))
+    backend.is_operator_grasping = lambda _operator: np.asarray(
+        [next(grasp_checks)], dtype=bool
+    )
+    backend.get_grasped_object_name = lambda _operator, _env_index: None
+    try:
+        update = _run_config_policy(evaluator, policy)
+
+        assert update.success.tolist() == [False]
+        assert update.details[0]["failure_category"] == "placement_failed"
+        assert update.details[0]["held_object"] == ""
     finally:
         evaluator.close()
 

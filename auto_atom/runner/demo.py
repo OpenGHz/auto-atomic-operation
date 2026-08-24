@@ -9,7 +9,11 @@ import hydra
 from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig
 
-from auto_atom.runtime import TaskRunner
+from auto_atom.runtime import (
+    ObservationEnvProtocol,
+    TaskRunner,
+    require_env_capability,
+)
 
 from .common import (
     ExampleLoopHooks,
@@ -41,7 +45,12 @@ def main(cfg: DictConfig) -> None:
 
     def _step_fn(_step, _update):
         if perf_count:
-            _last_obs[0] = runner.get_env().capture_observation()
+            env = require_env_capability(
+                runner.get_env(),
+                ObservationEnvProtocol,
+                feature="aao-demo perf_count observation capture",
+            )
+            _last_obs[0] = env.capture_observation()
         return runner.update()
 
     try:

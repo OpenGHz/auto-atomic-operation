@@ -25,10 +25,13 @@ from .runtime import (
     ExecutionContext,
     ExecutionRecord,
     ExecutionSummary,
+    InfoEnvProtocol,
     ObjectHandler,
+    ObservationEnvProtocol,
     OperatorHandler,
     PrimitiveAction,
     SceneBackend,
+    SimulationLoopEnvProtocol,
     StageExecutionPlan,
     StageExecutionStatus,
     TaskFlowBuilder,
@@ -37,6 +40,8 @@ from .runtime import (
     _build_execution_summary,
     _collect_reset_details,
     _EnvRuntimeState,
+    _teardown_backend_after_initialization_failure,
+    require_env_capability,
 )
 from .stage_execution import PolicyStageFeedback, StageExecution
 
@@ -241,6 +246,7 @@ class PolicyEvaluator:
         self._sim_lock: threading.Lock = threading.Lock()
         self._sim_thread: Optional[threading.Thread] = None
         self._sim_stop_event: Optional[threading.Event] = None
+        self._sim_loop_error: Optional[Exception] = None
         self._pending_sim_loop_freq: float = 0.0
 
     @property
@@ -263,6 +269,15 @@ class PolicyEvaluator:
     def from_config(
         self, config: TaskFileConfig, sim_loop_frequency: float = 0.0
     ) -> "PolicyEvaluator":
+        requested_sim_loop_frequency = float(sim_loop_frequency)
+        if (
+            not np.isfinite(requested_sim_loop_frequency)
+            or requested_sim_loop_frequency < 0
+        ):
+            raise ValueError(
+                "sim_loop_frequency must be non-negative and finite; "
+                f"got {sim_loop_frequency}."
+            )
         if config.execution.interval_selection is not None:
             raise ValueError(
                 "execution.interval_selection is supported by TaskRunner/aao-demo only; "
@@ -285,35 +300,58 @@ class PolicyEvaluator:
                 "Task file backend must be an instantiated SceneBackend. "
                 f"Got {type(backend).__name__}."
             )
-        self._context = ExecutionContext(
-            config=config.task,
-            backend=backend,
-            task_file=config,
-        )
-        self._timeline = self.builder.compile(
-            self._context,
-            validate_boundaries=False,
-        )
-        self._builder_timelines = {id(self.builder): self._timeline}
-        self._plan = list(self._timeline.stage_plans)
-        self._context.plan = self._plan
-        self._context.backend.setup(self._context.config)
-        self._stage_execution = StageExecution(
-            self._context,
-            self._plan,
-            actions_factory=lambda plan: self._require_timeline().clone_stage_actions(
-                plan.stage_index
-            ),
-            timeline=self._timeline,
-            completion_pose_resolver=self._resolve_completion_pose,
-        )
-        self._env_states = self._stage_execution.states
+        try:
+            env = require_env_capability(
+                backend.get_env(),
+                EnvProtocol,
+                feature="PolicyEvaluator initialization",
+                expected_batch_size=backend.batch_size,
+            )
+            if requested_sim_loop_frequency > 0:
+                require_env_capability(
+                    env,
+                    SimulationLoopEnvProtocol,
+                    feature="PolicyEvaluator background simulation",
+                    expected_batch_size=backend.batch_size,
+                )
+            context = ExecutionContext(
+                config=config.task,
+                backend=backend,
+                task_file=config,
+            )
+            timeline = self.builder.compile(
+                context,
+                validate_boundaries=False,
+            )
+            plan = list(timeline.stage_plans)
+            context.plan = plan
+            backend.setup(context.config)
+            stage_execution = StageExecution(
+                context,
+                plan,
+                actions_factory=lambda stage_plan: (
+                    self._require_timeline().clone_stage_actions(stage_plan.stage_index)
+                ),
+                timeline=timeline,
+                completion_pose_resolver=self._resolve_completion_pose,
+            )
+        except BaseException:
+            _teardown_backend_after_initialization_failure(backend)
+            raise
+
+        self._context = context
+        self._timeline = timeline
+        self._builder_timelines = {id(self.builder): timeline}
+        self._plan = plan
+        self._stage_execution = stage_execution
+        self._env_states = stage_execution.states
         self._has_reset = np.zeros(backend.batch_size, dtype=bool)
         self._records = self._stage_execution.records
-        self._pending_sim_loop_freq = float(sim_loop_frequency)
+        self._pending_sim_loop_freq = requested_sim_loop_frequency
         return self
 
     def reset(self, env_mask: Optional[np.ndarray] = None) -> TaskUpdate:
+        self._raise_sim_loop_error()
         context = self._require_context()
         mask = self._normalize_mask(env_mask)
         with self._sim_lock:
@@ -329,24 +367,45 @@ class PolicyEvaluator:
         return self._build_task_update()
 
     def get_observation(self) -> Any:
+        self._raise_sim_loop_error()
         context = self._require_context()
         with self._sim_lock:
             if self.observation_getter is not None:
                 return self.observation_getter(context)
             backend = context.backend
-            env = getattr(backend, "env", None)
-            if env is not None and hasattr(env, "capture_observation"):
-                return env.capture_observation()
-        raise RuntimeError(
-            "No observation_getter was provided and backend.env does not expose "
-            "capture_observation()."
-        )
+            env = require_env_capability(
+                backend.get_env(),
+                ObservationEnvProtocol,
+                feature="PolicyEvaluator.get_observation() without an observation_getter",
+                expected_batch_size=backend.batch_size,
+            )
+            return env.capture_observation()
 
     def get_env(self) -> EnvProtocol:
         """Return the underlying environment object managed by this evaluator."""
-        return self._require_context().backend.env
+        backend = self._require_context().backend
+        return require_env_capability(
+            backend.get_env(),
+            EnvProtocol,
+            feature="PolicyEvaluator.get_env()",
+            expected_batch_size=backend.batch_size,
+        )
+
+    def get_info(self) -> Dict[str, Any]:
+        """Return environment metadata when the backend provides that capability."""
+        self._raise_sim_loop_error()
+        backend = self._require_context().backend
+        with self._sim_lock:
+            env = require_env_capability(
+                backend.get_env(),
+                InfoEnvProtocol,
+                feature="PolicyEvaluator.get_info()",
+                expected_batch_size=backend.batch_size,
+            )
+            return env.get_info()
 
     def update(self, action: Any, env_mask: Optional[np.ndarray] = None) -> TaskUpdate:
+        self._raise_sim_loop_error()
         context = self._require_context()
         mask = self._normalize_mask(env_mask)
         self._validate_update_mask(mask)
@@ -366,6 +425,7 @@ class PolicyEvaluator:
 
     def close(self) -> None:
         self.stop_sim_loop()
+        self._sim_loop_error = None
         if self._context is None:
             return
         self._context.backend.teardown()
@@ -394,7 +454,7 @@ class PolicyEvaluator:
     def start_sim_loop(self, frequency: float = 60.0) -> None:
         """Start a background thread that advances physics at *frequency* Hz.
 
-        Each iteration calls ``backend.env.update()`` which steps MuJoCo
+        Each iteration calls ``backend.get_env().update()`` which steps MuJoCo
         physics using whatever control values (``data.ctrl``) were last set,
         so the simulation keeps running without explicit ``update()`` calls.
 
@@ -403,16 +463,23 @@ class PolicyEvaluator:
         frequency:
             Target update rate in Hz (default 60).
         """
+        self._raise_sim_loop_error()
         if self._sim_thread is not None:
             raise RuntimeError("Simulation loop is already running.")
-        context = self._require_context()
-        env = context.backend.env
-        if not hasattr(env, "update"):
-            raise RuntimeError(
-                "Backend env does not expose an update() method. "
-                "Background simulation loop is not supported for this backend."
+        if not np.isfinite(frequency) or frequency <= 0:
+            raise ValueError(
+                f"Simulation loop frequency must be positive and finite; got {frequency}."
             )
+        context = self._require_context()
+        backend = context.backend
+        env = require_env_capability(
+            backend.get_env(),
+            SimulationLoopEnvProtocol,
+            feature="PolicyEvaluator.start_sim_loop()",
+            expected_batch_size=backend.batch_size,
+        )
         self._sim_stop_event = threading.Event()
+        self._sim_loop_error = None
         self._sim_thread = threading.Thread(
             target=self._sim_loop_fn,
             args=(env, frequency),
@@ -435,18 +502,34 @@ class PolicyEvaluator:
         """Return whether the background simulation loop is active."""
         return self._sim_thread is not None and self._sim_thread.is_alive()
 
-    def _sim_loop_fn(self, env: Any, frequency: float) -> None:
+    def _sim_loop_fn(
+        self,
+        env: SimulationLoopEnvProtocol,
+        frequency: float,
+    ) -> None:
         """Background thread target: step physics at the requested rate."""
         assert self._sim_stop_event is not None
         dt = 1.0 / frequency
-        while not self._sim_stop_event.is_set():
-            t0 = time.monotonic()
-            with self._sim_lock:
-                env.update()
-            elapsed = time.monotonic() - t0
-            remaining = dt - elapsed
-            if remaining > 0:
-                self._sim_stop_event.wait(remaining)
+        try:
+            while not self._sim_stop_event.is_set():
+                t0 = time.monotonic()
+                with self._sim_lock:
+                    env.update()
+                elapsed = time.monotonic() - t0
+                remaining = dt - elapsed
+                if remaining > 0:
+                    self._sim_stop_event.wait(remaining)
+        except Exception as exc:
+            self._sim_loop_error = exc
+            self._sim_stop_event.set()
+
+    def _raise_sim_loop_error(self) -> None:
+        error = self._sim_loop_error
+        if error is None:
+            return
+        self._sim_loop_error = None
+        self.stop_sim_loop()
+        raise RuntimeError("Background simulation loop failed.") from error
 
     def summarize(
         self,
@@ -456,6 +539,7 @@ class PolicyEvaluator:
         updates_used: int = 0,
         elapsed_time_sec: float = 0.0,
     ) -> ExecutionSummary:
+        self._raise_sim_loop_error()
         return _build_execution_summary(
             update=update or self._build_task_update(),
             records=self._records,

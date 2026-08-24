@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any, Optional
+from typing import Optional
 
 import numpy as np
 
 from auto_atom.framework import TaskFileConfig
-from auto_atom.runtime import TaskUpdate
+from auto_atom.runtime import EnvProtocol, TaskUpdate
 
 
 class RunnerBase(ABC):
@@ -17,6 +17,12 @@ class RunnerBase(ABC):
     Every runner must support the lifecycle:
     ``__init__() -> from_config(cfg) -> reset()/update() loop -> close()``
     """
+
+    @property
+    @abstractmethod
+    def batch_size(self) -> int:
+        """Return the number of logical environments managed by the runner."""
+        ...
 
     @abstractmethod
     def from_config(self, config: TaskFileConfig) -> RunnerBase:
@@ -34,7 +40,7 @@ class RunnerBase(ABC):
         ...
 
     @abstractmethod
-    def get_env(self) -> Any:
+    def get_env(self) -> EnvProtocol:
         """Return the underlying environment object managed by this runner."""
         ...
 

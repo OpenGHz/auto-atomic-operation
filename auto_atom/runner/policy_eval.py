@@ -11,6 +11,11 @@ from hydra.utils import instantiate
 from omegaconf import DictConfig
 
 from auto_atom.policy_eval import ConfigDrivenDemoPolicy, PolicyEvaluator
+from auto_atom.runtime import (
+    ObservationEnvProtocol,
+    StepEnvProtocol,
+    require_env_capability,
+)
 
 from .common import (
     ExampleLoopHooks,
@@ -23,21 +28,25 @@ from .common import (
 
 def _default_observation_getter(context) -> Any:
     backend = context.backend
-    env = getattr(backend, "env", None)
-    if env is not None and hasattr(env, "capture_observation"):
-        return env.capture_observation()
-    return {}
+    env = require_env_capability(
+        backend.get_env(),
+        ObservationEnvProtocol,
+        feature="aao-eval default observation getter",
+        expected_batch_size=backend.batch_size,
+    )
+    return env.capture_observation()
 
 
 def _default_action_applier(context, action: Any, env_mask: Any = None) -> None:
     if action is None:
         return
     backend = context.backend
-    env = getattr(backend, "env", None)
-    if env is None or not hasattr(env, "step"):
-        raise RuntimeError(
-            "Default action applier requires backend.env.step(action, env_mask=...)."
-        )
+    env = require_env_capability(
+        backend.get_env(),
+        StepEnvProtocol,
+        feature="aao-eval default action applier",
+        expected_batch_size=backend.batch_size,
+    )
     normalized_action = _normalize_action_for_env_step(action, backend.batch_size)
     env.step(normalized_action, env_mask=env_mask)
 

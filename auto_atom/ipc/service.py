@@ -19,7 +19,12 @@ from rpyc.utils.server import ThreadedServer
 
 from ..config_loader import load_task_file, load_task_file_hydra
 from ..policy_eval import PolicyEvaluator
-from ..runtime import ExecutionContext
+from ..runtime import (
+    ExecutionContext,
+    ObservationEnvProtocol,
+    PoseActionEnvProtocol,
+    require_env_capability,
+)
 from .serialize import (
     deserialize_value,
     serialize_execution_record,
@@ -37,16 +42,31 @@ def _default_action_applier(
     if action is None:
         return
     if isinstance(action, dict):
-        context.backend.env.apply_pose_action(
+        backend = context.backend
+        env = require_env_capability(
+            backend.get_env(),
+            PoseActionEnvProtocol,
+            feature="IPC default action applier",
+            expected_batch_size=backend.batch_size,
+        )
+        env.apply_pose_action(
             "arm",
             action["position"],
             action["orientation"],
             action["gripper"],
+            env_mask=env_mask,
         )
 
 
 def _default_observation_getter(context: ExecutionContext) -> Any:
-    return context.backend.env.capture_observation()
+    backend = context.backend
+    env = require_env_capability(
+        backend.get_env(),
+        ObservationEnvProtocol,
+        feature="IPC default observation getter",
+        expected_batch_size=backend.batch_size,
+    )
+    return env.capture_observation()
 
 
 # ── rpyc config ──────────────────────────────────────────────────────────
@@ -176,8 +196,7 @@ def create_service(
             ]
 
         def exposed_get_info(self) -> Dict[str, Any]:
-            env = self._require_evaluator()._require_context().backend.env
-            return serialize_value(env.get_info())
+            return serialize_value(self._require_evaluator().get_info())
 
     return PolicyEvaluatorService
 

@@ -32,6 +32,25 @@ class MockObjectHandler(ObjectHandler):
     def get_pose(self) -> PoseState:
         return self.pose
 
+    def set_pose(
+        self,
+        pose: PoseState,
+        env_mask: Optional[np.ndarray] = None,
+    ) -> None:
+        batch_size = self.pose.batch_size
+        source = pose.broadcast_to(batch_size)
+        mask = (
+            np.ones(batch_size, dtype=bool)
+            if env_mask is None
+            else np.asarray(env_mask, dtype=bool).reshape(-1)
+        )
+        if mask.shape != (batch_size,):
+            raise ValueError(
+                f"env_mask must have shape ({batch_size},), got {mask.shape}"
+            )
+        self.pose.position[mask] = source.position[mask]
+        self.pose.orientation[mask] = source.orientation[mask]
+
 
 @dataclass
 class MockOperatorHandler(OperatorHandler):
@@ -143,7 +162,11 @@ class MockEnv:
         return {}
 
     def apply_joint_action(
-        self, operator: str, action: Any = None, env_mask: Any = None
+        self,
+        operator: str,
+        action: Any = None,
+        env_mask: Any = None,
+        kinematic: bool = False,
     ) -> None:
         pass
 
@@ -154,6 +177,7 @@ class MockEnv:
         orientation: Any = None,
         gripper: Any = None,
         env_mask: Any = None,
+        kinematic: bool = False,
     ) -> None:
         pass
 
@@ -170,6 +194,9 @@ class MockSceneBackend(SceneBackend):
 
     def __post_init__(self) -> None:
         self.env = MockEnv(batch_size=self.batch_size)
+
+    def get_env(self) -> MockEnv:
+        return self.env
 
     def setup(self, config: AutoAtomConfig) -> None:
         self.lifecycle_events.append(
@@ -218,6 +245,27 @@ class MockSceneBackend(SceneBackend):
     def is_operator_grasping(self, operator_name: str) -> np.ndarray:
         _ = self.get_operator_handler(operator_name)
         return np.zeros(self.batch_size, dtype=bool)
+
+    def is_operator_contacting(
+        self,
+        operator_name: str,
+        object_name: str,
+    ) -> np.ndarray:
+        _ = self.get_operator_handler(operator_name)
+        _ = self.get_object_handler(object_name)
+        return np.zeros(self.batch_size, dtype=bool)
+
+    def get_grasped_object_name(
+        self,
+        operator_name: str,
+        env_index: int,
+    ) -> Optional[str]:
+        _ = self.get_operator_handler(operator_name)
+        if not 0 <= env_index < self.batch_size:
+            raise IndexError(
+                f"env_index must be in [0, {self.batch_size}), got {env_index}"
+            )
+        return None
 
     def set_interest_objects_and_operations(
         self,

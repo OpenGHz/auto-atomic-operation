@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import inspect
+import logging
 import math
+import operator
+import weakref
 from abc import ABC, abstractmethod
 from contextlib import contextmanager, nullcontext
 from copy import deepcopy
@@ -19,6 +23,8 @@ from typing import (
     List,
     Optional,
     Protocol,
+    TypeVar,
+    cast,
     runtime_checkable,
 )
 
@@ -56,6 +62,8 @@ if TYPE_CHECKING:
     from .execution_timeline import ExecutionTimeline
     from .stage_execution import StageExecution
 
+logger = logging.getLogger(__name__)
+
 
 class StageExecutionStatus(str, Enum):
     PENDING = "pending"
@@ -72,18 +80,26 @@ class ControlSignal(str, Enum):
 
 
 @dataclass
-class ObjectHandler:
+class ObjectHandler(ABC):
     name: str
 
-    def get_pose(self) -> PoseState:
-        raise NotImplementedError
+    def __post_init__(self) -> None:
+        if not isinstance(self.name, str) or not self.name:
+            raise ValueError(
+                f"ObjectHandler.name must be a non-empty string; got {self.name!r}."
+            )
 
+    @abstractmethod
+    def get_pose(self) -> PoseState:
+        """Return the object's batched world pose."""
+
+    @abstractmethod
     def set_pose(
         self,
         pose: PoseState,
         env_mask: Optional[np.ndarray] = None,  # noqa: ARG002
     ) -> None:
-        raise NotImplementedError
+        """Set the object's batched world pose for selected environments."""
 
 
 @dataclass
@@ -151,6 +167,24 @@ class OperatorHandler(ABC):
     def get_base_pose(self) -> PoseState:
         """Return batched world poses for the operator base."""
 
+    def get_reached_tolerances(self) -> tuple[Any, Any]:
+        """Return default position and orientation tolerances for REACHED.
+
+        Backends whose operator configuration exposes different tolerances
+        should override this method.  Keeping this on the public handler
+        contract prevents Stage execution from depending on a backend's
+        private configuration object.
+        """
+        return 0.01, 0.08
+
+    def get_placed_tolerances(self) -> tuple[Any, Any]:
+        """Return default position and orientation tolerances for PLACED.
+
+        ``None`` means that the corresponding placement component is not
+        constrained unless the Stage supplies an explicit tolerance.
+        """
+        return None, None
+
     def set_pose(
         self,
         pose: PoseState,
@@ -161,21 +195,57 @@ class OperatorHandler(ABC):
 
 @runtime_checkable
 class EnvProtocol(Protocol):
-    """Minimal environment interface expected by ``SceneBackend.env``."""
+    """Core batched environment interface returned by ``SceneBackend.get_env()``.
+
+    Environment features such as stepping, observations, and simulation-loop
+    updates are optional capabilities represented by the narrower protocols
+    below. Callers should request only the capability they actually use.
+    """
+
+    @property
+    def batch_size(self) -> int:
+        """Number of environments represented by this object."""
+        ...
+
+
+@runtime_checkable
+class StepEnvProtocol(EnvProtocol, Protocol):
+    """Environment capability for applying batched policy actions."""
 
     def step(
-        self, action: np.ndarray, env_mask: Optional[np.ndarray] = None
+        self,
+        action: np.ndarray,
+        /,
+        *,
+        env_mask: Optional[np.ndarray] = None,
     ) -> None: ...
 
+
+@runtime_checkable
+class ObservationEnvProtocol(EnvProtocol, Protocol):
+    """Environment capability for capturing policy observations."""
+
     def capture_observation(self) -> Dict[str, Dict[str, Any]]: ...
+
+
+@runtime_checkable
+class JointActionEnvProtocol(EnvProtocol, Protocol):
+    """Environment capability for directly applying operator joint actions."""
 
     def apply_joint_action(
         self,
         operator: str,
         action: Any,
+        /,
+        *,
         env_mask: Optional[np.ndarray] = None,
         kinematic: bool = False,
     ) -> None: ...
+
+
+@runtime_checkable
+class PoseActionEnvProtocol(EnvProtocol, Protocol):
+    """Environment capability for directly applying operator pose actions."""
 
     def apply_pose_action(
         self,
@@ -183,16 +253,308 @@ class EnvProtocol(Protocol):
         position: Any,
         orientation: Any,
         gripper: Any = None,
+        /,
+        *,
+        env_mask: Optional[np.ndarray] = None,
+    ) -> None: ...
+
+
+@runtime_checkable
+class KinematicPoseActionEnvProtocol(PoseActionEnvProtocol, Protocol):
+    """Pose-action capability that also supports kinematic application."""
+
+    def apply_pose_action(
+        self,
+        operator: str,
+        position: Any,
+        orientation: Any,
+        gripper: Any = None,
+        /,
+        *,
         env_mask: Optional[np.ndarray] = None,
         kinematic: bool = False,
     ) -> None: ...
 
 
+@runtime_checkable
+class SimulationLoopEnvProtocol(EnvProtocol, Protocol):
+    """Environment capability for independently advancing simulation state."""
+
+    def update(self) -> None: ...
+
+
+@runtime_checkable
+class InfoEnvProtocol(EnvProtocol, Protocol):
+    """Environment capability for returning serializable metadata."""
+
+    def get_info(self) -> Dict[str, Any]: ...
+
+
+_EnvCapabilityT = TypeVar("_EnvCapabilityT")
+_ENV_CAPABILITY_CACHE: Dict[
+    tuple[int, type[Any]],
+    weakref.ReferenceType[object],
+] = {}
+
+
+def require_env_capability(
+    env: object,
+    capability: type[_EnvCapabilityT],
+    *,
+    feature: str,
+    expected_batch_size: Optional[int] = None,
+) -> _EnvCapabilityT:
+    """Return *env* narrowed to *capability* or raise a clear runtime error.
+
+    A successful structural/signature check is cached for the lifetime of a
+    weak-referenceable environment. Environment capability methods are
+    therefore expected to remain stable after construction; batch-size values
+    are still checked on every call.
+    """
+    cached = _is_environment_capability_cached(env, capability)
+    if not cached:
+        if not (
+            getattr(capability, "_is_protocol", False)
+            and getattr(capability, "_is_runtime_protocol", False)
+        ):
+            raise TypeError(
+                f"{capability!r} is not a runtime-checkable environment protocol."
+            )
+        required_members = _environment_protocol_members(capability)
+        missing_members = []
+        for member in required_members:
+            try:
+                inspect.getattr_static(env, member)
+            except AttributeError:
+                missing_members.append(member)
+        if missing_members:
+            missing = (
+                f" Missing attributes: {', '.join(missing_members)}."
+                if missing_members
+                else ""
+            )
+            raise RuntimeError(
+                f"{feature} requires environment capability {capability.__name__}; "
+                f"got {type(env).__name__}.{missing}"
+            )
+
+    narrowed = cast(_EnvCapabilityT, env)
+    try:
+        environment_batch_size = getattr(narrowed, "batch_size")
+    except Exception as exc:
+        raise RuntimeError(
+            f"{feature} requires a readable environment batch_size; "
+            f"{type(env).__name__}.batch_size raised "
+            f"{type(exc).__name__}: {exc}."
+        ) from exc
+    actual_batch_size = _require_positive_batch_size(
+        environment_batch_size,
+        owner="environment",
+        feature=feature,
+    )
+    normalized_expected_batch_size = (
+        None
+        if expected_batch_size is None
+        else _require_positive_batch_size(
+            expected_batch_size,
+            owner="backend",
+            feature=feature,
+        )
+    )
+    if (
+        normalized_expected_batch_size is not None
+        and actual_batch_size != normalized_expected_batch_size
+    ):
+        raise RuntimeError(
+            f"{feature} requires environment batch_size to match "
+            f"backend.batch_size; got {actual_batch_size} and "
+            f"{normalized_expected_batch_size}."
+        )
+    if not cached:
+        _validate_environment_protocol_signatures(
+            narrowed,
+            capability,
+            feature=feature,
+        )
+        _cache_environment_capability(env, capability)
+    return narrowed
+
+
+def _is_environment_capability_cached(
+    env: object,
+    capability: type[Any],
+) -> bool:
+    reference = _ENV_CAPABILITY_CACHE.get((id(env), capability))
+    return reference is not None and reference() is env
+
+
+def _cache_environment_capability(
+    env: object,
+    capability: type[Any],
+) -> None:
+    key = (id(env), capability)
+
+    def discard(reference: weakref.ReferenceType[object]) -> None:
+        if _ENV_CAPABILITY_CACHE.get(key) is reference:
+            _ENV_CAPABILITY_CACHE.pop(key, None)
+
+    try:
+        reference = weakref.ref(env, discard)
+    except TypeError:
+        return
+    _ENV_CAPABILITY_CACHE[key] = reference
+
+
+def _require_positive_batch_size(
+    value: object,
+    *,
+    owner: str,
+    feature: str,
+) -> int:
+    if isinstance(value, (bool, np.bool_)):
+        raise RuntimeError(
+            f"{feature} requires {owner} batch_size to be an integer; got {value!r}."
+        )
+    try:
+        normalized = operator.index(value)
+    except TypeError as exc:
+        raise RuntimeError(
+            f"{feature} requires {owner} batch_size to be an integer; got {value!r}."
+        ) from exc
+    if normalized <= 0:
+        raise RuntimeError(
+            f"{feature} requires {owner} batch_size to be positive; got {normalized}."
+        )
+    return normalized
+
+
+def _environment_protocol_members(capability: type[Any]) -> List[str]:
+    members: set[str] = set()
+    for base in capability.__mro__:
+        members.update(
+            name
+            for name in getattr(base, "__annotations__", {})
+            if not name.startswith("_")
+        )
+        members.update(
+            name
+            for name, value in vars(base).items()
+            if not name.startswith("_")
+            and (callable(value) or isinstance(value, property))
+        )
+    return sorted(members)
+
+
+def _validate_environment_protocol_signatures(
+    env: object,
+    capability: type[Any],
+    *,
+    feature: str,
+) -> None:
+    checked: set[str] = set()
+    for base in capability.__mro__:
+        for member_name, expected_member in vars(base).items():
+            if (
+                member_name.startswith("_")
+                or member_name in checked
+                or not callable(expected_member)
+            ):
+                continue
+            checked.add(member_name)
+            try:
+                actual_member = getattr(env, member_name)
+            except Exception as exc:
+                raise RuntimeError(
+                    f"{feature} requires readable "
+                    f"{capability.__name__}.{member_name}; "
+                    f"{type(env).__name__}.{member_name} raised "
+                    f"{type(exc).__name__}: {exc}."
+                ) from exc
+            if not callable(actual_member):
+                raise RuntimeError(
+                    f"{feature} requires callable "
+                    f"{capability.__name__}.{member_name}; got "
+                    f"{type(env).__name__}.{member_name}="
+                    f"{actual_member!r}."
+                )
+            callable_implementation = getattr(actual_member, "__call__", None)
+            if any(
+                inspect.iscoroutinefunction(candidate)
+                or inspect.isasyncgenfunction(candidate)
+                or inspect.isgeneratorfunction(candidate)
+                for candidate in (actual_member, callable_implementation)
+                if candidate is not None
+            ):
+                raise RuntimeError(
+                    f"{feature} requires synchronous "
+                    f"{capability.__name__}.{member_name}; got "
+                    f"{type(env).__name__}.{member_name}."
+                )
+            expected_signature = inspect.signature(expected_member)
+            try:
+                actual_signature = inspect.signature(actual_member)
+            except (TypeError, ValueError) as exc:
+                raise RuntimeError(
+                    f"{feature} requires introspectable "
+                    f"{capability.__name__}.{member_name}; wrap "
+                    f"{type(env).__name__}.{member_name} in a Python method "
+                    "with an explicit signature."
+                ) from exc
+
+            for args, kwargs in _protocol_signature_calls(expected_signature):
+                try:
+                    actual_signature.bind(*args, **kwargs)
+                except TypeError as exc:
+                    raise RuntimeError(
+                        f"{feature} requires {capability.__name__}.{member_name} "
+                        f"with a signature compatible with {expected_signature}; "
+                        f"got {type(env).__name__}.{member_name}{actual_signature}."
+                    ) from exc
+
+
+def _protocol_signature_calls(
+    signature: inspect.Signature,
+) -> List[tuple[List[object], Dict[str, object]]]:
+    sentinel = object()
+    parameters = list(signature.parameters.values())
+    if parameters and parameters[0].name in {"self", "cls"}:
+        parameters = parameters[1:]
+
+    minimal_args: List[object] = []
+    minimal_kwargs: Dict[str, object] = {}
+    full_args: List[object] = []
+    full_kwargs: Dict[str, object] = {}
+    for parameter in parameters:
+        required = parameter.default is inspect.Parameter.empty
+        if parameter.kind == inspect.Parameter.POSITIONAL_ONLY:
+            if required:
+                minimal_args.append(sentinel)
+            full_args.append(sentinel)
+        elif parameter.kind == inspect.Parameter.POSITIONAL_OR_KEYWORD:
+            if required:
+                minimal_args.append(sentinel)
+                full_args.append(sentinel)
+            else:
+                full_kwargs[parameter.name] = sentinel
+        elif parameter.kind == inspect.Parameter.KEYWORD_ONLY:
+            if required:
+                minimal_kwargs[parameter.name] = sentinel
+            full_kwargs[parameter.name] = sentinel
+
+    return [
+        (minimal_args, minimal_kwargs),
+        (full_args, full_kwargs),
+    ]
+
+
 class SceneBackend(ABC):
-    env: EnvProtocol
-    """The underlying environment object managed by this backend.
-    Concrete backends expose the actual env instance here
-    (e.g. ``BatchedUnifiedMujocoEnv`` for MuJoCo)."""
+    @abstractmethod
+    def get_env(self) -> EnvProtocol:
+        """Return the stable basis environment exposed to runners and policies.
+
+        This method is called after backend construction and before ``setup``;
+        the environment object and its capability methods must already exist.
+        """
 
     @property
     @abstractmethod
@@ -201,7 +563,7 @@ class SceneBackend(ABC):
 
     @abstractmethod
     def setup(self, config: AutoAtomConfig) -> None:
-        """Prepare backend resources for this task."""
+        """Prepare task state after environment and handler construction."""
 
     @abstractmethod
     def reset(self, env_mask: Optional[np.ndarray] = None) -> None:
@@ -226,6 +588,19 @@ class SceneBackend(ABC):
     @abstractmethod
     def is_operator_grasping(self, operator_name: str) -> np.ndarray:
         """Return whether the operator is currently grasping any object."""
+
+    @abstractmethod
+    def get_grasped_object_name(
+        self,
+        operator_name: str,
+        env_index: int,
+    ) -> Optional[str]:
+        """Return the object grasped by an operator in one environment.
+
+        Return ``None`` when the operator is empty-handed.  This is the
+        stable public lookup used by PLACE validation; implementations may
+        keep their object registries private.
+        """
 
     @property
     def dt_per_update(self) -> float:
@@ -265,12 +640,13 @@ class SceneBackend(ABC):
         )
         return delta > threshold
 
+    @abstractmethod
     def is_operator_contacting(
         self,
-        operator_name: str,  # noqa: ARG002
-        object_name: str,  # noqa: ARG002
+        operator_name: str,
+        object_name: str,
     ) -> np.ndarray:
-        return np.zeros(self.batch_size, dtype=bool)
+        """Return whether the operator contacts the object in each environment."""
 
     def get_element_pose(self, name: str, env_index: int = 0) -> PoseState:  # noqa: ARG002
         raise NotImplementedError(
@@ -288,6 +664,29 @@ class SceneBackend(ABC):
         operation_names: List[str],
     ) -> None:
         """Notify the backend about the current task-focus objects and operations."""
+
+    def get_random_generator(self) -> Optional[np.random.Generator]:
+        """Return the backend-owned RNG, when it has one.
+
+        Runner-owned seeded randomness is used when a backend returns ``None``.
+        This keeps waypoint randomization deterministic without reaching into a
+        backend's private state.
+        """
+        return None
+
+    def get_camera_reset_poses(self, env_index: int) -> Dict[str, PoseState]:
+        """Return randomized camera poses included in reset diagnostics.
+
+        Backends without camera randomization return an empty mapping.
+        """
+        return {}
+
+
+def _teardown_backend_after_initialization_failure(backend: SceneBackend) -> None:
+    try:
+        backend.teardown()
+    except Exception:
+        logger.exception("Backend teardown failed after initialization error.")
 
 
 @dataclass
@@ -328,6 +727,14 @@ class ExecutionContext:
     backend: SceneBackend
     task_file: TaskFileConfig
     plan: List["StageExecutionPlan"] = field(default_factory=list)
+    random_generator: np.random.Generator = field(
+        init=False,
+        repr=False,
+    )
+
+    def __post_init__(self) -> None:
+        seed = self.config.seed if self.config.seed != 0 else None
+        self.random_generator = np.random.default_rng(seed)
 
 
 @dataclass
@@ -477,7 +884,12 @@ class TaskFlowBuilder:
     def _select_operator(stage: StageConfig, backend: SceneBackend) -> str:
         if not stage.operator:
             raise ValueError("Stage did not specify an operator.")
-        backend.get_operator_handler(stage.operator)
+        handler = backend.get_operator_handler(stage.operator)
+        if handler.name != stage.operator:
+            raise ValueError(
+                "Backend returned an operator handler with mismatched identity: "
+                f"requested {stage.operator!r}, got {handler.name!r}."
+            )
         return stage.operator
 
     @staticmethod
@@ -712,6 +1124,10 @@ class TaskRunner:
         self._stage_execution: Optional["StageExecution"] = None
 
     @property
+    def batch_size(self) -> int:
+        return self._require_context().backend.batch_size
+
+    @property
     def records(self) -> List[ExecutionRecord]:
         return list(self._records)
 
@@ -761,34 +1177,51 @@ class TaskRunner:
                 "Task file backend must be an instantiated SceneBackend. "
                 f"Got {type(backend).__name__}."
             )
-        self._context = ExecutionContext(
-            config=config.task,
-            backend=backend,
-            task_file=config,
-        )
-        self._timeline = self.builder.compile(
-            self._context,
-            validate_boundaries=True,
-        )
-        self._plan = list(self._timeline.stage_plans)
-        self._context.plan = self._plan
-        self._context.backend.setup(self._context.config)
-        self._stage_execution = StageExecution(
-            self._context,
-            self._plan,
-            actions_factory=lambda plan: self._materialize_stage_actions(plan),
-            timeline=self._timeline,
-            action_runner=lambda env_index, plan, action, env_mask: (
-                self._run_stage_action(
-                    env_index=env_index,
-                    plan=plan,
-                    action=action,
-                    backend=self._require_context().backend,
-                    env_mask=env_mask,
-                )
-            ),
-        )
-        self._env_states = self._stage_execution.states
+        try:
+            require_env_capability(
+                backend.get_env(),
+                EnvProtocol,
+                feature="TaskRunner initialization",
+                expected_batch_size=backend.batch_size,
+            )
+            context = ExecutionContext(
+                config=config.task,
+                backend=backend,
+                task_file=config,
+            )
+            timeline = self.builder.compile(
+                context,
+                validate_boundaries=True,
+            )
+            plan = list(timeline.stage_plans)
+            context.plan = plan
+            backend.setup(context.config)
+            stage_execution = StageExecution(
+                context,
+                plan,
+                actions_factory=lambda stage_plan: self._materialize_stage_actions(
+                    stage_plan
+                ),
+                timeline=timeline,
+                action_runner=lambda env_index, stage_plan, action, env_mask: (
+                    self._run_stage_action(
+                        env_index=env_index,
+                        plan=stage_plan,
+                        action=action,
+                        backend=self._require_context().backend,
+                        env_mask=env_mask,
+                    )
+                ),
+            )
+        except BaseException:
+            _teardown_backend_after_initialization_failure(backend)
+            raise
+
+        self._context = context
+        self._timeline = timeline
+        self._plan = plan
+        self._stage_execution = stage_execution
+        self._env_states = stage_execution.states
         self._has_reset = np.zeros(backend.batch_size, dtype=bool)
         self._public_internal_updates = np.zeros(backend.batch_size, dtype=np.int64)
         self._last_execution_details = [{} for _ in range(backend.batch_size)]
@@ -1234,7 +1667,13 @@ class TaskRunner:
 
     def get_env(self) -> EnvProtocol:
         """Return the underlying environment object managed by this runner."""
-        return self._require_context().backend.env
+        backend = self._require_context().backend
+        return require_env_capability(
+            backend.get_env(),
+            EnvProtocol,
+            feature="TaskRunner.get_env()",
+            expected_batch_size=backend.batch_size,
+        )
 
     def close(self) -> None:
         if self._context is None:
@@ -1295,9 +1734,8 @@ class TaskRunner:
         BASE`` and use ``absolute_world`` (or ``relative``) in the
         waypoint's ``randomization``.
         """
-        rng = getattr(context.backend, "_rng", None)
-        if rng is None:
-            rng = np.random.default_rng()
+        backend_rng = context.backend.get_random_generator()
+        rng = backend_rng if backend_rng is not None else context.random_generator
         for action in actions:
             if action.kind != "pose" or action.pose is None:
                 continue
@@ -1767,20 +2205,12 @@ class TaskRunner:
             }
             initial_poses[name] = entry_details
 
-        # Collect camera poses if camera randomization is configured.
-        cam_rand = getattr(context.backend, "camera_randomization", {})
-        if cam_rand:
-            camera_poses: Dict[str, Any] = {}
-            get_cam_pose = getattr(context.backend, "_get_camera_pose", None)
-            if get_cam_pose is not None:
-                for cam_name in cam_rand:
-                    try:
-                        pose = get_cam_pose(cam_name).select(env_index)
-                        camera_poses[cam_name] = self._serialize_pose(pose)
-                    except (KeyError, AttributeError):
-                        continue
-            if camera_poses:
-                initial_poses["_cameras"] = camera_poses
+        camera_poses = {
+            name: self._serialize_pose(pose)
+            for name, pose in context.backend.get_camera_reset_poses(env_index).items()
+        }
+        if camera_poses:
+            initial_poses["_cameras"] = camera_poses
 
         if not initial_poses:
             return {}
