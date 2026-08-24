@@ -49,3 +49,7 @@ exclude = [
   "aao_configs*",
 ]
 namespaces = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+norecursedirs = ["third_party"]

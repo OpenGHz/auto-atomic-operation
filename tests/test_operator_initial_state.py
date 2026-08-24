@@ -8,7 +8,8 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from auto_atom.runtime import ComponentRegistry, load_task_file_hydra
+from auto_atom.config_loader import load_task_file_hydra
+from auto_atom.runtime import ComponentRegistry
 from auto_atom.utils.pose import quaternion_angular_distance
 
 
@@ -27,7 +28,7 @@ def _build_press_button_backend(overrides: list[str] | None = None):
 def _eef_pose_and_finger_distance(backend):
     handler = backend.get_operator_handler("arm")
     pose = handler.get_end_effector_pose().select(0)
-    env = backend.env.envs[0]
+    env = backend.get_env().envs[0]
     left_id = mujoco.mj_name2id(env.model, mujoco.mjtObj.mjOBJ_GEOM, "left_finger_pad")
     right_id = mujoco.mj_name2id(
         env.model, mujoco.mjtObj.mjOBJ_GEOM, "right_finger_pad"
