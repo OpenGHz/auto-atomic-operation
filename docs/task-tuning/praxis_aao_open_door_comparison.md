@@ -190,6 +190,52 @@ latch release < clearance <= target < settle_end
 
 Praxis 的相机默认来自 `configs/open_room_door_push.yaml:219-270`；AAO 的默认媒体开关来自 `aao_configs/common_vars.yaml:7-12` 及本任务配置。两边即使使用相同分辨率，也不是同一套相机标定或数据 schema。
 
+### 4.5 Praxis 门/把手资产拼装与可视化
+
+Praxis 的“拼装”不是在每个仿真 step 中通过 MuJoCo `<attach>` 临时挂载两个物体，而是分成**离线资产组合**和**运行时场景编译**两层：
+
+1. `build-unidoor-lever-catalog` 读取门体和把手源包，分别做尺寸归一化、坐标变换、碰撞几何检查，并写出门/把手的 component manifest、标准化 mesh 和哈希。之后按门 × 把手的笛卡尔积物化组合，例如 `D001-H003`；组合 XML 还会记录门角、把手角、抓取 site 等语义对象。
+2. 当前 staged/closed-loop 运行时主要从带机器人和相机的 base scene 创建 `MjSpec`，再由 `UnilabLeverTaskModelFactory._patch_door()` 与 `_patch_handle()` 替换选中变体的 mesh、碰撞代理、安装位、轴和传感器，最后 `spec.compile()` 得到本次仿真的物理模型。也就是说，组合 XML 是可审计的资产产物；动态运行模型是 **base scene + selected variant patch** 的编译结果。
+
+组合 XML 的核心层级可以简化为：
+
+```text
+worldbody
+├── door_frame
+└── door_panel
+    ├── door_hinge
+    ├── door_panel_visual / door_panel_collision
+    ├── door_handle (门板的子 body，随门板旋转)
+    │   ├── handle_hinge (把手下压关节)
+    │   ├── door_handle_visual
+    │   ├── handle_lever_collision
+    │   └── handle_grasp_center
+    └── door_lock (可选，仅 visual)
+```
+
+其中，门 component manifest 的 `geometry.handle_position_m` 决定 `door_handle` 在门板上的安装位置；把手 component manifest 的 `geometry.grasp_offset_m` 决定 `handle_grasp_center` site 的局部位置。visual mesh 与物理 collision/proxy 分开维护；带锁把手的 `lock.obj` 可以作为静态 visual 加入，但不应被解释成可驱动的锁舌动力学。右铰链变体还会同步镜像 mesh、碰撞补充物和 provenance，不能只翻转一个 joint 轴。
+
+**拼装后的可视化是有的，但有不同层级：**
+
+| 能力 | 是否有 | 产物与边界 |
+| --- | --- | --- |
+| 组合 XML 的 MuJoCo 加载 | 有 | 可直接检查门/把手层级、joint、site、actuator 和可选 lock；它主要是结构/加载验证，不包含完整机器人交互证据。 |
+| 全量静态资产审核图 | 有 | `render-unidoor-collision-audit` 生成 55 个门体 × 47 个把手/门锁的图片、`index.html` 和 manifest；用于人工审核碰撞与安装，不改变任务几何。 |
+| MuJoCo/EGL 3D 代表性预览 | 有 | `render-unidoor-collision-audit-3d-preview` 查看代表性门体、把手和碰撞代理，仍不是一次动态开门 episode。 |
+| 完整 variant visual replay | 有 | `UnilabLeverTaskModelFactory.compile_visual` 与 `MujocoVisualEpisodeRenderer._compile_scene_variant` 会把选中的门、把手、安装位和锁 visual 编译进带相机的完整场景，再重放 episode。需要 header 中的 `scene_variant`/provenance，且 renderer 会校验 mesh hash；缺少这些信息时只能可靠地渲染 base scene。 |
+| 动态开门视频/视觉 episode | 有 | `collect` 在录制后可自动调用 `praxis.runtime.render_visual_episodes`，闭环或 replay 也可生成 head/wrist 视觉产物；视频生成通过不等于 outcome verifier 判定开门成功。 |
+
+常用入口例如：
+
+```bash
+uv run --no-sync praxis build-unidoor-lever-catalog
+uv run --no-sync praxis render-unidoor-collision-audit
+MUJOCO_GL=egl uv run --no-sync praxis render-unidoor-collision-audit-3d-preview
+uv run --no-sync praxis collect --num-envs 1
+```
+
+因此，如果只是想确认“某个门和把手能否拼在一起”，先看 catalog 的组合 XML、manifest 和静态/3D audit；如果要看机器人、相机和该变体在动作中的完整画面，应使用带 `scene_variant` provenance 的 visual replay。两者都不能替代第 4.3 节的门角、事件顺序、settle 和安全 outcome 验证。
+
 ## 5. 当前动态验证状态
 
 | 方案 | 当前证据 | 能否称为“成功开门” |
