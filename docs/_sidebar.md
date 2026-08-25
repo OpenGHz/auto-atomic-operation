@@ -55,6 +55,7 @@
 
 - **Task Tuning**
   - [Open Door Tuning](/task-tuning/open_door_tuning.md)
+  - [Praxis vs AAO Open Door Comparison](/task-tuning/praxis_aao_open_door_comparison.md)
 
 - **Troubleshooting**
   - [MuJoCo EGL 渲染初始化失败](/troubleshooting/mujoco-egl-troubleshooting.md)
