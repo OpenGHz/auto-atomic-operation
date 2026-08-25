@@ -215,5 +215,6 @@ claude.md
 test.py
 .claude/
 AGENTS.md
+CLAUDE.md
 MUJOCO_LOG.TXT
 data/
