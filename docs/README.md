@@ -18,6 +18,7 @@
 - **Multi-arm support** — single-arm and dual-arm (left/right) topologies
 - **Execution records** — detailed per-stage status, failure reasons, and timing after every run
 - **MuJoCo backend included** — a ready-to-use backend with RGB-D cameras, tactile sensors, force/torque, IMU, and joint state support
+- **3D Gaussian Splatting rendering** — photorealistic task rendering through composable GS configs
 
 ## Installation
 
@@ -35,11 +36,24 @@ pip install auto-atomic-operation
 GIT_LFS_SKIP_SMUDGE=1 git clone https://github.com/OpenGHz/auto-atomic-operation.git
 cd auto-atomic-operation
 
-# Core framework only
-pip install -e .
+pip install -e .              # core framework only
+pip install -e ".[mujoco]"   # with the built-in MuJoCo backend
+pip install -e ".[gs]"       # with 3D Gaussian Splatting rendering
+```
 
-# With the built-in MuJoCo backend
-pip install -e ".[mujoco]"
+The PyPI release can lag behind source and does not ship the repository's demo
+configs or assets.  MuJoCo meshes and videos live in Git LFS:
+
+```bash
+sudo apt-get install git-lfs   # Debian/Ubuntu
+git lfs pull
+```
+
+Gaussian scene assets are hosted separately on Hugging Face:
+
+```bash
+pip install huggingface_hub "httpx[socks]"
+hf download OpenGHz/auto-atom-assets --repo-type=dataset --include "assets/gs/*" --local-dir .
 ```
 
 ## Quick Start
@@ -48,38 +62,42 @@ pip install -e ".[mujoco]"
 
 ```yaml
 # task.yaml
+env:
+  _target_: auto_atom.mock.create_mock_env
+  name: my_env
+  kind: mock_env
+
 backend: auto_atom.mock.build_mock_backend
 
 task:
   env_name: my_env
   stages:
-    - name: pick_cup
+    - name: approach_cup
       object: cup
-      operation: pick
+      operation: move
       operator: arm_a
       param:
         pre_move:
           - position: [0.45, -0.10, 0.08]
             rotation: [0.0, 1.57, 0.0]
             reference: object_world
-        eef:
-          close: true
 
-    - name: place_on_shelf
+    - name: move_to_shelf
       object: shelf
-      operation: place
+      operation: move
       operator: arm_a
       param:
         pre_move:
           - position: [0.10, 0.25, 0.16]
             orientation: [0.0, 0.0, 0.0, 1.0]
             reference: world
-        eef:
-          close: false
 
 task_operators:
   arm_a: {}
 ```
+
+See [Task File Schema](task-configuration/task_file_schema.md) for the complete
+top-level, stage, control, pose-reference, and execution-policy fields.
 
 ### 2. Run the task
 
@@ -115,6 +133,11 @@ aao-demo --config-name pick_and_place
 aao-info
 ```
 
+Use `aao-info` rather than a static task list so composed tasks and newly added
+robot variants are included.  To inspect the fully composed scene and robot,
+use the [View Scene](tools/view_scene.md) tool instead of opening a host XML
+directly.
+
 ## MuJoCo Demos
 
 | | |
@@ -129,16 +152,29 @@ aao-info
 ```
 auto_atom/
 ├── framework.py        # Pydantic configuration models (YAML schema)
-├── runtime.py          # Task execution engine (TaskRunner, TaskFlowBuilder)
+├── runtime.py          # TaskRunner, primitive actions, and backend protocols
+├── stage_execution.py  # Shared stage state machine and condition checks
+├── execution_timeline.py # Stable stage/keypoint/primitive ordering
+├── scene_composition/  # Host MJCF + ordered asset-layer compiler
+├── policy_eval.py      # External-policy evaluator and shared result types
 ├── mock.py             # In-memory mock backend for testing
 ├── basis/
 │   └── mjc/
 │       └── mujoco_env.py   # UnifiedMujocoEnv — Mujoco wrapper with sensor suite
 ├── backend/
 │   └── mjc/            # Mujoco backend (operators, objects, scene)
+├── runner/              # aao-demo, aao-eval, and aao-info entry points
 └── utils/
     └── pose.py         # Pose transforms and quaternion utilities
 ```
+
+The execution path is intentionally layered: Hydra composes and validates a
+task file, the backend creates handlers over a basis environment,
+`TaskFlowBuilder` expands stages into primitives, and `StageExecution` applies
+operation conditions while `TaskRunner` advances the simulation.  The detailed
+phase and condition flow is documented in [Execution Completion Flow](task-configuration/execution_completion_flow.md);
+the interface boundary for another simulator or robot is covered by
+[Implementing a Custom Backend](mujoco-backend/custom-backend.md).
 
 ## License
 

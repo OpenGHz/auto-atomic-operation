@@ -1,14 +1,21 @@
 # MuJoCo Backend Condition Constraints
 
-This document explains how the MuJoCo backend (`auto_atom.backend.mjc.mujoco_backend`) implements the condition constraints described in the main README, and lists the configurable parameters for threshold tuning.
+This document explains how the MuJoCo backend (`auto_atom.backend.mjc.mujoco_backend`)
+implements the operation conditions defined by the shared [Execution Completion
+Flow](../task-configuration/execution_completion_flow.md), and lists the
+configurable parameters for threshold tuning.
 
 ## Overview
 
-The MuJoCo backend evaluates post-conditions after each operation to determine success. The main conditions are:
+The shared stage state machine asks the MuJoCo backend to evaluate conditions
+at the operation-specific checkpoints documented in the execution flow.  The
+condition vocabulary is:
 
 - **grasped**: Object is held by the gripper
+- **released**: Operator is not holding an object
 - **contacted**: Gripper has made contact with the object
 - **displaced**: Object has moved from its initial position
+- **reached**: End-effector is within the target pose tolerance
 - **placed**: Object is at the target location
 
 ---

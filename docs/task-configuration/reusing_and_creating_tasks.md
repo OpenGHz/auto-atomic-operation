@@ -97,8 +97,11 @@ silently drifts from the original. See
 
 A new variant should **compose** the closest existing config through `defaults`
 and override *only* what differs — never copy a whole task to change one layer.
-Always end the `defaults` list with `_self_` (see
-[GS demo pattern / composition order](scene_composition.md)).
+For a runnable variant, normally end the `defaults` list with `_self_` so the
+variant's local values override its bases.  `_self_` is a precedence marker,
+not a ceremonial suffix: a reusable building block may deliberately put it
+earlier when a later mixin is intended to win.  Keep such exceptions explicit
+and documented (see [Scene Composition](scene_composition.md)).
 
 **Render (GS) variant — pure composition, a handful of lines:**
 
@@ -190,7 +193,8 @@ If `aao-info` does not list your config, it composed without a non-empty
   hidden by `aao-info` and misleads readers.
 - **Adding a config without composing** (copy-pasting a full base you could have
   listed in `defaults`). → Compose and override only the delta.
-- **Forgetting `_self_`** at the end of a new `defaults` list.
+- **Forgetting `_self_`**, or placing it at a precedence point that does not
+  match the intended override order.
 
 ## Related
 

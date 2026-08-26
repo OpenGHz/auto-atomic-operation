@@ -94,7 +94,7 @@ For all CLI flags, Hydra overrides, and `aao-eval` usage, see the [CLI Reference
 GS configs are named `<task>_gs` and run identically to the native MuJoCo demos. Asset bundles live on Hugging Face:
 
 ```bash
-pip install huggingface_hub httpx[socks]
+pip install huggingface_hub "httpx[socks]"
 hf download OpenGHz/auto-atom-assets --repo-type=dataset --include "assets/gs/*" --local-dir .
 ```
 
@@ -112,7 +112,8 @@ hf download OpenGHz/auto-atom-assets --repo-type=dataset --include "assets/gs/*"
 Full documentation is hosted at **[openghz.github.io/auto-atomic-operation](https://openghz.github.io/auto-atomic-operation/#/)**. Common entry points:
 
 - [CLI Reference](https://openghz.github.io/auto-atomic-operation/#/getting-started/cli_reference) — every flag, override, and output of `aao-demo` / `aao-eval`
-- [Task Configuration](https://openghz.github.io/auto-atomic-operation/#/task-configuration/stages_and_waypoints) — YAML schema, stages, waypoints, action space, randomization, scene composition
+- [Task File Schema](https://openghz.github.io/auto-atomic-operation/#/task-configuration/task_file_schema) — top-level YAML keys, stages, pose references, and execution policy
+- [Task Configuration](https://openghz.github.io/auto-atomic-operation/#/task-configuration/stages_and_waypoints) — waypoints, interval boundaries, stage sites, randomization, and scene composition
 - [Execution Completion Flow](https://openghz.github.io/auto-atomic-operation/#/task-configuration/execution_completion_flow) — how `pre_move` / `eef` / `post_move` decide they are done and how that drives stage success
 - [MuJoCo Backend](https://openghz.github.io/auto-atomic-operation/#/mujoco-backend/mujoco_backend_conditions) — backend conditions, gripper semantics, observation wiring
 - [Custom Backend Guide](https://openghz.github.io/auto-atomic-operation/#/mujoco-backend/custom-backend) — integrate a new simulator or real robot

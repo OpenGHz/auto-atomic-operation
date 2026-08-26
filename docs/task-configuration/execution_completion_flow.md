@@ -42,16 +42,33 @@ runtime state rather than eager preprocessing.
 - `eef` becomes one `eef` action when the operation requires it
 - `post_move` entries become one or more `pose` actions
 
-Typical sequences:
+The phase contract is summarized below.  “Optional” means that the phase is
+executed when configured; “generated” means the runner creates the primitive
+even when the corresponding `param` entry is omitted.
 
-- `move`: `pre_move -> post_move` when post-move waypoints are configured
-- `grasp`: by default `eef`; configured moves produce `pre_move -> eef -> post_move`
-- `release`: by default `eef`; configured moves produce `pre_move -> eef -> post_move`
-- `pick`: `pre_move -> eef -> post_move`
-- `place`: `pre_move -> eef -> post_move`
-- `push`: `pre_move -> post_move` and optionally `eef`
-- `pull`: `pre_move -> eef -> post_move`
-- `press`: `pre_move -> eef -> post_move`
+| Operation | `pre_move` | `eef` | `post_move` | Runtime sequence |
+| --- | --- | --- | --- | --- |
+| `move` | **Required** (at least one pose) | Ignored, even if configured | Optional | `pre_move+ -> post_move*` |
+| `grasp` | Optional | **Generated** close action (or configured `eef`) | Optional | `pre_move* -> eef -> post_move*` |
+| `release` | Optional | **Generated** open action (or configured `eef`) | Optional | `pre_move* -> eef -> post_move*` |
+| `pick` | Optional | **Generated** close action (or configured `eef`) | Optional | `pre_move* -> eef -> post_move*` |
+| `place` | Optional | **Generated** open action (or configured `eef`) | Optional | `pre_move* -> eef -> post_move*` |
+| `push` | **Required** (at least one pose) | Optional; only configured `eef` runs | Optional | `pre_move+ -> eef? -> post_move*` |
+| `pull` | Optional | **Generated** close action (or configured `eef`) | Optional | `pre_move* -> eef -> post_move*` |
+| `press` | **Required** (at least one pose) | **Generated** close action (or configured `eef`) | Optional | `pre_move+ -> eef -> post_move*` |
+
+In the sequence column, `+` means one or more configured waypoints, `*` means
+zero or more, and `?` marks an optional singleton phase.
+
+For `grasp`, `release`, `pick`, `place`, `pull`, and `press`, an explicit
+`param.eef` replaces the operation's default command; it is not silently
+rewritten to match the operation name.  This is a low-level override: keep its
+open/close direction consistent with the operation unless intentionally
+changing that operation's semantics.  `require_grasp: true` is only valid on a
+closing command and adds a target-specific grasp check.  A `pick` or `pull`
+post-move cannot use `object_world`, or `auto` when the stage has an object,
+because that target would chase the grasped object.  Use `eef_world` for the
+usual fixed-world retreat target.
 
 Each primitive action keeps the configured phase and YAML waypoint index from
 which it was built:
@@ -186,28 +203,59 @@ the internal-update counters are unchanged.
 
 ## Where Stage Conditions Are Checked
 
-Stage conditions are defined by `OPERATION_CONDITIONS` and evaluated by `TaskRunner._check_stage_condition()`.
+Stage conditions are defined by `OPERATION_CONDITIONS` and evaluated by the
+shared `stage_execution.check_stage_condition()` function under
+`StageExecution`.
 
 The key idea is:
 
 - primitive actions answer "did this low-level command finish?"
 - stage conditions answer "did this operation achieve the required semantic state?"
 
-Examples:
+## Atomic operations
 
-- `pick`
-  - perform condition: `released`
-  - success condition: `grasped`
-- `place`
-  - perform condition: `grasped`
-  - success condition: `placed`
-- `push`
-  - success condition: `displaced`
-- `pull`
-  - perform condition: `grasped`
-  - success condition: `grasped`
-- `press`
-  - success condition: `contacted`
+The phase table above describes primitive construction.  This second table
+records the semantic condition contract and its actual check point for the
+configured primitive sequence used by `TaskRunner` and
+`ConfigDrivenDemoPolicy`.  A condition is evaluated by the shared stage state
+machine; the active backend defines how each predicate is measured.
+
+| Operation | Perform condition and timing | Success condition and timing |
+| --- | --- | --- |
+| `move` | None | `reached` after the final primitive (the last `post_move`, or the last `pre_move` when no post-move exists). |
+| `grasp` | `released` before the stage, before optional moves | `grasped` after the final primitive. |
+| `release` | `grasped` before the stage, before optional moves | `released` after the final primitive. |
+| `pick` | `released` before the stage | `grasped` after the final primitive; if the EEF primitive finishes while the operator grasps nothing, the stage can fail immediately. |
+| `place` | `grasped` before the stage | `placed` after the final primitive, including release and any placement-tolerance check for the held object. |
+| `push` | None | `displaced` after the final primitive (normally after `post_move`). |
+| `pull` | The stage-start `grasped` check is intentionally skipped; `grasped` is checked immediately after `eef` before `post_move` | `grasped` again after the final primitive. |
+| `press` | None | `contacted` immediately after `eef`, before optional `post_move`; the successful contact is not rechecked at stage end. |
+
+`placed` combines release with the held object's target pose when a target and
+configured tolerance are available.  `displaced` compares the stage object's
+current position with its stage-start position and uses
+`param.displacement_threshold` when supplied.  `reached` checks both position
+and orientation tolerance for the stage's completion pose.
+
+### Condition vocabulary
+
+| Condition | Meaning |
+| --- | --- |
+| `released` | The operator is not currently grasping any object. |
+| `grasped` | The operator is currently grasping an object.  This general predicate can be narrowed to the stage target with `require_grasp: true`. |
+| `contacted` | The backend reports that the operator is in contact with the stage target object. |
+| `displaced` | The target object's position moved beyond the configured displacement threshold from its initial stage pose. |
+| `reached` | The EEF is within position and orientation tolerances of the final target pose. |
+| `placed` | The operator has released the held object and, when placement checking is configured, that object is within the selected target tolerances. |
+
+See [MuJoCo Backend Condition Constraints](../mujoco-backend/mujoco_backend_conditions.md)
+for contact detection, tolerance resolution, and failure diagnostics.
+
+An external policy that supplies only stage-level feedback has no configured
+`eef` keypoint.  In that mode, success is checked at the policy's reported
+stage-action boundary, or while polling the current stage when no explicit
+feedback boundary is supplied; the `eef`-specific timing in the table does not
+apply.
 
 ## Coupling Between Primitive Completion And Stage Completion
 
@@ -227,61 +275,6 @@ So the relationship is:
 
 - primitive completion drives control flow
 - stage conditions decide semantic success
-
-## Operation-Specific Timing
-
-### `move`
-
-- No pre-condition
-- Stage success uses the post-condition `reached`
-- `reached` means the end-effector is within tolerance of the final target pose
-
-### `grasp`
-
-- Stage normally runs only `eef`; optional configured moves run before and after it
-- Before execution, runner checks `released`
-- After `eef` reaches completion, runner checks `grasped`
-
-### `release`
-
-- Stage normally runs only `eef`; optional configured moves run before and after it
-- Before execution, runner checks `grasped`
-- After `eef` reaches completion, runner checks `released`
-
-### `pick`
-
-- Stage runs `pre_move -> eef -> post_move`
-- Before stage start, runner checks `released`
-- After `eef`, runner may immediately fail if the operator is still not grasping anything
-- After the full stage finishes, runner checks `grasped`
-
-This means `eef` completion alone does not guarantee `pick` success.
-
-### `place`
-
-- Stage runs `pre_move -> eef -> post_move`
-- Before stage start, runner checks `grasped`
-- After the full stage finishes, runner checks `placed`
-
-So opening the gripper may be "done" at the primitive level, but the stage can still fail if the object is still effectively grasped or, when a placement target is available, the held object is outside the configured placement tolerance. See `docs/mujoco_backend_conditions.md` for the target and tolerance resolution rules.
-
-### `pull`
-
-- Stage runs `pre_move -> eef -> post_move`
-- The normal pre-stage perform check is skipped
-- After `eef`, runner immediately checks `PERFORM = grasped`
-- After `post_move`, runner checks `SUCCESS = grasped`
-
-This is the most explicit example of primitive completion being separate from stage semantics:
-
-- `eef` can be mechanically complete
-- but if the object was not actually grasped, the stage fails before `post_move` continues
-
-### `press`
-
-- Stage runs `pre_move -> eef -> post_move`
-- After `eef`, runner immediately checks `SUCCESS = contacted`
-- Final stage success is decided from that mid-stage contact check rather than a final post-stage success check
 
 ## Interval boundaries
 
@@ -379,4 +372,4 @@ flowchart TD
 - `auto_atom/backend/mjc/mujoco_backend.py`
 - `auto_atom/runtime.py`
 - `auto_atom/framework.py`
-- `docs/mujoco_backend_conditions.md`
+- `docs/mujoco-backend/mujoco_backend_conditions.md`

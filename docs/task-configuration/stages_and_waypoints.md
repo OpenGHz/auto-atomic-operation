@@ -14,6 +14,9 @@ configuration that are easy to miss but frequently needed:
   distance an object must move before the `displaced` post-condition is
   satisfied.
 
+For the base YAML structure, complete stage fields, and pose-reference table,
+start with [Task File Schema](task_file_schema.md).
+
 ## Task interval boundary selection
 
 `execution.interval_selection` restricts `TaskRunner` / `aao-demo` to an
