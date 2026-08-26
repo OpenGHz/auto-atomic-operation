@@ -8,6 +8,7 @@ from pydantic import (
     Field,
     ImportString,
     NonNegativeInt,
+    PositiveFloat,
     PositiveInt,
     field_validator,
     model_validator,
@@ -203,6 +204,14 @@ class ArcControlConfig(BaseModel):
     max_step: float = 0.2
     """Maximum arc sub-step in radians (~11.5 deg).  Smaller values produce smoother
     arcs at the cost of more waypoints."""
+    joint_tolerance: PositiveFloat = 0.01
+    """Joint-angle tolerance in radians for completing an absolute arc.  Reaching
+    one local end-effector target is not sufficient until the named pivot joint is
+    also within this tolerance of ``angle``.  Relative arcs ignore this field."""
+    timeout_steps: PositiveInt = 1000
+    """Maximum aggregate control updates for one absolute arc.  This task-level
+    limit remains effective when successive local end-effector targets reset a
+    backend controller's per-pose timeout.  Relative arcs ignore this field."""
     reverse: bool = False
     """When True, the arc is traced in the opposite direction around the axis.
 

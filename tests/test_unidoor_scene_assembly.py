@@ -6,7 +6,10 @@ import hashlib
 import json
 from pathlib import Path
 
+import numpy as np
 import pytest
+from hydra import compose, initialize_config_dir
+from omegaconf import OmegaConf
 
 from auto_atom.scene_composition import (
     AssetAssemblyLayerConfig,
@@ -456,3 +459,58 @@ def test_real_catalog_host_and_robot_compile_if_assets_are_available() -> None:
             assert model.jnt_axis[actual_id].tolist() == pytest.approx(
                 oracle.jnt_axis[oracle_id].tolist()
             )
+
+
+def test_demo_places_handle_and_robot_on_the_same_door_side() -> None:
+    mujoco = pytest.importorskip("mujoco")
+    root = Path(__file__).resolve().parents[1]
+    config_dir = root / "aao_configs"
+    if not (
+        root
+        / "third_party"
+        / "unidoor_lever_catalog_pipeline_right_hinge"
+        / "product_space.json"
+    ).is_file():
+        pytest.skip("local UniDoor catalog is unavailable")
+
+    with initialize_config_dir(version_base=None, config_dir=str(config_dir)):
+        config = compose(config_name="open_door_unidoor_p7_v3_umi_v3")
+    scene = SceneConfig.model_validate(
+        OmegaConf.to_container(config.env.scene, resolve=True)
+    )
+    model = load_composed_scene(scene)
+    data = mujoco.MjData(model)
+    mujoco.mj_forward(model, data)
+
+    assembly_id = mujoco.mj_name2id(
+        model, mujoco.mjtObj.mjOBJ_BODY, "door__unidoor_assembly"
+    )
+    robot_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "p7_mount")
+    grasp_id = mujoco.mj_name2id(
+        model, mujoco.mjtObj.mjOBJ_SITE, "door__handle_grasp_center"
+    )
+    handle_joint_id = mujoco.mj_name2id(
+        model, mujoco.mjtObj.mjOBJ_JOINT, "door__handle_hinge"
+    )
+    panel_normal = data.xmat[assembly_id].reshape(3, 3)[:, 1]
+    robot_side = float(
+        np.dot(data.xpos[robot_id] - data.xpos[assembly_id], panel_normal)
+    )
+    grasp_side = float(
+        np.dot(data.site_xpos[grasp_id] - data.xpos[assembly_id], panel_normal)
+    )
+
+    assert robot_side < 0.0
+    assert grasp_side < 0.0
+    assert data.xaxis[handle_joint_id].tolist() == pytest.approx([1.0, 0.0, 0.0])
+    assert list(config.task.stages[0].param.post_move[0].arc.axis) == [1, 0, 0]
+
+
+def test_demo_final_approach_targets_the_explicit_grasp_site() -> None:
+    root = Path(__file__).resolve().parents[1]
+    with initialize_config_dir(version_base=None, config_dir=str(root / "aao_configs")):
+        config = compose(config_name="open_door_unidoor_p7_v3_umi_v3")
+
+    stage = config.task.stages[0]
+    assert stage.site == "door__handle_grasp_center"
+    assert list(stage.param.pre_move[-1].position) == [0.0, 0.0, 0.0]

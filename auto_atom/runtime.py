@@ -693,6 +693,7 @@ def _teardown_backend_after_initialization_failure(backend: SceneBackend) -> Non
 class ArcExecutionSnapshot:
     start_eef_pose: Optional[PoseState] = None
     pivot_world_pos: Optional[Position] = None
+    control_ticks: int = 0
 
 
 @dataclass
@@ -1830,7 +1831,7 @@ class TaskRunner:
         """
         operator = backend.get_operator_handler(plan.operator_name)
         target = backend.get_object_handler(plan.stage.object)
-        return TaskRunner._run_action(
+        result = TaskRunner._run_action(
             env_index=env_index,
             operator=operator,
             action=action,
@@ -1839,6 +1840,76 @@ class TaskRunner:
             env_mask=env_mask,
             reference_site=plan.stage.site,
         )
+        return TaskRunner._refine_absolute_arc_result(
+            env_index=env_index,
+            action=action,
+            backend=backend,
+            result=result,
+        )
+
+    @staticmethod
+    def _refine_absolute_arc_result(
+        env_index: int,
+        action: PrimitiveAction,
+        backend: SceneBackend,
+        result: ControlResult,
+    ) -> ControlResult:
+        """Convert local EEF completion into absolute-joint arc completion."""
+        pose = action.pose
+        arc = None if pose is None else pose.arc
+        if (
+            action.kind != "pose"
+            or arc is None
+            or not arc.absolute
+            or not isinstance(arc.pivot, str)
+        ):
+            return result
+
+        if action.arc_snapshot is None:
+            action.arc_snapshot = ArcExecutionSnapshot()
+        action.arc_snapshot.control_ticks += 1
+
+        raw_signal = result.signals[env_index]
+        if raw_signal in {ControlSignal.FAILED, ControlSignal.TIMED_OUT}:
+            return result
+
+        current_joint = float(backend.get_joint_angle(arc.pivot, env_index))
+        joint_error = float(arc.angle) - current_joint
+        within_tolerance = abs(joint_error) <= float(arc.joint_tolerance)
+
+        signals = result.signals.copy()
+        details = [dict(item) for item in result.details]
+        env_details = details[env_index]
+        env_details.update(
+            {
+                "absolute_arc_control_ticks": action.arc_snapshot.control_ticks,
+                "current_joint_angle": current_joint,
+                "target_joint_angle": float(arc.angle),
+                "joint_angle_error": joint_error,
+                "joint_tolerance": float(arc.joint_tolerance),
+            }
+        )
+
+        if raw_signal == ControlSignal.REACHED and not within_tolerance:
+            signals[env_index] = ControlSignal.RUNNING
+            env_details["event"] = "absolute_arc_segment_reached"
+
+        primitive_reached = signals[env_index] == ControlSignal.REACHED
+        timeout_exhausted = action.arc_snapshot.control_ticks >= int(arc.timeout_steps)
+        if not primitive_reached and timeout_exhausted:
+            signals[env_index] = ControlSignal.TIMED_OUT
+            env_details.update(
+                {
+                    "event": "absolute_arc_timeout",
+                    "failure_category": "controller_timeout",
+                    "failure_reason": (
+                        "absolute arc did not reach its target joint angle within "
+                        f"{arc.timeout_steps} aggregate control updates"
+                    ),
+                }
+            )
+
+        return ControlResult(signals=signals, details=details)
 
     @staticmethod
     def _run_action(

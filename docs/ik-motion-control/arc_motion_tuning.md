@@ -35,11 +35,15 @@ The door frame has `quat="0.707 0 0 0.707"` (90° around X), so:
 
 **Common mistake**: Using the local axis directly → EEF rotates around the wrong axis, handle doesn't move.
 
-## Arc max_step vs tolerance
+## Absolute-arc completion and `max_step`
 
-Each arc with `absolute: true` is split into sub-waypoints, each rotating by `max_step` radians. Each sub-waypoint must satisfy the position tolerance to advance.
+An arc with `absolute: true` remains one primitive. On each control update the
+runtime reads the named pivot joint and limits the next local EEF target to
+`max_step` radians. A local Cartesian target reporting `REACHED` only finishes
+that segment; the primitive advances only when the measured joint is also
+within `joint_tolerance` of the configured `angle`.
 
-**Rule**: The EEF displacement per sub-step must exceed `tolerance.position`:
+The approximate EEF displacement requested by one local segment is:
 
 ```
 displacement_per_step = max_step × radius
@@ -47,17 +51,36 @@ displacement_per_step = max_step × radius
 
 Where `radius` = distance from pivot to EEF.
 
-| Example | max_step | radius | displacement | tolerance | Result |
-|---------|----------|--------|-------------|-----------|--------|
-| Handle arc | 0.03 rad | 0.095m | 0.003m | 0.008m | **Instant reached** — too small |
-| Handle arc | 0.15 rad | 0.095m | 0.014m | 0.008m | OK |
-| Door arc | 0.15 rad | 0.80m | 0.120m | 0.008m | OK |
+| Example | max_step | radius | displacement | Tuning effect |
+|---------|----------|--------|-------------|---------------|
+| Handle arc | 0.03 rad | 0.095m | 0.003m | Smooth, contact-friendly, more control updates |
+| Handle arc | 0.15 rad | 0.095m | 0.014m | Faster, larger IK/contact jump |
+| Door arc | 0.01 rad | 0.80m | 0.008m | Smooth door motion, more control updates |
 
-**If displacement < tolerance**: Every sub-waypoint is already "reached" before the arm moves. The arc completes instantly without actually rotating the mechanism.
+A displacement smaller than the Cartesian pose tolerance can make a local
+segment report `REACHED` immediately, but it no longer makes the whole arc
+finish early. If contact is lost or the mechanism stalls, the absolute arc
+eventually returns `TIMED_OUT` after its aggregate `timeout_steps` budget rather
+than silently advancing.
+
+```yaml
+arc:
+  pivot: handle_hinge
+  angle: 0.15
+  absolute: true
+  max_step: 0.03
+  joint_tolerance: 0.01  # radians; default
+  timeout_steps: 1000    # aggregate control updates; default
+```
+
+Relative arcs keep their static, compile-time sub-primitive expansion; the
+joint completion gate and aggregate absolute-arc timeout do not apply to them.
 
 ## Arc absolute mode and handle spring-back
 
-With `absolute: true`, the arc targets a specific joint angle. Once the handle arc completes (handle at 0.45 rad), control moves to the door arc. The handle spring (`stiffness=2.0, springref=0`) immediately pulls the handle back.
+With `absolute: true`, the arc targets a specific measured joint angle. Once the
+handle enters `joint_tolerance`, control moves to the door arc. A handle spring
+can then pull the handle back toward its reference angle.
 
 **Problem**: If the handle springs back below `unlock_threshold`, the door latch re-engages during the door push.
 

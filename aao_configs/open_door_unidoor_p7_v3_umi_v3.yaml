@@ -16,12 +16,12 @@ env:
           door: D001
           handle: H003
         namespace: door
-        # The catalog's assembly origin differs from the hand-authored AAO
-        # frame. With +90-degree Z, this pose puts the handle in the existing
-        # camera/EEF interaction plane.
+        # Flip the door around its panel centre (rather than its hinge origin)
+        # so the handle and P7 are on the same side while the panel footprint
+        # stays in the existing camera/interaction region.
         placement:
-          position: [1.54, 0.79, -1.0]
-          orientation_xyzw: [0.0, 0.0, 0.707106781, 0.707106781]
+          position: [1.54, 0.13939759036, -1.0]
+          orientation_xyzw: [0.0, 0.0, -0.707106781, 0.707106781]
         verify_hashes: true
       - kind: mjcf
         path: ${assets_dir}/xmls/robots/p7_arm_v3_with_umi_gripper_v3.xml
@@ -50,7 +50,9 @@ task:
             orientation: [0.68997457, 0.19902274, -0.20541703, 0.66492774]
             max_linear_step: 0.04
             max_angular_step: 0.25
-          - position: [-0.07, 0.0, 0.0]
+          # UniDoor exposes an explicit grasp-centre site.  Unlike the legacy
+          # door body origin, it needs no additional 7 cm standoff.
+          - position: [0.0, 0.0, 0.0]
             reference: object_world
             orientation: [0.68997457, 0.19902274, -0.20541703, 0.66492774]
             max_linear_step: 0.04
@@ -60,15 +62,17 @@ task:
         post_move:
           - arc:
               pivot: door__handle_hinge
-              axis: [-1, 0, 0]
-              angle: 0.45
+              axis: [1, 0, 0]
+              # The UniDoor latch releases at 0.12 rad.  Keep a small margin
+              # without asking the P7 to follow the unreachable 0.45-rad arc.
+              angle: 0.15
               absolute: true
-              max_step: 0.15
+              max_step: 0.03
             reference: world
           - arc:
               pivot: door__door_hinge
               axis: [0, 0, -1]
               angle: 0.20
               absolute: true
-              max_step: 0.15
+              max_step: 0.01
             reference: world

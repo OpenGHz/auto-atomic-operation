@@ -22,8 +22,10 @@ env:
         selection: {door: D001, handle: H003}
         namespace: door
         placement:
-          position: [1.54, 0.79, -1.0]
-          orientation_xyzw: [0.0, 0.0, 0.707106781, 0.707106781]
+          # Rotate around the panel centre so the handle faces the robot
+          # without moving the panel out of the interaction region.
+          position: [1.54, 0.13939759036, -1.0]
+          orientation_xyzw: [0.0, 0.0, -0.707106781, 0.707106781]
         verify_hashes: true
 ```
 

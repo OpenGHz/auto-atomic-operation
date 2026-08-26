@@ -7,13 +7,13 @@ an arbitrary external policy and the configuration-driven scripted policy.
 from __future__ import annotations
 
 from copy import deepcopy
-from types import SimpleNamespace
+from types import MethodType, SimpleNamespace
 from typing import Any
 
 import numpy as np
 import pytest
 
-from auto_atom.framework import TaskFileConfig
+from auto_atom.framework import ArcControlConfig, TaskFileConfig
 from auto_atom.mock import MockObjectHandler
 from auto_atom.policy_eval import (
     ConfigDrivenDemoPolicy,
@@ -22,10 +22,12 @@ from auto_atom.policy_eval import (
 )
 from auto_atom.runtime import (
     ComponentRegistry,
+    ControlResult,
     ControlSignal,
     PrimitiveAction,
     PoseState,
     StageExecutionStatus,
+    TaskRunner,
 )
 
 
@@ -504,3 +506,417 @@ def test_config_driven_press_checks_contact_after_eef() -> None:
         assert update.details[0]["failure_category"] == "no_contact"
     finally:
         evaluator.close()
+
+
+# ---------------------------------------------------------------------------
+# Absolute named-joint arc completion
+# ---------------------------------------------------------------------------
+
+
+def _absolute_arc_task_file(
+    env_name: str,
+    *,
+    target_angle: float,
+    joint_tolerance: float = 0.01,
+    timeout_steps: int = 8,
+    batch_size: int = 1,
+) -> TaskFileConfig:
+    """Build a one-waypoint task whose EEF target follows a named joint."""
+
+    ComponentRegistry.register_env(
+        env_name, {"kind": "mock_env", "batch_size": batch_size}
+    )
+    return TaskFileConfig.model_validate(
+        {
+            "backend": "auto_atom.mock.build_mock_backend",
+            "task": {
+                "env_name": env_name,
+                "stages": [
+                    {
+                        "name": "turn_joint",
+                        "object": "",
+                        "operation": "move",
+                        "operator": "arm",
+                        "param": {
+                            "pre_move": [
+                                {
+                                    "reference": "world",
+                                    "arc": {
+                                        "pivot": "door_hinge",
+                                        "axis": [0.0, 0.0, 1.0],
+                                        "angle": target_angle,
+                                        "absolute": True,
+                                        "max_step": 0.2,
+                                        "joint_tolerance": joint_tolerance,
+                                        "timeout_steps": timeout_steps,
+                                    },
+                                }
+                            ]
+                        },
+                    }
+                ],
+            },
+            "task_operators": {"arm": {}},
+        }
+    )
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        pytest.param({"joint_tolerance": 0.0}, id="zero-joint-tolerance"),
+        pytest.param({"joint_tolerance": -0.01}, id="negative-joint-tolerance"),
+        pytest.param({"timeout_steps": 0}, id="zero-timeout"),
+        pytest.param({"timeout_steps": -1}, id="negative-timeout"),
+    ],
+)
+def test_absolute_arc_completion_limits_must_be_positive(
+    overrides: dict[str, float | int],
+) -> None:
+    with pytest.raises(ValueError):
+        ArcControlConfig(
+            pivot="door_hinge",
+            axis=(0.0, 0.0, 1.0),
+            angle=0.6,
+            absolute=True,
+            **overrides,
+        )
+
+
+def _immediate_reached_motion(
+    backend: Any,
+    *,
+    initial_angles: tuple[float, ...],
+    angles_after_reach: tuple[tuple[float, ...], ...],
+    raw_signal: ControlSignal = ControlSignal.REACHED,
+) -> SimpleNamespace:
+    """Install an EEF-reached controller while a separate joint evolves per tick.
+
+    This deliberately models the failure mode behind absolute arcs: Cartesian
+    IK can report its target reached although the mechanism has not yet
+    reached its measured joint target.  Joint reads remain pure reads because
+    runtime diagnostics may read them more than once per tick.
+    """
+
+    batch_size = backend.batch_size
+    assert len(initial_angles) == batch_size
+    assert len(angles_after_reach) == batch_size
+    tracker = SimpleNamespace(
+        angles=np.asarray(initial_angles, dtype=np.float64),
+        schedules=[list(schedule) for schedule in angles_after_reach],
+        ticks=np.zeros(batch_size, dtype=np.int64),
+        masks=[],
+        raw_signals=[],
+    )
+
+    def get_joint_angle(name: str, env_index: int = 0) -> float:
+        assert name == "door_hinge"
+        return float(tracker.angles[env_index])
+
+    def get_element_pose(name: str, env_index: int = 0) -> PoseState:
+        assert name == "door_hinge"
+        _ = env_index
+        return PoseState(
+            position=(0.0, 0.0, 0.0),
+            orientation=(0.0, 0.0, 0.0, 1.0),
+        )
+
+    backend.get_joint_angle = get_joint_angle
+    backend.get_element_pose = get_element_pose
+    operator = backend.get_operator_handler("arm")
+
+    def move_to_pose(
+        self: Any,
+        pose: Any,
+        _target: Any,
+        env_mask: Any = None,
+    ) -> ControlResult:
+        mask = np.asarray(env_mask, dtype=bool).reshape(-1)
+        assert mask.shape == (batch_size,)
+        tracker.masks.append(mask.copy())
+        signals = np.asarray([ControlSignal.RUNNING] * batch_size, dtype=object)
+        details = [{} for _ in range(batch_size)]
+        for env_index in np.flatnonzero(mask):
+            index = int(env_index)
+            self.end_effector_pose.position[index] = np.asarray(
+                pose.position, dtype=np.float64
+            )
+            self.end_effector_pose.orientation[index] = np.asarray(
+                pose.orientation, dtype=np.float64
+            )
+            tick = int(tracker.ticks[index])
+            schedule = tracker.schedules[index]
+            if schedule:
+                tracker.angles[index] = schedule[min(tick, len(schedule) - 1)]
+            tracker.ticks[index] += 1
+            signals[index] = raw_signal
+            details[index] = {"event": "eef_reached", "raw_signal": raw_signal.value}
+            tracker.raw_signals.append(raw_signal)
+        return ControlResult(signals=signals, details=details)
+
+    operator.move_to_pose = MethodType(move_to_pose, operator)
+    return tracker
+
+
+def _reset_arc_executor(
+    execution_path: str,
+    config: TaskFileConfig,
+) -> tuple[TaskRunner | PolicyEvaluator, ConfigDrivenDemoPolicy | None, Any]:
+    if execution_path == "demo":
+        runner = TaskRunner().from_config(config)
+        return runner, None, runner.reset()
+    policy = ConfigDrivenDemoPolicy()
+    evaluator = PolicyEvaluator(action_applier=policy.action_applier).from_config(
+        config
+    )
+    return evaluator, policy, evaluator.reset()
+
+
+def _arc_executor_update(
+    execution_path: str,
+    executor: TaskRunner | PolicyEvaluator,
+    policy: ConfigDrivenDemoPolicy | None,
+    update: Any,
+    env_mask: np.ndarray | None = None,
+) -> Any:
+    if execution_path == "demo":
+        assert isinstance(executor, TaskRunner)
+        return executor.update(env_mask)
+    assert isinstance(executor, PolicyEvaluator)
+    assert policy is not None
+    action = policy.act({}, update, executor)
+    return executor.update(action, env_mask)
+
+
+@pytest.mark.parametrize("execution_path", ["demo", "policy"])
+@pytest.mark.parametrize(
+    "target_angle,initial_angle,angles_after_reach,joint_tolerance,expected_ticks",
+    [
+        pytest.param(0.6, 0.0, (0.2, 0.4, 0.6), 0.01, 3, id="positive"),
+        pytest.param(0.0, 0.6, (0.4, 0.2, 0.0), 0.01, 3, id="negative"),
+        pytest.param(0.6, 0.0, (0.3, 0.75, 0.6), 0.01, 3, id="overshoot"),
+        pytest.param(
+            0.5,
+            0.4921875,
+            (0.4921875,),
+            0.0078125,
+            1,
+            id="exact-tolerance-boundary",
+        ),
+    ],
+)
+def test_absolute_arc_waits_for_measured_joint_target(
+    execution_path: str,
+    target_angle: float,
+    initial_angle: float,
+    angles_after_reach: tuple[float, ...],
+    joint_tolerance: float,
+    expected_ticks: int,
+) -> None:
+    """EEF REACHED alone must not advance an absolute named-joint arc."""
+
+    config = _absolute_arc_task_file(
+        f"absolute_arc_{execution_path}_{target_angle}_{initial_angle}",
+        target_angle=target_angle,
+        joint_tolerance=joint_tolerance,
+    )
+    executor, policy, update = _reset_arc_executor(execution_path, config)
+    try:
+        backend = executor._require_context().backend
+        tracker = _immediate_reached_motion(
+            backend,
+            initial_angles=(initial_angle,),
+            angles_after_reach=(angles_after_reach,),
+        )
+
+        for tick in range(expected_ticks):
+            update = _arc_executor_update(execution_path, executor, policy, update)
+            is_final_tick = tick == expected_ticks - 1
+            assert update.done.tolist() == [is_final_tick]
+            assert update.success.tolist() == [is_final_tick]
+            if not is_final_tick:
+                assert update.status.tolist() == [StageExecutionStatus.RUNNING]
+                state = executor._env_states[0]
+                assert state.active is not None
+                # The only compiled absolute-arc primitive must be retried.
+                assert state.active.action_index == 0
+
+        assert tracker.raw_signals == [ControlSignal.REACHED] * expected_ticks
+        assert [mask.tolist() for mask in tracker.masks] == [[True]] * expected_ticks
+        assert abs(float(tracker.angles[0]) - target_angle) <= joint_tolerance
+        assert [record.status for record in executor.records] == [
+            StageExecutionStatus.SUCCEEDED
+        ]
+    finally:
+        executor.close()
+
+
+@pytest.mark.parametrize("execution_path", ["demo", "policy"])
+@pytest.mark.parametrize(
+    ("raw_signal", "failure_category"),
+    [
+        (ControlSignal.FAILED, "controller_failure"),
+        (ControlSignal.TIMED_OUT, "controller_timeout"),
+    ],
+)
+def test_absolute_arc_preserves_raw_controller_terminal_signal(
+    execution_path: str,
+    raw_signal: ControlSignal,
+    failure_category: str,
+) -> None:
+    config = _absolute_arc_task_file(
+        f"absolute_arc_raw_{execution_path}_{raw_signal.value}",
+        target_angle=0.6,
+    )
+    executor, policy, update = _reset_arc_executor(execution_path, config)
+    try:
+        tracker = _immediate_reached_motion(
+            executor._require_context().backend,
+            initial_angles=(0.0,),
+            angles_after_reach=((0.2,),),
+            raw_signal=raw_signal,
+        )
+        update = _arc_executor_update(execution_path, executor, policy, update)
+
+        assert update.done.tolist() == [True]
+        assert update.success.tolist() == [False]
+        assert update.status.tolist() == [StageExecutionStatus.FAILED]
+        assert update.details[0]["failure_category"] == failure_category
+        assert tracker.raw_signals == [raw_signal]
+    finally:
+        executor.close()
+
+
+@pytest.mark.parametrize("execution_path", ["demo", "policy"])
+def test_absolute_arc_times_out_when_measured_joint_stalls(
+    execution_path: str,
+) -> None:
+    config = _absolute_arc_task_file(
+        f"absolute_arc_timeout_{execution_path}",
+        target_angle=0.6,
+        timeout_steps=2,
+    )
+    executor, policy, update = _reset_arc_executor(execution_path, config)
+    try:
+        tracker = _immediate_reached_motion(
+            executor._require_context().backend,
+            initial_angles=(0.0,),
+            angles_after_reach=((0.1, 0.2),),
+        )
+
+        update = _arc_executor_update(execution_path, executor, policy, update)
+        assert update.done.tolist() == [False]
+        assert executor._env_states[0].active is not None
+        assert executor._env_states[0].active.action_index == 0
+
+        update = _arc_executor_update(execution_path, executor, policy, update)
+        assert update.done.tolist() == [True]
+        assert update.success.tolist() == [False]
+        assert update.details[0]["failure_category"] == "controller_timeout"
+        assert tracker.raw_signals == [ControlSignal.REACHED, ControlSignal.REACHED]
+    finally:
+        executor.close()
+
+
+@pytest.mark.parametrize("execution_path", ["demo", "policy"])
+@pytest.mark.parametrize("kind,expected_reaches", [("pose", 1), ("relative_arc", 3)])
+def test_non_absolute_pose_actions_keep_reached_progression(
+    execution_path: str,
+    kind: str,
+    expected_reaches: int,
+) -> None:
+    if kind == "pose":
+        stages = [_move_stage("pose", _world_pose(0.3))]
+    else:
+        stages = [
+            {
+                "name": "relative_arc",
+                "object": "",
+                "operation": "move",
+                "operator": "arm",
+                "param": {
+                    "pre_move": [
+                        {
+                            "reference": "world",
+                            "arc": {
+                                "pivot": [0.0, 0.0, 0.0],
+                                "axis": [0.0, 0.0, 1.0],
+                                "angle": 0.5,
+                                "max_step": 0.2,
+                            },
+                        }
+                    ]
+                },
+            }
+        ]
+    config = _task_file(f"non_absolute_{execution_path}_{kind}", stages)
+    executor, policy, update = _reset_arc_executor(execution_path, config)
+    try:
+        tracker = _immediate_reached_motion(
+            executor._require_context().backend,
+            initial_angles=(0.0,),
+            angles_after_reach=((),),
+        )
+        for tick in range(expected_reaches):
+            update = _arc_executor_update(execution_path, executor, policy, update)
+            if tick < expected_reaches - 1:
+                assert update.done.tolist() == [False]
+                assert executor._env_states[0].active is not None
+                assert executor._env_states[0].active.action_index == tick + 1
+
+        assert update.done.tolist() == [True]
+        assert update.success.tolist() == [True]
+        assert len(tracker.raw_signals) == expected_reaches
+    finally:
+        executor.close()
+
+
+@pytest.mark.parametrize("execution_path", ["demo", "policy"])
+def test_absolute_arc_partial_batch_masks_are_independent(
+    execution_path: str,
+) -> None:
+    config = _absolute_arc_task_file(
+        f"absolute_arc_partial_batch_{execution_path}",
+        target_angle=0.6,
+        batch_size=2,
+    )
+    executor, policy, update = _reset_arc_executor(execution_path, config)
+    try:
+        tracker = _immediate_reached_motion(
+            executor._require_context().backend,
+            initial_angles=(0.0, 0.0),
+            angles_after_reach=((0.2, 0.4, 0.6), (0.2, 0.4, 0.6)),
+        )
+
+        update = _arc_executor_update(
+            execution_path,
+            executor,
+            policy,
+            update,
+            np.asarray([True, False], dtype=bool),
+        )
+        assert update.status.tolist() == [StageExecutionStatus.RUNNING, "pending"]
+        np.testing.assert_allclose(tracker.angles, [0.2, 0.0])
+        assert executor._env_states[0].active is not None
+        assert executor._env_states[0].active.action_index == 0
+        assert executor._env_states[1].active is None
+
+        update = _arc_executor_update(
+            execution_path,
+            executor,
+            policy,
+            update,
+            np.asarray([False, True], dtype=bool),
+        )
+        assert update.status.tolist() == [StageExecutionStatus.RUNNING] * 2
+        np.testing.assert_allclose(tracker.angles, [0.2, 0.2])
+        assert executor._env_states[0].active is not None
+        assert executor._env_states[0].active.action_index == 0
+        assert executor._env_states[1].active is not None
+        assert executor._env_states[1].active.action_index == 0
+        assert [mask.tolist() for mask in tracker.masks] == [
+            [True, False],
+            [False, True],
+        ]
+    finally:
+        executor.close()
