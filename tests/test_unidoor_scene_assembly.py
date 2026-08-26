@@ -512,7 +512,7 @@ def test_demo_places_handle_and_robot_on_the_same_door_side() -> None:
     assert robot_side < 0.0
     assert grasp_side < 0.0
     assert data.xaxis[handle_joint_id].tolist() == pytest.approx([1.0, 0.0, 0.0])
-    assert list(config.task.stages[0].param.post_move[0].arc.axis) == [1, 0, 0]
+    assert list(config.task.stages[1].param.pre_move[0].arc.axis) == [1, 0, 0]
 
 
 def test_demo_final_approach_targets_the_explicit_grasp_site() -> None:
@@ -520,10 +520,18 @@ def test_demo_final_approach_targets_the_explicit_grasp_site() -> None:
     with initialize_config_dir(version_base=None, config_dir=str(root / "aao_configs")):
         config = compose(config_name="open_door_unidoor_p7_v3_umi_v3")
 
-    stage = config.task.stages[0]
-    assert stage.site == "door__handle_grasp_center"
-    assert list(stage.param.pre_move[-1].position) == [0.01, 0.0, 0.0]
-    assert stage.param.pre_move[-1].tolerance.position == pytest.approx(0.002)
+    pick_stage, push_stage = config.task.stages
+    assert pick_stage.name == "pick_handle"
+    assert pick_stage.operation == "pick"
+    assert pick_stage.site == "door__handle_grasp_center"
+    assert list(pick_stage.param.pre_move[-1].position) == [0.02, 0.0, 0.0]
+    assert pick_stage.param.pre_move[-1].tolerance.position == pytest.approx(0.002)
+    assert pick_stage.param.eef.require_grasp is True
+    assert push_stage.name == "push_open"
+    assert push_stage.operation == "push"
+    assert "site" not in push_stage
+    assert len(push_stage.param.pre_move) == 2
+    assert "post_move" not in push_stage.param
 
 
 def test_demo_grasps_before_unlatching_and_unlocks_before_opening() -> None:
@@ -552,7 +560,6 @@ def test_demo_grasps_before_unlatching_and_unlocks_before_opening() -> None:
         )
     runner = TaskRunner().from_config(prepare_task_file(config))
     try:
-        runner.reset()
         backend = runner._context.backend
         single_env = backend.get_env().envs[0]
         latch_id = mujoco.mj_name2id(
@@ -560,26 +567,38 @@ def test_demo_grasps_before_unlatching_and_unlocks_before_opening() -> None:
             mujoco.mjtObj.mjOBJ_EQUALITY,
             "door__door_latch_lock",
         )
-        saw_handle_arc = False
+        saw_push_start = False
         saw_door_arc = False
+        update = runner.reset()
         for _ in range(500):
-            runner.update()
+            update = runner.update()
             active = runner._env_states[0].active
             if active is None:
+                if bool(update.done[0]):
+                    break
                 continue
-            if active.action_index == 3 and not saw_handle_arc:
-                saw_handle_arc = True
+            if active.plan.stage.name != "push_open":
+                continue
+            if active.action_index == 0 and not saw_push_start:
+                saw_push_start = True
                 assert backend.is_object_grasped(
                     "arm", "door__door_handle"
                 ).tolist() == [True]
                 assert bool(single_env.data.eq_active[latch_id])
-            if active.action_index == 4:
+            if active.action_index == 1:
                 saw_door_arc = True
                 assert backend.get_joint_angle("door__handle_hinge", 0) >= 0.12
                 assert not bool(single_env.data.eq_active[latch_id])
-                break
 
-        assert saw_handle_arc
+        assert saw_push_start
         assert saw_door_arc
+        assert update.done.tolist() == [True]
+        assert update.success.tolist() == [True]
+        assert [record.stage_name for record in runner.records] == [
+            "pick_handle",
+            "push_open",
+        ]
+        assert backend.get_joint_angle("door__door_hinge", 0) >= 0.18
+        assert backend.is_object_grasped("arm", "door__door_handle").tolist() == [True]
     finally:
         runner.close()

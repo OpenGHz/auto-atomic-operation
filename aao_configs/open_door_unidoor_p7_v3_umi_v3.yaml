@@ -26,6 +26,8 @@ env:
       - kind: mjcf
         path: ${assets_dir}/xmls/robots/p7_arm_v3_with_umi_gripper_v3.xml
   mask_objects: [door__door_handle]
+  # Heat-map focus for the manipulated mask object; task.stages below is the
+  # authoritative PICK -> PUSH workflow.
   operations: [push]
   pre_step_callbacks:
     - _target_: auto_atom.callbacks.door_latch.DoorLatchCallback
@@ -41,10 +43,10 @@ env:
 
 task:
   stages:
-    - name: grasp_and_open
+    - name: pick_handle
       object: door__door_handle
       site: door__handle_grasp_center
-      operation: push
+      operation: pick
       operator: arm
       param:
         pre_move:
@@ -53,9 +55,10 @@ task:
             orientation: [0.68997457, 0.19902274, -0.20541703, 0.66492774]
             max_linear_step: 0.04
             max_angular_step: 0.25
-          # The TCP advances 1 cm through the catalog grasp centre so both
-          # fingers close symmetrically without pressing the handle down.
-          - position: [0.01, 0.0, 0.0]
+          # Advance 2 cm through the catalog grasp centre.  This is the
+          # deepest tested offset that still establishes two-finger contact;
+          # 2.5 cm loses the left finger on D001/H003.
+          - position: [0.02, 0.0, 0.0]
             reference: object_world
             orientation: [0.68997457, 0.19902274, -0.20541703, 0.66492774]
             max_linear_step: 0.04
@@ -65,7 +68,15 @@ task:
         eef:
           close: true
           require_grasp: true
-        post_move:
+
+    - name: push_open
+      object: door__door_handle
+      operation: push
+      operator: arm
+      param:
+        # PICK has already established and verified the grasp.  For PUSH,
+        # pre_move is the effect trajectory itself; there is no EEF boundary.
+        pre_move:
           - arc:
               pivot: door__handle_hinge
               axis: [1, 0, 0]
