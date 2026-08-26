@@ -1,0 +1,78 @@
+{
+  "schema": "aao.scene-asset-package/v1",
+  "package_id": "unidoor_lever_right_hinge",
+  "revision": "catalog-1.3",
+  "payload_root": {
+    "uri": "../../../third_party/unidoor_lever_catalog_pipeline_right_hinge"
+  },
+  "units": {
+    "length": "m",
+    "angle": "rad",
+    "mass": "kg"
+  },
+  "canonical_frame": {
+    "name": "package_local",
+    "up": "+z",
+    "handedness": "right",
+    "quaternion": "xyzw",
+    "transform_baked": true
+  },
+  "components": {
+    "source": "product_space.json",
+    "index": "product_space.json",
+    "selection_roles": ["door", "handle"]
+  },
+  "assembly_templates": [
+    {
+      "id": "lever_door_v1",
+      "adapter": "unidoor.lever_door@1",
+      "joint_axes": {
+        "door": [0.0, 0.0, -1.0],
+        "handle": [0.0, 1.0, 0.0]
+      },
+      "joint_specs": {
+        "door": {
+          "range": [0.0, 1.5079644737231006],
+          "springref": 0.0,
+          "stiffness": 1.0,
+          "damping": 1.2,
+          "frictionloss": 0.2,
+          "armature": 0.02,
+          "limited": true
+        },
+        "handle": {
+          "range": [0.0, 0.65],
+          "springref": 0.0,
+          "stiffness": 3.0,
+          "damping": 0.08,
+          "armature": 0.002,
+          "limited": true
+        }
+      },
+      "axis_frame": "package_local",
+      "exports": [
+        "door.frame.body",
+        "door.panel.body",
+        "door.hinge.joint",
+        "handle.body",
+        "handle.hinge.joint",
+        "handle.grasp.site"
+      ]
+    }
+  ],
+  "integrity": {
+    "algorithm": "sha256",
+    "policy": "selected-artifacts",
+    "lock": "integrity.lock.json"
+  },
+  "provenance": {
+    "legacy_product_space": "../../../third_party/unidoor_lever_catalog_pipeline_right_hinge/product_space.json",
+    "note": "OBJ and collision sidecars remain in the external payload; no bytes are copied or rewritten."
+  },
+  "extensions": {
+    "unidoor": {
+      "compiler_version": "unidoor-lever-catalog-1.3",
+      "handedness_transform_id": "door-hinge-x-reflection-v1"
+    }
+  }
+}

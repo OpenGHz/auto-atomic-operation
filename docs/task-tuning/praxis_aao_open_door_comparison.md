@@ -192,34 +192,50 @@ Praxis 的相机默认来自 `configs/open_room_door_push.yaml:219-270`；AAO �
 
 ### 4.5 Praxis 门/把手资产拼装与可视化
 
-Praxis 的“拼装”不是在每个仿真 step 中通过 MuJoCo `<attach>` 临时挂载两个物体，而是分成**离线资产组合**和**运行时场景编译**两层：
+Praxis 的“拼装”分成**离线资产组合**和**运行时场景编译**两层；AAO 现在也提供了一个轻量的 manifest/OBJ 运行时装配路径，但两者的职责不同：
 
 1. `build-unidoor-lever-catalog` 读取门体和把手源包，分别做尺寸归一化、坐标变换、碰撞几何检查，并写出门/把手的 component manifest、标准化 mesh 和哈希。之后按门 × 把手的笛卡尔积物化组合，例如 `D001-H003`；组合 XML 还会记录门角、把手角、抓取 site 等语义对象。
-2. 当前 staged/closed-loop 运行时主要从带机器人和相机的 base scene 创建 `MjSpec`，再由 `UnilabLeverTaskModelFactory._patch_door()` 与 `_patch_handle()` 替换选中变体的 mesh、碰撞代理、安装位、轴和传感器，最后 `spec.compile()` 得到本次仿真的物理模型。也就是说，组合 XML 是可审计的资产产物；动态运行模型是 **base scene + selected variant patch** 的编译结果。
+2. Praxis staged/closed-loop 运行时主要从带机器人和相机的 base scene 创建 `MjSpec`，再由 `UnilabLeverTaskModelFactory._patch_door()` 与 `_patch_handle()` 替换选中变体的 mesh、碰撞代理、安装位、轴和传感器，最后 `spec.compile()` 得到本次仿真的物理模型。
+3. AAO 将这类拼装建模为通用 `SceneConfig` 的 `asset_assembly` layer：`package`、`adapter@version`、role selection、placement、namespace 和 integrity policy 是统一字段。当前 `unidoor.lever_door@1` adapter 读取 `product_space.json`、两个 component manifest 和标准化 OBJ，生成 namespaced 门框/门板/把手 MJCF contribution，再由 host composer 与 MJCF 机器人 layer 合并。AAO 运行时**不读取** `combinations/`，因此可以按组件 manifest 直接换门或把手；预生成组合 XML 仅作为回归 oracle。
 
 组合 XML 的核心层级可以简化为：
 
 ```text
 worldbody
-├── door_frame
-└── door_panel
-    ├── door_hinge
-    ├── door_panel_visual / door_panel_collision
-    ├── door_handle (门板的子 body，随门板旋转)
-    │   ├── handle_hinge (把手下压关节)
-    │   ├── door_handle_visual
-    │   ├── handle_lever_collision
-    │   └── handle_grasp_center
-    └── door_lock (可选，仅 visual)
+└── unidoor_assembly (`position` / `orientation` 作用于此 root body)
+    ├── door_frame
+    └── door_panel
+        ├── door_hinge
+        ├── door_panel_visual / door_panel_collision
+        ├── door_handle (门板的子 body，随门板旋转)
+        │   ├── handle_hinge (把手下压关节)
+        │   ├── door_handle_visual
+        │   ├── handle_lever_collision
+        │   └── handle_grasp_center
+        └── door_lock (可选，仅 visual)
 ```
 
-其中，门 component manifest 的 `geometry.handle_position_m` 决定 `door_handle` 在门板上的安装位置；把手 component manifest 的 `geometry.grasp_offset_m` 决定 `handle_grasp_center` site 的局部位置。visual mesh 与物理 collision/proxy 分开维护；带锁把手的 `lock.obj` 可以作为静态 visual 加入，但不应被解释成可驱动的锁舌动力学。右铰链变体还会同步镜像 mesh、碰撞补充物和 provenance，不能只翻转一个 joint 轴。
+其中，门 component manifest 的 `geometry.handle_position_m` 决定 `door_handle` 在门板上的安装位置；把手 component manifest 的 `geometry.grasp_offset_m` 决定 `handle_grasp_center` site 的局部位置。visual mesh 与物理 collision/proxy 分开维护；带锁把手的 `lock.obj` 可以作为静态 visual 加入，但不应被解释成可驱动的锁舌动力学。右铰链变体还会同步镜像 mesh、碰撞补充物和 provenance，不能只翻转一个 joint 轴。canonical package template 显式记录 `door_hinge=[0,0,-1]`、`handle_hinge=[0,1,0]` 及其 axis frame；运行时不从旧 `handedness` 猜测机构轴，离线迁移器负责校验、转换并记录推导依据。配置中的 `xyzw` 环境四元数会转换为 MJCF 的 `wxyz`。
+
+AAO 装配器的最小配置字段如下：
+
+| 字段 | 作用 |
+| --- | --- |
+| `package` | canonical scene asset package descriptor（可指向外部、可迁移 payload） |
+| `adapter` / `selection` | `unidoor.lever_door@1` 与 `door`/`handle` role selection |
+| `placement` / `namespace` | 将 canonical 门环境放入 host scene，并生成稳定 namespaced IDs |
+| `verify_hashes` | 校验选中 manifest、OBJ 和门碰撞 supplement 的 SHA-256 |
+
+`verify_hashes=true` 时，路径必须留在 catalog root 内；ACD sidecar 只保留为
+provenance，首版 AAO 采用门的 box supplement 与把手 AABB，不把 Praxis 的
+MotrixSim ACD 凸分解隐式改写成 AAO 碰撞体。
 
 **拼装后的可视化是有的，但有不同层级：**
 
 | 能力 | 是否有 | 产物与边界 |
 | --- | --- | --- |
-| 组合 XML 的 MuJoCo 加载 | 有 | 可直接检查门/把手层级、joint、site、actuator 和可选 lock；它主要是结构/加载验证，不包含完整机器人交互证据。 |
+| 组合 XML 的 MuJoCo 加载 | 有 | 可直接检查门/把手层级、joint、site、actuator 和可选 lock；在 AAO 中它是回归 oracle，主要用于结构/加载对照，不是运行时必需输入，也不包含完整机器人交互证据。 |
+| AAO manifest/OBJ 运行时装配 | 有 | `SceneConfig` 的 `asset_assembly` layer 通过 `unidoor.lever_door@1` adapter 从组件 manifest/OBJ 生成 namespaced contribution，再与 MJCF layers 统一合并；不读取 `combinations/`。 |
 | 全量静态资产审核图 | 有 | `render-unidoor-collision-audit` 生成 55 个门体 × 47 个把手/门锁的图片、`index.html` 和 manifest；用于人工审核碰撞与安装，不改变任务几何。 |
 | MuJoCo/EGL 3D 代表性预览 | 有 | `render-unidoor-collision-audit-3d-preview` 查看代表性门体、把手和碰撞代理，仍不是一次动态开门 episode。 |
 | 完整 variant visual replay | 有 | `UnilabLeverTaskModelFactory.compile_visual` 与 `MujocoVisualEpisodeRenderer._compile_scene_variant` 会把选中的门、把手、安装位和锁 visual 编译进带相机的完整场景，再重放 episode。需要 header 中的 `scene_variant`/provenance，且 renderer 会校验 mesh hash；缺少这些信息时只能可靠地渲染 base scene。 |
@@ -234,7 +250,12 @@ MUJOCO_GL=egl uv run --no-sync praxis render-unidoor-collision-audit-3d-preview
 uv run --no-sync praxis collect --num-envs 1
 ```
 
-因此，如果只是想确认“某个门和把手能否拼在一起”，先看 catalog 的组合 XML、manifest 和静态/3D audit；如果要看机器人、相机和该变体在动作中的完整画面，应使用带 `scene_variant` provenance 的 visual replay。两者都不能替代第 4.3 节的门角、事件顺序、settle 和安全 outcome 验证。
+因此，如果只是想确认“某个门和把手能否拼在一起”，可以先用 AAO 的 manifest/OBJ
+装配器做本地编译，再用 catalog 组合 XML 做结构回归，并查看静态/3D audit；如果
+要看机器人、相机和该变体在动作中的完整画面，应使用带 `scene_variant` provenance
+的 visual replay。任一 MJCF compile/load 通过都不能替代第 4.3 节的门角、事件顺序、
+settle 和安全 outcome 验证，也不能自动解决 `third_party/` 被 `.gitignore` 忽略、
+源包许可和对外再分发边界。
 
 ## 5. 当前动态验证状态
 
@@ -242,6 +263,7 @@ uv run --no-sync praxis collect --num-envs 1
 | --- | --- | --- |
 | Praxis P7 staged 15° | H15-1 preflight PASS；attempt-001 的 H15-2 FAIL，原因 `swing_timeout`。最大门角 `0.237799451 rad = 13.6249°`，终态 `12.7797°`，没有进入 `GRIPPER_RELEASE/RETREAT/SETTLE`。hard safety violation steps 为 0，但 target/settle 缺失。 | 不能；这是当前官方的失败动态基线。 |
 | AAO `open_door_p7_v3_umi_v3` | 本次未重新运行。已有两个本地 demo summary 报告 `2/2` Stage success、206 updates；摘要没有门角或 outcome event。 | 只能称为 AAO framework-level Stage smoke success，不能据此证明达到 Praxis 的 15°门角或机构 outcome。 |
+| AAO `open_door_unidoor_p7_v3_umi_v3` | 方案 2 的 manifest/OBJ 装配、P7+UMI 注入和环境初始化已通过；55×47 共 2585 个组合均可编译。完整 rollout 在 update 396 的把手圆弧阶段以 `ik_unreachable` 失败，尚未进入门圆弧。 | 资产迁移/装配已完成，但继承自旧几何的 waypoint 与姿态仍需针对 UniDoor 把手调优，当前不能称为动态开门成功。 |
 
 Praxis 数字证据见 `third_party/praxis/docs/STATUS.md:66-98`。历史 M1/30°成功记录已经被 D-038 标记为 retired，不应当用来掩盖当前 H15-2 失败。
 

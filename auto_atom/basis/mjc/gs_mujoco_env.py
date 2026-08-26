@@ -12,7 +12,9 @@ section:
       _target_: auto_atom.basis.mjc.gs_mujoco_env.GSUnifiedMujocoEnv
       config:
         _target_: auto_atom.basis.mjc.gs_mujoco_env.GSEnvConfig
-        model_path: assets/xmls/scenes/pick_and_place/demo.xml
+        scene:
+          base: assets/xmls/scenes/pick_and_place/demo.xml
+          layers: []
         ...
         gaussian_render:
           body_gaussians:

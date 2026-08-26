@@ -33,6 +33,7 @@ from auto_atom.basis.mjc.mujoco_basis import (
     ViewerConfig,
 )
 from auto_atom.runtime import ComponentRegistry
+from auto_atom.scene_composition import SceneArtifact, compile_scene
 from auto_atom.utils.pose import PoseState, quaternion_from_matrix_3x3
 from auto_atom.utils.transformations import (
     euler_from_matrix,
@@ -239,8 +240,14 @@ class KeyCreator:
 class UnifiedMujocoEnv(MujocoBasis):
     """MuJoCo environment with operator pose control and observation capture."""
 
-    def __init__(self, config: Optional[EnvConfig] = None, **kwargs):
-        super().__init__(config, **kwargs)
+    def __init__(
+        self,
+        config: Optional[EnvConfig] = None,
+        *,
+        scene_artifact: SceneArtifact | None = None,
+        **kwargs,
+    ):
+        super().__init__(config, scene_artifact=scene_artifact, **kwargs)
         self._operator_states: dict[str, _OperatorState] = {}
         self._key_creator = KeyCreator(self.config.structured)
         # Off by default — IK runs in the hot path of every control step in
@@ -1779,10 +1786,11 @@ class BatchedUnifiedMujocoEnv:
         self.config = config
         self.batch_size = int(config.batch_size)
         self.envs: list[UnifiedMujocoEnv] = []
+        shared_artifact = compile_scene(config.scene) if config.scene.layers else None
         for env_index in range(self.batch_size):
             viewer = config.viewer if env_index == config.viewer_env_index else None
             env_cfg = config.model_copy(update={"batch_size": 1, "viewer": viewer})
-            self.envs.append(UnifiedMujocoEnv(env_cfg))
+            self.envs.append(UnifiedMujocoEnv(env_cfg, scene_artifact=shared_artifact))
         if config.name:
             ComponentRegistry.register_env(config.name, self)
         self._key_creator = KeyCreator(self.config.structured)

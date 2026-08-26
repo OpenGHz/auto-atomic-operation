@@ -11,7 +11,7 @@ env:
   # assets/xmls/scenes/pick_and_place/demo_franka.xml. Duplicates the keyframe
   # no-op-ily for scenes that still embed one; provides the sole home pose
   # for composed (robot-less) scenes where the robot is injected via
-  # env.robot_paths.
+  # env.scene.layers.
   initial_joint_positions:
     # Panda arm (7 hinges) — "home" posture.
     joint1:  0.0006515062070403818

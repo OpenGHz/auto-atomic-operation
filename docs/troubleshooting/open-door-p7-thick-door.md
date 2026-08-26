@@ -2,7 +2,7 @@
 
 ## 现象
 
-`open_door_p7_ik` 默认使用 `assets/xmls/scenes/open_door/demo.xml`（场景，不含机器人）+ `assets/xmls/robots/p7_arm_with_xf9600.xml`（通过 `env.robot_paths` 在加载时注入）时可以完成开门。
+`open_door_p7_ik` 默认使用 `assets/xmls/scenes/open_door/demo.xml`（场景，不含机器人）+ `assets/xmls/robots/p7_arm_with_xf9600.xml`（通过 `env.scene.layers` 的 `kind: mjcf` layer 在加载时注入）时可以完成开门。
 
 但如果把门板碰撞几何从:
 

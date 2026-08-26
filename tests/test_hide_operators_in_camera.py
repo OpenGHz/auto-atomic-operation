@@ -6,16 +6,22 @@ import numpy as np
 from hydra import compose, initialize_config_dir
 
 from auto_atom.basis.mjc.mujoco_basis import EnvConfig, MujocoBasis
-from auto_atom.utils.scene_loader import load_scene
+from auto_atom.scene_composition import (
+    MjcfLayerConfig,
+    SceneConfig,
+    load_composed_scene,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
 def _load_pick_and_place_model() -> mujoco.MjModel:
-    return load_scene(
-        ROOT / "assets/xmls/scenes/pick_and_place/demo.xml",
-        [ROOT / "assets/xmls/robots/robotiq.xml"],
+    return load_composed_scene(
+        SceneConfig(
+            base=ROOT / "assets/xmls/scenes/pick_and_place/demo.xml",
+            layers=(MjcfLayerConfig(path=ROOT / "assets/xmls/robots/robotiq.xml"),),
+        )
     )
 
 
@@ -32,7 +38,7 @@ def _make_visibility_env(model: mujoco.MjModel) -> MujocoBasis:
 
 
 def test_hide_operators_defaults_to_false() -> None:
-    config = EnvConfig.model_validate({"model_path": "unused.xml"})
+    config = EnvConfig.model_validate({"scene": {"base": "unused.xml"}})
 
     assert config.hide_operators_in_camera is False
 

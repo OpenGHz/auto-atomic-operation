@@ -5,9 +5,11 @@ defaults:
 env:
   # Inject the XF9600 mocap gripper into every task that inherits this base.
   # Scene XMLs stay robot-less so the same scene can host different robots by
-  # swapping ``robot_paths``.
-  robot_paths:
-    - ${assets_dir}/xmls/robots/xf9600_mocap.xml
+  # swapping this ordered MJCF layer.
+  scene:
+    layers:
+      - kind: mjcf
+        path: ${assets_dir}/xmls/robots/xf9600_mocap.xml
   # Home pose at reset. Arm hangs 0.4m above the floor; gripper fully open
   # (clawj = 0). Tasks can override ``xf9600_freejoint`` for task-specific homes.
   initial_joint_positions:

@@ -1,0 +1,36 @@
+{
+  "schema": "aao.scene-asset-lock/v1",
+  "algorithm": "sha256",
+  "digest_scope": "runtime-payload-artifacts",
+  "entries": [
+    {
+      "uri": "components/doors/D001/component.json",
+      "sha256": "24bf38a3c8dd21fc6c27cdb3ed60096c1f973fc6f44712ccff014f7ddd5e33fd"
+    },
+    {
+      "uri": "components/doors/D001/frame.obj",
+      "sha256": "5f5e53376c38cd787bbc8111c2e79577f4c44dede577e78f1db8d51287eef489"
+    },
+    {
+      "uri": "components/doors/D001/panel.obj",
+      "sha256": "406de722c1e472eeb2a206fcc04498e95dfae0f31a4309a2bde181660b33834c"
+    },
+    {
+      "uri": "components/doors/D001/collision/door_v1.json",
+      "sha256": "9055fbd3b03c028f8d9b0d72431968b41b5ec816a515c689a507a5de0d21719a"
+    },
+    {
+      "uri": "components/handles/H003/component.json",
+      "sha256": "6035bc1b34d5ff44456326ddda801254c5d5684ea0454939103c6227f442b938"
+    },
+    {
+      "uri": "components/handles/H003/handle.obj",
+      "sha256": "aa44276834445044c25c479609e7a1ce7cc96c58280e9238596f36c1e25c9dee"
+    },
+    {
+      "uri": "components/handles/H003/collision/motrixsim_acd_v1.json",
+      "sha256": "55aca58953627f46f5bba95305b207afcb83e6c5d90e9925e199759d2c2f8d9d"
+    }
+  ],
+  "note": "This lock is an example selected-artifact lock; regenerate it for another selection."
+}

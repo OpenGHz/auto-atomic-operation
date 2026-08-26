@@ -9,8 +9,10 @@ env:
     - joint_position
     - joint_velocity
     - joint_effort
-  robot_paths:
-    - ${assets_dir}/xmls/robots/airbot_play_with_g2.xml
+  scene:
+    layers:
+      - kind: mjcf
+        path: ${assets_dir}/xmls/robots/airbot_play_with_g2.xml
   operators:
     arm:
       arm_actuators:

@@ -2,9 +2,9 @@
 
 Launch the interactive MuJoCo viewer on a composed scene + robot, applying every YAML-defined home-pose and pose override before the first frame is shown.
 
-Since scene XMLs no longer embed their robot include or `<key name="home">`, opening `assets/xmls/scenes/<task>/demo.xml` directly in the MuJoCo simulator shows just the empty scene. This script reads a Hydra task config, composes the scene with the robot(s) declared under `env.robot_paths`, applies `env.initial_joint_positions` plus `task.initial_pose` and `task_operators.<name>.initial_state.base_pose`, and hands the model to `mujoco.viewer.launch`.
+Since scene XMLs no longer have to embed a robot include or `<key name="home">`, opening a host XML directly can show only the host. This script reads `env.scene`, compiles its ordered MJCF and asset-assembly layers, applies `env.initial_joint_positions` plus `task.initial_pose` and `task_operators.<name>.initial_state.base_pose`, and hands the model to `mujoco.viewer.launch`.
 
-**Script:** [examples/view_scene.py](../examples/view_scene.py)
+**Script:** [examples/view_scene.py](../../examples/view_scene.py)
 
 ## Usage
 
@@ -23,12 +23,12 @@ python examples/view_scene.py --config-name open_door_p7_ik -- env.initial_joint
 
 ## What it composes
 
-For the chosen config, the script reads four override surfaces and applies them on top of the bare scene XML:
+For the chosen config, the script reads these override surfaces and applies them on top of the host scene:
 
 | Source                                            | What it sets                                                                  |
 |---------------------------------------------------|-------------------------------------------------------------------------------|
-| `env.model_path`                                  | Scene XML (no robot, no keyframe)                                             |
-| `env.robot_paths`                                 | Robot XML(s) injected as `<include>` siblings under `<mujoco>` at load time   |
+| `env.scene.base`                                  | Host scene XML                                                                 |
+| `env.scene.layers`                                | Ordered MJCF and namespaced asset-assembly layers                              |
 | `env.initial_joint_positions`                     | Per-joint home pose (mirrors `MujocoBasis.reset()`)                           |
 | `task.initial_pose`                               | Per-body pose overrides (freejoint qpos for movable bodies, or `body_pos/quat` for static bodies) |
 | `task_operators.<name>.initial_state.base_pose`   | Relocates each operator's `root_body` so the arm sits at the right world pose |
@@ -69,10 +69,10 @@ Pick up edits without restarting Python:
 Reload re-reads:
 
 - **YAML edits** to `env.initial_joint_positions`, `task.initial_pose`,
-  `task_operators.<name>.initial_state.base_pose`, `env.robot_paths`, or
+  `task_operators.<name>.initial_state.base_pose`, `env.scene.*`, or
   `env.gaussian_render.*` — re-composed via Hydra from disk.
-- **XML edits** to the scene or any robot XML — re-read by
-  `auto_atom.utils.scene_loader.load_scene`.
+- **XML/package edits** to the host, MJCF layer or asset package — re-read by
+  `auto_atom.scene_composition.load_composed_scene`.
 - **PLY edits** in GS mode — body / background gaussians are reloaded from
   disk and a new `GSRendererMuJoCo` is built. The GS window shows
   `Loading Gaussian renderer...` and `Warming up GS render...` status frames
@@ -82,8 +82,8 @@ Reload re-reads:
 In GS mode the MuJoCo viewer window is closed and reopened around each
 reload (because the underlying `MjModel` is replaced); this is normal.
 
-This makes `view_scene.py` the fastest way to iterate on home pose, robot
-injection, scene geometry, and Gaussian alignment side by side.
+This makes `view_scene.py` the fastest way to iterate on home pose, scene
+composition, geometry, and Gaussian alignment side by side.
 
 ## Console output
 
@@ -104,5 +104,5 @@ viewer would otherwise show only inside the GUI.
 
 ## Related
 
-- [Scene Composition](../task-configuration/scene_composition.md) — how `env.robot_paths` injection works
+- [Scene Composition](../task-configuration/scene_composition.md) — the shared layer compiler and package contract
 - [Tune Randomization Extremes](tune_randomization_extremes.md) — same override surfaces, with randomization stepping

@@ -4,8 +4,10 @@ defaults:
 
 env:
   # Inject the Airbot Play arm + G2P gripper into the composable scene.
-  robot_paths:
-    - ${assets_dir}/xmls/robots/airbot_play_with_g2p.xml
+  scene:
+    layers:
+      - kind: mjcf
+        path: ${assets_dir}/xmls/robots/airbot_play_with_g2p.xml
   # Home pose is all-zero (matches the legacy <key name="home"> qpos)
   # so no initial_joint_positions entries are needed for the arm; qpos0
   # defaults suffice. Task-specific homes can still override.

@@ -13,7 +13,6 @@ import time
 from contextlib import contextmanager
 from enum import Enum
 from math import pi, tan
-from pathlib import Path
 from typing import Any, Callable, Dict, Iterator, List, Optional, Set, Tuple
 
 import mujoco
@@ -29,6 +28,12 @@ from pydantic import (
 )
 
 from auto_atom.basis.mjc.tactile.tactile_sensor import TactileSensorManager
+from auto_atom.scene_composition import (
+    SceneArtifact,
+    SceneConfig,
+    compile_scene,
+    load_composed_scene,
+)
 
 
 class DataType(str, Enum):
@@ -199,17 +204,16 @@ class OperatorBinding(BaseModel, frozen=True):
 
 
 class EnvConfig(BaseModel, frozen=True):
-    model_config = ConfigDict(validate_assignment=True, extra="forbid")
+    model_config = ConfigDict(
+        validate_assignment=True,
+        use_attribute_docstrings=True,
+        extra="forbid",
+    )
 
     name: str = ""
     """Optional registry name. When set, the constructed batched env self-registers under this name."""
-    model_path: Path
-    """Path to the scene XML. If ``robot_paths`` is non-empty, the scene is
-    composed by injecting each robot XML as an ``<include>`` sibling under
-    ``<mujoco>`` at load time; otherwise the scene file is loaded as-is."""
-    robot_paths: List[Path] = Field(default_factory=list)
-    """Optional robot XMLs to compose with ``model_path``. Leave empty when
-    ``model_path`` already embeds its robot (legacy monolithic scenes)."""
+    scene: SceneConfig
+    """Generic host scene and ordered composition layers."""
     operators: Dict[str, OperatorBinding] = Field(default_factory=dict)
     """Operator definitions keyed by logical name, mapping to XML actuators and sensors."""
     enabled_sensors: Set[DataType] = Field(default_factory=set)
@@ -349,13 +353,22 @@ class EnvConfig(BaseModel, frozen=True):
 class MujocoBasis:
     """Low-level MuJoCo wrapper: model/data access, rendering, physics."""
 
-    def __init__(self, config: Optional[EnvConfig] = None, **kwargs):
+    def __init__(
+        self,
+        config: Optional[EnvConfig] = None,
+        *,
+        scene_artifact: SceneArtifact | None = None,
+        **kwargs,
+    ):
         self.get_logger().info("Initializing...")
         if config is None:
             config = EnvConfig.model_validate(kwargs)
         self.config = config
         self._info = None
-        self.model, self.data = self._load_model(config.model_path, config.robot_paths)
+        self.scene_artifact = scene_artifact or (
+            compile_scene(config.scene) if config.scene.layers else None
+        )
+        self.model, self.data = self._load_model(config.scene, self.scene_artifact)
         if config.sim_freq is not None:
             self.model.opt.timestep = 1.0 / config.sim_freq
         self.get_logger().info(
@@ -712,11 +725,10 @@ class MujocoBasis:
 
     @staticmethod
     def _load_model(
-        model_path: Path, robot_paths: List[Path] | None = None
+        scene: SceneConfig,
+        artifact: SceneArtifact | None = None,
     ) -> tuple[Any, Any]:
-        from auto_atom.utils.scene_loader import load_scene
-
-        model = load_scene(model_path, robot_paths or [])
+        model = load_composed_scene(scene, artifact)
         data = mujoco.MjData(model)
         return model, data
 

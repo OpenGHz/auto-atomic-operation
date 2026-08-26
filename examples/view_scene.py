@@ -2,9 +2,9 @@
 
 Since scene XMLs no longer embed their robot include or keyframe, opening
 ``demo.xml`` directly in the MuJoCo simulator shows just the empty scene.
-This script reads a Hydra task config, composes the scene with the robot(s)
-declared under ``env.robot_paths``, applies ``env.initial_joint_positions``
-as the home pose, and hands the model to ``mujoco.viewer.launch``.
+This script reads a Hydra task config, compiles the ordered layers declared
+under ``env.scene``, applies ``env.initial_joint_positions`` as the home pose,
+and hands the model to ``mujoco.viewer.launch``.
 
 When the config carries a ``gaussian_render`` section, the script switches
 to a passive viewer and opens a second OpenCV window that re-renders the
@@ -41,8 +41,8 @@ from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, ListConfig, OmegaConf
 
 from auto_atom.runner.common import get_config_dir
+from auto_atom.scene_composition import SceneConfig, load_composed_scene
 from auto_atom.utils.pose import euler_to_quaternion
-from auto_atom.utils.scene_loader import load_scene
 
 # Joint qpos widths by mjtJoint enum value: free=7, ball=4, slide=1, hinge=1.
 _QPOS_WIDTH = {0: 7, 1: 4, 2: 1, 3: 1}
@@ -217,9 +217,15 @@ def _extract_overrides(cfg: DictConfig) -> dict:
     """Pull the four override surfaces out of a freshly-composed Hydra cfg
     so reload can re-read them without restarting the process."""
     env_cfg = cfg.env
+    scene_data = _to_container(env_cfg.get("scene")) or {}
     out: dict = {
-        "model_path": str(env_cfg.model_path),
-        "robot_paths": [str(p) for p in (env_cfg.get("robot_paths") or [])],
+        "scene": scene_data,
+        "scene_base": str(scene_data["base"]),
+        "mjcf_paths": [
+            str(layer.get("path"))
+            for layer in scene_data.get("layers", [])
+            if isinstance(layer, dict) and layer.get("kind") == "mjcf"
+        ],
         "ijp": _to_container(env_cfg.get("initial_joint_positions")) or {},
         "initial_pose": _to_container(cfg.get("task", {}).get("initial_pose")) or {},
         "op_bases": [],
@@ -244,7 +250,7 @@ def _extract_overrides(cfg: DictConfig) -> dict:
 
 
 def _build(overrides: dict) -> tuple[mujoco.MjModel, mujoco.MjData]:
-    m = load_scene(overrides["model_path"], overrides["robot_paths"])
+    m = load_composed_scene(SceneConfig.model_validate(overrides["scene"]))
     d = mujoco.MjData(m)
     mujoco.mj_resetData(m, d)
 
@@ -296,7 +302,7 @@ def _print_model_summary(model: mujoco.MjModel, overrides: dict) -> None:
     print(
         f"[info] model  : nq={model.nq} nv={model.nv} nu={model.nu} "
         f"nbody={model.nbody} ngeom={model.ngeom}  "
-        f"(robots={overrides['robot_paths']}, ijp={len(overrides['ijp'])}, "
+        f"(mjcf={overrides['mjcf_paths']}, ijp={len(overrides['ijp'])}, "
         f"body_pose={len(overrides['initial_pose'])}, "
         f"op_base={len(overrides['op_bases'])})"
     )
@@ -719,8 +725,8 @@ def main(cfg: DictConfig) -> None:
         raise RuntimeError("Could not resolve absolute config dir from HydraConfig.")
 
     overrides = _extract_overrides(cfg)
-    print(f"[info] scene  : {overrides['model_path']}")
-    print(f"[info] robots : {overrides['robot_paths'] or '(none)'}")
+    print(f"[info] scene  : {overrides['scene_base']}")
+    print(f"[info] mjcf   : {overrides['mjcf_paths'] or '(none)'}")
     print(
         f"[info] home   : {len(overrides['ijp'])} joint override(s), "
         f"{len(overrides['initial_pose'])} body pose(s), "
@@ -761,9 +767,9 @@ def main(cfg: DictConfig) -> None:
     def loader() -> tuple[mujoco.MjModel, mujoco.MjData]:
         try:
             # Re-compose the Hydra config from disk so the reload button picks up
-            # YAML edits (initial_pose, base_pose, robot_paths, joint_positions, ...),
-            # then rebuild the model. ``load_scene`` already re-reads the scene/robot
-            # XML files from disk so XML edits also flow through.
+            # YAML edits (scene layers, initial_pose, base_pose, joint positions,
+            # ...), then rebuild the model through the same generic composer used
+            # by the environment.
             _cfg_now, ov, m, d = _load_reloaded_scene(
                 config_dir, config_name, cli_overrides
             )

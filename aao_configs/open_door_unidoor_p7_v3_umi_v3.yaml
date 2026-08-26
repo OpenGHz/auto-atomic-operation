@@ -1,0 +1,74 @@
+defaults:
+  - open_door_p7_v3_umi_v3
+  - _self_
+
+scene_name: open_door_unidoor
+task_name: open_door_unidoor_p7_v3_umi_v3
+
+env:
+  scene:
+    base: ${assets_dir}/xmls/scenes/open_door_unidoor/demo.xml
+    layers:
+      - kind: asset_assembly
+        package: ${oc.env:AAO_UNIDOOR_ASSET_PACKAGE,assets/scene_assets/unidoor_lever_right_hinge/scene_asset_package.json}
+        adapter: unidoor.lever_door@1
+        selection:
+          door: D001
+          handle: H003
+        namespace: door
+        # The catalog's assembly origin differs from the hand-authored AAO
+        # frame. With +90-degree Z, this pose puts the handle in the existing
+        # camera/EEF interaction plane.
+        placement:
+          position: [1.54, 0.79, -1.0]
+          orientation_xyzw: [0.0, 0.0, 0.707106781, 0.707106781]
+        verify_hashes: true
+      - kind: mjcf
+        path: ${assets_dir}/xmls/robots/p7_arm_v3_with_umi_gripper_v3.xml
+  mask_objects: [door__door_handle]
+  operations: [push]
+  pre_step_callbacks:
+    - _target_: auto_atom.callbacks.door_latch.DoorLatchCallback
+      door_joint: door__door_hinge
+      handle_joint: door__handle_hinge
+      kp: 80.0
+      kd: 8.0
+      unlock_threshold: 0.12
+      lock_zone: 0.05
+
+task:
+  stages:
+    - name: grasp_and_open
+      object: door__door_handle
+      site: door__handle_grasp_center
+      operation: push
+      operator: arm
+      param:
+        pre_move:
+          - position: [-0.14, 0.0, 0.0]
+            reference: object_world
+            orientation: [0.68997457, 0.19902274, -0.20541703, 0.66492774]
+            max_linear_step: 0.04
+            max_angular_step: 0.25
+          - position: [-0.07, 0.0, 0.0]
+            reference: object_world
+            orientation: [0.68997457, 0.19902274, -0.20541703, 0.66492774]
+            max_linear_step: 0.04
+            max_angular_step: 0.2
+        eef:
+          close: true
+        post_move:
+          - arc:
+              pivot: door__handle_hinge
+              axis: [-1, 0, 0]
+              angle: 0.45
+              absolute: true
+              max_step: 0.15
+            reference: world
+          - arc:
+              pivot: door__door_hinge
+              axis: [0, 0, -1]
+              angle: 0.20
+              absolute: true
+              max_step: 0.15
+            reference: world

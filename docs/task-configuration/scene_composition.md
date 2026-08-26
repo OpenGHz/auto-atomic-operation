@@ -1,114 +1,115 @@
-# Scene Composition
+# Scene composition
 
-`auto_atom` composes the scene XML and the robot XML(s) at load time instead of authoring a separate per-robot demo file. Scene XMLs declare only task-specific geometry (tables, objects, cameras, sites); robot XMLs are pulled in via `env.robot_paths` and inlined into the scene's `<mujoco>` root with their asset paths absolutized, so robot and scene can use independent `meshdir` / `texturedir` settings.
+场景拼接是一个通用的 `SceneConfig` 契约：一个 host MJCF 加上按声明顺序
+编译的 scene layers。layer 可以是已有的 MJCF 文档，也可以是从 scene asset
+package 解析出的资产装配。环境、viewer 和 MuJoCo basis 只消费这个契约，
+不需要知道资产供应商或具体机构。
 
-## Why
-
-Before this refactor, each robot needed its own `demo_<robot>.xml` (e.g. `demo_p7_xf9600.xml`, `demo_franka.xml`) duplicating the entire scene plus that robot's keyframe. Adding a new robot meant copy-pasting and re-tuning every task scene.
-
-Now:
-
-- One `assets/xmls/scenes/<task>/demo.xml` holds the scene only — no robot include, no `<key>` keyframe.
-- Robots live under `assets/xmls/robots/` and are referenced by config.
-- Home pose is described once in YAML as `env.initial_joint_positions` instead of an XML keyframe.
-
-## Configuring `robot_paths`
-
-Set `env.robot_paths` to the list of robot XMLs the task should compose with the scene. Order matters — earlier entries are inserted first. Most basis configs already do this for you:
+## 配置契约
 
 ```yaml
-# aao_configs/basis_p7_xf9600.yaml
 env:
-  robot_paths:
-    - ${assets_dir}/xmls/robots/p7_arm_with_xf9600.xml
-  initial_joint_positions:
-    joint1: 0.0
-    joint2: -0.785
-    # ... 7 P7 hinges + XF9600 gripper joints
+  scene:
+    base: ${assets_dir}/xmls/scenes/open_door_unidoor/demo.xml
+    layers:
+      # 机器人也是普通的 MJCF layer；顺序决定声明和资源合并顺序。
+      - kind: mjcf
+        path: ${assets_dir}/xmls/robots/p7_arm_v3_with_umi_gripper_v3.xml
+      # 资产装配使用稳定 namespace，避免多个实例的名字互相覆盖。
+      - kind: asset_assembly
+        package: assets/scene_assets/unidoor_lever_right_hinge/scene_asset_package.json
+        adapter: unidoor.lever_door@1
+        selection: {door: D001, handle: H003}
+        namespace: door
+        placement:
+          position: [1.54, 0.79, -1.0]
+          orientation_xyzw: [0.0, 0.0, 0.707106781, 0.707106781]
+        verify_hashes: true
 ```
 
-When the scene XML already embeds its own robot (legacy monolithic scenes), leave `robot_paths` empty (the default in [`aao_configs/basis.yaml`](../../aao_configs/basis.yaml)). The loader takes a fast path and skips XML rewriting.
+`SceneConfig` 是纯数据模型：不在 YAML 中放 adapter 实例、Python callable 或
+临时文件。adapter 只在运行时 registry 中按 `adapter@version` 查找。一个场景
+可以声明任意多个 asset assembly；namespace 必须唯一，生成的 MJCF 名称采用
+`<namespace>__<local-name>`，adapter 同时返回逻辑 semantic exports，例如：
 
-## Loader behaviour
+| logical export | generated name (`namespace=door`) |
+| --- | --- |
+| `door.door.hinge.joint` | `door__door_hinge` |
+| `door.handle.hinge.joint` | `door__handle_hinge` |
+| `door.handle.grasp.site` | `door__handle_grasp_center` |
+| `door.handle.object` | `door__door_handle` |
 
-`auto_atom.utils.scene_loader.load_scene` is the single entry point:
+任务配置应引用确定性的 namespaced 名称（或由上层任务编译器消费 exports），
+不要依赖某个供应商的全局 `door_hinge`。
 
-| Case                          | Behaviour                                                                        |
-|-------------------------------|----------------------------------------------------------------------------------|
-| `robot_paths=[]`              | `mujoco.MjModel.from_xml_path(scene_xml)` — no rewriting                         |
-| `robot_paths=[r1, r2, ...]`   | Parse `scene_xml` and each robot XML, **recursively expand** every `<include>` inside the robot tree, **absolutize** all asset paths and `compiler` `meshdir` / `texturedir` / `assetdir` attributes against each robot file's own directory, then **inline** the robot's children directly into `<mujoco>`. The composed document is written to a temp sibling of the scene file, loaded, and deleted. |
+## 加载与合并语义
 
-The inline-with-absolutized-paths strategy means robot XMLs and scene XMLs can use different `meshdir` settings (e.g. `assets/meshes/p7_arm` vs `assets/meshes`) without one clobbering the other in MuJoCo's parse-time meshdir merge. Asset paths inside the robot are resolved before inlining, so the host scene's compiler context is never perturbed and the loader is independent of CWD. Relative `meshdir`, `texturedir`, and `<include>` references inside the *scene* itself continue to resolve as before, because the composed file is still written next to the scene XML.
+公共入口是 `auto_atom.scene_composition.load_composed_scene(SceneConfig)`；
+`EnvConfig.scene` 必须提供这个完整 recipe。compiler 对每个 layer 做以下工作：
 
-## Home pose injection
+1. 解析 host；MJCF layer 递归展开 include，并以其源文件目录为基准绝对化 mesh、
+   texture、model 和 compiler 路径。
+2. adapter 只返回 `SceneContribution`（fragment、semantic exports、依赖摘要和
+   diagnostics），不直接改 host，也不管理临时文件。
+3. host composer 合并 `asset`、`worldbody`、`contact`、`equality`、`tendon`、
+   `actuator`、`sensor`、`keyframe`、`custom`、`extension` 等 list sections，并
+   检查所有 named element/default class 冲突。`option`、`visual`、`compiler` 等
+   singleton 只填补 host 未声明的属性，不能被隐藏 layer 覆盖。
+4. 只有在需要 layer 时才在 host 同目录 materialize 临时 XML；MuJoCo 加载后
+   立即删除。artifact digest 同时覆盖 XML 和依赖路径/内容哈希。
 
-Because the scene XML no longer carries a `<key>` keyframe, the runtime applies `env.initial_joint_positions` on every reset:
+批环境会先编译一次 `SceneArtifact`，再为每个 replica 从同一份 XML artifact
+创建独立的 `MjModel/MjData`；因此 batch size 不会把 manifest/OBJ 解析工作重复
+放大，物理状态仍彼此隔离。
 
-- Scalar joint → write directly into `data.qpos`.
-- Multi-DOF joint (free / ball) → write the full `[x y z qw qx qy qz]` or `[qw qx qy qz]` vector.
-- Equality-constrained passive joints (e.g. parallel-linkage gripper followers) are settled by stepping under zero gravity while pinning the configured scalar joints.
+这种合并规则让第二个 adapter 复用同一 seam，也避免旧 `_merge_fragment` 只认识
+少数 sections 而静默丢失物理约束。
 
-This is implemented in `MujocoBasis.reset()`. The same logic is mirrored in [`examples/view_scene.py`](../../examples/view_scene.py) so the viewer shows exactly what the runtime will see.
+## Scene asset package v1
 
-## Available robot XMLs
+通用 package descriptor 的根 schema 是 `aao.scene-asset-package/v1`，至少包含：
 
-| Robot XML                                       | Description                                                |
-|-------------------------------------------------|------------------------------------------------------------|
-| `assets/xmls/robots/robotiq.xml`                | 6-DOF floating base + Robotiq 2F-85 gripper                |
-| `assets/xmls/robots/panda_robotiq.xml`          | Franka Panda + Robotiq 2F-85                               |
-| `assets/xmls/robots/p7_arm_with_xf9600.xml`     | 7-DOF P7 arm + XFG-9600 parallel-linkage gripper           |
-| `assets/xmls/robots/p7_arm_with_g2p.xml`        | 7-DOF P7 arm + G2P (UMI parallel-linkage) gripper          |
-| `assets/xmls/robots/airbot_play.xml`            | Airbot Play 6-DOF arm                                      |
-| `assets/xmls/robots/airbot_play_with_xf9600.xml`| Airbot Play + XFG-9600                                     |
-| `assets/xmls/robots/airbot_play_with_g2p.xml`   | Airbot Play + G2P gripper                                  |
-| `assets/xmls/robots/airbot_g2p.xml`             | Standalone G2P gripper assembly (used by `*_with_g2p.xml`) |
-| `assets/xmls/robots/xf9600_mocap.xml`           | Mocap-driven floating XFG-9600 gripper                     |
-| `assets/xmls/robots/p7_arm_v3_with_umi_gripper_v3.xml` | 7-DOF P7 arm v3 + UMI gripper v3 (driven by an analytical IK solver) |
-| `assets/xmls/robots/umi_gripper_v3.xml`         | Standalone UMI gripper v3 assembly (referenced by both the v3 arm and the mocap variant) |
-| `assets/xmls/robots/umi_gripper_v3_mocap.xml`   | Mocap-driven floating UMI gripper v3                       |
+- `package_id` / `revision`、单位和 canonical frame（包括 quaternion 顺序及
+  `transform_baked`）；
+- component index（opaque id、kind、manifest URI、status、hash）；
+- component manifest 中的 `artifacts`、相对 URI、representation、frame、hash，
+  可选 `anchors`、`geometry.bounds`、`mechanism.joints`；
+- adapter/template catalog、integrity policy、provenance 和 extensions。
 
-Across all G2P variants the driven actuator joint is `eef_claw_joint`, the
-finger pad geoms are `eef_left_finger_pad_upper` / `eef_right_finger_pad_upper`,
-and `FingerDistanceMapper` is wired to those names. The `eef_*` prefix replaces
-the legacy `xfg_*` prefix that earlier configs used; see the
-`xfg_* → eef_*` notes in [Action Space](action_space.md) and
-[EEF Mapper (Finger Distance)](../mujoco-backend/eef_mapper.md).
+artifact URI 必须是 payload-relative POSIX 路径，解析后不能越过声明的
+`payload_root`；绝对源包路径只能作为 opaque provenance，不能成为运行时依赖。
+关节 axis、pivot、limits、range、stiffness、damping 等动力学属于版本化
+assembly template，必须显式记录。运行时 adapter 不从 `hinge_side` 猜测轴；只有
+离线迁移器可以推导并把推导依据写入 provenance。
 
-### Basis configs paired with each robot
+本仓库的 [UniDoor package view](../../assets/scene_assets/unidoor_lever_right_hinge/scene_asset_package.json)
+只增加一个可追踪的小 descriptor，引用 `third_party` 中现有 OBJ/sidecar，不复制
+或改写 144 MiB 资产。迁移器会为 102 个 component 生成 176 个 visual 与 102
+个 collision artifact 引用（JSON sidecar，不复制 mesh）。当前 UniDoor adapter
+将 `product_space.json` 作为该 package 的私有 component index，并校验选中 manifest
+和 mesh 的 SHA-256；`combinations/` 只作为结构回归 oracle。
 
-Most tasks pick a robot via the basis config they extend:
+## UniDoor 示例
 
-| Basis config                          | Robot composition                                                            |
-|---------------------------------------|------------------------------------------------------------------------------|
-| `aao_configs/basis_xf9600.yaml`       | Generic XF9600 settings (extended by the configs below)                      |
-| `aao_configs/basis_airbot_play_xf9600.yaml` | Airbot Play + XF9600                                                   |
-| `aao_configs/basis_airbot_play_g2p.yaml`    | Airbot Play + G2P                                                      |
-| `aao_configs/basis_p7_xf9600.yaml`    | P7 arm + XF9600                                                              |
-| `aao_configs/basis_p7_g2p.yaml`       | P7 arm + G2P                                                                 |
-| `aao_configs/basis_p7_xf9600_composable.yaml` | Composable variant of the P7 + XF9600 stack                          |
-| `aao_configs/basis_p7_v3_umi_v3.yaml`         | P7 arm v3 + UMI gripper v3 (analytical IK via `P7V3AnalyticalIKSolver`) |
-| `aao_configs/basis_mocap_eef_xf9600.yaml`     | Mocap-driven floating XF9600                                         |
-| `aao_configs/basis_mocap_eef_umi_v3.yaml`     | Mocap-driven floating UMI gripper v3                                 |
-| `aao_configs/basis_franka.yaml`       | Franka Panda + Robotiq                                                       |
+完整任务见 `aao_configs/open_door_unidoor_p7_v3_umi_v3.yaml`。该任务使用
+`asset_assembly` layer 选择 `D001/H003`，并将门的 semantic names 映射到
+`door__door_handle`、`door__handle_grasp_center`、`door__handle_hinge` 和
+`door__door_hinge`。替换门或把手只需改 `selection`；替换另一类资产则实现一个
+新的 adapter，不需要修改 `EnvConfig`、Basis 或 viewer。
 
-Task configs that bind to one of the new robots include
-`open_door_airbot_play_g2p`, `cup_on_coaster_airbot_p7`,
-`arrange_flowers_gs_airbot_p7`, `wipe_the_table_gs_airbot_p7`, and
-`press_{blue,green,pink}_button_airbot_p7`.
+预生成组合 XML 不参与运行时装配。它们仍可用于对比关节轴、site、尺寸和可选锁
+具的结构回归。结构加载通过不代表动态开门成功；waypoint、IK 可达性、碰撞和
+任务 postcondition 仍需独立验证。
 
-Tasks that bind to the **P7 v3 + UMI v3** stack:
+## Home pose 与 viewer
 
-- `cup_on_coaster_gs_airbot_p7` — joint-mode arm via `basis_p7_g2p`
-- `cup_on_coaster_gs_airbot_p7_umi` — joint-mode arm via `basis_p7_v3_umi_v3`
-- `open_door_p7_v3_umi_v3` — joint-mode arm via `basis_p7_v3_umi_v3`
-- `pick_and_place_umi_v3` — mocap variant via `basis_mocap_eef_umi_v3`
+host 不再需要为每个机器人复制 keyframe。`env.initial_joint_positions` 仍在
+`MujocoBasis.reset()` 中应用；scalar、free、ball joint 的写入规则保持不变。
+`examples/view_scene.py` 在 reload 时重新读取同一个 `SceneConfig`，因此 viewer
+和实际环境共享 compiler、namespace、integrity 检查和 home-pose 逻辑。
 
-## Iterating with the viewer
+## 相关文档
 
-[`examples/view_scene.py`](../../examples/view_scene.py) (see [View Scene](../tools/view_scene.md)) is the fastest way to verify a `robot_paths` change: it composes the scene + robot, applies all home-pose / initial-pose / operator base overrides, and supports reload-on-edit so you don't need to restart Python after tweaking YAML or XML.
-
-## Related
-
-- [Action Space](action_space.md) — how operators map joints/sites to actions
-- [View Scene](../tools/view_scene.md) — interactive viewer that mirrors the runtime composition
-- [Custom Backend](../mujoco-backend/custom-backend.md) — backend factories that bind to the composed model
+- [ADR-0001：通用场景组合契约](../adr/0001-generic-scene-composition.md)
+- [任务复用与创建](reusing_and_creating_tasks.md)
+- [View Scene](../tools/view_scene.md)

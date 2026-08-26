@@ -35,6 +35,12 @@ import mujoco
 import numpy as np
 import pytest
 
+from auto_atom.scene_composition import (
+    MjcfLayerConfig,
+    SceneConfig,
+    load_composed_scene,
+)
+
 _ASSETS = Path(__file__).resolve().parents[1] / "assets" / "xmls"
 
 # ── Per-robot test parameters ────────────────────────────────────────────────
@@ -87,9 +93,9 @@ def _load_model(cfg: dict) -> tuple[mujoco.MjModel, mujoco.MjData]:
     robot = cfg["robot_xml"]
     if not robot.exists():
         pytest.skip(f"Robot XML not found: {robot}")
-    from auto_atom.utils.scene_loader import load_scene
-
-    model = load_scene(scene, [robot])
+    model = load_composed_scene(
+        SceneConfig(base=scene, layers=(MjcfLayerConfig(path=robot),))
+    )
     for joint_name, value in cfg["initial_joint_positions"].items():
         jid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, joint_name)
         assert jid >= 0, f"Joint not found in composed model: {joint_name}"
@@ -284,8 +290,10 @@ def test_capture_observation_obs_action_consistent(cfg: dict) -> None:
     operators, eef_key_fragment = _framework_operator_config(cfg)
 
     env_cfg = EnvConfig(
-        model_path=cfg["scene_xml"],
-        robot_paths=[cfg["robot_xml"]],
+        scene=SceneConfig(
+            base=cfg["scene_xml"],
+            layers=(MjcfLayerConfig(path=cfg["robot_xml"]),),
+        ),
         initial_joint_positions=cfg["initial_joint_positions"],
         operators=operators,
         enabled_sensors={DataType.JOINT_POSITION},
@@ -379,8 +387,10 @@ def test_apply_joint_action_round_trip(cfg: dict) -> None:
     operators, eef_key_fragment = _framework_operator_config(cfg)
 
     env_cfg = EnvConfig(
-        model_path=cfg["scene_xml"],
-        robot_paths=[cfg["robot_xml"]],
+        scene=SceneConfig(
+            base=cfg["scene_xml"],
+            layers=(MjcfLayerConfig(path=cfg["robot_xml"]),),
+        ),
         initial_joint_positions=cfg["initial_joint_positions"],
         operators=operators,
         enabled_sensors={DataType.JOINT_POSITION},
@@ -581,8 +591,14 @@ def test_framework_with_finger_distance_mapper() -> None:
         }
     }
     env_cfg = EnvConfig(
-        model_path=scene,
-        robot_paths=[_ASSETS / "robots" / "airbot_play_with_xf9600.xml"],
+        scene=SceneConfig(
+            base=scene,
+            layers=(
+                MjcfLayerConfig(
+                    path=_ASSETS / "robots" / "airbot_play_with_xf9600.xml"
+                ),
+            ),
+        ),
         operators=operators,
         enabled_sensors={DataType.JOINT_POSITION},
         structured=True,

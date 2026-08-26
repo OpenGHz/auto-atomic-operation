@@ -128,7 +128,10 @@ defaults:
   - _self_
 scene_name: pick_and_place
 env:
-  robot_paths: [ "${assets_dir}/xmls/robots/panda_robotiq.xml" ]
+  scene:
+    layers:
+      - kind: mjcf
+        path: ${assets_dir}/xmls/robots/panda_robotiq.xml
   mask_objects: ["source_block", "target_pedestal"]
   operations: ["pick", "place"]
 task:

@@ -83,9 +83,9 @@ class OperatorInfo(BaseModel):
     name: str
     """The operator name referenced by stages / declared in ``task_operators``."""
     model: str = ""
-    """The robot model the operator is embodied as — the ``env.robot_paths`` XML
-    stem (e.g. ``robotiq``, ``airbot_play_with_g2p``). Set when the scene loads a
-    single robot; left empty when the robot is ambiguous (see ``TaskInfo.robots``)."""
+    """The robot model the operator is embodied as — the ``mjcf`` scene-layer
+    XML stem (e.g. ``robotiq``, ``airbot_play_with_g2p``). Set when the scene
+    loads a single robot; left empty when the robot is ambiguous."""
 
 
 class TaskInfo(BaseModel):
@@ -99,7 +99,7 @@ class TaskInfo(BaseModel):
     """Operating subjects — the operator(s) that perform the stages, each with
     its robot model when known."""
     robots: List[str] = []
-    """Robot models loaded by the scene, from ``env.robot_paths`` (XML stems)."""
+    """Robot models loaded by the scene, from ``mjcf`` layer XML stems."""
     declared_objects: List[str] = []
     """Objects declared in ``env.mask_objects``."""
     stage_objects: List[str] = []
@@ -227,13 +227,15 @@ def load_task_info(config_name: str) -> Optional[TaskInfo]:
     env = data.get("env") or {}
     env = env if isinstance(env, dict) else {}
 
-    # Robot models loaded by the scene, from the env.robot_paths XML stems.
-    robot_paths = env.get("robot_paths")
-    robots = (
-        _unique_preserving_order([Path(str(p)).stem for p in robot_paths])
-        if isinstance(robot_paths, list)
-        else []
-    )
+    # Robot models are ordinary ordered ``mjcf`` layers.
+    scene_data = env.get("scene") or {}
+    layers = scene_data.get("layers", []) if isinstance(scene_data, dict) else []
+    mjcf_paths = [
+        layer.get("path")
+        for layer in layers
+        if isinstance(layer, dict) and layer.get("kind") == "mjcf"
+    ]
+    robots = _unique_preserving_order([Path(str(p)).stem for p in mjcf_paths])
 
     # Operating subjects: names come from the stages (the actors that act) plus
     # any declared in task_operators / env.operators. The robot model is only

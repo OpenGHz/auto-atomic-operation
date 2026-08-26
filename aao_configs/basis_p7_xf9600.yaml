@@ -4,8 +4,10 @@ defaults:
 
 env:
   # Inject the P7 arm + XF9600 gripper into the composable scene.
-  robot_paths:
-    - ${assets_dir}/xmls/robots/p7_arm_with_xf9600.xml
+  scene:
+    layers:
+      - kind: mjcf
+        path: ${assets_dir}/xmls/robots/p7_arm_with_xf9600.xml
   # Home pose at reset — mirrors the <key name="home"> previously embedded
   # in assets/xmls/scenes/open_door/demo_p7_xf9600.xml. 7 P7 arm hinges +
   # 9 XF9600 linkage joints (near-zero rest values). Door/handle hinges

@@ -1,5 +1,5 @@
 <mujoco model="open_door_demo">
-  <!-- Robot-less scene. Compose via env.robot_paths in the task YAML. -->
+  <!-- Robot-less scene. Add the robot as an mjcf layer under env.scene.layers. -->
 
   <statistic center="0.3 0 0.4" extent="1"/>
 

@@ -210,7 +210,7 @@ press_three_buttons
 
 The **operating subject** comes from the task's operators (the `operator` a
 stage runs on, plus any declared in `task_operators` / `env.operators`), each
-annotated with its robot model — the `env.robot_paths` XML stem (e.g.
+annotated with its robot model — the `env.scene.layers[kind=mjcf]` XML stem (e.g.
 `robotiq`, `airbot_play_with_g2p`). The model is shown inline when the scene
 loads a single robot; when the scene loads several (or none, e.g. the mock
 backend), a separate `robots:` line lists them and the inline model is omitted.
