@@ -438,6 +438,37 @@ class StageExecution:
     ) -> Optional[Dict[str, Any]]:
         if completed_action.kind != "eef":
             return None
+        eef = completed_action.eef
+        if eef is not None and eef.require_grasp:
+            object_name = active.plan.stage.object
+            target_grasped = bool(
+                object_name
+                and self.context.backend.is_object_grasped(
+                    active.operator.name,
+                    object_name,
+                )[env_index]
+            )
+            if not target_grasped:
+                details = _condition_failure_details(
+                    env_index=env_index,
+                    context=self.context,
+                    plan=active.plan,
+                    condition_type=OperationConditionType.SUCCESS,
+                    constraint=OperationConstraint.GRASPED,
+                    is_grasping=bool(
+                        self.context.backend.is_operator_grasping(active.operator.name)[
+                            env_index
+                        ]
+                    ),
+                    completion_pose=None,
+                    target_object_pose=None,
+                    held_object_name=None,
+                )
+                details["is_target_grasped"] = False
+                details["failure_reason"] = (
+                    f"operator is not grasping required target '{object_name}'"
+                )
+                return details
         operation = active.plan.stage.operation
         if operation == Operation.PULL:
             return check_stage_condition(

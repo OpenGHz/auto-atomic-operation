@@ -93,7 +93,9 @@ aao-demo --config-name open_door_p7_ik
 1. 门板自身与门框更早、更强地接触
 2. `XF9600` 左指垫在推门阶段更深地压进 `door_panel_geom`
 
-结果是门还没真正绕 `door_hinge` 起转，夹爪已经把把手姿态破坏掉，`handle_hinge` 回落到门锁阈值以下，`DoorLatchCallback` 又把门锁回去。
+结果是门还没真正绕 `door_hinge` 起转，夹爪已经把把手姿态破坏掉，
+`handle_hinge` 回落到 `relock_travel` 以下，`DoorLatchCallback` 又启用门铰链
+equality，把门重新锁住。
 
 ## 推荐修复
 
@@ -116,7 +118,7 @@ aao-demo --config-name open_door_p7_ik
 下面这些尝试在该问题上都不是根治：
 
 - 仅调大把手下压角度
-- 仅调小 `unlock_threshold`
+- 仅调小 `unlock_travel`
 - 仅回退 P7 抓取点
 - 仅把门铰链 arc 改成别的 waypoint
 

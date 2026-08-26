@@ -19,6 +19,8 @@ from auto_atom.scene_composition import (
     compile_scene,
     load_composed_scene,
 )
+from auto_atom.runner.common import prepare_task_file
+from auto_atom.runtime import TaskRunner
 
 
 def _sha256(path: Path) -> str:
@@ -294,10 +296,17 @@ def test_build_tiny_unidoor_scene_contains_contract_names(tiny_catalog: Path) ->
         mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, "door__handle_grasp_center")
         >= 0
     )
+    latch_id = mujoco.mj_name2id(
+        model, mujoco.mjtObj.mjOBJ_EQUALITY, "door__door_latch_lock"
+    )
+    assert latch_id >= 0
+    assert model.eq_type[latch_id] == mujoco.mjtEq.mjEQ_JOINT
+    assert bool(model.eq_active0[latch_id])
     assert (
-        mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_ACTUATOR, "door__door_latch") >= 0
+        mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_ACTUATOR, "door__door_latch") < 0
     )
     assert artifact.semantic_refs["door.door.hinge.joint"] == "door__door_hinge"
+    assert artifact.semantic_refs["door.latch.constraint"] == "door__door_latch_lock"
 
 
 def test_xyzw_orientation_is_emitted_as_mjcf_wxyz(tiny_catalog: Path) -> None:
@@ -513,4 +522,64 @@ def test_demo_final_approach_targets_the_explicit_grasp_site() -> None:
 
     stage = config.task.stages[0]
     assert stage.site == "door__handle_grasp_center"
-    assert list(stage.param.pre_move[-1].position) == [0.0, 0.0, 0.0]
+    assert list(stage.param.pre_move[-1].position) == [0.01, 0.0, 0.0]
+    assert stage.param.pre_move[-1].tolerance.position == pytest.approx(0.002)
+
+
+def test_demo_grasps_before_unlatching_and_unlocks_before_opening() -> None:
+    mujoco = pytest.importorskip("mujoco")
+    root = Path(__file__).resolve().parents[1]
+    if not (
+        root
+        / "third_party"
+        / "unidoor_lever_catalog_pipeline_right_hinge"
+        / "product_space.json"
+    ).is_file():
+        pytest.skip("local UniDoor catalog is unavailable")
+
+    with initialize_config_dir(
+        version_base=None,
+        config_dir=str(root / "aao_configs"),
+    ):
+        config = compose(
+            config_name="open_door_unidoor_p7_v3_umi_v3",
+            overrides=[
+                "env.batch_size=1",
+                "env.cameras=[]",
+                "env.enabled_sensors=[]",
+                "env.viewer=null",
+            ],
+        )
+    runner = TaskRunner().from_config(prepare_task_file(config))
+    try:
+        runner.reset()
+        backend = runner._context.backend
+        single_env = backend.get_env().envs[0]
+        latch_id = mujoco.mj_name2id(
+            single_env.model,
+            mujoco.mjtObj.mjOBJ_EQUALITY,
+            "door__door_latch_lock",
+        )
+        saw_handle_arc = False
+        saw_door_arc = False
+        for _ in range(500):
+            runner.update()
+            active = runner._env_states[0].active
+            if active is None:
+                continue
+            if active.action_index == 3 and not saw_handle_arc:
+                saw_handle_arc = True
+                assert backend.is_object_grasped(
+                    "arm", "door__door_handle"
+                ).tolist() == [True]
+                assert bool(single_env.data.eq_active[latch_id])
+            if active.action_index == 4:
+                saw_door_arc = True
+                assert backend.get_joint_angle("door__handle_hinge", 0) >= 0.12
+                assert not bool(single_env.data.eq_active[latch_id])
+                break
+
+        assert saw_handle_arc
+        assert saw_door_arc
+    finally:
+        runner.close()

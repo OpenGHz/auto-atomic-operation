@@ -293,16 +293,17 @@ def _build_unidoor_fragment(config: _UniDoorCatalogConfig) -> ET.Element:
             },
         )
 
-    actuator = ET.SubElement(model_root, "actuator")
+    equality = ET.SubElement(model_root, "equality")
     ET.SubElement(
-        actuator,
-        "motor",
+        equality,
+        "joint",
         {
-            "name": "door_latch",
-            "joint": "door_hinge",
-            "gear": "1",
-            "ctrllimited": "true",
-            "ctrlrange": "-40 40",
+            "name": "door_latch_lock",
+            "joint1": "door_hinge",
+            "polycoef": "0 0 0 0 0",
+            "active": "true",
+            "solref": "0.002 1",
+            "solimp": "0.99 0.999 0.001",
         },
     )
     sensor = ET.SubElement(model_root, "sensor")

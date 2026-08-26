@@ -178,6 +178,9 @@ def _namespace_fragment(fragment: ET.Element, namespace: str) -> dict[str, str]:
         "door.frame.body": names.get("door_frame", f"{prefix}door_frame"),
         "door.panel.body": names.get("door_panel", f"{prefix}door_panel"),
         "door.hinge.joint": names.get("door_hinge", f"{prefix}door_hinge"),
+        "door.latch.constraint": names.get(
+            "door_latch_lock", f"{prefix}door_latch_lock"
+        ),
         "handle.body": names.get("door_handle", f"{prefix}door_handle"),
         "handle.hinge.joint": names.get("handle_hinge", f"{prefix}handle_hinge"),
         "handle.grasp.site": names.get(

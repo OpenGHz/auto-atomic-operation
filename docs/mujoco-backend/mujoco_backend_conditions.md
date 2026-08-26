@@ -237,8 +237,12 @@ angle = 2 * arccos(|quat_diff.w|)
 
 The gripper action is "reached" based on the operation:
 
-### 6.1 Closing (with target object)
-**Condition**: `_is_target_grasped()` returns True (see section 1)
+### 6.1 Closing with a required target grasp
+
+Set `task.stages[].param.eef.require_grasp: true`. Completion then requires
+`_is_target_grasped()` to return true for the Stage target (see section 1).
+Neither reaching the commanded gripper position nor being blocked by an
+arbitrary object is accepted as completion.
 
 **Additional requirement**: Minimum settle steps must elapse before checking grasp.
 
@@ -246,13 +250,20 @@ The gripper action is "reached" based on the operation:
 |-----------|----------|---------|-------------|
 | `control.grasp.settle_steps` | `MujocoGraspConfig` | `5` | Simulation steps to wait before checking grasp |
 
-### 6.2 Closing (without target / fallback)
-**Condition**: `actual_qpos >= max(target_ctrl - eef_tolerance, 0.45)`
+### 6.2 Closing without a required grasp
 
-Gripper has closed to within tolerance of the target position, or reached the minimum closed position (0.45).
+With the default `require_grasp: false`, a detected target grasp still completes
+the primitive. Otherwise the positional fallback is:
+
+**Condition**: `actual_qpos >= target_ctrl - eef_tolerance`
+
+If an object physically blocks the gripper, AAO waits at least 30 updates and
+then accepts measurable motion away from fully open. This fallback is disabled
+when `require_grasp` is true.
 
 ### 6.3 Opening
-**Condition**: `actual_qpos <= max(eef_tolerance, 0.05)`
+**Condition**: `actual_qpos <= eef_open_value + eef_tolerance` after the
+configured release-settle updates.
 
 Gripper has opened to within tolerance of fully open, or reached the minimum open threshold (0.05).
 
@@ -262,6 +273,15 @@ Gripper has opened to within tolerance of fully open, or reached the minimum ope
 |-----------|----------|---------|-------------|
 | `control.tolerance.eef` | `MujocoToleranceConfig` | `0.03` | Gripper position tolerance |
 | `control.grasp.settle_steps` | `MujocoGraspConfig` | `5` | Steps to wait before grasp check |
+
+`require_grasp` belongs to the individual `eef` primitive rather than the
+operator defaults:
+
+```yaml
+eef:
+  close: true
+  require_grasp: true
+```
 
 ---
 

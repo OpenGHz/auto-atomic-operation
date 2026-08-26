@@ -114,6 +114,7 @@ class MockOperatorHandler(OperatorHandler):
     def control_eef(
         self,
         eef: EefControlConfig,
+        target: Optional[ObjectHandler],
         env_mask: Optional[np.ndarray] = None,
     ) -> ControlResult:
         mask = self._normalize_mask(env_mask)
@@ -122,7 +123,10 @@ class MockOperatorHandler(OperatorHandler):
         for env_index, enabled in enumerate(mask):
             if not enabled:
                 continue
-            command_key = f"eef:{eef.close}:{eef.joint_positions}"
+            command_key = (
+                f"eef:{eef.close}:{eef.joint_positions}:{eef.require_grasp}:"
+                f"{target.name if target else ''}"
+            )
             self._prepare_command(env_index, command_key)
             self._progress[env_index] += 1
             if self._progress[env_index] == 1:

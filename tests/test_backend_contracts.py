@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from typing import Optional
 
 import numpy as np
+import pytest
 
 from auto_atom.framework import (
     AutoAtomConfig,
@@ -63,9 +64,10 @@ class _ExternalOperator(OperatorHandler):
     def control_eef(
         self,
         eef: EefControlConfig,
+        target: Optional[ObjectHandler],
         env_mask: Optional[np.ndarray] = None,
     ) -> ControlResult:
-        _ = eef, env_mask
+        _ = eef, target, env_mask
         return ControlResult.filled(1, ControlSignal.REACHED)
 
     def get_end_effector_pose(self) -> PoseState:
@@ -130,6 +132,12 @@ class _ExternalBackend(SceneBackend):
     ) -> np.ndarray:
         _ = operator_name, object_name
         return np.asarray([False], dtype=bool)
+
+
+def test_eef_grasp_requirement_only_accepts_close_commands() -> None:
+    assert EefControlConfig(close=True, require_grasp=True).require_grasp
+    with pytest.raises(ValueError, match="require_grasp=true requires close=true"):
+        EefControlConfig(close=False, require_grasp=True)
 
 
 def _build_external_backend(task, operators) -> _ExternalBackend:

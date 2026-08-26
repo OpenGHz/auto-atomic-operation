@@ -132,7 +132,7 @@ Stage grasp_and_open (operation=push, object=handle_body_phys)
 | --- | --- | --- | --- |
 | 当前门角目标 | `0.2617993877991494 rad`，严格为 15° | `0.20 rad`，约 11.46°；配置注释写“约 15°”但数值不是 15° | 不能用两边的成功率直接比较；若要对齐，先决定统一的 outcome identity |
 | 把手目标 | `0.45 rad`；以实测 `0.36 rad` 作为释放反馈 | `handle_hinge` 圆弧目标 `0.45 rad` | 命令目标相同不代表反馈阈值相同 |
-| 门锁模型 | `door_latch` actuator；stiffness 300、damping 8、max force 40；clearance 0.03 rad | `DoorLatchCallback` 在把手角 `<0.12 rad` 且门角处于 `0.05 rad` lock zone 时施加 `kp=80,kd=8` 的 `qfrc_applied`，没有同等的显式力限幅 | 解锁时机、锁舌力学和回弹特性不同 |
+| 门锁模型 | `door_latch` actuator；stiffness 300、damping 8、max force 40；clearance 0.03 rad | active-by-default 的 door joint equality；`DoorLatchCallback` 按把手行程 `unlock=0.12/relock=0.08 rad` 和 `0.02 rad` 捕获区切换约束 | AAO 现在是不可用有限推力越过的硬锁；Praxis 是有力限幅的机构模型，两者仍不能直接比较破锁力 |
 | 门几何 | UniDoor 编译资产；当前产品空间为 55 doors × 47 handles，pilot 组合为 `D001-H003` | 固定手工场景；门板半宽约 0.410 m、半高约 0.805 m，质量约 6 kg | AAO 的 `demo.xml` 是一个具体模板，不是 Praxis 的产品族 |
 | 铰链/坐标 | 当前右铰链 push；active profile 将门轴设为 `[0,0,-1]`、把手轴设为 `[0,1,0]`，再应用 wheelchair/world frame 和右侧镜像 variant | `demo.xml` 的 `door_hinge` 轴为 `[0,0,1]`，`handle_hinge` 轴为 `[0,1,0]`，任务圆弧另指定轴向 | 同名 joint 不意味着正方向和安装坐标一致 |
 

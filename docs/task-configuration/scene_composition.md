@@ -37,6 +37,7 @@ env:
 | logical export | generated name (`namespace=door`) |
 | --- | --- |
 | `door.door.hinge.joint` | `door__door_hinge` |
+| `door.latch.constraint` | `door__door_latch_lock` |
 | `door.handle.hinge.joint` | `door__handle_hinge` |
 | `door.handle.grasp.site` | `door__handle_grasp_center` |
 | `door.handle.object` | `door__door_handle` |

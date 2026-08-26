@@ -441,6 +441,16 @@ class EefControlConfig(BaseModel):
     """Whether to close the end-effector. True for closing the end-effector, False for opening the end-effector. This will set the end-effector joint positions to the lower limit or upper limit defined in the environment model."""
     joint_positions: List[float] = []
     """The target joint positions for the end-effector control. The order and meaning of the joint positions depend on the specific end-effector used in the environment."""
+    require_grasp: bool = False
+    """When closing on a Stage target, require the backend to verify that target is
+    physically grasped before reporting the end-effector primitive as reached."""
+
+    @model_validator(mode="after")
+    def validate_require_grasp(self):
+        """A grasp completion requirement is only meaningful for closing."""
+        if self.require_grasp and not self.close:
+            raise ValueError("require_grasp=true requires close=true")
+        return self
 
 
 class StageControlConfig(BaseModel):

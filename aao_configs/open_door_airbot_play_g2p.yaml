@@ -59,12 +59,15 @@ env:
   operations: [ "push" ]
   pre_step_callbacks:
     - _target_: auto_atom.callbacks.door_latch.DoorLatchCallback
-      door_joint: door_hinge
-      handle_joint: handle_hinge
-      kp: 80.0
-      kd: 8.0
-      unlock_threshold: 0.07
-      lock_zone: 0.05
+      config:
+        _target_: auto_atom.callbacks.door_latch.DoorLatchConfig
+        lock_constraint: door_latch_lock
+        door_joint: door_hinge
+        handle_joint: handle_hinge
+        handle_direction: 1
+        unlock_travel: 0.07
+        relock_travel: 0.04
+        relock_zone: 0.02
   viewer:
     lookat: [ 1.25, 0.15, -0.2 ]
     distance: 1.8

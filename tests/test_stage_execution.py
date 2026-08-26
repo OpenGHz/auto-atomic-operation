@@ -508,6 +508,37 @@ def test_config_driven_press_checks_contact_after_eef() -> None:
         evaluator.close()
 
 
+def test_config_driven_push_can_require_target_grasp_after_eef() -> None:
+    config = _task_file(
+        "stage_execution_push_required_grasp",
+        [
+            {
+                "name": "push_with_required_grasp",
+                "object": "handle",
+                "operation": "push",
+                "operator": "arm",
+                "param": {
+                    "pre_move": [_world_pose(0.2)],
+                    "eef": {"close": True, "require_grasp": True},
+                },
+            }
+        ],
+    )
+    policy = ConfigDrivenDemoPolicy()
+    evaluator = PolicyEvaluator(action_applier=policy.action_applier).from_config(
+        config
+    )
+    try:
+        update = _run_config_policy(evaluator, policy)
+
+        assert update.success.tolist() == [False]
+        assert update.details[0]["failure_category"] == "missing_grasp"
+        assert update.details[0]["target_object"] == "handle"
+        assert update.details[0]["is_target_grasped"] is False
+    finally:
+        evaluator.close()
+
+
 # ---------------------------------------------------------------------------
 # Absolute named-joint arc completion
 # ---------------------------------------------------------------------------

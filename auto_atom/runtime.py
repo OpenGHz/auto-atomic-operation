@@ -155,6 +155,7 @@ class OperatorHandler(ABC):
     def control_eef(
         self,
         eef: EefControlConfig,
+        target: Optional[ObjectHandler],
         env_mask: Optional[np.ndarray] = None,
     ) -> ControlResult:
         """Advance the end-effector toward the desired state for selected envs."""
@@ -1947,7 +1948,7 @@ class TaskRunner:
                 action.resolved_pose = resolved_pose
             return operator.move_to_pose(resolved_pose, target, env_mask=env_mask)
         if action.kind == "eef" and action.eef is not None:
-            return operator.control_eef(action.eef, env_mask=env_mask)
+            return operator.control_eef(action.eef, target, env_mask=env_mask)
         raise RuntimeError(f"Invalid primitive action '{action.kind}'.")
 
     @staticmethod

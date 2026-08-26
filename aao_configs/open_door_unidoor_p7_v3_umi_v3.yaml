@@ -29,12 +29,15 @@ env:
   operations: [push]
   pre_step_callbacks:
     - _target_: auto_atom.callbacks.door_latch.DoorLatchCallback
-      door_joint: door__door_hinge
-      handle_joint: door__handle_hinge
-      kp: 80.0
-      kd: 8.0
-      unlock_threshold: 0.12
-      lock_zone: 0.05
+      config:
+        _target_: auto_atom.callbacks.door_latch.DoorLatchConfig
+        lock_constraint: door__door_latch_lock
+        door_joint: door__door_hinge
+        handle_joint: door__handle_hinge
+        handle_direction: 1
+        unlock_travel: 0.12
+        relock_travel: 0.08
+        relock_zone: 0.02
 
 task:
   stages:
@@ -50,15 +53,18 @@ task:
             orientation: [0.68997457, 0.19902274, -0.20541703, 0.66492774]
             max_linear_step: 0.04
             max_angular_step: 0.25
-          # UniDoor exposes an explicit grasp-centre site.  Unlike the legacy
-          # door body origin, it needs no additional 7 cm standoff.
-          - position: [0.0, 0.0, 0.0]
+          # The TCP advances 1 cm through the catalog grasp centre so both
+          # fingers close symmetrically without pressing the handle down.
+          - position: [0.01, 0.0, 0.0]
             reference: object_world
             orientation: [0.68997457, 0.19902274, -0.20541703, 0.66492774]
             max_linear_step: 0.04
             max_angular_step: 0.2
+            tolerance:
+              position: 0.002
         eef:
           close: true
+          require_grasp: true
         post_move:
           - arc:
               pivot: door__handle_hinge
@@ -76,3 +82,11 @@ task:
               absolute: true
               max_step: 0.01
             reference: world
+
+task_operators:
+  arm:
+    control:
+      tolerance:
+        # The UMI v3 closing span is only 0.0165.  The inherited 0.012
+        # tolerance allowed close to finish before either finger made contact.
+        eef: 0.002

@@ -534,6 +534,7 @@ class MujocoOperatorHandler(OperatorHandler):
     def control_eef(
         self,
         eef: EefControlConfig,
+        target: Optional[ObjectHandler],
         env_mask: Optional[np.ndarray] = None,
     ) -> ControlResult:
         mask = self._normalize_mask(env_mask)
@@ -545,7 +546,10 @@ class MujocoOperatorHandler(OperatorHandler):
         for env_index, single_env in enumerate(self.env.envs):
             if not mask[env_index]:
                 continue
-            command_key = f"{eef.close}:{eef.joint_positions}"
+            self._last_target[env_index] = (
+                target if isinstance(target, MujocoObjectHandler) else None
+            )
+            command_key = f"{eef.close}:{eef.joint_positions}:{eef.require_grasp}"
             if self._last_eef_key[env_index] != command_key:
                 self._last_eef_key[env_index] = command_key
                 self._eef_steps[env_index] = 0
@@ -573,20 +577,38 @@ class MujocoOperatorHandler(OperatorHandler):
             reached = False
             settle_ready = self._eef_steps[env_index] >= self.control.grasp.settle_steps
             event = "eef_moving"
-            if (
+            target_grasped = (
                 eef.close
                 and settle_ready
                 and self._last_target[env_index] is not None
                 and self._is_target_grasped(env_index, self._last_target[env_index])
-            ):
+            )
+            if eef.close and eef.require_grasp and self._last_target[env_index] is None:
+                event = "grasp_target_required"
+                details[env_index] = {
+                    "event": event,
+                    "failure_category": "missing_grasp_target",
+                    "failure_reason": (
+                        "require_grasp=true needs a non-empty Stage target object"
+                    ),
+                }
+                signals[env_index] = ControlSignal.FAILED
+                self._eef_steps[env_index] = 0
+                continue
+            if target_grasped:
                 reached = True
                 grasped_name = self._last_target[env_index].name
                 event = "eef_grasped"
-            elif eef.close and actual >= (target_value - self.control.tolerance.eef):
+            elif (
+                eef.close
+                and not eef.require_grasp
+                and actual >= (target_value - self.control.tolerance.eef)
+            ):
                 reached = True
                 event = "eef_reached"
             elif (
                 eef.close
+                and not eef.require_grasp
                 and self._eef_steps[env_index]
                 >= max(self.control.grasp.settle_steps, 30)
                 and actual > self.eef_open_value + self.control.tolerance.eef * 0.1

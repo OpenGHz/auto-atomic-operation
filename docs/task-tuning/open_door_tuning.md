@@ -81,12 +81,18 @@ task_operators:
 env:
   pre_step_callbacks:
     - _target_: auto_atom.callbacks.door_latch.DoorLatchCallback
-      door_joint: door_hinge
-      handle_joint: handle_hinge
-      kp: 80.0
-      kd: 8.0
-      unlock_threshold: 0.20
-      lock_zone: 0.05
+      config:
+        _target_: auto_atom.callbacks.door_latch.DoorLatchConfig
+        lock_constraint: door_latch_lock
+        door_joint: door_hinge
+        handle_joint: handle_hinge
+        handle_direction: 1
+        unlock_travel: 0.20
+        relock_travel: 0.15
+        relock_zone: 0.02
 ```
 
-回调在每次 `mj_step()` 前执行，通过 `qfrc_applied` 施加条件弹簧力模拟门锁。
+场景 MJCF 需要声明 active-by-default 的 `joint` equality。回调在每次
+`mj_step()` 前切换 `data.eq_active`：把手达到 `unlock_travel` 才释放；把手回到
+`relock_travel` 以下且门仍在 `relock_zone` 内才重新上锁。锁定由 MuJoCo 约束
+求解器执行，不是可被大力越过的弹簧力。

@@ -82,12 +82,27 @@ With `absolute: true`, the arc targets a specific measured joint angle. Once the
 handle enters `joint_tolerance`, control moves to the door arc. A handle spring
 can then pull the handle back toward its reference angle.
 
-**Problem**: If the handle springs back below `unlock_threshold`, the door latch re-engages during the door push.
+**Problem**: If the handle springs back below `relock_travel` before the door
+clears `relock_zone`, the equality latch re-engages during the door push.
 
 **Solutions** (pick one):
-1. Lower `unlock_threshold` in the latch callback (e.g. 0.12 instead of 0.20)
-2. Increase handle arc target angle so spring-back stays above threshold
-3. Use a two-stage approach: hold handle down while pushing door (requires two operators or different operation design)
+1. Keep a measured margin between the handle arc target and `unlock_travel`.
+2. Configure `relock_travel < unlock_travel` to provide physical hysteresis.
+3. Maintain a verified grasp so the handle stays depressed until the door clears
+   `relock_zone`.
+
+For tasks where closing must establish a physical target grasp before any arc,
+make that primitive contract explicit:
+
+```yaml
+eef:
+  close: true
+  require_grasp: true
+```
+
+With `require_grasp`, a fully closed or tolerance-reached gripper is not enough;
+the backend must observe a valid target grasp or the primitive eventually times
+out.
 
 ## IK workspace limits
 
