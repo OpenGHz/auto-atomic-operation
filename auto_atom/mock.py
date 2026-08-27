@@ -193,6 +193,8 @@ class MockSceneBackend(SceneBackend):
     batch_size: int = 1
     operators: Dict[str, MockOperatorHandler] = field(default_factory=dict)
     objects: Dict[str, MockObjectHandler] = field(default_factory=dict)
+    element_poses: Dict[str, PoseState] = field(default_factory=dict)
+    element_owners: Dict[str, str] = field(default_factory=dict)
     lifecycle_events: List[str] = field(default_factory=list)
     interest_updates: List[Dict[str, List[str]]] = field(default_factory=list)
     env: MockEnv = field(init=False)
@@ -241,6 +243,47 @@ class MockSceneBackend(SceneBackend):
         except KeyError as exc:
             known = ", ".join(sorted(self.objects)) or "<empty>"
             raise KeyError(f"Unknown object '{name}'. Known objects: {known}") from exc
+
+    def get_element_pose(self, name: str, env_index: int = 0) -> PoseState:
+        if not 0 <= env_index < self.batch_size:
+            raise IndexError(
+                f"env_index must be in [0, {self.batch_size}), got {env_index}"
+            )
+        if name in self.objects:
+            return (
+                self.objects[name]
+                .get_pose()
+                .broadcast_to(self.batch_size)
+                .select(env_index)
+            )
+        try:
+            pose = self.element_poses[name]
+        except KeyError as exc:
+            known = ", ".join(sorted(self.element_poses)) or "<empty>"
+            raise KeyError(
+                f"Unknown named element '{name}'. Known elements: {known}"
+            ) from exc
+        return pose.broadcast_to(self.batch_size).select(env_index)
+
+    def is_element_rigidly_attached_to_object(
+        self,
+        element_name: str,
+        object_name: str,
+        env_index: int = 0,
+    ) -> bool:
+        _ = self.get_object_handler(object_name)
+        if not 0 <= env_index < self.batch_size:
+            raise IndexError(
+                f"env_index must be in [0, {self.batch_size}), got {env_index}"
+            )
+        if element_name == object_name:
+            return True
+        if element_name not in self.element_poses:
+            known = ", ".join(sorted(self.element_poses)) or "<empty>"
+            raise KeyError(
+                f"Unknown named element '{element_name}'. Known elements: {known}"
+            )
+        return self.element_owners.get(element_name) == object_name
 
     def is_object_grasped(self, operator_name: str, object_name: str) -> np.ndarray:
         _ = self.get_operator_handler(operator_name)

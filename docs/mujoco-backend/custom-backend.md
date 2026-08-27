@@ -349,10 +349,13 @@ class MySceneBackend(SceneBackend):
         env: MyEnv,
         operators: dict[str, MyOperatorHandler],
         objects: dict[str, MyObjectHandler],
+        element_owners: dict[str, str],
     ):
         self._env = env
         self._operators = operators
         self._objects = objects
+        # Explicit backend-owned registry for named rigid frames/geometries.
+        self._element_owners = element_owners
 
     def get_env(self) -> MyEnv:
         """The stable runtime seam for accessing the basis environment."""
@@ -385,6 +388,22 @@ class MySceneBackend(SceneBackend):
         if not name:
             return None
         return self._objects[name]
+
+    def is_element_rigidly_attached_to_object(
+        self,
+        element_name: str,
+        object_name: str,
+        env_index: int = 0,
+    ) -> bool:
+        """Validate ownership of a named frame used for held-object control."""
+        del env_index  # ownership is topology, not per-environment state
+        if object_name not in self._objects:
+            raise KeyError(f"Unknown object {object_name!r}")
+        try:
+            owner = self._element_owners[element_name]
+        except KeyError as exc:
+            raise KeyError(f"Unknown named element {element_name!r}") from exc
+        return owner == object_name
 
     # --- Grasp state ---
 
@@ -423,6 +442,16 @@ class MySceneBackend(SceneBackend):
         """Called by the runner before each stage. Use it to focus sensors, rendering, etc."""
         pass
 ```
+
+`is_element_rigidly_attached_to_object()` is part of the required public
+backend contract. Return `true` only when the named site, body, geometry, or
+other supported element lies in the object's rigidly fixed subtree. Return
+`false` for an existing element that belongs to another object or is separated
+from the object by an articulated joint, and raise `KeyError` when either name
+is unknown. A backend that does not support named object-local frames must still
+implement the method; it may reject every requested element (while preserving
+the same unknown-name behavior). Backends that accept a named frame must also
+override `get_element_pose()` so the runner can resolve that frame's world pose.
 
 ---
 

@@ -1,0 +1,9 @@
+<mujocoinclude>
+  <joint name="dishwasher_rack1_joint" type="slide"
+         axis="0 -1 0" pos="-0.00163518 0.05106521 0.14311844"
+         limited="true" range="0 0.33" ref="0.33"
+         damping="1" frictionloss="1" armature="0.01" stiffness="0.05"/>
+  <geom name="dishwasher_rack1_visual_geom" type="mesh"
+        mesh="dishwasher_rack1_visual" material="rack"
+        mass="0" contype="0" conaffinity="0"/>
+</mujocoinclude>

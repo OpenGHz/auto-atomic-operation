@@ -113,6 +113,19 @@ class _ExternalBackend(SceneBackend):
             return None
         return self._objects[name]
 
+    def is_element_rigidly_attached_to_object(
+        self,
+        element_name: str,
+        object_name: str,
+        env_index: int = 0,
+    ) -> bool:
+        _ = env_index
+        if element_name not in self._objects:
+            raise KeyError(element_name)
+        if object_name not in self._objects:
+            raise KeyError(object_name)
+        return element_name == object_name
+
     def is_object_grasped(self, operator_name: str, object_name: str) -> np.ndarray:
         _ = operator_name, object_name
         return np.asarray([False], dtype=bool)
@@ -169,6 +182,10 @@ def test_minimal_external_backend_satisfies_runner_contract() -> None:
     try:
         assert runner.batch_size == 1
         assert isinstance(runner.get_env(), _ExternalEnv)
+        assert runner._require_context().backend.is_element_rigidly_attached_to_object(
+            "block",
+            "block",
+        )
         update = runner.reset()
         assert update.done.tolist() == [False]
         update = runner.update()
@@ -254,6 +271,63 @@ def test_mujoco_backend_observes_named_operator_contacts() -> None:
     assert contact.normal_force_n >= 0.0
     assert backend.is_operator_contacting("arm", "door").tolist() == [True]
     assert backend.is_operator_contacting("arm", "nearby").tolist() == [False]
+
+
+def test_mujoco_backend_validates_rigid_named_frame_ownership() -> None:
+    mujoco = pytest.importorskip("mujoco")
+    model = mujoco.MjModel.from_xml_string(
+        """
+        <mujoco>
+          <worldbody>
+            <body name="plate">
+              <freejoint/>
+              <geom name="plate_geom" type="box" size="0.1 0.1 0.01"/>
+              <site name="plate_site"/>
+              <body name="fixed_child" pos="0.02 0 0">
+                <geom type="sphere" size="0.005"/>
+                <site name="fixed_site"/>
+              </body>
+              <body name="hinged_child" pos="0.04 0 0">
+                <joint name="hinge" type="hinge"/>
+                <geom type="sphere" size="0.005"/>
+                <site name="hinged_site"/>
+              </body>
+            </body>
+            <body name="rack" pos="0.5 0 0">
+              <freejoint/>
+              <geom type="sphere" size="0.01"/>
+              <site name="rack_site"/>
+            </body>
+          </worldbody>
+        </mujoco>
+        """
+    )
+    data = mujoco.MjData(model)
+    mujoco.mj_forward(model, data)
+    env = SimpleNamespace(
+        batch_size=1,
+        envs=[SimpleNamespace(model=model, data=data)],
+    )
+    backend = MujocoTaskBackend(
+        env=env,
+        operator_handlers={},
+        object_handlers={
+            "plate": MujocoObjectHandler(name="plate", env=env, body_name="plate"),
+            "rack": MujocoObjectHandler(name="rack", env=env, body_name="rack"),
+        },
+    )
+
+    assert backend.is_element_rigidly_attached_to_object("plate_site", "plate")
+    assert backend.is_element_rigidly_attached_to_object("plate_geom", "plate")
+    assert backend.is_element_rigidly_attached_to_object("fixed_site", "plate")
+    assert not backend.is_element_rigidly_attached_to_object(
+        "hinged_site",
+        "plate",
+    )
+    assert not backend.is_element_rigidly_attached_to_object("rack_site", "plate")
+    assert backend.get_element_pose("plate_geom").batch_size == 1
+    with pytest.raises(KeyError, match="No site, body, geom, or joint"):
+        backend.is_element_rigidly_attached_to_object("missing_site", "plate")
 
 
 def test_object_handler_rejects_empty_identity() -> None:

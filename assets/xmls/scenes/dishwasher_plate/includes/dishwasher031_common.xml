@@ -1,0 +1,133 @@
+<mujocoinclude>
+  <geom name="dishwasher_body_visual_geom" type="mesh"
+        mesh="dishwasher_body_visual" material="dishwasher"
+        mass="0" contype="0" conaffinity="0"/>
+
+  <body name="dishwasher_door"
+        pos="0 -0.303386998368 0.087427061032"
+        quat="0.954803187366 0.297238748139 0 0">
+    <joint name="dishwasher_door_joint" type="hinge"
+           axis="1 0 0"
+           pos="-0.00171831 -0.29211199619594097 -0.4435629010736084"
+           limited="true" range="0 0.6035987755982988"
+           ref="0.6035987755982988" springref="0"
+           damping="1" frictionloss="10" armature="1" stiffness="2"/>
+    <geom name="dishwasher_door_visual_geom" type="mesh"
+          mesh="dishwasher_door_visual" material="dishwasher"
+          mass="0" contype="0" conaffinity="0"/>
+    <geom name="dishwasher_door_main" type="box"
+          pos="-0.00171831 -0.27046903 0.01473459"
+          size="0.314526647329 0.021642966196 0.458297491074"
+          rgba="0 0 0 0"/>
+    <geom name="dishwasher_door_latch_right" type="box"
+          pos="0.24632083 -0.31011658 0.39872193"
+          size="0.012813650072 0.019381284714 0.016376437619"
+          quat="0.730941057205 0 0.682440578938 0" rgba="0 0 0 0"/>
+    <geom name="dishwasher_door_latch_left" type="box"
+          pos="-0.23809594 -0.31011658 0.39885226"
+          size="0.012395946309 0.019381269813 0.016752798110"
+          quat="0.730941057205 0 0.682440578938 0" rgba="0 0 0 0"/>
+    <geom name="dishwasher_door_handle" type="cylinder"
+          pos="0.00388840 -0.33332097 0.39996758"
+          size="0.012235971168 0.258230537176"
+          quat="0.707106828690 0.000000012102 0.707106709480 -0.000000012102"
+          rgba="0 0 0 0"/>
+
+    <body name="dishwasher_button_lock">
+      <joint name="dishwasher_button_lock_joint" type="slide"
+             axis="0 0 -1" pos="-0.18298566 -0.26662981 0.47530904"
+             limited="true" range="0 0.002" ref="0" springref="-0.0025"
+             damping="1" frictionloss="1" armature="0.01" stiffness="4"/>
+      <geom name="dishwasher_button_lock_visual_geom" type="mesh"
+            mesh="dishwasher_button_lock_visual" material="dishwasher"
+            mass="0" contype="0" conaffinity="0"/>
+      <geom name="dishwasher_button_lock_collision" type="cylinder"
+            pos="-0.18283316 -0.26663026 0.47586274"
+            size="0.009277576581 0.002021603519"
+            quat="0.707106709480 0 0 -0.707106828690" rgba="0 0 0 0"/>
+    </body>
+    <body name="dishwasher_button_power">
+      <joint name="dishwasher_button_power_joint" type="slide"
+             axis="0 0 -1" pos="0.18145567 -0.26662990 0.47530901"
+             limited="true" range="0 0.002" ref="0" springref="-0.0025"
+             damping="1" frictionloss="1" armature="0.01" stiffness="4"/>
+      <geom name="dishwasher_button_power_visual_geom" type="mesh"
+            mesh="dishwasher_button_power_visual" material="dishwasher"
+            mass="0" contype="0" conaffinity="0"/>
+      <geom name="dishwasher_button_power_collision" type="cylinder"
+            pos="0.18147971 -0.26663026 0.47586274"
+            size="0.009277576581 0.002021603519"
+            quat="0.707106709480 0 0 -0.707106828690" rgba="0 0 0 0"/>
+    </body>
+  </body>
+
+  <!-- Axis-aligned collision decomposition copied from the source cabinet. -->
+  <geom name="dishwasher_cabinet_top" type="box"
+        pos="0.00155940 0.03263054 0.46358112"
+        size="0.293255686760 0.278490543365 0.010836720467" rgba="0 0 0 0"/>
+  <geom name="dishwasher_cabinet_right" type="box"
+        pos="0.30845612 0.04954802 0.00629329"
+        size="0.013749126345 0.295408010483 0.468124508858" rgba="0 0 0 0"/>
+  <geom name="dishwasher_cabinet_left" type="box"
+        pos="-0.30654550 0.04954801 0.00629329"
+        size="0.015659794211 0.295407950878 0.468124508858" rgba="0 0 0 0"/>
+  <geom name="dishwasher_cabinet_back" type="box"
+        pos="0.00155942 0.32865322 0.00629329"
+        size="0.293255686760 0.016302794218 0.468124508858" rgba="0 0 0 0"/>
+  <geom name="dishwasher_cabinet_bottom" type="box"
+        pos="-0.00038596 0.04952301 -0.46985781"
+        size="0.317077636719 0.295432984829 0.008026558906" rgba="0 0 0 0"/>
+  <geom name="dishwasher_upper_rail_right" type="box"
+        pos="0.28742397 0.04803570 0.19780329"
+        size="0.007391098887 0.283953249454 0.001804872649" rgba="0 0 0 0"/>
+  <geom name="dishwasher_upper_rail_left" type="box"
+        pos="-0.28673527 0.04803570 0.19780329"
+        size="0.004961001221 0.283953249454 0.001804872649" rgba="0 0 0 0"/>
+  <geom name="dishwasher_lower_rail_left" type="box"
+        pos="-0.28673527 0.04803570 -0.09955715"
+        size="0.004961001221 0.283953249454 0.001804876374" rgba="0 0 0 0"/>
+  <geom name="dishwasher_lower_rail_right" type="box"
+        pos="0.28742397 0.04803570 -0.09955715"
+        size="0.007391098887 0.283953249454 0.001804876374" rgba="0 0 0 0"/>
+
+  <!-- The lower rack starts retracted and is entirely forbidden. -->
+  <body name="dishwasher_rack0">
+    <joint name="dishwasher_rack0_joint" type="slide"
+           axis="0 -1 0" pos="-0.00163518 0.05106521 -0.15279360"
+           limited="true" range="0 0.33" ref="0"
+           damping="1" frictionloss="1" armature="0.01" stiffness="0.05"/>
+    <geom name="dishwasher_rack0_visual_geom" type="mesh"
+          mesh="dishwasher_rack0_visual" material="rack"
+          mass="0" contype="0" conaffinity="0"/>
+    <geom name="dishwasher_rack0_rib_0" type="box"
+          pos="0.05465550 0.05172771 -0.15919490"
+          size="0.001964055002 0.202991127968 0.026353538036" rgba="0 0 0 0"/>
+    <geom name="dishwasher_rack0_rib_1" type="box"
+          pos="-0.04838342 0.05172771 -0.15919490"
+          size="0.001964055002 0.202991127968 0.026353538036" rgba="0 0 0 0"/>
+    <geom name="dishwasher_rack0_rib_2" type="box"
+          pos="-0.13689145 0.05172771 -0.15919490"
+          size="0.001964055002 0.202991127968 0.026353538036" rgba="0 0 0 0"/>
+    <geom name="dishwasher_rack0_rib_3" type="box"
+          pos="-0.22374275 0.05172771 -0.15919490"
+          size="0.001964055002 0.202991127968 0.026353538036" rgba="0 0 0 0"/>
+    <geom name="dishwasher_rack0_base" type="box"
+          pos="-0.00317875 0.05088568 -0.20264810"
+          size="0.256795018911 0.250564277172 0.021035809070" rgba="0 0 0 0"/>
+    <geom name="dishwasher_rack0_left" type="box"
+          pos="-0.27093369 0.05203331 -0.14494359"
+          size="0.010546132922 0.248831436038 0.059873435646" rgba="0 0 0 0"/>
+    <geom name="dishwasher_rack0_right" type="box"
+          pos="0.26400656 0.05203331 -0.14494359"
+          size="0.010546132922 0.248831436038 0.059873435646" rgba="0 0 0 0"/>
+    <geom name="dishwasher_rack0_front" type="box"
+          pos="-0.00012753 -0.20295436 -0.15362094"
+          size="0.277037441730 0.005895007402 0.070062935352" rgba="0 0 0 0"/>
+    <geom name="dishwasher_rack0_rib_4" type="box"
+          pos="0.21544147 0.05172771 -0.15919490"
+          size="0.001964055002 0.202991127968 0.026353538036" rgba="0 0 0 0"/>
+    <geom name="dishwasher_rack0_back" type="box"
+          pos="-0.00012753 0.30668143 -0.15362094"
+          size="0.277037441730 0.005895007402 0.070062935352" rgba="0 0 0 0"/>
+  </body>
+</mujocoinclude>

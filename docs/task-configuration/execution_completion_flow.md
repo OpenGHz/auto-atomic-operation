@@ -4,8 +4,12 @@ This document explains how `pre_move`, `eef`, and `post_move` are executed, how 
 
 The short version is:
 
-- `pre_move` and `post_move` are both primitive `pose` actions.
+- `pre_move` and `post_move` are both primitive `pose` actions. Each one can
+  constrain either the EEF or a frame on the currently held object.
 - `eef` is a primitive gripper action.
+- A held-object pose goal is converted into an EEF command through the
+  grasp-time measured binding, but completion is checked on the configured
+  object frame.
 - Each primitive action decides its own completion first.
 - The task runner then uses that primitive result to decide whether to continue the stage, fail the stage, or mark the stage successful.
 - Stage success is therefore built on primitive completion, but it is not identical to primitive completion.
@@ -15,7 +19,11 @@ The short version is:
 There are two layers involved:
 
 1. Primitive action execution
-   - Implemented by backend handlers such as `MujocoOperatorHandler.move_to_pose()` and `MujocoOperatorHandler.control_eef()`.
+   - `TaskRunner` resolves the semantic controlled-frame goal into a concrete
+     EEF command; backend handlers such as `MujocoOperatorHandler.move_to_pose()`
+     and `MujocoOperatorHandler.control_eef()` execute that command.
+   - Pose completion is refined against the configured controlled frame, not
+     only the derived EEF command.
    - Produces `ControlSignal.RUNNING`, `REACHED`, `TIMED_OUT`, or `FAILED`.
 2. Stage execution
    - Implemented by the shared `StageExecution` module.
@@ -72,6 +80,12 @@ is only valid on a closing command.  A `pick` or `pull` post-move cannot use
 would chase the grasped object.  Use `eef_world` for the usual fixed-world
 retreat target.
 
+After a closing EEF primitive reaches and its target-specific mid-stage check
+passes, Stage execution records the measured EEF-to-held-object grasp binding
+before the next `post_move` waypoint starts. An accepted opening EEF primitive
+clears that binding before any following waypoint, so held-object motion cannot
+silently continue after release.
+
 Each primitive action keeps the configured phase and YAML waypoint index from
 which it was built:
 
@@ -86,27 +100,54 @@ waypoints that expand into several internal primitive actions.
 
 ### `pre_move` / `post_move`
 
-Both are handled by `MujocoOperatorHandler.move_to_pose()`.
+Both compile to pose primitives. `TaskRunner` resolves their semantic goal;
+the selected operator backend executes the resulting EEF command.
 
-For each control tick, the backend:
+For each control tick, the configured execution path:
 
-1. Resolves the target world pose for the current primitive action
-2. Commands the operator toward that target
-3. Measures the end-effector pose after stepping
-4. Computes:
-   - position error
-   - orientation error
+1. Resolves the waypoint `reference` into a world-frame target basis.
+2. Selects the configured `controlled_frame`:
+   - `eef` uses the operator's EEF directly;
+   - `held_object` requires a verified grasp binding and optionally selects a
+     named object-local frame.
+3. Resolves the controlled frame's semantic world goal. A `fixed`
+   `orientation_goal` supplies a complete orientation; `axis_alignment`
+   supplies only the required axis direction.
+4. For a held object, combines that goal with the measured grasp binding to
+   derive the concrete world-frame EEF command.
+5. Commands the operator toward the derived EEF pose and waits for the backend
+   primitive to report `REACHED`.
+6. Measures the configured controlled frame after stepping and computes its
+   position and orientation errors against the semantic goal.
 
-The primitive pose action is considered complete only when both are within tolerance:
+The primitive pose action is considered complete only when the configured
+controlled frame is within tolerance:
 
 ```text
 position_error <= control.tolerance.position
 orientation_error <= control.tolerance.orientation
 ```
 
-If that happens, the backend returns:
+For legacy `orientation` / `rotation` and `orientation_goal.kind: fixed`, the
+orientation error is full quaternion angular distance. For
+`orientation_goal.kind: axis_alignment`, it is the angular error between the
+controlled axis and target axis. Twist about that axis is not part of the
+error, so different in-plane rotations of a symmetric object are equivalent.
+
+Waypoint `tolerance` overrides the operator-level reached tolerance. For an
+axis goal, `tolerance.orientation` remains a scalar angle in radians; it is not
+an Euler-component mask.
+
+If that happens, the refined pose primitive returns:
 
 - `ControlSignal.REACHED`
+
+More precisely, the operator backend first reaches the derived EEF command,
+then `TaskRunner` validates the semantic frame. If the EEF reports `REACHED`
+but the held object/frame is outside tolerance, the primitive returns `FAILED`
+with `controlled_frame_not_reached`; it does not report a false success. A
+missing grasp binding or changed held-object identity also fails goal
+resolution instead of falling back to direct EEF control.
 
 If the action runs too long:
 
@@ -143,6 +184,14 @@ So for `eef`, "done" can mean either:
 - or a lower-level actuator/joint threshold was reached
 
 That distinction matters because stage success may still require an additional stage-condition check.
+
+The accepted EEF boundary also owns grasp-binding lifecycle:
+
+- after a verified close, the actual EEF-to-object transform is measured and
+  retained for subsequent held-object waypoints;
+- an existing binding is not silently re-measured to hide attachment slip;
+- after an accepted open, the binding is cleared;
+- reset clears bindings only for the reset environments.
 
 ## Stage Progression Rules
 
@@ -253,10 +302,13 @@ one.
 > check, but no such option exists today.
 
 `placed` combines release with the held object's target pose when a target and
-configured tolerance are available.  `displaced` compares the stage object's
-current position with its stage-start position and uses
-`param.displacement_threshold` when supplied.  `reached` checks both position
-and orientation tolerance for the stage's completion pose.
+configured tolerance are available. When a pre-release waypoint controls the
+held object, that resolved semantic goal is also the placement goal: full
+orientation goals use quaternion error, while axis-alignment goals ignore
+twist and check only the constrained axis. `displaced` compares the stage
+object's current position with its stage-start position and uses
+`param.displacement_threshold` when supplied. `reached` checks position and
+the applicable orientation-goal error for the final controlled frame.
 
 ### Condition vocabulary
 
@@ -266,8 +318,8 @@ and orientation tolerance for the stage's completion pose.
 | `grasped` | The operator is currently grasping an object.  `pick` and `pull` intrinsically narrow this condition to their Stage target; an explicit EEF on another operation can request the same target-specific primitive check with `require_grasp: true`. |
 | `contacted` | The backend reports that the operator is in contact with the stage target object. |
 | `displaced` | The target object's position moved beyond the configured displacement threshold from its initial stage pose. |
-| `reached` | The EEF is within position and orientation tolerances of the final target pose. |
-| `placed` | The operator has released the held object and, when placement checking is configured, that object is within the selected target tolerances. |
+| `reached` | The final waypoint's controlled EEF or held-object frame is within its position and applicable orientation-goal tolerances. |
+| `placed` | The operator has released the held object and, when placement checking is configured, that object's selected frame satisfies the resolved full-or-partial placement goal. |
 
 See [MuJoCo Backend Condition Constraints](../mujoco-backend/mujoco_backend_conditions.md)
 for contact detection, tolerance resolution, and failure diagnostics.
@@ -348,10 +400,14 @@ flowchart TD
 
     D --> E[Run current primitive action]
     E --> F{Action kind}
-    F -->|pose| G[move_to_pose]
+    F -->|pose| R[Resolve controlled-frame goal and derived EEF command]
+    R --> G[move_to_pose]
     F -->|eef| H[control_eef]
 
-    G --> I{Primitive signal}
+    G --> S{Derived EEF command reached?}
+    S -->|no| I{Primitive signal}
+    S -->|yes| T[Validate configured controlled frame]
+    T --> I
     H --> I
 
     I -->|RUNNING| J[Keep same action and stage running]
@@ -380,8 +436,14 @@ flowchart TD
 
 ## Practical Takeaways
 
-- `pre_move` and `post_move` completion are purely pose-tolerance based in the MuJoCo backend.
+- `pre_move` and `post_move` completion is pose-tolerance based on the
+  configured controlled frame; a held-object goal is not considered reached
+  merely because its derived EEF command is reached.
 - `eef` completion is gripper-state based, with special grasp detection when closing on a target object.
+- A verified close establishes the measured grasp binding used by later
+  held-object goals; release and reset clear it.
+- Axis-alignment completion constrains one axis and deliberately ignores twist
+  about it.
 - Primitive `REACHED` does not always mean the stage has semantically succeeded.
 - Stage success depends on operation-specific condition checks such as `grasped`, `released`, `placed`, `contacted`, or `displaced`.
 - If you are debugging an execution, inspect both:

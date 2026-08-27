@@ -47,6 +47,7 @@ from ...utils.pose import (
     position_within_tolerance,
     position_within_tolerance_nullable,
     quaternion_angular_distance,
+    quaternion_from_matrix_3x3,
     quaternion_to_rotation_matrix,
     quaternion_to_rpy,
 )
@@ -506,10 +507,21 @@ class MujocoOperatorHandler(OperatorHandler):
             )
             self._move_steps[env_index] += 1
             eef_world_after = self.get_end_effector_pose()
-            pos_diff_after = eef_world_after.position[env_index] - pos_goal
-            pos_err_after = float(np.linalg.norm(pos_diff_after))
-            ori_err_after = quaternion_angular_distance(
+            step_pos_diff_after = eef_world_after.position[env_index] - pos_goal
+            step_pos_err_after = float(np.linalg.norm(step_pos_diff_after))
+            step_ori_err_after = quaternion_angular_distance(
                 eef_world_after.orientation[env_index], ori_goal
+            )
+            # Step shaping changes only the command sent on this control tick.
+            # Primitive completion must still be measured against the final
+            # waypoint; otherwise reaching the first clamped sub-step would
+            # incorrectly advance the Stage after only a few millimetres.
+            final_pos_diff_after = (
+                eef_world_after.position[env_index] - desired_pos[env_index]
+            )
+            final_pos_err_after = float(np.linalg.norm(final_pos_diff_after))
+            final_ori_err_after = quaternion_angular_distance(
+                eef_world_after.orientation[env_index], desired_ori[env_index]
             )
             # Resolve effective tolerance: per-waypoint override > operator default
             wp_tol = pose.tolerance
@@ -523,8 +535,8 @@ class MujocoOperatorHandler(OperatorHandler):
                 if wp_tol is not None and wp_tol.orientation is not None
                 else self.control.tolerance.orientation
             )
-            pos_ok = position_within_tolerance(pos_diff_after, eff_pos_tol)
-            ori_ok = ori_err_after <= eff_ori_tol
+            pos_ok = position_within_tolerance(final_pos_diff_after, eff_pos_tol)
+            ori_ok = final_ori_err_after <= eff_ori_tol
             event = "pose_reached" if pos_ok and ori_ok else "moving"
             details[env_index] = {
                 "event": event,
@@ -537,8 +549,10 @@ class MujocoOperatorHandler(OperatorHandler):
                         float(v) for v in eef_world_after.orientation[env_index]
                     ],
                 },
-                "position_error": pos_err_after,
-                "orientation_error": ori_err_after,
+                "position_error": final_pos_err_after,
+                "orientation_error": final_ori_err_after,
+                "command_step_position_error": step_pos_err_after,
+                "command_step_orientation_error": step_ori_err_after,
                 "steps": int(self._move_steps[env_index]),
             }
             ik_streak = int(
@@ -2142,6 +2156,14 @@ class MujocoTaskBackend(SceneBackend):
         if bid >= 0:
             pos, quat = single_env.get_body_pose(name)
             return PoseState(position=pos, orientation=quat)
+        gid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, name)
+        if gid >= 0:
+            return PoseState(
+                position=data.geom_xpos[gid],
+                orientation=quaternion_from_matrix_3x3(
+                    data.geom_xmat[gid].reshape(3, 3)
+                ),
+            )
         jid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, name)
         if jid >= 0:
             joint_bid = model.jnt_bodyid[jid]
@@ -2162,7 +2184,60 @@ class MujocoTaskBackend(SceneBackend):
                 ),
             )
         raise KeyError(
-            f"No site, body, or joint named '{name}' found in the MuJoCo model."
+            f"No site, body, geom, or joint named '{name}' found in the MuJoCo model."
+        )
+
+    def is_element_rigidly_attached_to_object(
+        self,
+        element_name: str,
+        object_name: str,
+        env_index: int = 0,
+    ) -> bool:
+        single_env = self.env.envs[env_index]
+        model = single_env.model
+        object_handler = self.get_object_handler(object_name)
+        if object_handler is None:
+            raise KeyError(f"Unknown object {object_name!r}.")
+        object_body_id = mujoco.mj_name2id(
+            model,
+            mujoco.mjtObj.mjOBJ_BODY,
+            object_handler.body_name,
+        )
+        if object_body_id < 0:
+            raise KeyError(
+                f"Object {object_name!r} refers to missing body "
+                f"{object_handler.body_name!r}."
+            )
+        element_body_id = self._named_element_body_id(model, element_name)
+
+        current_body_id = element_body_id
+        while current_body_id != object_body_id:
+            if current_body_id <= 0:
+                return False
+            # A joint on a descendant body makes its frame movable relative to
+            # the object's root even though it remains in the same subtree.
+            if int(model.body_jntnum[current_body_id]) > 0:
+                return False
+            current_body_id = int(model.body_parentid[current_body_id])
+        return True
+
+    @staticmethod
+    def _named_element_body_id(model: Any, name: str) -> int:
+        site_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, name)
+        if site_id >= 0:
+            return int(model.site_bodyid[site_id])
+        body_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, name)
+        if body_id >= 0:
+            return int(body_id)
+        geom_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, name)
+        if geom_id >= 0:
+            return int(model.geom_bodyid[geom_id])
+        joint_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, name)
+        if joint_id >= 0:
+            joint_body_id = int(model.jnt_bodyid[joint_id])
+            return int(model.body_parentid[joint_body_id])
+        raise KeyError(
+            f"No site, body, geom, or joint named {name!r} found in the MuJoCo model."
         )
 
     def get_joint_angle(self, name: str, env_index: int = 0) -> float:

@@ -1,0 +1,12 @@
+<mujocoinclude>
+  <motor name="dishwasher_door_actuator"
+         joint="dishwasher_door_joint" gear="50"/>
+  <motor name="dishwasher_rack0_actuator"
+         joint="dishwasher_rack0_joint" gear="50"/>
+  <motor name="dishwasher_rack1_actuator"
+         joint="dishwasher_rack1_joint" gear="50"/>
+  <motor name="dishwasher_button_lock_actuator"
+         joint="dishwasher_button_lock_joint" gear="0.5"/>
+  <motor name="dishwasher_button_power_actuator"
+         joint="dishwasher_button_power_joint" gear="0.5"/>
+</mujocoinclude>

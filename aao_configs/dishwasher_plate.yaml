@@ -1,0 +1,151 @@
+defaults:
+  - basis_mocap_eef_xf9600
+  - _self_
+
+scene_name: dishwasher_plate
+
+env:
+  batch_size: 1
+  # XF9600's stiff four-bar linkage requires the same 1200 Hz integration
+  # rate used by its existing pick-and-place task.
+  sim_freq: 1200
+  # Start at the horizontal plate's grasp pose.  This host scene intentionally
+  # contains no table layer, so approaching from the generic origin would let
+  # the free plate fall before the first grasp closes.
+  initial_joint_positions:
+    xf9600_freejoint: [-0.55, -0.36, 0.223671074, 0.0, 0.0, -0.70710678, 0.70710678]
+  mask_objects: ["plate2", "dishwasher_rack1_target"]
+  operations: ["pick", "place"]
+  cameras:
+    - name: placement_camera
+      width: ${cam_width}
+      height: ${cam_height}
+      enable_color: ${enable_color}
+      enable_depth: ${enable_depth}
+      enable_mask: ${enable_mask}
+      enable_heat_map: ${enable_heat_map}
+      is_static: true
+  viewer:
+    lookat: [-0.12, -0.28, 0.18]
+    distance: 1.25
+    azimuth: 145
+    elevation: -24
+    step_delay: 0.03
+    hold_seconds: 1.0
+
+task_operators:
+  arm:
+    control:
+      # The soft-welded mocap gripper must rotate a physically held 24 cm
+      # plate by 90 degrees; this needs a longer horizon than small-object demos.
+      timeout_steps: 1200
+      tolerance:
+        position: 0.02
+        orientation: 0.15
+
+task:
+  # Keep the migrated plate's authored horizontal pose deterministic.  The
+  # robot base contributes an EEF randomization entry, so explicitly remove it
+  # for this geometry-sensitive demonstration.
+  initial_pose:
+    plate2:
+      position: [-0.450, -0.360, 0.223671074]
+      orientation: [0.0, 0.0, 0.0, 1.0]
+  randomization:
+    arm: null
+  stages:
+    - name: pick_plate
+      object: plate2
+      site: plate2_site
+      operation: pick
+      operator: arm
+      param:
+        pre_move:
+          - position: [0.0, 0.0, 0.0]
+            # Local +Y is the jaw-closing direction.  Align it with world +Z
+            # so the open fingers straddle the horizontal plate thickness.
+            orientation: [0.70710678, 0.0, 0.0, 0.70710678]
+            reference: object_world
+            static: true
+        eef:
+          close: true
+
+    - name: place_plate_in_upper_rack
+      object: dishwasher_rack1_target
+      site: dishwasher_rack1_target_site
+      operation: place
+      operator: arm
+      param:
+        pre_move:
+          # First lift the held plate vertically from its measured current
+          # pose.  This is an object-relative translation, not an EEF target.
+          - controlled_frame:
+              kind: held_object
+              frame: plate2_site
+            position: [0.0, 0.0, 0.15]
+            reference: world
+            relative: true
+            tolerance:
+              position: 0.02
+              orientation: 0.15
+
+          # Turn the plate at the lifted source pose, outside the appliance.
+          # Only the normal is constrained, so in-plane plate twist stays free.
+          - controlled_frame:
+              kind: held_object
+              frame: plate2_site
+            position: [-0.450, -0.360, 0.3535]
+            reference: world
+            static: true
+            orientation_goal:
+              kind: axis_alignment
+              controlled_axis: [0.0, 0.0, 1.0]
+              target_axis:
+                vector: [0.0, 1.0, 0.0]
+                reference: object
+              direction: same
+            tolerance:
+              position: 0.02
+              orientation: 0.15
+
+          # Translate the vertical plate above the rack-local destination.
+          - controlled_frame:
+              kind: held_object
+              frame: plate2_site
+            position: [0.0, 0.0, 0.15]
+            reference: object
+            static: true
+            orientation_goal:
+              kind: axis_alignment
+              controlled_axis: [0.0, 0.0, 1.0]
+              target_axis:
+                vector: [0.0, 1.0, 0.0]
+                reference: object
+              direction: same
+            tolerance:
+              position: 0.02
+              orientation: 0.15
+
+          # Finally lower the vertical plate into the rack-local target.
+          - controlled_frame:
+              kind: held_object
+              frame: plate2_site
+            position: [0.0, 0.0, 0.0]
+            reference: object
+            static: true
+            orientation_goal:
+              kind: axis_alignment
+              controlled_axis: [0.0, 0.0, 1.0]
+              target_axis:
+                vector: [0.0, 1.0, 0.0]
+                reference: object
+              direction: same
+            tolerance:
+              position: 0.02
+              orientation: 0.15
+        eef:
+          close: false
+        placed_reference: pre_move
+        placed_tolerance:
+          position: 0.025
+          orientation: 0.15

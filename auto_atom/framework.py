@@ -1,6 +1,7 @@
+import math
 from collections.abc import Mapping
 from enum import Enum
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Annotated, Dict, List, Literal, Optional, Tuple, Union
 
 from pydantic import (
     BaseModel,
@@ -13,6 +14,7 @@ from pydantic import (
     field_validator,
     model_validator,
 )
+from typing_extensions import Self
 
 Position = Tuple[float, float, float]
 """A 3D position represented as a tuple of three floats (x, y, z)."""
@@ -56,7 +58,7 @@ class OperationConstraint(str, Enum):
     DISPLACED = "displaced"
     """Whether the target object has been displaced from its original pose (e.g., the distance between the current pose of the object and its original pose is greater than a certain threshold) after the operation."""
     REACHED = "reached"
-    """Whether the operator end-effector is within tolerance of the final target pose for the stage."""
+    """Whether the final waypoint's controlled frame is within its pose tolerance."""
     PLACED = "placed"
     """Whether the operator has released the held object AND the held object
     is within tolerance of the target position/orientation."""
@@ -142,6 +144,151 @@ class PoseReference(str, Enum):
     """The reference is equivalent to moving the origin of the world system to the operator's end-effector position at the moment the action starts, while keeping the coordinate system direction unchanged. The target pose is snapshotted once at action start and does not track subsequent EEF movement."""
     AUTO = "auto"
     """The pose reference is automatically determined based on the context of the operation. For example, if an object is specified in the stage configuration, the reference will be set to OBJECT_WORLD; if no object is specified, the reference will be set to BASE."""
+
+
+class ControlledFrameKind(str, Enum):
+    """The kind of frame whose pose a waypoint controls."""
+
+    EEF = "eef"
+    """Control the operator end-effector pose directly."""
+    HELD_OBJECT = "held_object"
+    """Control the pose of the object currently held by the operator."""
+
+
+class ControlledFrameConfig(BaseModel, frozen=True):
+    """Frame whose pose is controlled by a waypoint."""
+
+    model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid")
+
+    kind: ControlledFrameKind = ControlledFrameKind.EEF
+    """Whether the waypoint controls the end effector or the held object."""
+
+    frame: Optional[str] = Field(default=None, min_length=1)
+    """Optional object-local frame; omitted means the held object's root frame."""
+
+    @model_validator(mode="after")
+    def validate_frame(self) -> Self:
+        """Only held-object control can select an object-local frame."""
+        if self.kind == ControlledFrameKind.EEF and self.frame is not None:
+            raise ValueError("controlled_frame.frame requires kind='held_object'")
+        return self
+
+
+class OrientationGoalKind(str, Enum):
+    """Supported orientation-goal semantics."""
+
+    FIXED = "fixed"
+    """Constrain the complete orientation to a quaternion."""
+    AXIS_ALIGNMENT = "axis_alignment"
+    """Constrain only one controlled-frame axis."""
+
+
+class AxisAlignmentDirection(str, Enum):
+    """Allowed direction relationship between aligned axes."""
+
+    SAME = "same"
+    """Require the controlled axis to point in the target-axis direction."""
+    OPPOSITE = "opposite"
+    """Require the controlled axis to point opposite the target-axis direction."""
+    EITHER = "either"
+    """Treat equal and opposite target-axis directions as equivalent."""
+
+
+class AxisReference(str, Enum):
+    """Reference frame in which a target axis vector is expressed."""
+
+    WORLD = "world"
+    """Express the target axis in the world frame."""
+    BASE = "base"
+    """Express the target axis in the operator base frame."""
+    OBJECT = "object"
+    """Express the target axis in the stage object or site frame."""
+
+
+def _validate_unit_vector(value: Position, field_name: str) -> Position:
+    """Reject non-finite or non-unit direction vectors."""
+    norm_squared = math.fsum(component * component for component in value)
+    if not math.isfinite(norm_squared) or not math.isclose(
+        norm_squared,
+        1.0,
+        rel_tol=1e-6,
+        abs_tol=1e-6,
+    ):
+        raise ValueError(f"{field_name} must be a finite unit vector")
+    return value
+
+
+class TargetAxisConfig(BaseModel, frozen=True):
+    """Target direction for an axis-alignment orientation goal."""
+
+    model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid")
+
+    vector: Position
+    """Unit target direction expressed in ``reference``."""
+
+    reference: AxisReference
+    """Coordinate frame in which ``vector`` is expressed."""
+
+    @field_validator("vector", mode="after")
+    @classmethod
+    def validate_vector(cls, value: Position) -> Position:
+        """Require a finite unit target direction."""
+        return _validate_unit_vector(value, "target_axis.vector")
+
+
+class FixedOrientationGoalConfig(BaseModel, frozen=True):
+    """A full-orientation waypoint goal."""
+
+    model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid")
+
+    kind: Literal[OrientationGoalKind.FIXED] = OrientationGoalKind.FIXED
+    """Discriminator for a fixed-orientation goal."""
+
+    quaternion_xyzw: Orientation
+    """Required controlled-frame orientation as an ``xyzw`` quaternion."""
+
+    @field_validator("quaternion_xyzw", mode="after")
+    @classmethod
+    def validate_quaternion(cls, value: Orientation) -> Orientation:
+        """Require and normalize a finite, non-zero quaternion."""
+        norm_squared = math.fsum(component * component for component in value)
+        if not math.isfinite(norm_squared) or norm_squared <= 1.0e-24:
+            raise ValueError("quaternion_xyzw must be finite and non-zero")
+        norm = math.sqrt(norm_squared)
+        return tuple(float(component / norm) for component in value)
+
+
+class AxisAlignmentOrientationGoalConfig(BaseModel, frozen=True):
+    """A partial orientation goal that aligns one controlled-frame axis."""
+
+    model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid")
+
+    kind: Literal[OrientationGoalKind.AXIS_ALIGNMENT] = (
+        OrientationGoalKind.AXIS_ALIGNMENT
+    )
+    """Discriminator for an axis-alignment goal."""
+
+    controlled_axis: Position
+    """Unit axis expressed in the controlled frame."""
+
+    target_axis: TargetAxisConfig
+    """Target direction and the frame in which that direction is expressed."""
+
+    direction: AxisAlignmentDirection = AxisAlignmentDirection.SAME
+    """Whether the controlled axis must be equal, opposite, or either direction."""
+
+    @field_validator("controlled_axis", mode="after")
+    @classmethod
+    def validate_controlled_axis(cls, value: Position) -> Position:
+        """Require a finite unit controlled-frame axis."""
+        return _validate_unit_vector(value, "controlled_axis")
+
+
+OrientationGoalConfig = Annotated[
+    Union[FixedOrientationGoalConfig, AxisAlignmentOrientationGoalConfig],
+    Field(discriminator="kind"),
+]
+"""A discriminated full-or-partial orientation goal."""
 
 
 class TaskPhase(str, Enum):
@@ -246,7 +393,11 @@ class WaypointToleranceConfig(BaseModel):
     """Position tolerance. A scalar applies as an L2-norm threshold;
     a 3-element list ``[x, y, z]`` checks each axis independently."""
     orientation: Optional[float] = None
-    """Orientation tolerance in radians (quaternion angular distance)."""
+    """Orientation tolerance in radians.
+
+    This is quaternion angular distance for a complete orientation and axis
+    angular error for an axis-alignment goal.
+    """
 
 
 class PlacedToleranceConfig(BaseModel):
@@ -261,8 +412,10 @@ class PlacedToleranceConfig(BaseModel):
 
     orientation: Optional[Union[float, List[Optional[float]]]] = [None, None, None]
     """Orientation tolerance in radians. Scalar = quaternion angular distance
-    threshold. List ``[roll, pitch, yaw]`` = per-axis Euler thresholds where
-    ``null`` means no constraint on that axis."""
+    threshold for complete orientations, or axis angular error for an
+    axis-alignment goal. List ``[roll, pitch, yaw]`` = per-axis Euler
+    thresholds where ``null`` means no constraint on that axis; lists are not
+    valid for axis-alignment goals."""
 
 
 class PoseRandomRange(BaseModel):
@@ -412,14 +565,18 @@ def pose_randomization_regions(
 class PoseControlConfig(BaseModel):
     """Configuration for the pose control"""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid")
 
     position: Optional[Position] = None
-    """The target position for the pose control. The position is represented as a tuple of three floats (x, y, z)."""
+    """Target controlled-frame position as three floats ``(x, y, z)``."""
     orientation: Optional[Orientation] = None
-    """The target orientation for the pose control. The orientation is represented as a quaternion in `xyzw` order."""
+    """Legacy full controlled-frame orientation as an ``xyzw`` quaternion."""
     rotation: Optional[Rotation] = None
-    """The target rotation for the pose control. The rotation is represented as Euler angles in `rpy` order."""
+    """Legacy full controlled-frame rotation as Euler angles in ``rpy`` order."""
+    controlled_frame: ControlledFrameConfig = ControlledFrameConfig()
+    """The frame whose pose this waypoint controls; defaults to the end effector."""
+    orientation_goal: Optional[OrientationGoalConfig] = None
+    """Optional full or partial orientation goal for the controlled frame."""
     reference: PoseReference = PoseReference.AUTO
     """The reference frame for the pose control."""
     static: bool = False
@@ -458,6 +615,41 @@ class PoseControlConfig(BaseModel):
     sampled from these ranges and added to the waypoint position/orientation
     at the start of each episode."""
 
+    @model_validator(mode="after")
+    def validate_orientation_goal(self) -> Self:
+        """Reject ambiguous or unsupported orientation-goal combinations."""
+        if self.orientation_goal is not None and self.arc is not None:
+            raise ValueError("orientation_goal does not support arc movement")
+        if (
+            self.controlled_frame.kind == ControlledFrameKind.HELD_OBJECT
+            and self.arc is not None
+        ):
+            raise ValueError(
+                "held_object controlled_frame does not support arc movement"
+            )
+        if self.orientation_goal is None:
+            return self
+        if self.orientation is not None or self.rotation is not None:
+            raise ValueError(
+                "orientation_goal cannot be combined with orientation or rotation"
+            )
+        if self.randomization is not None and any(
+            getattr(self.randomization, axis) is not None
+            for axis in ("roll", "pitch", "yaw")
+        ):
+            raise ValueError(
+                "orientation_goal cannot be combined with rotational randomization"
+            )
+        if isinstance(
+            self.orientation_goal,
+            AxisAlignmentOrientationGoalConfig,
+        ):
+            if self.relative:
+                raise ValueError(
+                    "axis_alignment orientation_goal does not support relative=true"
+                )
+        return self
+
 
 class EefControlConfig(BaseModel):
     """Configuration for the end-effector control"""
@@ -495,7 +687,9 @@ class StageControlConfig(BaseModel):
     """Target reference for the PLACED post-condition. ``'object'`` uses the
     stage object's current pose (the destination); ``'pre_move'`` uses the
     last pre_move waypoint resolved position. When the stage has no object,
-    ``'pre_move'`` is always used regardless of this setting."""
+    ``'pre_move'`` is always used regardless of this setting. A resolved
+    held-object pre-move goal is authoritative regardless of this legacy
+    selector."""
     placed_tolerance: Optional[PlacedToleranceConfig] = PlacedToleranceConfig()
     """Per-stage tolerance override for the PLACED post-condition. Falls back
     to the operator-level placed tolerance. If neither level configures a

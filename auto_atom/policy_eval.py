@@ -14,6 +14,8 @@ import numpy as np
 from .config_loader import load_task_file
 from .execution_timeline import ExecutionTimeline
 from .framework import (
+    ControlledFrameKind,
+    Operation,
     PoseControlConfig,
     TaskFileConfig,
     UpdateBoundary,
@@ -25,11 +27,13 @@ from .runtime import (
     ExecutionContext,
     ExecutionRecord,
     ExecutionSummary,
+    GraspBinding,
     InfoEnvProtocol,
     ObjectHandler,
     ObservationEnvProtocol,
     OperatorHandler,
     PrimitiveAction,
+    ResolvedMotionGoal,
     SceneBackend,
     SimulationLoopEnvProtocol,
     StageExecutionPlan,
@@ -165,6 +169,10 @@ class ConfigDrivenDemoPolicy:
                 action=env_action.action,
                 backend=context.backend,
                 env_mask=self._single_env_mask(context.backend.batch_size, env_index),
+                grasp_binding=context.get_grasp_binding(
+                    env_index,
+                    plan.operator_name,
+                ),
             )
             if result.signals[env_index] == ControlSignal.REACHED:
                 feedback.stage_action_sequence_done[env_index] = (
@@ -410,8 +418,28 @@ class PolicyEvaluator:
         mask = self._normalize_mask(env_mask)
         self._validate_update_mask(mask)
         with self._sim_lock:
-            feedback = self.action_applier(context, action, mask)
+            stage_execution = self._require_stage_execution()
+            action_mask = mask.copy()
             for env_index, enabled in enumerate(mask):
+                if not enabled or self._env_states[env_index].done:
+                    action_mask[env_index] = False
+                    continue
+                stage_execution.prepare_policy(
+                    env_index,
+                    resolve_completion_pose=not isinstance(
+                        action,
+                        ConfigDrivenPolicyAction,
+                    ),
+                )
+                if self._env_states[env_index].done:
+                    action_mask[env_index] = False
+
+            feedback = (
+                self.action_applier(context, action, action_mask)
+                if bool(np.any(action_mask))
+                else None
+            )
+            for env_index, enabled in enumerate(action_mask):
                 if not enabled or self._env_states[env_index].done:
                     continue
                 self._update_env(
@@ -728,11 +756,21 @@ class PolicyEvaluator:
         self,
         env_index: int,
         active: ActiveStageState,
-    ) -> Optional[PoseControlConfig]:
-        if not active.actions:
+    ) -> Optional[ResolvedMotionGoal]:
+        action = self._completion_goal_action(active)
+        if action is None or action.pose is None:
             return None
-        action = active.actions[-1]
-        if action.kind != "pose":
+        grasp_binding = self._require_context().get_grasp_binding(
+            env_index,
+            active.plan.operator_name,
+        )
+        if (
+            action.pose.controlled_frame.kind == ControlledFrameKind.HELD_OBJECT
+            and grasp_binding is None
+        ):
+            # PICK/GRASP external policies establish the binding only after
+            # their grasp succeeds.  Completion resolution is retried at that
+            # semantic boundary instead of failing before the policy acts.
             return None
         return _resolve_policy_completion_pose(
             env_index=env_index,
@@ -741,7 +779,38 @@ class PolicyEvaluator:
             backend=self._require_context().backend,
             action=action,
             reference_site=active.plan.stage.site,
+            grasp_binding=grasp_binding,
         )
+
+    @staticmethod
+    def _completion_goal_action(
+        active: ActiveStageState,
+    ) -> Optional[PrimitiveAction]:
+        """Select the configured pose that defines external-policy success."""
+        if active.plan.stage.operation == Operation.PLACE:
+            pre_move: List[PrimitiveAction] = []
+            for action in active.actions:
+                if action.kind == "eef":
+                    break
+                if action.kind == "pose" and action.pose is not None:
+                    pre_move.append(action)
+            for action in reversed(pre_move):
+                assert action.pose is not None
+                if action.pose.controlled_frame.kind == ControlledFrameKind.HELD_OBJECT:
+                    return action
+            placed_reference = getattr(
+                active.plan.stage.param,
+                "placed_reference",
+                "object",
+            )
+            if placed_reference == "pre_move" or not active.plan.stage.object:
+                return pre_move[-1] if pre_move else None
+            return None
+
+        for action in reversed(active.actions):
+            if action.kind == "pose" and action.pose is not None:
+                return action
+        return None
 
 
 def _resolve_policy_completion_pose(
@@ -752,13 +821,14 @@ def _resolve_policy_completion_pose(
     backend: SceneBackend,
     action: Any,
     reference_site: Optional[str] = None,
-) -> Optional[PoseControlConfig]:
+    grasp_binding: Optional[GraspBinding] = None,
+) -> Optional[ResolvedMotionGoal]:
     if action.pose is None:
         return None
     from .runtime import TaskRunner
 
     completion_action = deepcopy(action)
-    return TaskRunner._resolve_pose_command(
+    return TaskRunner._resolve_motion_goal(
         env_index=env_index,
         operator=operator,
         pose=completion_action.pose,
@@ -766,4 +836,5 @@ def _resolve_policy_completion_pose(
         backend=backend,
         action=completion_action,
         reference_site=reference_site,
+        grasp_binding=grasp_binding,
     )

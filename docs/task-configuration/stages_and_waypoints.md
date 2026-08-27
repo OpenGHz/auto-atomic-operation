@@ -1,6 +1,6 @@
 # Stages & Waypoints
 
-This page documents four less-obvious fields on task / stage / waypoint
+This page documents several less-obvious fields on task / stage / waypoint
 configuration that are easy to miss but frequently needed:
 
 - `TaskFileConfig.execution` — select the public `TaskRunner.update()` boundary,
@@ -10,6 +10,10 @@ configuration that are easy to miss but frequently needed:
   site or geometry instead of the stage object's body origin.
 - `PoseControlConfig.static` — freeze a tracking reference at the first
   control tick so a rigidly-grasped object does not chase itself.
+- `PoseControlConfig.controlled_frame` — choose whether a waypoint constrains
+  the EEF or a frame on the currently held object.
+- `PoseControlConfig.orientation_goal` — express either a full orientation or
+  an axis-only constraint with unconstrained twist.
 - `StageControlConfig.displacement_threshold` — per-stage override of the
   distance an object must move before the `displaced` post-condition is
   satisfied.
@@ -226,6 +230,148 @@ Semantics:
   - arc pivot fallback
 - Leave `site: null` (the default) to fall back to the `object` body pose.
 
+## Held-object control and grasp binding
+
+`controlled_frame` answers **what must reach the waypoint**. It is independent
+of `reference`, which answers **where the target values are expressed**:
+
+```yaml
+controlled_frame:
+  kind: eef          # default
+reference: world
+```
+
+or:
+
+```yaml
+controlled_frame:
+  kind: held_object
+  frame: plate_center_site   # optional; omit to control the object root
+reference: object
+```
+
+With `kind: held_object`, the identity comes from the object the stage operator
+actually holds, not from the destination in `StageConfig.object`. This matters
+for `place`: `object` can name a rack or container while the controlled object
+is the plate captured by the preceding grasp.
+
+AAO establishes a **grasp binding** after a closing EEF primitive completes and
+its required grasp checks pass. The binding is the measured rigid transform
+from the EEF to the actual held object for one environment and operator. A
+held-object waypoint is resolved as follows:
+
+1. Resolve the desired world pose of the configured controlled object/frame.
+2. Combine it with the measured grasp binding to derive a world-frame EEF
+   command.
+3. Execute that EEF command through the configured operator backend.
+4. When the EEF command reports completion, measure the controlled object/frame
+   again and check the semantic waypoint tolerance.
+
+The measured relationship is intentionally not replaced by a configured
+"nominal grasp". Reusing the original binding also prevents attachment slip
+from being hidden by silently rebinding: if the EEF reaches its derived command
+but the object frame misses the goal, the waypoint fails. Bindings are isolated
+per environment and operator, cleared on release or reset, and rejected if the
+held-object identity changes. Execution that begins at an already-grasped
+`place` stage measures the missing binding once at that verified boundary.
+
+A complete object-centric placement waypoint can therefore describe the plate
+directly:
+
+```yaml
+stages:
+  - name: place_plate_in_rack
+    object: rack
+    site: rack_slot_site
+    operation: place
+    operator: arm
+    param:
+      pre_move:
+        - controlled_frame:
+            kind: held_object
+            frame: plate_center_site
+          position: [0.0, 0.0, 0.0]
+          reference: object
+          orientation_goal:
+            kind: axis_alignment
+            controlled_axis: [0.0, 0.0, 1.0]
+            target_axis:
+              vector: [0.0, 1.0, 0.0]
+              reference: object
+            direction: same
+          tolerance:
+            position: 0.01
+            orientation: 0.035
+      eef:
+        close: false
+      placed_reference: pre_move
+      placed_tolerance:
+        position: 0.01
+        orientation: 0.035
+```
+
+Here `position` is relative to `rack_slot_site`, while the controlled frame is
+on the held plate. The closing primitive in the preceding pick stage supplied
+the grasp binding; the opening EEF releases it only after the object-centric
+pre-move reaches its target. A held-object waypoint without a verified binding,
+or one placed after the opening EEF action, fails instead of falling back to EEF
+control.
+
+## Partial orientation goals
+
+`orientation_goal` replaces the legacy `orientation` / `rotation` fields when
+the task needs explicit full-or-partial orientation semantics:
+
+```yaml
+# Full XYZW orientation in the waypoint reference frame.
+orientation_goal:
+  kind: fixed
+  quaternion_xyzw: [0.0, 0.0, 0.0, 1.0]
+```
+
+```yaml
+# Align only one local axis.
+orientation_goal:
+  kind: axis_alignment
+  controlled_axis: [0.0, 0.0, 1.0]
+  target_axis:
+    vector: [0.0, 1.0, 0.0]
+    reference: object
+  direction: same
+```
+
+For `axis_alignment`:
+
+- `controlled_axis` is a unit vector in the controlled frame. For a plate
+  whose local Z is its surface normal, use `[0, 0, 1]`.
+- `target_axis.vector` is a unit vector expressed independently in `world`,
+  the operator `base`, or the stage `object` / `site` frame.
+- `same` preserves target polarity, `opposite` reverses it, and `either`
+  treats both polarities as equivalent.
+- Only the shortest swing that aligns the axes is commanded. Existing twist
+  about the controlled axis is retained and remains unconstrained.
+- Waypoint and `placed` completion compare the axis-angle error with the
+  scalar orientation tolerance. They do not require full-quaternion equality.
+
+The independent `target_axis.reference` means a scene asset does not need a
+new site orientation just to express an axis constraint. For example, if an
+existing target site has identity orientation, a target vector `[0, 1, 0]`
+with `reference: object` selects its local +Y direction directly.
+
+The first version deliberately rejects combinations whose semantics would be
+ambiguous or silently ignored:
+
+- any `orientation_goal` together with `orientation`, `rotation`, or
+  rotational waypoint randomization;
+- `axis_alignment` together with `relative: true`;
+- any `orientation_goal` together with `arc`;
+- any `held_object` controlled frame together with `arc`;
+- `controlled_frame.kind: eef` together with an object-local `frame`.
+
+Position randomization remains valid with either orientation-goal kind. See
+[Task File Schema](task_file_schema.md#controlled-frame-and-orientation-goal)
+for the compact field tables and direction values.
+
 ## Static reference snapshot
 
 `PoseControlConfig.static: true` snapshots the reference frame at the
@@ -258,13 +404,19 @@ stages:
 
 Semantics:
 
-- `static: true` freezes the reference pose at the first tick of this
-  waypoint, giving a fixed world-frame target for the rest of the
-  motion.
-- `EEF` / `EEF_WORLD` references are always snapshotted — `static` is a
-  no-op for them.
-- `relative` waypoints operate against the current pose at their first
-  tick regardless of this flag.
+- `static: true` freezes the complete semantic goal at the first tick of this
+  waypoint, giving a fixed world-frame target for the rest of the motion. For
+  `axis_alignment`, this also freezes an independently referenced target axis.
+- `EEF` / `EEF_WORLD` always snapshot the waypoint's position and
+  full-orientation reference. An independently object- or base-referenced
+  `target_axis` remains live unless `static: true` freezes the complete goal.
+- `relative` waypoints snapshot their complete semantic goal from the current
+  pose at their first tick, so `static: true` is redundant for them.
+
+`controlled_frame: {kind: held_object}` does not turn the held object into the
+waypoint's `reference`. For object-centric placement, use the destination
+object/site, `world`, or `base` as the reference; the grasp binding supplies
+the EEF-to-object relationship separately.
 
 ## Stage displacement threshold
 

@@ -204,3 +204,10 @@ Examples from the current project may include:
 - creating a sibling scene such as `demo_robot_variant.xml`
 
 Treat those as examples, not mandatory naming rules.
+
+## Worked migration
+
+See [Dishwasher031 and plate2 asset migration](dishwasher_plate_assets.md) for a complete
+robot-less host-scene migration with byte-level provenance, baked articulation state,
+shared horizontal/vertical payloads, generated wire collision geometry, and final
+host-plus-robot load validation.

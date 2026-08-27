@@ -1,0 +1,20 @@
+<mujocoinclude>
+  <mesh name="dishwasher_body_visual"
+        file="dishwasher_plate/dishwasher031/Body001.obj"/>
+  <mesh name="dishwasher_door_visual"
+        file="dishwasher_plate/dishwasher031/door.obj"/>
+  <mesh name="dishwasher_button_lock_visual"
+        file="dishwasher_plate/dishwasher031/button_lock.obj"/>
+  <mesh name="dishwasher_button_power_visual"
+        file="dishwasher_plate/dishwasher031/button_power.obj"/>
+  <mesh name="dishwasher_rack0_visual"
+        file="dishwasher_plate/dishwasher031/rack0.obj"/>
+  <mesh name="dishwasher_rack1_visual"
+        file="dishwasher_plate/dishwasher031/rack1.obj"/>
+  <texture name="dishwasher_texture" type="2d"
+           file="dishwasher_plate/dishwasher031/T_BC001.png"/>
+  <material name="dishwasher" texture="dishwasher_texture"
+            rgba="1 1 1 1" shininess="0.1" specular="0.6"/>
+  <material name="rack" rgba="0.42 0.45 0.48 1"
+            metallic="0.25" roughness="0.55"/>
+</mujocoinclude>

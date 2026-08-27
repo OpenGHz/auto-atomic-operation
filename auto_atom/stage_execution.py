@@ -9,6 +9,7 @@ import numpy as np
 
 from .framework import (
     OPERATION_CONDITIONS,
+    ControlledFrameKind,
     Operation,
     OperationConditionType,
     OperationConstraint,
@@ -23,8 +24,10 @@ from .runtime import (
     ExecutionContext,
     ExecutionRecord,
     PrimitiveAction,
+    ResolvedMotionGoal,
     StageExecutionPlan,
     StageExecutionStatus,
+    TaskRunner,
     _EnvRuntimeState,
     _EnvUpdateEvent,
     _ResolvedTaskKeypoint,
@@ -44,7 +47,7 @@ StageActionsFactory = Callable[[StageExecutionPlan], List[PrimitiveAction]]
 StageActionRunner = Callable[
     [int, StageExecutionPlan, PrimitiveAction, np.ndarray], ControlResult
 ]
-CompletionPoseResolver = Callable[[int, ActiveStageState], Optional[PoseControlConfig]]
+CompletionPoseResolver = Callable[[int, ActiveStageState], Optional[ResolvedMotionGoal]]
 ResetDetailsFactory = Callable[[int], Dict[str, Any]]
 
 
@@ -88,9 +91,26 @@ class StageExecution:
         for env_index, enabled in enumerate(env_mask):
             if not enabled:
                 continue
+            self.context.clear_env_grasp_bindings(env_index)
             state = _EnvRuntimeState()
             state.latest_details = details_factory(env_index)
             self.states[env_index] = state
+
+    def prepare_policy(
+        self,
+        env_index: int,
+        *,
+        resolve_completion_pose: bool,
+    ) -> _EnvUpdateEvent:
+        """Start and validate a policy stage before its action is applied."""
+        return (
+            self._ensure_started(
+                env_index,
+                self.states[env_index],
+                resolve_completion_pose=resolve_completion_pose,
+            )
+            or _EnvUpdateEvent()
+        )
 
     def record_failure(
         self,
@@ -225,6 +245,20 @@ class StageExecution:
         if feedback.stage_actions is None:
             return self._consume_external_feedback(env_index, state, feedback)
 
+        active = state.active
+        if (
+            active is not None
+            and active.action_index == 0
+            and active.actions is not feedback.stage_actions
+        ):
+            # PolicyEvaluator now starts the Stage before applying an action so
+            # preconditions and an already-held PLACE binding exist in time.
+            # Adopt the config-driven policy's materialized actions before
+            # consuming its first result; these carry randomization and the
+            # resolved goal produced by the action that just ran.
+            active.actions = feedback.stage_actions
+            active.completion_motion_goal = None
+
         start_event = self._ensure_started(
             env_index,
             state,
@@ -260,6 +294,31 @@ class StageExecution:
         active = state.active
         if active is None:
             return _EnvUpdateEvent()
+
+        binding_failure = self._synchronize_external_grasp_binding(
+            env_index,
+            active,
+        )
+        if binding_failure is not None:
+            binding_failure = self.record_failure(
+                env_index,
+                active.plan,
+                binding_failure,
+            )
+            self._set_failed(state, binding_failure)
+            return _EnvUpdateEvent(failed=True)
+        completion_failure = self._resolve_external_completion_goal(
+            env_index,
+            active,
+        )
+        if completion_failure is not None:
+            completion_failure = self.record_failure(
+                env_index,
+                active.plan,
+                completion_failure,
+            )
+            self._set_failed(state, completion_failure)
+            return _EnvUpdateEvent(failed=True)
 
         if feedback.signal in {ControlSignal.TIMED_OUT, ControlSignal.FAILED}:
             failure = self._build_action_failure_details(
@@ -330,9 +389,25 @@ class StageExecution:
             plan,
             actions_override=actions_override,
         )
-        if resolve_completion_pose and self.completion_pose_resolver is not None:
-            active.completion_pose = self.completion_pose_resolver(env_index, active)
         state.active = active
+        if resolve_completion_pose and self.completion_pose_resolver is not None:
+            try:
+                active.completion_motion_goal = self.completion_pose_resolver(
+                    env_index,
+                    active,
+                )
+            except (KeyError, NotImplementedError, RuntimeError, ValueError) as error:
+                failure = self.record_failure(
+                    env_index,
+                    plan,
+                    self._completion_resolution_failure(
+                        env_index,
+                        active,
+                        error,
+                    ),
+                )
+                self._set_failed(state, failure)
+                return _EnvUpdateEvent(failed=True)
         state.latest_status = StageExecutionStatus.RUNNING
         return None
 
@@ -354,6 +429,23 @@ class StageExecution:
             if plan.stage.operation == Operation.PLACE
             else None
         )
+        if (
+            held_object_name
+            and self.context.get_grasp_binding(
+                env_index,
+                plan.operator_name,
+            )
+            is None
+        ):
+            # A task may begin at an already-grasped PLACE stage or arrive
+            # here through an external policy.  The PERFORM condition has
+            # already verified that the operator is holding something, so a
+            # missing binding can be bootstrapped exactly once at this edge.
+            self.context.capture_grasp_binding(
+                env_index,
+                plan.operator_name,
+                held_object_name,
+            )
         actions = (
             self.actions_factory(plan) if actions_override is None else actions_override
         )
@@ -424,6 +516,25 @@ class StageExecution:
                 failed=True,
             )
 
+        binding_failure = self._update_grasp_binding_after_eef(
+            env_index,
+            active,
+            action,
+        )
+        if binding_failure is not None:
+            binding_failure = self.record_failure(
+                env_index,
+                active.plan,
+                binding_failure,
+            )
+            self._set_failed(state, binding_failure)
+            return self._event_for_completed_action(
+                mode=mode,
+                completed_position=completed_position,
+                completed_keypoint=completed_keypoint,
+                failed=True,
+            )
+
         if active.action_index < len(active.actions):
             self._set_running(
                 state,
@@ -472,6 +583,210 @@ class StageExecution:
             stage_succeeded=True,
         )
 
+    def _update_grasp_binding_after_eef(
+        self,
+        env_index: int,
+        active: ActiveStageState,
+        completed_action: PrimitiveAction,
+    ) -> Optional[Dict[str, Any]]:
+        """Capture verified grasps and clear bindings after verified release."""
+        if completed_action.kind != "eef" or completed_action.eef is None:
+            return None
+        operator_name = active.plan.operator_name
+        if not completed_action.eef.close:
+            # The accepted open primitive is the lifecycle boundary.  PLACED
+            # keeps its held identity and semantic goal on ActiveStageState,
+            # while the binding itself must no longer authorize held-object
+            # commands after release.
+            self.context.clear_grasp_binding(env_index, operator_name)
+            return None
+
+        object_name = self.context.backend.get_grasped_object_name(
+            operator_name,
+            env_index,
+        )
+        if completed_action.eef.require_grasp:
+            object_name = active.plan.stage.object
+        if not object_name:
+            return None
+
+        existing = self.context.get_grasp_binding(env_index, operator_name)
+        if existing is not None:
+            if existing.object_name == object_name:
+                # Never silently rebind a retained grasp: doing so would make
+                # attachment slip look like a new nominal transform.
+                return None
+            return {
+                "event": "grasp_binding_identity_mismatch",
+                "failure_stage": "execution",
+                "failure_category": "grasp_binding_identity_mismatch",
+                "failure_reason": (
+                    "operator already has a binding for "
+                    f"{existing.object_name!r} but verified {object_name!r}"
+                ),
+                "env_index": env_index,
+                "operator": operator_name,
+                "operation": active.plan.stage.operation.value,
+                "target_object": active.plan.stage.object,
+            }
+        try:
+            self.context.capture_grasp_binding(
+                env_index,
+                operator_name,
+                object_name,
+            )
+        except (KeyError, RuntimeError, ValueError) as error:
+            return {
+                "event": "grasp_binding_capture_failed",
+                "failure_stage": "execution",
+                "failure_category": "grasp_binding_capture_failed",
+                "failure_reason": str(error),
+                "env_index": env_index,
+                "operator": operator_name,
+                "operation": active.plan.stage.operation.value,
+                "target_object": active.plan.stage.object,
+            }
+        return None
+
+    def _synchronize_external_grasp_binding(
+        self,
+        env_index: int,
+        active: ActiveStageState,
+    ) -> Optional[Dict[str, Any]]:
+        """Synchronize binding state at an external-policy observation edge."""
+        operator_name = active.plan.operator_name
+        is_grasping = bool(
+            self.context.backend.is_operator_grasping(operator_name)[env_index]
+        )
+        object_name = (
+            self.context.backend.get_grasped_object_name(
+                operator_name,
+                env_index,
+            )
+            if is_grasping
+            else None
+        )
+        existing = self.context.get_grasp_binding(env_index, operator_name)
+        if object_name is None:
+            if existing is not None and active.plan.stage.operation in {
+                Operation.PLACE,
+                Operation.RELEASE,
+            }:
+                self.context.clear_grasp_binding(env_index, operator_name)
+            return None
+        if existing is not None:
+            if existing.object_name == object_name:
+                return None
+            return {
+                "event": "grasp_binding_identity_mismatch",
+                "failure_stage": "execution",
+                "failure_category": "grasp_binding_identity_mismatch",
+                "failure_reason": (
+                    "operator already has a binding for "
+                    f"{existing.object_name!r} but now holds {object_name!r}"
+                ),
+                "env_index": env_index,
+                "operator": operator_name,
+                "operation": active.plan.stage.operation.value,
+                "target_object": active.plan.stage.object,
+            }
+        try:
+            self.context.capture_grasp_binding(
+                env_index,
+                operator_name,
+                object_name,
+            )
+        except (KeyError, RuntimeError, ValueError) as error:
+            return {
+                "event": "grasp_binding_capture_failed",
+                "failure_stage": "execution",
+                "failure_category": "grasp_binding_capture_failed",
+                "failure_reason": str(error),
+                "env_index": env_index,
+                "operator": operator_name,
+                "operation": active.plan.stage.operation.value,
+                "target_object": active.plan.stage.object,
+            }
+        return None
+
+    def _resolve_external_completion_goal(
+        self,
+        env_index: int,
+        active: ActiveStageState,
+    ) -> Optional[Dict[str, Any]]:
+        """Resolve a deferred external-policy goal once its binding exists."""
+        if (
+            active.completion_motion_goal is not None
+            or self.completion_pose_resolver is None
+        ):
+            return None
+        try:
+            active.completion_motion_goal = self.completion_pose_resolver(
+                env_index,
+                active,
+            )
+        except (KeyError, NotImplementedError, RuntimeError, ValueError) as error:
+            return self._completion_resolution_failure(
+                env_index,
+                active,
+                error,
+            )
+        if (
+            active.completion_motion_goal is None
+            and self._requires_resolved_completion_goal(active)
+        ):
+            return self._completion_resolution_failure(
+                env_index,
+                active,
+                RuntimeError(
+                    "configured semantic completion goal could not be resolved"
+                ),
+            )
+        return None
+
+    @staticmethod
+    def _requires_resolved_completion_goal(active: ActiveStageState) -> bool:
+        success_constraint = OPERATION_CONDITIONS.get(
+            active.plan.stage.operation,
+            {},
+        ).get(OperationConditionType.SUCCESS)
+        if success_constraint == OperationConstraint.REACHED:
+            return any(action.kind == "pose" for action in active.actions)
+        if active.plan.stage.operation != Operation.PLACE:
+            return False
+        before_eef = True
+        has_held_goal = False
+        for action in active.actions:
+            if action.kind == "eef":
+                before_eef = False
+            if (
+                before_eef
+                and action.kind == "pose"
+                and action.pose is not None
+                and action.pose.controlled_frame.kind == ControlledFrameKind.HELD_OBJECT
+            ):
+                has_held_goal = True
+        return has_held_goal or (
+            getattr(active.plan.stage.param, "placed_reference", "object") == "pre_move"
+        )
+
+    @staticmethod
+    def _completion_resolution_failure(
+        env_index: int,
+        active: ActiveStageState,
+        error: Exception,
+    ) -> Dict[str, Any]:
+        return {
+            "event": "motion_goal_resolution_failed",
+            "failure_stage": "execution",
+            "failure_category": "motion_goal_resolution_failed",
+            "failure_reason": str(error),
+            "env_index": env_index,
+            "operator": active.plan.operator_name,
+            "operation": active.plan.stage.operation.value,
+            "target_object": active.plan.stage.object,
+        }
+
     def _poll_external_policy(
         self,
         env_index: int,
@@ -480,6 +795,30 @@ class StageExecution:
         active = state.active
         if active is None:
             return _EnvUpdateEvent()
+        binding_failure = self._synchronize_external_grasp_binding(
+            env_index,
+            active,
+        )
+        if binding_failure is not None:
+            binding_failure = self.record_failure(
+                env_index,
+                active.plan,
+                binding_failure,
+            )
+            self._set_failed(state, binding_failure)
+            return _EnvUpdateEvent(failed=True)
+        completion_failure = self._resolve_external_completion_goal(
+            env_index,
+            active,
+        )
+        if completion_failure is not None:
+            completion_failure = self.record_failure(
+                env_index,
+                active.plan,
+                completion_failure,
+            )
+            self._set_failed(state, completion_failure)
+            return _EnvUpdateEvent(failed=True)
         success_failure = self._final_stage_failure(env_index, active)
         if success_failure is None:
             details = self._policy_success_details(env_index, active.plan)
@@ -527,7 +866,9 @@ class StageExecution:
                         ]
                     ),
                     completion_pose=None,
+                    completion_motion_goal=None,
                     target_object_pose=None,
+                    target_motion_goal=None,
                     held_object_name=None,
                 )
                 details["is_target_grasped"] = False
@@ -573,7 +914,16 @@ class StageExecution:
     ) -> Optional[Dict[str, Any]]:
         if press_checked_at_eef and active.plan.stage.operation == Operation.PRESS:
             return None
-        target_object_pose = self._target_object_pose(env_index, active)
+        completion_motion_goal = (
+            active.completion_motion_goal
+            or self._completion_motion_goal_from_active(active)
+        )
+        target_motion_goal = self._target_motion_goal(active)
+        target_object_pose = self._target_object_pose(
+            env_index,
+            active,
+            target_motion_goal=target_motion_goal,
+        )
         return check_stage_condition(
             env_index=env_index,
             context=self.context,
@@ -583,7 +933,9 @@ class StageExecution:
             completion_pose=(
                 active.completion_pose or self._completion_pose_from_active(active)
             ),
+            completion_motion_goal=completion_motion_goal,
             target_object_pose=target_object_pose,
+            target_motion_goal=target_motion_goal,
             held_object_name=active.held_object_name,
         )
 
@@ -591,15 +943,52 @@ class StageExecution:
         self,
         env_index: int,
         active: ActiveStageState,
+        *,
+        target_motion_goal: Optional[ResolvedMotionGoal],
     ) -> Optional[PoseState]:
         if active.plan.stage.operation != Operation.PLACE:
             return None
+        if (
+            target_motion_goal is not None
+            and target_motion_goal.controlled_object_name is not None
+        ):
+            return target_motion_goal.controlled_world_pose
         reference = getattr(active.plan.stage.param, "placed_reference", "object")
         target_name = active.plan.stage.object
         if reference == "object" and target_name:
             target = self.context.backend.get_object_handler(target_name)
             return None if target is None else target.get_pose().select(env_index)
+        if target_motion_goal is not None:
+            return target_motion_goal.controlled_world_pose
         return self._pre_move_end_pose(active)
+
+    @staticmethod
+    def _target_motion_goal(
+        active: ActiveStageState,
+    ) -> Optional[ResolvedMotionGoal]:
+        if active.plan.stage.operation != Operation.PLACE:
+            return None
+        reference = getattr(active.plan.stage.param, "placed_reference", "object")
+        last_goal: Optional[ResolvedMotionGoal] = None
+        last_held_goal: Optional[ResolvedMotionGoal] = None
+        for action in active.actions:
+            if action.kind == "eef":
+                break
+            goal = action.resolved_motion_goal
+            if goal is not None:
+                last_goal = goal
+                if goal.controlled_object_name is not None:
+                    last_held_goal = goal
+        if last_held_goal is not None:
+            return last_held_goal
+        if (
+            active.completion_motion_goal is not None
+            and active.completion_motion_goal.controlled_object_name is not None
+        ):
+            return active.completion_motion_goal
+        if reference == "pre_move" or not active.plan.stage.object:
+            return last_goal
+        return None
 
     def _set_running(
         self,
@@ -857,15 +1246,28 @@ class StageExecution:
         return None
 
     @staticmethod
+    def _completion_motion_goal_from_active(
+        active: ActiveStageState,
+    ) -> Optional[ResolvedMotionGoal]:
+        for action in reversed(active.actions):
+            if action.kind == "pose" and action.resolved_motion_goal is not None:
+                return action.resolved_motion_goal
+        return None
+
+    @staticmethod
     def _pre_move_end_pose(active: ActiveStageState) -> Optional[PoseState]:
         last_pose = None
         for action in active.actions:
             if action.kind == "eef":
                 break
-            if action.kind == "pose" and action.resolved_pose is not None:
+            if action.kind == "pose" and action.resolved_motion_goal is not None:
+                last_pose = action.resolved_motion_goal.controlled_world_pose
+            elif action.kind == "pose" and action.resolved_pose is not None:
                 last_pose = action.resolved_pose
         if last_pose is None:
             return None
+        if isinstance(last_pose, PoseState):
+            return last_pose
         return PoseState(
             position=np.asarray(last_pose.position, dtype=np.float64).reshape(1, 3),
             orientation=np.asarray(last_pose.orientation, dtype=np.float64).reshape(
@@ -903,7 +1305,9 @@ def check_stage_condition(
     condition_type: OperationConditionType,
     initial_pose: Optional[PoseState] = None,
     completion_pose: Optional[PoseControlConfig] = None,
+    completion_motion_goal: Optional[ResolvedMotionGoal] = None,
     target_object_pose: Optional[PoseState] = None,
+    target_motion_goal: Optional[ResolvedMotionGoal] = None,
     held_object_name: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     constraints = OPERATION_CONDITIONS.get(plan.stage.operation)
@@ -953,7 +1357,11 @@ def check_stage_condition(
     elif constraint == OperationConstraint.REACHED:
         operator = backend.get_operator_handler(operator_name)
         waypoint_tolerance = (
-            getattr(completion_pose, "tolerance", None) if completion_pose else None
+            completion_motion_goal.configured_pose.tolerance
+            if completion_motion_goal is not None
+            else getattr(completion_pose, "tolerance", None)
+            if completion_pose
+            else None
         )
         operator_position, operator_orientation = operator.get_reached_tolerances()
         position_tolerance = (
@@ -968,7 +1376,28 @@ def check_stage_condition(
             and waypoint_tolerance.orientation is not None
             else operator_orientation
         )
-        if completion_pose is None:
+        if completion_motion_goal is not None:
+            try:
+                position_difference, orientation_error, _ = (
+                    TaskRunner.motion_goal_errors(
+                        env_index=env_index,
+                        operator=operator,
+                        backend=backend,
+                        goal=completion_motion_goal,
+                        require_held=(
+                            completion_motion_goal.configured_pose.controlled_frame.kind.value
+                            == "held_object"
+                        ),
+                    )
+                )
+            except (KeyError, NotImplementedError, RuntimeError, ValueError):
+                satisfied = False
+            else:
+                satisfied = position_within_tolerance(
+                    position_difference,
+                    position_tolerance,
+                ) and orientation_error <= float(orientation_tolerance)
+        elif completion_pose is None:
             satisfied = False
         else:
             current_pose = operator.get_end_effector_pose().select(env_index)
@@ -992,6 +1421,7 @@ def check_stage_condition(
             plan=plan,
             is_grasping=is_grasping,
             target_object_pose=target_object_pose,
+            target_motion_goal=target_motion_goal,
             held_object_name=held_object_name,
         )
     else:
@@ -1007,7 +1437,9 @@ def check_stage_condition(
         constraint=constraint,
         is_grasping=is_grasping,
         completion_pose=completion_pose,
+        completion_motion_goal=completion_motion_goal,
         target_object_pose=target_object_pose,
+        target_motion_goal=target_motion_goal,
         held_object_name=held_object_name,
     )
     if target_grasp_required:
@@ -1025,6 +1457,7 @@ def _placed_condition_satisfied(
     plan: StageExecutionPlan,
     is_grasping: bool,
     target_object_pose: Optional[PoseState],
+    target_motion_goal: Optional[ResolvedMotionGoal],
     held_object_name: Optional[str],
 ) -> bool:
     if is_grasping:
@@ -1033,13 +1466,15 @@ def _placed_condition_satisfied(
         return True
     if not held_object_name:
         return False
+    if (
+        target_motion_goal is not None
+        and target_motion_goal.controlled_object_name is not None
+        and target_motion_goal.controlled_object_name != held_object_name
+    ):
+        return False
     handler = context.backend.get_object_handler(held_object_name)
     if handler is None:
         return False
-    current = handler.get_pose()
-    position_difference = np.asarray(
-        current.position[env_index], dtype=np.float64
-    ) - np.asarray(target_object_pose.position[0], dtype=np.float64)
     control = plan.stage.param
     stage_tolerance: Optional[PlacedToleranceConfig] = getattr(
         control,
@@ -1067,6 +1502,41 @@ def _placed_condition_satisfied(
         if _is_configured(operator_orientation)
         else None
     )
+
+    semantic_goal = (
+        target_motion_goal
+        if target_motion_goal is not None
+        and target_motion_goal.controlled_object_name == held_object_name
+        else None
+    )
+    if semantic_goal is not None:
+        try:
+            position_difference, orientation_error, _ = TaskRunner.motion_goal_errors(
+                env_index=env_index,
+                operator=context.backend.get_operator_handler(plan.operator_name),
+                backend=context.backend,
+                goal=semantic_goal,
+                require_held=False,
+            )
+        except (KeyError, NotImplementedError, RuntimeError, ValueError):
+            return False
+        position_ok = position_within_tolerance_nullable(
+            position_difference,
+            position_tolerance,
+        )
+        if not _is_configured(orientation_tolerance):
+            orientation_ok = True
+        elif isinstance(orientation_tolerance, (list, np.ndarray)):
+            # Euler component masks are not a geometric axis tolerance.
+            return False
+        else:
+            orientation_ok = orientation_error <= float(orientation_tolerance)
+        return position_ok and orientation_ok
+
+    current = handler.get_pose()
+    position_difference = np.asarray(
+        current.position[env_index], dtype=np.float64
+    ) - np.asarray(target_object_pose.position[0], dtype=np.float64)
     return position_within_tolerance_nullable(
         position_difference,
         position_tolerance,
@@ -1094,7 +1564,9 @@ def _condition_failure_details(
     constraint: OperationConstraint,
     is_grasping: bool,
     completion_pose: Optional[PoseControlConfig],
+    completion_motion_goal: Optional[ResolvedMotionGoal],
     target_object_pose: Optional[PoseState],
+    target_motion_goal: Optional[ResolvedMotionGoal],
     held_object_name: Optional[str],
 ) -> Dict[str, Any]:
     object_name = plan.stage.object
@@ -1122,7 +1594,7 @@ def _condition_failure_details(
         ),
         OperationConstraint.REACHED: (
             "target_not_reached",
-            "operator end-effector is not within tolerance of the target pose",
+            "configured controlled frame is not within tolerance of the target",
         ),
         OperationConstraint.PLACED: (
             "placement_failed",
@@ -1149,6 +1621,7 @@ def _condition_failure_details(
             context,
             plan,
             completion_pose,
+            completion_motion_goal,
         )
     elif constraint == OperationConstraint.PLACED:
         details["placed_reference"] = getattr(
@@ -1160,7 +1633,9 @@ def _condition_failure_details(
             details,
             env_index,
             context,
+            plan,
             target_object_pose,
+            target_motion_goal,
             held_object_name,
         )
     return details
@@ -1172,8 +1647,48 @@ def _add_reached_failure_details(
     context: ExecutionContext,
     plan: StageExecutionPlan,
     completion_pose: Optional[PoseControlConfig],
+    completion_motion_goal: Optional[ResolvedMotionGoal],
 ) -> None:
-    details["completion_pose_available"] = completion_pose is not None
+    details["completion_pose_available"] = (
+        completion_pose is not None or completion_motion_goal is not None
+    )
+    if completion_motion_goal is not None:
+        operator = context.backend.get_operator_handler(plan.operator_name)
+        details["target_pose"] = {
+            "position": [
+                float(value)
+                for value in completion_motion_goal.controlled_world_pose.position[0]
+            ],
+            "orientation": [
+                float(value)
+                for value in completion_motion_goal.controlled_world_pose.orientation[0]
+            ],
+        }
+        details["controlled_frame"] = (
+            completion_motion_goal.configured_pose.controlled_frame.model_dump(
+                mode="json"
+            )
+        )
+        try:
+            position_error, orientation_error, current_pose = (
+                TaskRunner.motion_goal_errors(
+                    env_index=env_index,
+                    operator=operator,
+                    backend=context.backend,
+                    goal=completion_motion_goal,
+                    require_held=False,
+                )
+            )
+        except (KeyError, NotImplementedError, RuntimeError, ValueError) as error:
+            details["motion_goal_error"] = str(error)
+            return
+        details["current_pose"] = {
+            "position": [float(value) for value in current_pose.position[0]],
+            "orientation": [float(value) for value in current_pose.orientation[0]],
+        }
+        details["position_error"] = float(np.linalg.norm(position_error))
+        details["orientation_error"] = float(orientation_error)
+        return
     if completion_pose is None:
         return
     operator = context.backend.get_operator_handler(plan.operator_name)
@@ -1201,7 +1716,9 @@ def _add_placed_failure_details(
     details: Dict[str, Any],
     env_index: int,
     context: ExecutionContext,
+    plan: StageExecutionPlan,
     target_object_pose: Optional[PoseState],
+    target_motion_goal: Optional[ResolvedMotionGoal],
     held_object_name: Optional[str],
 ) -> None:
     details["held_object"] = held_object_name or ""
@@ -1209,6 +1726,43 @@ def _add_placed_failure_details(
         return
     handler = context.backend.get_object_handler(held_object_name)
     if handler is None:
+        return
+    if (
+        target_motion_goal is not None
+        and target_motion_goal.controlled_object_name == held_object_name
+    ):
+        details["controlled_frame"] = (
+            target_motion_goal.configured_pose.controlled_frame.model_dump(mode="json")
+        )
+        try:
+            position_error, orientation_error, current_pose = (
+                TaskRunner.motion_goal_errors(
+                    env_index=env_index,
+                    operator=context.backend.get_operator_handler(plan.operator_name),
+                    backend=context.backend,
+                    goal=target_motion_goal,
+                    require_held=False,
+                )
+            )
+        except (KeyError, NotImplementedError, RuntimeError, ValueError) as error:
+            details["motion_goal_error"] = str(error)
+            return
+        details["target_position"] = [
+            float(value)
+            for value in target_motion_goal.controlled_world_pose.position[0]
+        ]
+        details["current_position"] = [
+            float(value) for value in current_pose.position[0]
+        ]
+        details["position_error"] = float(np.linalg.norm(position_error))
+        details["target_orientation"] = [
+            float(value)
+            for value in target_motion_goal.controlled_world_pose.orientation[0]
+        ]
+        details["current_orientation"] = [
+            float(value) for value in current_pose.orientation[0]
+        ]
+        details["orientation_error"] = float(orientation_error)
         return
     current = handler.get_pose()
     details["target_position"] = [

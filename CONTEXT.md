@@ -1,7 +1,7 @@
 # Auto Atomic Operation
 
-This context defines the execution boundaries used to describe progress through an
-automatic atomic-operation task.
+This context defines the language used to describe motion goals, execution
+boundaries, and reusable scene assets in an automatic atomic-operation task.
 
 ## Language
 
@@ -18,6 +18,25 @@ _Avoid_: Keypoint, waypoint
 One configured task point identified by stage, phase, and YAML waypoint index; one
 keypoint may expand into multiple primitives.
 _Avoid_: Primitive, control point
+
+**Controlled frame**:
+The end-effector or held-object frame whose pose a waypoint semantically constrains.
+_Avoid_: Reference frame, target frame
+
+**Reference frame**:
+The coordinate frame in which a waypoint's target position, orientation, or axis is
+expressed; it does not identify which frame is being moved.
+_Avoid_: Controlled frame, controlled object
+
+**Orientation goal**:
+A full or partial rotational requirement on a controlled frame; an axis-only goal
+leaves rotation about the constrained axis free.
+_Avoid_: EEF quaternion, rotation mask
+
+**Grasp binding**:
+The measured rigid relationship between an end effector and its held object after a
+verified grasp.
+_Avoid_: Configured grasp offset, target pose
 
 **Stage**:
 One configured task operation containing an ordered sequence of keypoints and its

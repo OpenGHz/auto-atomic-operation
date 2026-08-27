@@ -141,15 +141,98 @@ omit this field for those operations; their compiled closing primitive uses
 explicit opening EEF is invalid for `pick` and `pull`.
 
 `rotation` is Euler roll/pitch/yaw in radians; `orientation` is an XYZW
-quaternion.  A waypoint may also set `relative`, `static`, interpolation step
-limits, `arc`, `tolerance`, and per-waypoint `randomization`.  Their detailed
-semantics are documented in [Stages & Waypoints](stages_and_waypoints.md) and
+quaternion. A waypoint may instead declare an `orientation_goal`, and may
+select an EEF or held-object `controlled_frame`. It may also set `relative`,
+`static`, interpolation step limits, `arc`, `tolerance`, and per-waypoint
+`randomization`. Their detailed semantics are documented in
+[Stages & Waypoints](stages_and_waypoints.md) and
 [Arc Motion Tuning](../ik-motion-control/arc_motion_tuning.md).
+
+### Controlled frame and orientation goal
+
+A pose waypoint answers two independent questions:
+
+| Question | Field | Default |
+| --- | --- | --- |
+| Which frame must reach the goal? | `controlled_frame` | `{kind: eef}` |
+| In which frame are the waypoint's target values written? | `reference` | `auto` |
+
+Use `controlled_frame.kind: held_object` to specify the desired pose of the
+object already held by the stage operator. An optional `frame` selects a named
+object-local frame; omit it to control the held object's root. After a verified
+grasp, AAO measures the actual rigid EEF-to-object relationship and uses it to
+convert the object-frame goal into the concrete EEF command. The task therefore
+does not need to predict the EEF pose from an assumed grasp transform.
+
+For example, this waypoint puts a held plate frame at a rack-slot site while
+constraining only the plate normal:
+
+```yaml
+- controlled_frame:
+    kind: held_object
+    frame: plate_center_site
+  position: [0.0, 0.0, 0.0]
+  reference: object
+  orientation_goal:
+    kind: axis_alignment
+    controlled_axis: [0.0, 0.0, 1.0]  # plate normal in the plate frame
+    target_axis:
+      vector: [0.0, 1.0, 0.0]         # desired direction in the rack-site frame
+      reference: object
+    direction: same
+```
+
+Here, waypoint `reference: object` places the controlled frame relative to the
+stage object or its `site`. The separate `target_axis.reference: object`
+expresses the target direction in that same object/site orientation. The two
+references need not match: the position can be object-relative while the
+target axis is expressed in `world` or `base`.
+
+`orientation_goal` is a discriminated choice:
+
+| `kind` | Fields | Meaning |
+| --- | --- | --- |
+| `fixed` | `quaternion_xyzw: [x, y, z, w]` | Constrain the complete controlled-frame orientation. |
+| `axis_alignment` | `controlled_axis`, `target_axis`, `direction` | Constrain one controlled-frame axis and leave twist about that axis free. |
+
+Both axis vectors must be finite unit vectors. `controlled_axis` is expressed
+in the controlled frame. `target_axis.vector` accepts an independent
+`reference` of `world`, `base`, or `object`; the last mode uses the stage
+`site` orientation when one is configured. `direction` has these meanings:
+
+| Value | Axis relationship |
+| --- | --- |
+| `same` | Controlled axis points in the target direction. |
+| `opposite` | Controlled axis points against the target direction. |
+| `either` | Both polarities are equivalent; the smaller reorientation is used. |
+
+For `axis_alignment`, AAO applies only the shortest swing needed to align the
+axis and retains the current twist. Completion checks the axis-angle error,
+not full-quaternion equality, so symmetric objects do not perform unnecessary
+rotation about their symmetry axis.
+
+Configuration validation rejects ambiguous or unsupported combinations:
+
+- `orientation_goal` cannot be combined with legacy `orientation` or
+  `rotation` fields.
+- Rotational waypoint randomization (`roll`, `pitch`, or `yaw`) cannot be
+  combined with `orientation_goal`; position randomization remains valid.
+- `axis_alignment` currently does not support `relative: true`.
+- No `orientation_goal` kind currently supports `arc`.
+- `controlled_frame.kind: held_object` does not support `arc`.
+- An EEF controlled frame cannot name an object-local `frame`.
+
+A held-object waypoint also fails at execution time if no verified grasp
+binding exists, the held-object identity changes, or the waypoint is requested
+after release. See
+[Stages & Waypoints](stages_and_waypoints.md#held-object-control-and-grasp-binding)
+for the lifecycle and a complete Stage example.
 
 ### Pose references
 
-The `reference` field determines the frame in which a waypoint's local pose is
-interpreted.  Unless `relative: true` is set, position and explicitly supplied
+The `reference` field determines the frame in which a waypoint's local target
+is interpreted; it does not determine whether the EEF or a held object is
+controlled. Unless `relative: true` is set, position and explicitly supplied
 orientation are absolute within that reference frame.
 
 | Reference | Meaning |
@@ -162,9 +245,11 @@ orientation are absolute within that reference frame.
 | `eef_world` | The EEF position captured when the waypoint starts, with world-axis orientation.  It is a snapshot rather than a tracking reference. |
 | `auto` | Uses `object_world` when the stage has an object, otherwise `base`. |
 
-`static: true` snapshots the resolved reference at the first tick of the
-waypoint; it is most commonly used with `object` or `object_world`.  `eef` and
-`eef_world` are already snapshotted.  See
+`static: true` snapshots the complete semantic goal at the first tick of the
+waypoint; it is most commonly used with `object` or `object_world`. `eef` and
+`eef_world` already snapshot the waypoint's position/full-orientation basis,
+but an independently object- or base-referenced `target_axis` remains live
+unless `static: true` freezes the complete goal. See
 [Stages & Waypoints](stages_and_waypoints.md#static-reference-snapshot) for
 the interaction with a rigidly grasped object.
 
