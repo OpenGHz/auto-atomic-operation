@@ -27,6 +27,7 @@ from pydantic import (
     model_validator,
 )
 
+from auto_atom.basis.mjc.model_initialization import apply_initial_joint_positions
 from auto_atom.basis.mjc.tactile.tactile_sensor import TactileSensorManager
 from auto_atom.scene_composition import (
     SceneArtifact,
@@ -937,68 +938,21 @@ class MujocoBasis:
             mujoco.mj_resetDataKeyframe(self.model, self.data, 0)
         else:
             mujoco.mj_resetData(self.model, self.data)
-        qpos_widths = {0: 7, 1: 4, 2: 1, 3: 1}  # free, ball, slide, hinge
-        multi_dof_entries: list[tuple[int, np.ndarray]] = []
-        pin_addrs: list[int] = []
-        for joint_name, value in self.config.initial_joint_positions.items():
-            jid = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, joint_name)
-            if jid < 0:
-                continue
-            addr = int(self.model.jnt_qposadr[jid])
-            width = qpos_widths[int(self.model.jnt_type[jid])]
-            if isinstance(value, (list, tuple)):
-                arr = np.asarray(value, dtype=float)
-                if arr.size != width:
-                    raise ValueError(
-                        f"initial_joint_positions['{joint_name}'] has {arr.size} "
-                        f"values but joint has {width} qpos slots"
-                    )
-                multi_dof_entries.append((addr, arr))
-            else:
-                if width != 1:
-                    raise ValueError(
-                        f"initial_joint_positions['{joint_name}'] is scalar but joint "
-                        f"has {width} qpos slots; use a list to set all slots"
-                    )
-                self.data.qpos[addr] = value
-                pin_addrs.append(addr)
-        if pin_addrs and self.model.neq > 0:
-            # Equality constraints (parallel linkage grippers, etc.) are only
-            # resolved during mj_step.  Pin the configured joints and step so
-            # passive joints settle to a constraint-consistent state.
-            for op in self._operators.values():
-                for aidx in [
-                    self._op_arm_aidx[op.name],
-                    self._op_eef_aidx[op.name],
-                ]:
-                    for ai in aidx:
-                        ji = self.model.actuator_trnid[ai, 0]
-                        if ji >= 0:
-                            self.data.ctrl[ai] = self.data.qpos[
-                                self.model.jnt_qposadr[ji]
-                            ]
-            saved_gravity = self.model.opt.gravity.copy()
-            self.model.opt.gravity[:] = 0
-            target = self.data.qpos[pin_addrs].copy()
-            # Pin all free-joint qpos during settle so bodies with a freejoint
-            # (objects on the table, mocap-driven arm bases) do not drift from
-            # contact-solver repulsion or residual constraint forces.
-            free_addrs: list[int] = []
-            for j in range(self.model.njnt):
-                if int(self.model.jnt_type[j]) == 0:  # mjJNT_FREE
-                    a = int(self.model.jnt_qposadr[j])
-                    free_addrs.extend(range(a, a + 7))
-            free_snapshot = self.data.qpos[free_addrs].copy() if free_addrs else None
-            for _ in range(500):
-                mujoco.mj_step(self.model, self.data)
-                self.data.qpos[pin_addrs] = target
-                if free_snapshot is not None:
-                    self.data.qpos[free_addrs] = free_snapshot
-            self.data.qvel[:] = 0.0
-            self.model.opt.gravity[:] = saved_gravity
-        for addr, arr in multi_dof_entries:
-            self.data.qpos[addr : addr + arr.size] = arr
-        mujoco.mj_forward(self.model, self.data)
+        actuator_ids = (
+            int(actuator_id)
+            for operator in self._operators.values()
+            for indices in (
+                self._op_arm_aidx[operator.name],
+                self._op_eef_aidx[operator.name],
+            )
+            for actuator_id in indices
+        )
+        apply_initial_joint_positions(
+            self.model,
+            self.data,
+            self.config.initial_joint_positions,
+            actuator_ids,
+        )
         self._sync_mocap_to_freejoint()
         self._prev_ctrl = None
 

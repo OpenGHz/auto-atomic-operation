@@ -40,12 +40,11 @@ from hydra.core.global_hydra import GlobalHydra
 from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, ListConfig, OmegaConf
 
+from auto_atom.basis.mjc.model_initialization import apply_initial_joint_positions
 from auto_atom.runner.common import get_config_dir
 from auto_atom.scene_composition import SceneConfig, load_composed_scene
 from auto_atom.utils.pose import euler_to_quaternion
 
-# Joint qpos widths by mjtJoint enum value: free=7, ball=4, slide=1, hinge=1.
-_QPOS_WIDTH = {0: 7, 1: 4, 2: 1, 3: 1}
 _DEBUG = False
 
 
@@ -141,61 +140,28 @@ def _apply_home_pose(
     model: mujoco.MjModel,
     data: mujoco.MjData,
     initial_joint_positions: dict,
+    actuator_names: list[str] | None = None,
 ) -> None:
-    """Mirror ``MujocoBasis.reset()``: write scalars + multi-DOF entries and
-    let parallel-linkage equality constraints settle under zero gravity."""
-    multi_dof: list[tuple[int, np.ndarray]] = []
-    pin_addrs: list[int] = []
-    for joint_name, value in initial_joint_positions.items():
-        jid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, joint_name)
-        if jid < 0:
-            print(f"[warn] joint '{joint_name}' not found; skipping")
+    """Apply the runtime home-state contract before launching the viewer."""
+    actuator_ids: list[int] = []
+    for actuator_name in actuator_names or ():
+        actuator_id = mujoco.mj_name2id(
+            model, mujoco.mjtObj.mjOBJ_ACTUATOR, actuator_name
+        )
+        if actuator_id < 0:
+            print(f"[warn] actuator '{actuator_name}' not found; skipping")
             continue
-        addr = int(model.jnt_qposadr[jid])
-        width = _QPOS_WIDTH[int(model.jnt_type[jid])]
-        if isinstance(value, (list, tuple)):
-            arr = np.asarray(value, dtype=float)
-            if arr.size != width:
-                raise ValueError(
-                    f"initial_joint_positions['{joint_name}']: got {arr.size} "
-                    f"values, joint expects {width}"
-                )
-            multi_dof.append((addr, arr))
-        else:
-            if width != 1:
-                raise ValueError(
-                    f"initial_joint_positions['{joint_name}']: scalar given for "
-                    f"a {width}-DOF joint; pass a list"
-                )
-            data.qpos[addr] = float(value)
-            pin_addrs.append(addr)
+        actuator_ids.append(int(actuator_id))
 
-    if pin_addrs and model.neq > 0:
-        # Settle equality-constrained passive joints (e.g. gripper coupler /
-        # follower) by stepping in zero gravity while pinning all freejoint
-        # bodies and the configured scalar joints.
-        free_addrs: list[int] = []
-        for j in range(model.njnt):
-            if int(model.jnt_type[j]) == 0:  # free
-                a = int(model.jnt_qposadr[j])
-                free_addrs.extend(range(a, a + 7))
-        free_snap = data.qpos[free_addrs].copy() if free_addrs else None
+    missing_joint_names = apply_initial_joint_positions(
+        model,
+        data,
+        initial_joint_positions,
+        actuator_ids,
+    )
+    for joint_name in missing_joint_names:
+        print(f"[warn] joint '{joint_name}' not found; skipping")
 
-        saved_g = model.opt.gravity.copy()
-        model.opt.gravity[:] = 0
-        target = data.qpos[pin_addrs].copy()
-        for _ in range(500):
-            mujoco.mj_step(model, data)
-            data.qpos[pin_addrs] = target
-            if free_snap is not None:
-                data.qpos[free_addrs] = free_snap
-        data.qvel[:] = 0.0
-        model.opt.gravity[:] = saved_g
-
-    for addr, arr in multi_dof:
-        data.qpos[addr : addr + arr.size] = arr
-
-    mujoco.mj_forward(model, data)
     # Sync mocap bodies (if any) onto the freejoint they're welded to so the
     # arm doesn't snap back when the viewer takes its first step.
     for eq in range(model.neq):
@@ -218,6 +184,16 @@ def _extract_overrides(cfg: DictConfig) -> dict:
     so reload can re-read them without restarting the process."""
     env_cfg = cfg.env
     scene_data = _to_container(env_cfg.get("scene")) or {}
+    operators_cfg = _to_container(env_cfg.get("operators")) or {}
+    actuator_names = list(
+        dict.fromkeys(
+            str(actuator_name)
+            for operator in operators_cfg.values()
+            for field in ("arm_actuators", "eef_actuators")
+            for actuator_name in (operator.get(field) or [])
+        )
+    )
+    sim_freq_raw = env_cfg.get("sim_freq")
     out: dict = {
         "scene": scene_data,
         "scene_base": str(scene_data["base"]),
@@ -226,12 +202,13 @@ def _extract_overrides(cfg: DictConfig) -> dict:
             for layer in scene_data.get("layers", [])
             if isinstance(layer, dict) and layer.get("kind") == "mjcf"
         ],
+        "sim_freq": float(sim_freq_raw) if sim_freq_raw is not None else None,
+        "actuator_names": actuator_names,
         "ijp": _to_container(env_cfg.get("initial_joint_positions")) or {},
         "initial_pose": _to_container(cfg.get("task", {}).get("initial_pose")) or {},
         "op_bases": [],
     }
 
-    operators_cfg = env_cfg.get("operators") or {}
     task_operators_cfg = cfg.get("task_operators") or {}
     items = task_operators_cfg.items() if task_operators_cfg else []
     for op_name, op_node in items:
@@ -251,8 +228,16 @@ def _extract_overrides(cfg: DictConfig) -> dict:
 
 def _build(overrides: dict) -> tuple[mujoco.MjModel, mujoco.MjData]:
     m = load_composed_scene(SceneConfig.model_validate(overrides["scene"]))
+    sim_freq = overrides.get("sim_freq")
+    if sim_freq is not None:
+        if sim_freq <= 0:
+            raise ValueError(f"env.sim_freq must be positive, got {sim_freq}")
+        m.opt.timestep = 1.0 / sim_freq
     d = mujoco.MjData(m)
-    mujoco.mj_resetData(m, d)
+    if m.nkey > 0:
+        mujoco.mj_resetDataKeyframe(m, d, 0)
+    else:
+        mujoco.mj_resetData(m, d)
 
     # 1) task_operators.*.initial_state.base_pose — relocates the arm root
     #    body so the arm sits at the right world pose.
@@ -271,7 +256,7 @@ def _build(overrides: dict) -> tuple[mujoco.MjModel, mujoco.MjData]:
         )
 
     # 3) env.initial_joint_positions — joint-level home pose.
-    _apply_home_pose(m, d, overrides["ijp"])
+    _apply_home_pose(m, d, overrides["ijp"], overrides.get("actuator_names", []))
     return m, d
 
 

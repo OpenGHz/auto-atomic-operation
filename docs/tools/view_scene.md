@@ -29,11 +29,15 @@ For the chosen config, the script reads these override surfaces and applies them
 |---------------------------------------------------|-------------------------------------------------------------------------------|
 | `env.scene.base`                                  | Host scene XML                                                                 |
 | `env.scene.layers`                                | Ordered MJCF and namespaced asset-assembly layers                              |
+| `env.sim_freq`                                   | Physics frequency, overriding the host XML timestep exactly as the runtime does |
 | `env.initial_joint_positions`                     | Per-joint home pose (mirrors `MujocoBasis.reset()`)                           |
 | `task.initial_pose`                               | Per-body pose overrides (freejoint qpos for movable bodies, or `body_pos/quat` for static bodies) |
 | `task_operators.<name>.initial_state.base_pose`   | Relocates each operator's `root_body` so the arm sits at the right world pose |
 
 Equality-constrained passive joints (e.g. parallel-linkage gripper followers) are settled by stepping under zero gravity while pinning the configured scalar joints, matching the runtime backend reset.
+
+Configured joint-position actuators are initialized to hold the applied home
+pose. Motor, velocity, tendon, and site actuators keep their existing controls.
 
 Mocap bodies welded to a freejoint are synced onto their target pose so the arm doesn't snap on the first viewer step.
 
