@@ -382,6 +382,33 @@ class PoseRandomRange(BaseModel):
         return v
 
 
+class PoseRandomizationConfig(BaseModel, frozen=True):
+    """A choice among one or more independently configured pose regions.
+
+    Each region is a complete :class:`PoseRandomRange`, so it owns its axis
+    ranges, reference mode, and collision radius.  The legacy direct
+    ``PoseRandomRange`` form remains valid wherever this wrapper is accepted.
+    """
+
+    model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid")
+
+    regions: List[PoseRandomRange] = Field(min_length=1)
+    """Non-empty collection of candidate regions sampled at reset."""
+
+
+PoseRandomizationSpec = Union[PoseRandomRange, PoseRandomizationConfig]
+"""Canonical single- or multi-region pose randomization specification."""
+
+
+def pose_randomization_regions(
+    spec: PoseRandomizationSpec,
+) -> Tuple[PoseRandomRange, ...]:
+    """Return the concrete regions represented by a randomization spec."""
+    if isinstance(spec, PoseRandomizationConfig):
+        return tuple(spec.regions)
+    return (spec,)
+
+
 class PoseControlConfig(BaseModel):
     """Configuration for the pose control"""
 
@@ -591,10 +618,12 @@ class OperatorRandomizationConfig(BaseModel):
     sampling, reset re-homes the operator to the sampled EEF pose.
     """
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid")
 
-    base: Optional[PoseRandomRange] = None
-    eef: Optional[PoseRandomRange] = None
+    base: Optional[PoseRandomizationSpec] = None
+    """Optional single- or multi-region randomization for the operator base."""
+    eef: Optional[PoseRandomizationSpec] = None
+    """Optional single- or multi-region randomization for the end effector."""
 
 
 class InitialPoseConfig(BaseModel):
@@ -637,14 +666,19 @@ class AutoAtomConfig(BaseModel):
     """Per-object initial pose overrides applied after keyframe reset, before
     randomization.  Keys are object names matching the MuJoCo body (or stage
     ``object`` field).  Supports both freejoint and static bodies."""
-    randomization: Dict[str, Union[PoseRandomRange, OperatorRandomizationConfig]] = {}
+    randomization: Dict[
+        str,
+        Union[PoseRandomizationSpec, OperatorRandomizationConfig],
+    ] = {}
     """Per-entity pose randomization applied at each reset.
 
-    Objects accept a direct ``PoseRandomRange``.
+    Objects accept either a direct ``PoseRandomRange`` or a
+    ``PoseRandomizationConfig`` containing one or more disjoint regions.
 
     Operators must use ``OperatorRandomizationConfig`` with explicit
-    ``base`` and/or ``eef`` sub-entries. The direct ``PoseRandomRange``
-    shorthand is rejected at sample time for operator entries.
+    ``base`` and/or ``eef`` sub-entries. Each sub-entry accepts either form.
+    The direct ``PoseRandomRange`` shorthand is rejected at sample time for
+    operator entries.
     """
     camera_initial_pose: Dict[str, InitialPoseConfig] = Field(default_factory=dict)
     """Per-camera initial pose overrides applied at each reset, before
@@ -697,7 +731,7 @@ class AutoAtomConfig(BaseModel):
     )
     @classmethod
     def _strip_none_keys(cls, v: object) -> object:
-        """Remove ``None``-valued keys from each entry.
+        """Remove ``None``-valued keys from nested mapping entries.
 
         Hydra/OmegaConf merges override ``key: null`` as ``key: None``
         rather than deleting the key.  Stripping them here lets child
@@ -706,14 +740,19 @@ class AutoAtomConfig(BaseModel):
         """
         if not isinstance(v, dict):
             return v
-        return {
-            name: (
-                {k: val for k, val in entry.items() if val is not None}
-                if isinstance(entry, dict)
-                else entry
-            )
-            for name, entry in v.items()
-        }
+
+        def _strip(value: object) -> object:
+            if isinstance(value, dict):
+                return {
+                    key: _strip(nested)
+                    for key, nested in value.items()
+                    if nested is not None
+                }
+            if isinstance(value, list):
+                return [_strip(item) for item in value]
+            return value
+
+        return _strip(v)
 
     """When True the first N resets cycle through extreme poses (each axis at its min/max, then all-min and all-max) before switching to random sampling.  Use this to verify that configured ranges are not too large."""
 

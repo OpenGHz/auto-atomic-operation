@@ -99,8 +99,8 @@ These initial-state overrides are applied before operator randomization
 defaults are recorded, so:
 
 - `task.randomization.arm.base` uses `initial_state.base_pose` as its baseline.
-- Direct `task.randomization.arm` and nested `task.randomization.arm.eef`
-  use `initial_state.eef_pose` as their home EEF baseline.
+- `task.randomization.arm.eef` uses `initial_state.eef_pose` as its home EEF
+  baseline.
 - `initial_state.eef` only sets the gripper/open-close control value; it does
   not change the pose randomization baseline.
 - If an operator `initial_state` field is omitted, the baseline falls back to
@@ -154,6 +154,17 @@ Keys are object or operator names.
   sub-entries. The direct per-axis shorthand on an operator key is no longer
   supported and raises `TypeError` at sample time.
 
+For a target whose valid workspace is disjoint, use
+`PoseRandomizationConfig`'s `regions` list. The legacy direct form remains
+valid; `regions` is a non-empty list of complete per-region configurations.
+Each region owns its axis ranges, `reference`, and `collision_radius`.
+On every sampling attempt, exactly one region is selected with equal
+probability for each target and environment. A collision-rejection retry
+selects a region again, so a failed sample can move to a different disconnected
+area. This is a uniform **proposal** mixture; the final accepted samples are
+conditioned on collision rejection, so regions with different collision-free
+acceptance rates need not appear equally often.
+
 ```yaml
 task:
   seed: 42                     # numpy RNG seed for reproducibility
@@ -174,6 +185,56 @@ task:
         y: [-0.01, 0.01]
         z: [-0.005, 0.005]
 ```
+
+### Multiple disjoint regions
+
+`regions` represents an equal-weight **proposal mixture of axis-aligned
+boxes**. Position coordinates are sampled independently from each selected
+region's `x`, `y`, and `z` intervals (and orientation axes from its `roll`,
+`pitch`, and `yaw` intervals). The intervals must describe boxes in the
+selected reference frame; arbitrary polygons, masks, or a single bounding box
+with holes are not represented.
+
+```yaml
+task:
+  randomization:
+    source_block:
+      regions:
+        # Left work area: relative to the block's default pose.
+        - x: [-0.30, -0.15]
+          y: [-0.10, 0.10]
+          reference: relative
+          collision_radius: 0.04
+        # Right work area: absolute world coordinates, with its own radius.
+        - x: [0.45, 0.60]
+          y: [0.20, 0.35]
+          reference: absolute_world
+          collision_radius: 0.06
+
+    arm:
+      eef:
+        regions:
+          - x: [0.20, 0.30]
+            y: [-0.10, 0.00]
+            z: [0.15, 0.20]
+            reference: absolute_base
+            collision_radius: 0.15
+          - x: [0.35, 0.45]
+            y: [0.05, 0.15]
+            z: [0.15, 0.20]
+            reference: absolute_base
+            collision_radius: 0.12
+```
+
+The same wrapper can be used under an operator's `base:` entry. Region
+selection is independent for `base` and `eef`; references declared in every
+region participate in dependency ordering. If a selected region references an
+entity, the existing delta-carry and reference-connected collision semantics
+apply to that sampled region.
+
+`regions: []` is invalid. Cameras and per-waypoint randomization currently
+accept only a single `PoseRandomRange`; use `task.randomization` (and an
+operator's nested `base`/`eef`) for disjoint entity workspaces.
 
 ### Supported axes
 
@@ -217,17 +278,8 @@ task:
       y: [-0.15, 0.15]
       collision_radius: 0.04
 
-    # Place the arm's home EEF anywhere in a box defined in the arm's base
-    # frame — useful when the base itself is randomized or when the "right
-    # side of the robot" matters more than "the right side of the room"
-    arm:
-      reference: absolute_base
-      x: [0.20, 0.35]
-      y: [-0.10, 0.10]
-      z: [0.15, 0.25]
-
-    # Mixed (nested form): small relative jitter of the base plus an
-    # absolute-base EEF box — uses the same operator name "arm"
+    # Small relative jitter of the arm base plus a home-EEF box expressed
+    # in that base frame. Operator randomization always uses this nested form.
     arm:
       base:
         x: [-0.01, 0.01]
@@ -488,7 +540,8 @@ set `is_static: false`.
 
 ## How It Works
 
-The randomization logic lives in `SceneBackend` (the mixin used by `MujocoTaskBackend`).
+The entity and camera randomization logic is implemented by
+`MujocoTaskBackend`, which fulfills the generic `SceneBackend` contract.
 
 ### Lifecycle
 

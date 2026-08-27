@@ -22,9 +22,11 @@ from ...framework import (
     OperatorRandomizationConfig,
     PlacedToleranceConfig,
     PoseControlConfig,
+    PoseRandomizationSpec,
     PoseRandomRange,
     PoseReference,
     RandomizationReference,
+    pose_randomization_regions,
 )
 from ...runtime import (
     ComponentRegistry,
@@ -91,6 +93,23 @@ class MujocoControlConfig(BaseModel):
 
 
 _MAX_COLLISION_REJECTION_ATTEMPTS = 100
+_RandomizationAncestors = Set[str] | List[Set[str]]
+
+
+def _randomization_references(
+    spec: PoseRandomizationSpec,
+) -> tuple[Union[RandomizationReference, str], ...]:
+    """Return every reference declared by a randomization spec."""
+    return tuple(region.reference for region in pose_randomization_regions(spec))
+
+
+def _copy_randomization_ancestors(
+    ancestors: _RandomizationAncestors,
+) -> _RandomizationAncestors:
+    """Copy scalar or per-environment reference-ancestor sets."""
+    if isinstance(ancestors, list):
+        return [set(values) for values in ancestors]
+    return set(ancestors)
 
 
 @dataclass
@@ -98,8 +117,8 @@ class _CollisionParticipant:
     owner: str
     label: str
     pose: PoseState
-    radius: float
-    ancestors: Set[str] = field(default_factory=set)
+    radius: float | np.ndarray
+    ancestors: _RandomizationAncestors = field(default_factory=set)
 
 
 @dataclass
@@ -108,8 +127,17 @@ class _PendingRandomizationAction:
     owner: str
     label: str
     pose: PoseState
-    radius: float
-    ancestors: Set[str] = field(default_factory=set)
+    radius: float | np.ndarray
+    reference: Optional[Union[RandomizationReference, str]] = None
+    ancestors: _RandomizationAncestors = field(default_factory=set)
+
+
+@dataclass(frozen=True)
+class _RandomizationActionSpec:
+    kind: str
+    owner: str
+    label: str
+    randomization: PoseRandomizationSpec
 
 
 @dataclass
@@ -866,9 +894,10 @@ class MujocoTaskBackend(SceneBackend):
     env: BatchedUnifiedMujocoEnv
     operator_handlers: Dict[str, MujocoOperatorHandler]
     object_handlers: Dict[str, MujocoObjectHandler]
-    randomization: Dict[str, PoseRandomRange | OperatorRandomizationConfig] = field(
-        default_factory=dict
-    )
+    randomization: Dict[
+        str,
+        PoseRandomizationSpec | OperatorRandomizationConfig,
+    ] = field(default_factory=dict)
     camera_randomization: Dict[str, PoseRandomRange] = field(default_factory=dict)
     initial_poses: Dict[str, InitialPoseConfig] = field(default_factory=dict)
     camera_initial_poses: Dict[str, InitialPoseConfig] = field(default_factory=dict)
@@ -1071,6 +1100,26 @@ class MujocoTaskBackend(SceneBackend):
     #  Randomization: ordering, reference resolution, and application
     # ------------------------------------------------------------------
 
+    def _select_randomization_region(
+        self,
+        spec: PoseRandomizationSpec,
+    ) -> PoseRandomRange:
+        """Select one region from a possibly multi-region randomization spec.
+
+        A wrapper's regions are equiprobable.  Selection is deliberately made
+        at the point where a target is sampled so collision-rejection retries
+        naturally draw a fresh region on every attempt.  The legacy single
+        ``PoseRandomRange`` path does not consume an extra random value.
+        """
+        regions = pose_randomization_regions(spec)
+        if not regions:
+            raise ValueError("Randomization region lists must not be empty")
+        if len(regions) == 1:
+            return regions[0]
+        sampled_index = int(self._rng.uniform(0.0, float(len(regions))))
+        sampled_index = max(0, min(sampled_index, len(regions) - 1))
+        return regions[sampled_index]
+
     @staticmethod
     def _parse_entity_reference(ref: str) -> Tuple[str, Optional[str]]:
         """Split an entity-name reference into ``(name, attr)``.
@@ -1085,23 +1134,61 @@ class MujocoTaskBackend(SceneBackend):
                 return name, attr
         return ref, None
 
+    def _randomization_action_specs(self) -> Dict[str, _RandomizationActionSpec]:
+        """Expand public entity configs into independently ordered actions."""
+        actions: Dict[str, _RandomizationActionSpec] = {}
+        for owner, randomization in self.randomization.items():
+            if (
+                owner not in self.object_handlers
+                and owner not in self.operator_handlers
+            ):
+                continue
+            if isinstance(randomization, OperatorRandomizationConfig):
+                if randomization.base is not None:
+                    label = f"{owner}.base"
+                    actions[label] = _RandomizationActionSpec(
+                        kind="operator_base",
+                        owner=owner,
+                        label=label,
+                        randomization=randomization.base,
+                    )
+                if randomization.eef is not None:
+                    label = f"{owner}.eef"
+                    actions[label] = _RandomizationActionSpec(
+                        kind="operator_eef",
+                        owner=owner,
+                        label=label,
+                        randomization=randomization.eef,
+                    )
+                continue
+            actions[owner] = _RandomizationActionSpec(
+                kind="object" if owner in self.object_handlers else "unknown",
+                owner=owner,
+                label=owner,
+                randomization=randomization,
+            )
+        return actions
+
     def _randomization_dependencies(self) -> Dict[str, Set[str]]:
-        deps: Dict[str, Set[str]] = {name: set() for name in self.randomization}
-        for name, rand in self.randomization.items():
-            refs: List[Union[RandomizationReference, str]] = []
-            if isinstance(rand, OperatorRandomizationConfig):
-                if rand.base is not None:
-                    refs.append(rand.base.reference)
-                if rand.eef is not None:
-                    refs.append(rand.eef.reference)
-            else:
-                refs.append(rand.reference)
-            for ref in refs:
-                if isinstance(ref, RandomizationReference):
+        actions = self._randomization_action_specs()
+        deps: Dict[str, Set[str]] = {label: set() for label in actions}
+        for label, action in actions.items():
+            if action.kind == "operator_eef":
+                base_label = f"{action.owner}.base"
+                if base_label in actions:
+                    deps[label].add(base_label)
+            for reference in _randomization_references(action.randomization):
+                if isinstance(reference, RandomizationReference):
                     continue
-                bare, _attr = self._parse_entity_reference(ref)
-                if bare in self.randomization:
-                    deps[name].add(bare)
+                bare, attr = self._parse_entity_reference(reference)
+                if attr is not None:
+                    dependency = f"{bare}.{attr}"
+                elif f"{bare}.base" in actions:
+                    dependency = f"{bare}.base"
+                else:
+                    dependency = bare
+                if dependency in actions:
+                    deps[label].add(dependency)
         return deps
 
     def _randomization_order(self) -> List[str]:
@@ -1111,6 +1198,9 @@ class MujocoTaskBackend(SceneBackend):
         entity being sampled first. Cycles raise ``ValueError``.
         """
         deps = self._randomization_dependencies()
+        declaration_index = {
+            name: index for index, name in enumerate(self._randomization_action_specs())
+        }
         order: List[str] = []
         visited: Set[str] = set()
         visiting: Set[str] = set()
@@ -1121,33 +1211,111 @@ class MujocoTaskBackend(SceneBackend):
             if n in visiting:
                 raise ValueError(f"Circular randomization reference involving '{n}'")
             visiting.add(n)
-            for dep in deps[n]:
+            for dep in sorted(deps[n], key=declaration_index.__getitem__):
                 _visit(dep)
             visiting.remove(n)
             visited.add(n)
             order.append(n)
 
-        for name in self.randomization:
+        for name in deps:
             _visit(name)
         return order
 
     def _reference_ancestors(
         self,
         reference: Union[RandomizationReference, str],
-        deps: Dict[str, Set[str]],
+        selected_ancestors: Dict[str, Set[str]],
     ) -> Set[str]:
         if isinstance(reference, RandomizationReference):
             return set()
-        bare, _attr = self._parse_entity_reference(reference)
-        ancestors: Set[str] = set()
-        pending = [bare]
-        while pending:
-            current = pending.pop()
-            if current in ancestors:
-                continue
-            ancestors.add(current)
-            pending.extend(deps.get(current, ()))
+        bare, attr = self._parse_entity_reference(reference)
+        if attr is None and bare in self.operator_handlers:
+            attr = "base"
+        reference_key = f"{bare}.{attr}" if attr is not None else bare
+        ancestors = {bare}
+        ancestors.update(selected_ancestors.get(reference_key, ()))
         return ancestors
+
+    def _validate_pose_randomization_spec(
+        self,
+        label: str,
+        spec: PoseRandomizationSpec,
+        *,
+        allow_absolute_base: bool,
+    ) -> None:
+        """Validate every region against its target context before sampling."""
+        for region_index, region in enumerate(pose_randomization_regions(spec)):
+            if (
+                region.reference == RandomizationReference.ABSOLUTE_BASE
+                and not allow_absolute_base
+            ):
+                raise ValueError(
+                    f"{label} randomization region {region_index} cannot use "
+                    "'absolute_base' — only operator end-effector "
+                    "randomization is defined in a base frame."
+                )
+            reference = region.reference
+            if isinstance(reference, RandomizationReference):
+                continue
+            bare, attr = self._parse_entity_reference(reference)
+            if attr is not None and bare not in self.operator_handlers:
+                raise ValueError(
+                    f"{label} randomization region {region_index} reference "
+                    f"'{reference}' uses '.{attr}', but '{bare}' is not a "
+                    "known operator."
+                )
+            if (
+                attr is None
+                and bare not in self.object_handlers
+                and bare not in self.operator_handlers
+            ):
+                raise ValueError(
+                    f"{label} randomization region {region_index} reference "
+                    f"'{reference}' is not a known object or operator."
+                )
+
+    def _validate_randomization_configuration(self) -> None:
+        """Validate target-specific rules for all configured regions."""
+        for name, spec in self.randomization.items():
+            if name in self.object_handlers:
+                if isinstance(spec, OperatorRandomizationConfig):
+                    raise TypeError(
+                        f"Object '{name}' randomization must use a direct "
+                        "single- or multi-region pose specification, not an "
+                        "operator randomization config."
+                    )
+                self._validate_pose_randomization_spec(
+                    f"Object '{name}'",
+                    spec,
+                    allow_absolute_base=False,
+                )
+                continue
+            if name not in self.operator_handlers:
+                logging.getLogger(MujocoTaskBackend.__name__).warning(
+                    "Randomization key '%s' does not match any object or "
+                    "operator handler — skipping.",
+                    name,
+                )
+                continue
+            if not isinstance(spec, OperatorRandomizationConfig):
+                raise TypeError(
+                    f"Operator '{name}' randomization must use the nested form "
+                    "with explicit `base:` and/or `eef:` sub-entries (i.e. an "
+                    "OperatorRandomizationConfig). Direct pose randomization "
+                    "specifications are not supported."
+                )
+            if spec.base is not None:
+                self._validate_pose_randomization_spec(
+                    f"Operator '{name}' base",
+                    spec.base,
+                    allow_absolute_base=False,
+                )
+            if spec.eef is not None:
+                self._validate_pose_randomization_spec(
+                    f"Operator '{name}' end effector",
+                    spec.eef,
+                    allow_absolute_base=True,
+                )
 
     def _resolve_reference_base_pose(
         self,
@@ -1204,6 +1372,7 @@ class MujocoTaskBackend(SceneBackend):
         return compose_pose(delta, default_pose)
 
     def _apply_randomization(self, env_mask: np.ndarray) -> None:
+        self._validate_randomization_configuration()
         deps = self._randomization_dependencies()
         order = self._randomization_order()
         components = self._randomization_components(order, deps)
@@ -1215,7 +1384,6 @@ class MujocoTaskBackend(SceneBackend):
                 env_mask,
                 sampled_poses,
                 collision_participants,
-                deps,
             )
             for action in component_actions:
                 if action.kind == "object":
@@ -1237,7 +1405,7 @@ class MujocoTaskBackend(SceneBackend):
                         label=action.label,
                         pose=action.pose,
                         radius=action.radius,
-                        ancestors=set(action.ancestors),
+                        ancestors=_copy_randomization_ancestors(action.ancestors),
                     )
                 )
             sampled_poses.update(component_poses)
@@ -1247,7 +1415,7 @@ class MujocoTaskBackend(SceneBackend):
         order: List[str],
         deps: Dict[str, Set[str]],
     ) -> List[List[str]]:
-        adjacency: Dict[str, Set[str]] = {name: set() for name in self.randomization}
+        adjacency: Dict[str, Set[str]] = {name: set() for name in deps}
         for name, parents in deps.items():
             for parent in parents:
                 adjacency[name].add(parent)
@@ -1276,7 +1444,6 @@ class MujocoTaskBackend(SceneBackend):
         env_mask: np.ndarray,
         accepted_sampled_poses: Dict[str, PoseState],
         accepted_participants: List[_CollisionParticipant],
-        dependency_map: Dict[str, Set[str]],
     ) -> tuple[Dict[str, PoseState], List[_PendingRandomizationAction]]:
         key_buffers = {
             name: self._current_pose_for_randomization_key(name) for name in component
@@ -1292,7 +1459,6 @@ class MujocoTaskBackend(SceneBackend):
                 env_index,
                 accepted_sampled_poses,
                 accepted_participants,
-                dependency_map,
             )
             if failure is not None:
                 logger = logging.getLogger(MujocoTaskBackend.__name__)
@@ -1313,13 +1479,28 @@ class MujocoTaskBackend(SceneBackend):
             for action in env_actions:
                 if action.label not in action_buffers:
                     template = self._current_pose_for_action(action.kind, action.owner)
+                    buffered_radius: float | np.ndarray = float(action.radius)
+                    action_ancestors = self._collision_ancestors_for_env(
+                        action.ancestors,
+                        env_index,
+                    )
+                    buffered_ancestors: _RandomizationAncestors = set(action_ancestors)
+                    if self.batch_size > 1:
+                        buffered_radius = np.full(
+                            self.batch_size,
+                            float(action.radius),
+                            dtype=np.float64,
+                        )
+                        buffered_ancestors = [
+                            set(action_ancestors) for _ in range(self.batch_size)
+                        ]
                     action_buffers[action.label] = _PendingRandomizationAction(
                         kind=action.kind,
                         owner=action.owner,
                         label=action.label,
                         pose=template,
-                        radius=action.radius,
-                        ancestors=set(action.ancestors),
+                        radius=buffered_radius,
+                        ancestors=buffered_ancestors,
                     )
                     action_order.append(action.label)
                 action_buffers[action.label].pose.position[env_index] = (
@@ -1328,6 +1509,21 @@ class MujocoTaskBackend(SceneBackend):
                 action_buffers[action.label].pose.orientation[env_index] = (
                     action.pose.orientation[0]
                 )
+                if isinstance(action_buffers[action.label].radius, np.ndarray):
+                    action_buffers[action.label].radius[env_index] = float(
+                        action.radius
+                    )
+                else:
+                    action_buffers[action.label].radius = float(action.radius)
+                buffered_action_ancestors = action_buffers[action.label].ancestors
+                env_action_ancestors = self._collision_ancestors_for_env(
+                    action.ancestors,
+                    env_index,
+                )
+                if isinstance(buffered_action_ancestors, list):
+                    buffered_action_ancestors[env_index] = set(env_action_ancestors)
+                else:
+                    action_buffers[action.label].ancestors = set(env_action_ancestors)
 
         component_actions = [action_buffers[label] for label in action_order]
         return key_buffers, component_actions
@@ -1338,7 +1534,6 @@ class MujocoTaskBackend(SceneBackend):
         env_index: int,
         accepted_sampled_poses: Dict[str, PoseState],
         accepted_participants: List[_CollisionParticipant],
-        dependency_map: Dict[str, Set[str]],
     ) -> tuple[
         Dict[str, PoseState],
         List[_PendingRandomizationAction],
@@ -1351,26 +1546,37 @@ class MujocoTaskBackend(SceneBackend):
         last_sampled_poses: Dict[str, PoseState] = {}
         last_actions: List[_PendingRandomizationAction] = []
         last_failure: Optional[tuple[str, str]] = None
+        action_specs = self._randomization_action_specs()
 
         for _ in range(_MAX_COLLISION_REJECTION_ATTEMPTS):
             working_poses = dict(accepted_env_poses)
             env_sampled_poses: Dict[str, PoseState] = {}
             env_actions: List[_PendingRandomizationAction] = []
             env_participants: List[_CollisionParticipant] = []
+            selected_ancestors: Dict[str, Set[str]] = {}
             failure: Optional[tuple[str, str]] = None
-            for name in component:
-                rand_range = self.randomization[name]
+            for action_label in component:
                 sampled_poses, actions = self._sample_randomization_target_for_env(
-                    name,
-                    rand_range,
+                    action_specs[action_label],
                     env_index,
                     working_poses,
-                    dependency_map,
                 )
                 for key, pose in sampled_poses.items():
                     working_poses[key] = pose
                     env_sampled_poses[key] = pose
                 for action in actions:
+                    if action.reference is None:
+                        raise ValueError(
+                            f"Sampled action '{action.label}' has no reference"
+                        )
+                    action.ancestors = self._reference_ancestors(
+                        action.reference,
+                        selected_ancestors,
+                    )
+                    action_ancestors = set(action.ancestors)
+                    selected_ancestors[action.label] = action_ancestors
+                    if action.kind in ("object", "operator_base"):
+                        selected_ancestors[action.owner] = action_ancestors
                     blocking = self._find_collision_participant(
                         owner_name=action.owner,
                         env_index=env_index,
@@ -1401,45 +1607,14 @@ class MujocoTaskBackend(SceneBackend):
 
     def _sample_randomization_target_for_env(
         self,
-        name: str,
-        rand_range: PoseRandomRange | OperatorRandomizationConfig,
+        action_spec: _RandomizationActionSpec,
         env_index: int,
         working_poses: Dict[str, PoseState],
-        dependency_map: Dict[str, Set[str]],
     ) -> tuple[Dict[str, PoseState], List[_PendingRandomizationAction]]:
-        if name in self.object_handlers:
-            if isinstance(rand_range, OperatorRandomizationConfig):
-                raise TypeError(
-                    f"Object '{name}' randomization must be a "
-                    "PoseRandomRange, not an operator randomization config."
-                )
-            if rand_range.reference == RandomizationReference.ABSOLUTE_BASE:
-                raise ValueError(
-                    f"Object '{name}' randomization cannot use 'absolute_base' — "
-                    "only operator end-effector randomization is defined in a "
-                    "base frame."
-                )
-            sampled = self._sample_object_pose_for_env(
-                name,
-                rand_range,
-                env_index,
-                working_poses,
-            )
-            return {name: sampled}, [
-                _PendingRandomizationAction(
-                    kind="object",
-                    owner=name,
-                    label=name,
-                    pose=sampled,
-                    radius=float(rand_range.collision_radius),
-                    ancestors=self._reference_ancestors(
-                        rand_range.reference,
-                        dependency_map,
-                    ),
-                )
-            ]
-
-        if name not in self.operator_handlers:
+        name = action_spec.owner
+        if action_spec.kind == "unknown" or (
+            action_spec.kind != "object" and name not in self.operator_handlers
+        ):
             logging.getLogger(MujocoTaskBackend.__name__).warning(
                 "Randomization key '%s' does not match any object or operator "
                 "handler — skipping.",
@@ -1447,73 +1622,68 @@ class MujocoTaskBackend(SceneBackend):
             )
             return {}, []
 
-        handler = self.operator_handlers[name]
-        sampled_poses: Dict[str, PoseState] = {}
-        actions: List[_PendingRandomizationAction] = []
-        if isinstance(rand_range, OperatorRandomizationConfig):
-            if rand_range.base is not None:
-                if rand_range.base.reference == RandomizationReference.ABSOLUTE_BASE:
-                    raise ValueError(
-                        f"Operator '{name}' base randomization cannot use "
-                        "'absolute_base' — the base IS the frame."
-                    )
-                sampled_base = self._sample_operator_base_pose_for_env(
-                    name,
-                    handler,
-                    rand_range.base,
-                    env_index,
-                    working_poses,
+        selected_range = self._select_randomization_region(action_spec.randomization)
+        if action_spec.kind == "object":
+            if selected_range.reference == RandomizationReference.ABSOLUTE_BASE:
+                raise ValueError(
+                    f"Object '{name}' randomization cannot use 'absolute_base' — "
+                    "only operator end-effector randomization is defined in a "
+                    "base frame."
                 )
-                sampled_poses[name] = sampled_base
-                working_poses[name] = sampled_base
-                sampled_poses[f"{name}.base"] = sampled_base
-                working_poses[f"{name}.base"] = sampled_base
-                actions.append(
-                    _PendingRandomizationAction(
-                        kind="operator_base",
-                        owner=name,
-                        label=f"{name}.base",
-                        pose=sampled_base,
-                        radius=float(rand_range.base.collision_radius),
-                        ancestors=self._reference_ancestors(
-                            rand_range.base.reference,
-                            dependency_map,
-                        ),
-                    )
+            sampled = self._sample_object_pose_for_env(
+                name,
+                selected_range,
+                env_index,
+                working_poses,
+            )
+            return {action_spec.label: sampled}, [
+                _PendingRandomizationAction(
+                    kind=action_spec.kind,
+                    owner=name,
+                    label=action_spec.label,
+                    pose=sampled,
+                    radius=float(selected_range.collision_radius),
+                    reference=selected_range.reference,
                 )
-            if rand_range.eef is not None:
-                sampled_eef = self._sample_operator_eef_pose_for_env(
-                    name,
-                    handler,
-                    rand_range.eef,
-                    env_index,
-                    working_poses,
-                )
-                sampled_poses[name] = sampled_eef
-                working_poses[name] = sampled_eef
-                sampled_poses[f"{name}.eef"] = sampled_eef
-                working_poses[f"{name}.eef"] = sampled_eef
-                actions.append(
-                    _PendingRandomizationAction(
-                        kind="operator_eef",
-                        owner=name,
-                        label=f"{name}.eef",
-                        pose=sampled_eef,
-                        radius=float(rand_range.eef.collision_radius),
-                        ancestors=self._reference_ancestors(
-                            rand_range.eef.reference,
-                            dependency_map,
-                        ),
-                    )
-                )
-            return sampled_poses, actions
+            ]
 
-        raise TypeError(
-            f"Operator '{name}' randomization must use the nested form with "
-            "explicit `base:` and/or `eef:` sub-entries (i.e. an "
-            "OperatorRandomizationConfig). The direct PoseRandomRange shorthand "
-            "is no longer supported."
-        )
+        handler = self.operator_handlers[name]
+        if action_spec.kind == "operator_base":
+            if selected_range.reference == RandomizationReference.ABSOLUTE_BASE:
+                raise ValueError(
+                    f"Operator '{name}' base randomization cannot use "
+                    "'absolute_base' — the base IS the frame."
+                )
+            sampled = self._sample_operator_base_pose_for_env(
+                name,
+                handler,
+                selected_range,
+                env_index,
+                working_poses,
+            )
+        elif action_spec.kind == "operator_eef":
+            sampled = self._sample_operator_eef_pose_for_env(
+                name,
+                handler,
+                selected_range,
+                env_index,
+                working_poses,
+            )
+        else:
+            raise ValueError(f"Unknown randomization action kind: {action_spec.kind}")
+        return {
+            name: sampled,
+            action_spec.label: sampled,
+        }, [
+            _PendingRandomizationAction(
+                kind=action_spec.kind,
+                owner=name,
+                label=action_spec.label,
+                pose=sampled,
+                radius=float(selected_range.collision_radius),
+                reference=selected_range.reference,
+            )
+        ]
 
     def _sample_object_pose_for_env(
         self,
@@ -1694,18 +1864,14 @@ class MujocoTaskBackend(SceneBackend):
         return compose_pose(delta, default_pose)
 
     def _current_pose_for_randomization_key(self, name: str) -> PoseState:
-        rand_range = self.randomization[name]
-        if name in self.object_handlers:
-            return self.object_handlers[name].get_pose()
-        if name not in self.operator_handlers:
+        action = self._randomization_action_specs().get(name)
+        if (
+            action is None
+            or action.kind == "unknown"
+            or (action.kind != "object" and action.owner not in self.operator_handlers)
+        ):
             return PoseState().broadcast_to(self.batch_size)
-        handler = self.operator_handlers[name]
-        if isinstance(rand_range, OperatorRandomizationConfig):
-            if rand_range.eef is not None:
-                return handler.get_end_effector_pose()
-            if rand_range.base is not None:
-                return handler.get_base_pose()
-        return handler.get_base_pose()
+        return self._current_pose_for_action(action.kind, action.owner)
 
     def _current_pose_for_action(self, kind: str, owner: str) -> PoseState:
         if kind == "object":
@@ -1756,18 +1922,27 @@ class MujocoTaskBackend(SceneBackend):
         ancestors: Set[str],
         collision_participants: List[_CollisionParticipant],
     ) -> Optional[_CollisionParticipant]:
-        if collision_radius <= 0.0:
+        candidate_radius = float(collision_radius)
+        if candidate_radius <= 0.0:
             return None
         candidate_row = 0 if candidate_pose.batch_size == 1 else env_index
         candidate_pos = np.asarray(
             candidate_pose.position[candidate_row], dtype=np.float64
         )
         for participant in collision_participants:
-            if participant.radius <= 0.0:
+            participant_radius = self._collision_radius_for_env(
+                participant.radius,
+                env_index,
+            )
+            if participant_radius <= 0.0:
                 continue
             if participant.owner == owner_name:
                 continue
-            if participant.owner in ancestors or owner_name in participant.ancestors:
+            participant_ancestors = self._collision_ancestors_for_env(
+                participant.ancestors,
+                env_index,
+            )
+            if participant.owner in ancestors or owner_name in participant_ancestors:
                 continue
             other_row = 0 if participant.pose.batch_size == 1 else env_index
             other_pos = np.asarray(
@@ -1776,10 +1951,39 @@ class MujocoTaskBackend(SceneBackend):
             )
             if (
                 np.linalg.norm(candidate_pos - other_pos)
-                < collision_radius + participant.radius
+                < candidate_radius + participant_radius
             ):
                 return participant
         return None
+
+    @staticmethod
+    def _collision_radius_for_env(
+        radius: float | np.ndarray,
+        env_index: int,
+    ) -> float:
+        """Resolve a scalar or batched collision radius for one environment."""
+        if isinstance(radius, np.ndarray):
+            values = np.asarray(radius, dtype=np.float64).reshape(-1)
+            if values.size == 0:
+                return 0.0
+            if values.size == 1:
+                return float(values[0])
+            return float(values[env_index])
+        return float(radius)
+
+    @staticmethod
+    def _collision_ancestors_for_env(
+        ancestors: _RandomizationAncestors,
+        env_index: int,
+    ) -> Set[str]:
+        """Resolve scalar or batched reference ancestors for one environment."""
+        if isinstance(ancestors, list):
+            if not ancestors:
+                return set()
+            if len(ancestors) == 1:
+                return ancestors[0]
+            return ancestors[env_index]
+        return ancestors
 
     def _sample_random_pose_single(
         self,
@@ -2246,11 +2450,11 @@ def build_mujoco_backend(
         refs: list = []
         if isinstance(rand_range, OperatorRandomizationConfig):
             if rand_range.base is not None:
-                refs.append(rand_range.base.reference)
+                refs.extend(_randomization_references(rand_range.base))
             if rand_range.eef is not None:
-                refs.append(rand_range.eef.reference)
+                refs.extend(_randomization_references(rand_range.eef))
         else:
-            refs.append(rand_range.reference)
+            refs.extend(_randomization_references(rand_range))
         for ref in refs:
             if isinstance(ref, str) and not isinstance(ref, RandomizationReference):
                 if ref not in operator_handlers:

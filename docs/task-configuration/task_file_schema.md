@@ -176,7 +176,7 @@ The following optional fields live under `task`:
 | --- | --- |
 | `seed` | NumPy randomization seed; defaults to `0`, which selects an entropy-seeded generator rather than a reproducible fixed seed. |
 | `initial_pose` | Per-object position/orientation overrides applied after the XML keyframe and before randomization. |
-| `randomization` | Per-object or operator pose ranges sampled at reset.  Operators use nested `base` and/or `eef` entries. |
+| `randomization` | Per-object or operator pose ranges sampled at reset. Objects and operator `base` / `eef` entries accept either one range or a non-empty `regions` list for disjoint workspaces; operators use the nested form. |
 | `camera_initial_pose` | Per-camera pose overrides applied before camera randomization. |
 | `camera_randomization` | Per-camera relative or absolute-world pose ranges. |
 | `randomization_debug` | Cycle through configured extrema before ordinary random sampling when enabled. |

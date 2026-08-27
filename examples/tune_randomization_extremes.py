@@ -18,7 +18,7 @@ import os
 import sys
 import tkinter as tk
 import tkinter.font as tkfont
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from tkinter import ttk
 from typing import Callable, Dict, List, Optional
 
@@ -36,9 +36,11 @@ from auto_atom.framework import (
     OperatorConfig,
     OperatorInitialState,
     OperatorRandomizationConfig,
+    PoseRandomizationSpec,
     PoseRandomRange,
     PoseReference,
     RandomizationReference,
+    pose_randomization_regions,
 )
 from auto_atom.runner.common import get_config_dir, prepare_task_file
 from auto_atom.runtime import TaskRunner
@@ -194,7 +196,7 @@ def _configure_tk_dpi_and_fonts(root: tk.Tk) -> None:
 
 @dataclass(frozen=True)
 class ReloadedTuningConfig:
-    randomization: Dict[str, PoseRandomRange | OperatorRandomizationConfig]
+    randomization: Dict[str, PoseRandomizationSpec | OperatorRandomizationConfig]
     initial_poses: Dict[str, InitialPoseConfig]
     operator_initial_states: Dict[str, OperatorInitialState]
 
@@ -216,6 +218,39 @@ def _axis_range(rand_range: PoseRandomRange, axis: str) -> tuple[float, float]:
     except (TypeError, ValueError):
         return (0.0, 0.0)
     return (value, value)
+
+
+def _region_label(target: RandomizationTarget, region_index: int) -> str:
+    """Format a target label, disambiguating multi-region entries."""
+    if len(target.regions) == 1:
+        return target.label
+    return f"{target.label} [region {region_index}]"
+
+
+def _active_region_axes(rand_range: PoseRandomRange) -> tuple[str, ...]:
+    """Return every explicitly configured axis, including fixed zero ranges.
+
+    ``None`` means "leave the baseline unchanged", while an explicit
+    ``[0, 0]`` in an absolute reference means "set this axis to zero".  Those
+    cases must remain distinguishable in generated extreme and random cases.
+    """
+    return tuple(axis for axis in AXES if getattr(rand_range, axis, None) is not None)
+
+
+def _sample_region_index(
+    rng: np.random.Generator,
+    region_count: int,
+) -> int:
+    """Sample an equiprobable region index, with a small test-double fallback."""
+    if region_count <= 0:
+        raise ValueError("Randomization region lists must not be empty")
+    if region_count == 1:
+        return 0
+    integers = getattr(rng, "integers", None)
+    if callable(integers):
+        return int(integers(0, region_count))
+    sampled = int(float(rng.uniform(0.0, float(region_count))))
+    return max(0, min(sampled, region_count - 1))
 
 
 def _with_offsets(
@@ -328,11 +363,16 @@ def _apply_operator_initial_states(
 class RandomizationTarget:
     key: str
     label: str
-    rand_range: PoseRandomRange
+    rand_range: PoseRandomizationSpec
     get_default_pose: Callable[[], PoseState]
     apply_pose: Callable[[PoseState], None]
     get_current_pose: Callable[[], PoseState]
     get_base_pose: Optional[Callable[[], PoseState]] = None
+
+    @property
+    def regions(self) -> tuple[PoseRandomRange, ...]:
+        """Return the candidate regions for this physical target."""
+        return pose_randomization_regions(self.rand_range)
 
 
 @dataclass(frozen=True)
@@ -340,6 +380,7 @@ class ExtremeCase:
     name: str
     description: str
     offsets_by_target: Dict[str, Dict[str, float]]
+    region_indices_by_target: Dict[str, int] = field(default_factory=dict)
 
 
 def _collect_cli_overrides(argv: List[str]) -> List[str]:
@@ -502,6 +543,7 @@ class RandomizationInspector:
         self.backend.get_env().refresh_viewer()
 
     def _collect_targets(self) -> List[RandomizationTarget]:
+        self.backend._validate_randomization_configuration()  # type: ignore[attr-defined]
         targets: List[RandomizationTarget] = []
         for name, rand in self.backend.randomization.items():
             if name in self.backend.object_handlers:
@@ -657,26 +699,21 @@ class RandomizationInspector:
         non_zero_targets = [
             target
             for target in self.targets
-            if any(
-                _axis_range(target.rand_range, axis)[0]
-                != _axis_range(target.rand_range, axis)[1]
-                for axis in AXES
-            )
+            if any(_active_region_axes(region) for region in target.regions)
         ]
         if non_zero_targets:
+            selected_regions = {target.key: 0 for target in non_zero_targets}
             all_min = {
                 target.key: {
-                    axis: _axis_range(target.rand_range, axis)[0]
-                    for axis in AXES
-                    if _axis_range(target.rand_range, axis) != (0.0, 0.0)
+                    axis: _axis_range(target.regions[0], axis)[0]
+                    for axis in _active_region_axes(target.regions[0])
                 }
                 for target in non_zero_targets
             }
             all_max = {
                 target.key: {
-                    axis: _axis_range(target.rand_range, axis)[1]
-                    for axis in AXES
-                    if _axis_range(target.rand_range, axis) != (0.0, 0.0)
+                    axis: _axis_range(target.regions[0], axis)[1]
+                    for axis in _active_region_axes(target.regions[0])
                 }
                 for target in non_zero_targets
             }
@@ -685,6 +722,7 @@ class RandomizationInspector:
                     name="all-min",
                     description="Apply every randomized axis at its minimum value at the same time.",
                     offsets_by_target=all_min,
+                    region_indices_by_target=selected_regions,
                 )
             )
             cases.append(
@@ -692,28 +730,70 @@ class RandomizationInspector:
                     name="all-max",
                     description="Apply every randomized axis at its maximum value at the same time.",
                     offsets_by_target=all_max,
+                    region_indices_by_target=selected_regions.copy(),
                 )
             )
 
         for target in self.targets:
-            for axis in AXES:
-                axis_min, axis_max = _axis_range(target.rand_range, axis)
-                if axis_min == axis_max:
-                    continue
-                cases.append(
-                    ExtremeCase(
-                        name=f"{target.label} {axis}=min",
-                        description=f"Only {target.label} uses {axis} minimum {axis_min:.6f}; all other axes stay at default.",
-                        offsets_by_target={target.key: {axis: float(axis_min)}},
+            for region_index, rand_range in enumerate(target.regions):
+                active_axes = _active_region_axes(rand_range)
+                region_name = _region_label(target, region_index)
+                region_selection = {target.key: region_index}
+
+                if len(target.regions) > 1:
+                    region_min = {
+                        axis: _axis_range(rand_range, axis)[0] for axis in active_axes
+                    }
+                    region_max = {
+                        axis: _axis_range(rand_range, axis)[1] for axis in active_axes
+                    }
+                    cases.append(
+                        ExtremeCase(
+                            name=f"{region_name} all-min",
+                            description=(
+                                f"Apply all {region_name} axes at their minimum "
+                                "values; all other targets stay at default."
+                            ),
+                            offsets_by_target={target.key: region_min},
+                            region_indices_by_target=region_selection,
+                        )
                     )
-                )
-                cases.append(
-                    ExtremeCase(
-                        name=f"{target.label} {axis}=max",
-                        description=f"Only {target.label} uses {axis} maximum {axis_max:.6f}; all other axes stay at default.",
-                        offsets_by_target={target.key: {axis: float(axis_max)}},
+                    cases.append(
+                        ExtremeCase(
+                            name=f"{region_name} all-max",
+                            description=(
+                                f"Apply all {region_name} axes at their maximum "
+                                "values; all other targets stay at default."
+                            ),
+                            offsets_by_target={target.key: region_max},
+                            region_indices_by_target=region_selection.copy(),
+                        )
                     )
-                )
+
+                for axis in active_axes:
+                    axis_min, axis_max = _axis_range(rand_range, axis)
+                    cases.append(
+                        ExtremeCase(
+                            name=f"{region_name} {axis}=min",
+                            description=(
+                                f"Only {region_name} uses {axis} minimum "
+                                f"{axis_min:.6f}; all other axes stay at default."
+                            ),
+                            offsets_by_target={target.key: {axis: float(axis_min)}},
+                            region_indices_by_target=region_selection,
+                        )
+                    )
+                    cases.append(
+                        ExtremeCase(
+                            name=f"{region_name} {axis}=max",
+                            description=(
+                                f"Only {region_name} uses {axis} maximum "
+                                f"{axis_max:.6f}; all other axes stay at default."
+                            ),
+                            offsets_by_target={target.key: {axis: float(axis_max)}},
+                            region_indices_by_target=region_selection.copy(),
+                        )
+                    )
 
         return cases
 
@@ -722,17 +802,25 @@ class RandomizationInspector:
             return "No supported task.randomization entries found in this config."
         lines = []
         for target in self.targets:
-            parts = []
-            for axis in AXES:
-                lo, hi = _axis_range(target.rand_range, axis)
-                if lo == 0.0 and hi == 0.0:
-                    continue
-                parts.append(f"{axis}=[{lo:.6f}, {hi:.6f}]")
-            if target.rand_range.collision_radius != 0.05:
-                parts.append(
-                    f"collision_radius={float(target.rand_range.collision_radius):.6f}"
+            for region_index, rand_range in enumerate(target.regions):
+                reference = rand_range.reference
+                reference_label = (
+                    reference.value
+                    if isinstance(reference, RandomizationReference)
+                    else reference
                 )
-            lines.append(f"{target.label}: " + (", ".join(parts) or "all zero"))
+                parts = [f"reference={reference_label}"]
+                for axis in _active_region_axes(rand_range):
+                    lo, hi = _axis_range(rand_range, axis)
+                    parts.append(f"{axis}=[{lo:.6f}, {hi:.6f}]")
+                if rand_range.collision_radius != 0.05:
+                    parts.append(
+                        f"collision_radius={float(rand_range.collision_radius):.6f}"
+                    )
+                lines.append(
+                    f"{_region_label(target, region_index)}: "
+                    + (", ".join(parts) or "all zero")
+                )
         return "\n".join(lines)
 
     def _set_state_text(self, text: str) -> None:
@@ -753,6 +841,10 @@ class RandomizationInspector:
             pose = target.get_current_pose().select(0)
             roll, pitch, yaw = quaternion_to_rpy(pose.orientation[0])
             lines.append(target.label)
+            if case is not None and target.key in case.region_indices_by_target:
+                region_index = case.region_indices_by_target[target.key]
+                if 0 <= region_index < len(target.regions):
+                    lines.append(f"  selected_region: {region_index}")
             lines.append(f"  position: [{_fmt(pose.position[0])}]")
             lines.append(f"  quat(xyzw): [{_fmt(pose.orientation[0])}]")
             lines.append(f"  rpy: [{_fmt((roll, pitch, yaw))}]")
@@ -787,18 +879,16 @@ class RandomizationInspector:
     def _sorted_targets_for_apply(self) -> List[RandomizationTarget]:
         """Order targets so entity-name-referenced entries resolve after their
         referents (delta-carry depends on the referenced pose being sampled)."""
-        try:
-            entity_order = self.backend._randomization_order()
-        except Exception:
-            return list(self.targets)
-        order_index = {name: idx for idx, name in enumerate(entity_order)}
+        action_order = self.backend._randomization_order()
+        order_index = {name: idx for idx, name in enumerate(action_order)}
 
         def sort_key(target: RandomizationTarget) -> tuple:
-            _, _, entity = target.key.partition(":")
-            # within one operator entity, base must be applied before eef so
-            # that an eef referencing "<name>.base" sees the sampled base.
+            action_key = self._sampled_pose_key(target)
             attr_priority = 0 if target.key.startswith("operator-base:") else 1
-            return (order_index.get(entity, len(order_index)), attr_priority)
+            return (
+                order_index.get(action_key, len(order_index)),
+                attr_priority,
+            )
 
         return sorted(self.targets, key=sort_key)
 
@@ -817,7 +907,14 @@ class RandomizationInspector:
         sampled_poses: Dict[str, PoseState] = {}
         for target in self._sorted_targets_for_apply():
             offsets = case.offsets_by_target.get(target.key) or {}
-            reference = target.rand_range.reference
+            region_index = case.region_indices_by_target.get(target.key, 0)
+            if not 0 <= region_index < len(target.regions):
+                raise ValueError(
+                    f"Case '{case.name}' selects invalid region {region_index} "
+                    f"for target '{target.key}' (expected 0..{len(target.regions) - 1})"
+                )
+            rand_range = target.regions[region_index]
+            reference = rand_range.reference
             if (
                 reference == RandomizationReference.ABSOLUTE_BASE
                 and target.get_base_pose is not None
@@ -830,14 +927,14 @@ class RandomizationInspector:
                 sampled_in_base = _with_offsets(
                     default_in_base,
                     offsets,
-                    target.rand_range,
+                    rand_range,
                 )
                 sampled_pose = compose_pose(base_world, sampled_in_base)
             elif isinstance(reference, RandomizationReference):
                 sampled_pose = _with_offsets(
                     target.get_default_pose(),
                     offsets,
-                    target.rand_range,
+                    rand_range,
                 )
             else:
                 # Entity-name reference: carry the referenced entity's delta
@@ -848,7 +945,7 @@ class RandomizationInspector:
                     sampled_poses,
                     target.get_default_pose(),
                 )
-                sampled_pose = _with_offsets(base_pose, offsets, target.rand_range)
+                sampled_pose = _with_offsets(base_pose, offsets, rand_range)
             target.apply_pose(sampled_pose)
             sample_key = self._sampled_pose_key(target)
             if sample_key is not None:
@@ -884,19 +981,25 @@ class RandomizationInspector:
 
     def apply_random_sample(self) -> None:
         offsets_by_target: Dict[str, Dict[str, float]] = {}
+        region_indices_by_target: Dict[str, int] = {}
         for target in self.targets:
+            region_index = _sample_region_index(self.rng, len(target.regions))
+            region_indices_by_target[target.key] = region_index
+            rand_range = target.regions[region_index]
             offsets = {}
-            for axis in AXES:
-                low, high = _axis_range(target.rand_range, axis)
-                if low == 0.0 and high == 0.0:
-                    continue
+            for axis in _active_region_axes(rand_range):
+                low, high = _axis_range(rand_range, axis)
                 offsets[axis] = float(self.rng.uniform(low, high))
             if offsets:
                 offsets_by_target[target.key] = offsets
         case = ExtremeCase(
             name="random-sample",
-            description="A fresh random sample drawn uniformly from each configured range.",
+            description=(
+                "A fresh random sample drawn uniformly from one selected "
+                "region per target and each configured range."
+            ),
             offsets_by_target=offsets_by_target,
+            region_indices_by_target=region_indices_by_target,
         )
         self._apply_case(case)
 

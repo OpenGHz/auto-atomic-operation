@@ -19,11 +19,43 @@ python examples/tune_randomization_extremes.py --config-name arrange_flowers
 
 The default config is `pick_and_place`. The script extracts the `task.randomization` section from the YAML config and builds a set of extreme cases.
 
+### Multiple disjoint regions
+
+An object (or an operator `base` / `eef` entry) may define mutually exclusive
+candidate regions with `regions`:
+
+```yaml
+task:
+  randomization:
+    source_block:
+      regions:
+        - reference: absolute_world
+          x: [0.20, 0.30]
+          y: [-0.10, 0.00]
+        - reference: absolute_world
+          x: [0.60, 0.70]
+          y: [0.10, 0.20]
+    arm:
+      eef:
+        regions:
+          - x: [-0.02, 0.02]
+          - x: [0.20, 0.24]
+```
+
+The inspector keeps one physical target per entry. Every generated case selects
+at most one region for that target; regions are never applied simultaneously.
+Each region gets its own all-min/all-max and per-axis min/max cases, and the
+`Random Sample` button selects one region uniformly before sampling that
+region's axes. The current-pose panel reports the selected zero-based region
+index. A region with only `reference` / `collision_radius` and no configured
+axis still gets region-qualified all-min/all-max entries so it can be selected
+and inspected explicitly.
+
 ## Control panel
 
 The tkinter panel provides:
 
-- **Randomization summary** -- shows all randomized targets with their axis ranges
+- **Randomization summary** -- shows every region's reference, axis ranges, and non-default collision radius
 - **Extreme case selector** -- dropdown to pick a case, with Prev/Next buttons
 - **Apply / Reset Default** -- apply the selected case or return to the nominal pose
 - **Random Sample** -- draw a fresh random sample uniformly from each configured range
@@ -38,12 +70,23 @@ The inspector automatically generates these cases from the config:
 | Case | Description |
 |---|---|
 | `default` | No randomization offset; all targets at nominal pose |
-| `all-min` | Every randomized axis at its minimum value simultaneously |
-| `all-max` | Every randomized axis at its maximum value simultaneously |
+| `all-min` | Every randomized axis at its minimum value simultaneously (the first region is used for multi-region targets) |
+| `all-max` | Every randomized axis at its maximum value simultaneously (the first region is used for multi-region targets) |
 | `<target> <axis>=min` | Single target, single axis at minimum; everything else at default |
 | `<target> <axis>=max` | Single target, single axis at maximum; everything else at default |
 
-This covers all corners of the randomization space. If any case pushes an object outside the workspace, off the table, or into collision, the range should be tightened.
+For multi-region targets, region-qualified cases are named
+`<target> [region N] ...` and include region-level all-min/all-max cases in
+addition to the per-axis cases. This gives every configured region an
+independent inspection path without turning disjoint regions into simultaneous
+targets.
+
+These cases cover each axis endpoint plus the synchronized all-min/all-max
+states. They do not exhaust mixed corners such as `x=min, y=max`, every
+multi-target combination, or every cross-region combination. Use Random Sample
+and task-specific checks for those combinations. If a generated case pushes an
+object outside the workspace, off the table, or into collision, the range
+should be tightened.
 
 `default` is the current YAML-defined baseline after initial pose/state
 overrides have been applied. Operators with `initial_state` are shown even if
@@ -55,7 +98,7 @@ and gripper control.
 
 1. Configure `task.randomization` in your YAML config (see [Pose Randomization](../task-configuration/randomization.md))
 2. Run this inspector to visually verify the extremes
-3. Use `all-min` and `all-max` to check the worst-case simultaneous offsets
+3. Use `all-min` and `all-max` to check the two same-direction simultaneous endpoint states
 4. Step through per-axis cases to identify which specific axis causes problems
 5. Use `Random Sample` to spot-check typical randomized states
 6. Edit your YAML `initial_pose`, operator `initial_state`, or randomization ranges and press `Reload Randomization` to iterate without restarting
