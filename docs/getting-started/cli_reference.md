@@ -1,7 +1,8 @@
 # CLI Reference
 
-The package provides three console entry points. `aao-demo` and `aao-eval` are
-powered by [Hydra](https://hydra.cc); `aao-info` introspects the task configs.
+The package provides four console entry points. `aao-demo` and `aao-eval` are
+powered by [Hydra](https://hydra.cc), `aao-unidoor-sweep` orchestrates bounded
+Hydra multiruns, and `aao-info` introspects the task configs.
 
 ## aao-demo
 
@@ -110,6 +111,76 @@ Each run writes a `summary.json` to the Hydra output directory
 completion steps, timing, and failure reasons. `updates_used` includes the
 untimed warmup update; `timed_updates` and `loop_frequency_hz` exclude it.
 Timing covers only update execution, not interactive waits or console output.
+
+## aao-unidoor-sweep
+
+Run the UniDoor door/handle product space as a strictly serial Hydra matrix and
+write a machine-readable result for every expected combination. IDs come from
+the component index declared by the scene asset package, so the tested matrix
+and the assets loaded by the task have one source of truth.
+
+```bash
+# All 55 doors x 47 handles (2,585 jobs)
+aao-unidoor-sweep
+
+# A smaller Cartesian product, in the specified order
+aao-unidoor-sweep \
+  --doors D001,D002 \
+  --handles H001,H004,HL001
+```
+
+Hydra's basic launcher is serial, but it retains each job in the same Python
+process. The wrapper therefore starts bounded multiruns (six jobs per process
+by default) and waits for each one before starting the next. This keeps the
+combination order serial while releasing simulator resources between batches.
+Change the bound with `--launcher-batch-size`; do not use Hydra's
+`hydra.sweeper.max_batch_size=1`, because an exceptional job can then prevent
+later batches from running.
+
+Every job uses `env.batch_size=1`, the configured task seed (42 by default),
+and a disabled viewer. It preserves the task's cameras, sensors, timeouts,
+control rates, and callback behavior. A full catalog run takes hours; use a
+subset first when validating a new task configuration.
+
+### Sweep outputs and failure records
+
+The default root is `outputs/unidoor-sweeps/<timestamp>/`:
+
+```text
+sweep_manifest.json   # expected jobs, exact argv, catalog hashes, Git state
+sweep.log             # combined stdout/stderr from every Hydra batch
+report.json           # one structured result per expected combination
+failures.csv          # only non-success combinations, with reproduction commands
+batches/...           # Hydra configs, demo.log, and per-job summary.json files
+```
+
+`report.json` and `failures.csv` distinguish five states:
+
+| State | Meaning |
+|---|---|
+| `SUCCESS` | Every recorded round and environment succeeded |
+| `TASK_FAILURE` | The simulation completed and wrote a valid task failure |
+| `NO_SUMMARY` | Hydra created the job directory but no `summary.json` was written |
+| `NOT_STARTED` | The manifest expected the job, but Hydra never created its directory |
+| `INVALID_SUMMARY` | `summary.json` exists but cannot be parsed or has no valid rounds |
+
+A task-level failure does not make `aao-demo` itself return nonzero, so the
+sweep always classifies the summaries rather than relying on Hydra's return
+code. Each failed row includes a standalone `reproduce_command` with the exact
+door, handle, seed, rounds, and update limit.
+
+Rebuild the reports without starting simulations, or resume only combinations
+with missing/invalid results in versioned attempt directories:
+
+```bash
+aao-unidoor-sweep --report outputs/unidoor-sweeps/20260827-180000
+aao-unidoor-sweep --resume outputs/unidoor-sweeps/20260827-180000
+```
+
+Exit code `0` means every combination succeeded, `1` means only task-level
+failures occurred, `2` means at least one job was not started or produced no
+valid summary, and `130` means the sweep was interrupted. Reports are written
+before returning any of these nonzero codes.
 
 ## aao-eval
 
