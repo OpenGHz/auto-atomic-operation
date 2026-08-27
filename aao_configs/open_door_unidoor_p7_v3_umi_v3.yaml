@@ -66,7 +66,10 @@ task:
             max_linear_step: 0.04
             max_angular_step: 0.2
             tolerance:
-              position: 0.002
+              # Catalog-wide controller residuals normally settle below
+              # 3.5 mm.  Keep this stricter than the 8 mm operator default,
+              # then let PICK's target-specific grasp check decide success.
+              position: 0.004
 
     - name: pull_handle
       object: door__door_handle

@@ -883,7 +883,11 @@ def test_demo_final_approach_targets_the_explicit_grasp_site() -> None:
     assert pick_stage.operation == "pick"
     assert pick_stage.site == "door__handle_grasp_center"
     assert list(pick_stage.param.pre_move[-1].position) == [0.02, 0.0, 0.0]
-    assert pick_stage.param.pre_move[-1].tolerance.position == pytest.approx(0.002)
+    assert pick_stage.param.pre_move[-1].tolerance.position == pytest.approx(0.004)
+    assert (
+        pick_stage.param.pre_move[-1].tolerance.position
+        < config.task_operators.arm.control.tolerance.position
+    )
     assert "eef" not in pick_stage.param
     assert pull_stage.name == "pull_handle"
     assert pull_stage.operation == "pull"
