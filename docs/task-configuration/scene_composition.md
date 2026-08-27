@@ -92,6 +92,18 @@ assembly template，必须显式记录。运行时 adapter 不从 `hinge_side` �
 将 `product_space.json` 作为该 package 的私有 component index，并校验选中 manifest
 和 mesh 的 SHA-256；`combinations/` 只作为结构回归 oracle。
 
+把手 component 可以声明 `motrixsim_acd_convex_parts_v1` collision supplement。
+adapter 会校验 sidecar 路径、文件哈希、component/source/handedness identity、固定
+slot 顺序、每个凸块的几何哈希和启用数量，然后为每个启用凸块分别生成一个 inline
+MJCF mesh geom。不同凸块不会合并，因为 MuJoCo 对单个 mesh 使用凸包碰撞，合并会
+丢失凸分解的接触形状；`collision_enabled=false` 的固定拓扑占位槽不会进入模型。
+
+碰撞表示与动力学质量相互独立：所有 ACD geom 都使用零 density，把手 body 使用
+与原 AABB 表示相同的 `0.25 kg` 显式质量和 bounds-derived inertia，因此替换把手或
+改变凸块数量不会放大质量。未声明 collision supplement 的 component 继续使用
+`handle_bounds_m` 的单个 AABB；一旦声明了 supplement，缺文件、未知 representation、
+哈希或拓扑错误都会终止编译，不会静默退回 AABB。
+
 ## UniDoor 示例
 
 完整任务见 `aao_configs/open_door_unidoor_p7_v3_umi_v3.yaml`。该任务使用

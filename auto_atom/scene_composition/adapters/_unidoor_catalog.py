@@ -4,10 +4,11 @@ The generic adapter is the only caller of this module.  Host-scene merging,
 namespacing and model loading stay in the generic composition pipeline; this
 module only validates the selected catalog records and emits an MJCF fragment.
 
-Only the normalized catalog contract is consumed here.  Source DAE/URDF files,
-Praxis Python modules, and the optional ACD collision sidecar are not required
-to compile the visual/AABB model.  ACD metadata remains available in the
-component manifests for a future collision adapter.
+Only the normalized catalog contract is consumed here. Source DAE/URDF files
+and Praxis Python modules are not runtime dependencies. Handle manifests may
+declare the versioned MotrixSim ACD collision supplement; when present, its
+verified enabled convex parts are emitted as inline MJCF meshes. Assets that
+do not declare that representation retain the catalog AABB collision fallback.
 """
 
 from __future__ import annotations
@@ -21,6 +22,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from ._unidoor_collision import (
+    HandleCollisionSupplement,
+    load_handle_collision_supplement,
+)
+
 _COLLISION_CLASS = "unidoor_door_collision"
 _MESH_NAMES = {
     "frame": "unidoor_frame_mesh",
@@ -28,6 +34,7 @@ _MESH_NAMES = {
     "handle": "unidoor_handle_mesh",
     "lock": "unidoor_lock_mesh",
 }
+_HANDLE_COLLISION_MESH_PREFIX = "unidoor_handle_collision_"
 
 
 @dataclass(frozen=True)
@@ -77,6 +84,11 @@ def _build_unidoor_fragment(config: _UniDoorCatalogConfig) -> ET.Element:
     )
     grasp_offset = _vector3(handle_geometry.get("grasp_offset_m"), "grasp_offset_m")
     handle_bounds = _bounds(handle_geometry.get("handle_bounds_m"), "handle_bounds_m")
+    handle_collision = load_handle_collision_supplement(
+        root,
+        handle,
+        verify_hashes=config.verify_hashes,
+    )
     panel_bounds, frame_bands = _door_collision_geometry(
         root, door, door_geometry, config.verify_hashes
     )
@@ -123,6 +135,8 @@ def _build_unidoor_fragment(config: _UniDoorCatalogConfig) -> ET.Element:
             "mesh",
             {"name": _MESH_NAMES["lock"], "file": _absolute_posix(lock_path)},
         )
+    if handle_collision is not None:
+        _append_handle_collision_mesh_assets(asset, handle_collision)
 
     defaults = ET.SubElement(model_root, "default")
     collision_default = ET.SubElement(defaults, "default", {"class": _COLLISION_CLASS})
@@ -248,9 +262,17 @@ def _build_unidoor_fragment(config: _UniDoorCatalogConfig) -> ET.Element:
         max((handle_bounds[1][index] - handle_bounds[0][index]) / 2, 0.001)
         for index in range(3)
     )
-    _append_box(
-        handle_body, "handle_lever_collision", handle_center, handle_size, mass="0.25"
-    )
+    if handle_collision is None:
+        _append_box(
+            handle_body,
+            "handle_lever_collision",
+            handle_center,
+            handle_size,
+            density="0",
+        )
+    else:
+        _append_handle_collision_geoms(handle_body, handle_collision)
+    _append_handle_inertial(handle_body, handle_center, handle_size)
     ET.SubElement(
         handle_body,
         "geom",
@@ -366,6 +388,23 @@ def _build_unidoor_fragment(config: _UniDoorCatalogConfig) -> ET.Element:
     ET.SubElement(
         custom, "text", {"name": "unidoor_handle_asset_id", "data": config.handle_id}
     )
+    if handle_collision is not None:
+        ET.SubElement(
+            custom,
+            "text",
+            {
+                "name": "unidoor_handle_collision_representation",
+                "data": "motrixsim_acd_convex_parts_v1",
+            },
+        )
+        ET.SubElement(
+            custom,
+            "numeric",
+            {
+                "name": "unidoor_handle_collision_part_count",
+                "data": _fmt((handle_collision.actual_part_count,)),
+            },
+        )
     ET.SubElement(custom, "text", {"name": "unidoor_hinge_side", "data": hinge_side})
     ET.SubElement(
         custom,
@@ -672,6 +711,7 @@ def _append_box(
     size: Sequence[float],
     *,
     mass: str | None = None,
+    density: str | None = None,
 ) -> None:
     attributes = {
         "name": name,
@@ -683,7 +723,69 @@ def _append_box(
     }
     if mass is not None:
         attributes["mass"] = mass
+    if density is not None:
+        attributes["density"] = density
     ET.SubElement(parent, "geom", attributes)
+
+
+def _append_handle_collision_mesh_assets(
+    asset: ET.Element, supplement: HandleCollisionSupplement
+) -> None:
+    for part in supplement.enabled_parts:
+        ET.SubElement(
+            asset,
+            "mesh",
+            {
+                "name": _handle_collision_mesh_name(part.name),
+                "vertex": _fmt(value for vertex in part.vertices_m for value in vertex),
+                "face": " ".join(str(value) for face in part.faces for value in face),
+            },
+        )
+
+
+def _append_handle_collision_geoms(
+    parent: ET.Element, supplement: HandleCollisionSupplement
+) -> None:
+    for part in supplement.enabled_parts:
+        ET.SubElement(
+            parent,
+            "geom",
+            {
+                "name": f"handle_lever_collision_{part.name}",
+                "type": "mesh",
+                "mesh": _handle_collision_mesh_name(part.name),
+                "group": "3",
+                "class": _COLLISION_CLASS,
+                "density": "0",
+            },
+        )
+
+
+def _append_handle_inertial(
+    parent: ET.Element,
+    center: Sequence[float],
+    half_size: Sequence[float],
+) -> None:
+    mass = 0.25
+    hx, hy, hz = (float(value) for value in half_size)
+    inertia = (
+        mass / 3.0 * (hy * hy + hz * hz),
+        mass / 3.0 * (hx * hx + hz * hz),
+        mass / 3.0 * (hx * hx + hy * hy),
+    )
+    ET.SubElement(
+        parent,
+        "inertial",
+        {
+            "pos": _fmt(center),
+            "mass": _fmt((mass,)),
+            "diaginertia": _fmt(inertia),
+        },
+    )
+
+
+def _handle_collision_mesh_name(part_name: str) -> str:
+    return f"{_HANDLE_COLLISION_MESH_PREFIX}{part_name}"
 
 
 def _joint_attributes(

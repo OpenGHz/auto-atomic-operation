@@ -67,3 +67,9 @@ references, frames, anchors, mechanism data, integrity records, and provenance.
 Legacy vendor manifests may be retained as provenance but are not the runtime
 contract.
 _Avoid_: Combination XML catalog, vendor product-space file
+
+**Collision supplement**:
+A versioned scene-asset record that supplies a component's physical collision
+representation independently of its visual artifact. Its frame and identity
+are bound to the component manifest.
+_Avoid_: Collision metadata, visual mesh

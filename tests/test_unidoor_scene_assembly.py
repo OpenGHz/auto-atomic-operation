@@ -27,6 +27,33 @@ def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def _json_sha256(value: object) -> str:
+    return hashlib.sha256(
+        json.dumps(
+            value,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+def _collision_part(
+    name: str,
+    vertices: list[list[float]],
+    faces: list[list[int]],
+    *,
+    enabled: bool,
+) -> dict:
+    geometry = {"vertices_m": vertices, "faces": faces}
+    return {
+        "name": name,
+        "collision_enabled": enabled,
+        **geometry,
+        "geometry_sha256": _json_sha256(geometry),
+    }
+
+
 def _write_obj(path: Path, *, scale: float = 1.0) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
@@ -235,6 +262,140 @@ def tiny_catalog(tmp_path: Path) -> Path:
     return root
 
 
+@pytest.fixture()
+def tiny_acd_catalog(tiny_catalog: Path) -> Path:
+    """Add a two-part ACD sidecar without changing the AABB fallback fixture."""
+
+    handle_dir = tiny_catalog / "components" / "handles" / "H003"
+    component_path = handle_dir / "component.json"
+    component = json.loads(component_path.read_text(encoding="utf-8"))
+    source_mesh_sha256 = component["outputs"]["handle"]["sha256"]
+    component["source_id"] = "tiny-h003"
+
+    tetrahedron_vertices = [
+        [0.0, 0.0, 0.0],
+        [0.02, 0.0, 0.0],
+        [0.0, 0.02, 0.0],
+        [0.0, 0.0, 0.02],
+    ]
+    tetrahedron_faces = [
+        [0, 2, 1],
+        [0, 1, 3],
+        [0, 3, 2],
+        [1, 2, 3],
+    ]
+    bipyramid_vertices = [
+        [0.04, 0.0, 0.0],
+        [0.06, 0.0, 0.0],
+        [0.05, 0.02, 0.0],
+        [0.05, 0.01, 0.02],
+        [0.05, 0.01, -0.02],
+    ]
+    bipyramid_faces = [
+        [0, 1, 3],
+        [1, 2, 3],
+        [2, 0, 3],
+        [1, 0, 4],
+        [2, 1, 4],
+        [0, 2, 4],
+    ]
+    disabled_vertices = [
+        [0.0, 0.0, 0.0],
+        [0.001, 0.0, 0.0],
+        [0.0, 0.001, 0.0],
+        [0.0, 0.0, 0.001],
+    ]
+    parts = [
+        _collision_part(
+            "part_000",
+            tetrahedron_vertices,
+            tetrahedron_faces,
+            enabled=True,
+        ),
+        _collision_part(
+            "part_001",
+            bipyramid_vertices,
+            bipyramid_faces,
+            enabled=True,
+        ),
+    ]
+    parts.extend(
+        _collision_part(
+            f"part_{index:03d}",
+            disabled_vertices,
+            tetrahedron_faces,
+            enabled=False,
+        )
+        for index in range(2, 42)
+    )
+    enabled_geometry_hashes = [
+        part["geometry_sha256"] for part in parts if part["collision_enabled"]
+    ]
+    artifact_manifest_sha256 = "a" * 64
+    artifact_collection_sha256 = "b" * 64
+    artifact_asset_set_sha256 = _json_sha256(
+        {
+            "asset_id": "H003",
+            "source_mesh_sha256": source_mesh_sha256,
+            "part_geometry_sha256": enabled_geometry_hashes,
+        }
+    )
+    sidecar = {
+        "schema_version": "1.0",
+        "package_kind": "unidoor_component_collision_supplement",
+        "representation": "motrixsim_acd_convex_parts_v1",
+        "model_version": "unidoor-handle-runtime-motrixsim-acd-v1",
+        "asset_id": "H003",
+        "asset_kind": "handle",
+        "source_id": "tiny-h003",
+        "source_mesh_sha256": source_mesh_sha256,
+        "handedness": {
+            "hinge_side": "right",
+            "matrix": [[-1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+            "transform_id": "door-hinge-x-reflection-v1",
+            "identity_sha256": (
+                "d629f199482168c681d87aae599aebfad4e1c41316018a6a8aaca9a9c7a90a8d"
+            ),
+        },
+        "actual_part_count": 2,
+        "topology_slot_count": 42,
+        "artifact_manifest_sha256": artifact_manifest_sha256,
+        "artifact_collection_sha256": artifact_collection_sha256,
+        "artifact_asset_set_sha256": artifact_asset_set_sha256,
+        "parts": parts,
+    }
+    sidecar_path = handle_dir / "collision" / "motrixsim_acd_v1.json"
+    sidecar_path.parent.mkdir(parents=True)
+    sidecar_path.write_text(json.dumps(sidecar), encoding="utf-8")
+    component["collision_supplement"] = {
+        "path": "components/handles/H003/collision/motrixsim_acd_v1.json",
+        "sha256": _sha256(sidecar_path),
+        "schema_version": "1.0",
+        "representation": "motrixsim_acd_convex_parts_v1",
+        "asset_id": "H003",
+        "asset_kind": "handle",
+        "source_mesh_sha256": source_mesh_sha256,
+        "actual_part_count": 2,
+        "topology_slot_count": 42,
+        "artifact_manifest_sha256": artifact_manifest_sha256,
+        "artifact_collection_sha256": artifact_collection_sha256,
+        "artifact_asset_set_sha256": artifact_asset_set_sha256,
+        "hinge_side": "right",
+    }
+    component_path.write_text(json.dumps(component), encoding="utf-8")
+
+    product_path = tiny_catalog / "product_space.json"
+    product = json.loads(product_path.read_text(encoding="utf-8"))
+    handle_reference = next(
+        reference
+        for reference in product["components"]["handles"]
+        if reference["asset_id"] == "H003"
+    )
+    handle_reference["manifest_sha256"] = _sha256(component_path)
+    product_path.write_text(json.dumps(product), encoding="utf-8")
+    return tiny_catalog
+
+
 def _write_host(path: Path) -> None:
     path.write_text(
         '<mujoco model="host"><worldbody><body name="host"/></worldbody></mujoco>',
@@ -307,6 +468,203 @@ def test_build_tiny_unidoor_scene_contains_contract_names(tiny_catalog: Path) ->
     )
     assert artifact.semantic_refs["door.door.hinge.joint"] == "door__door_hinge"
     assert artifact.semantic_refs["door.latch.constraint"] == "door__door_latch_lock"
+
+
+def test_handle_collision_falls_back_to_aabb_without_supplement(
+    tiny_catalog: Path,
+) -> None:
+    mujoco = pytest.importorskip("mujoco")
+
+    model = mujoco.MjModel.from_xml_string(compile_scene(_config(tiny_catalog)).xml)
+    handle_body_id = mujoco.mj_name2id(
+        model, mujoco.mjtObj.mjOBJ_BODY, "door__door_handle"
+    )
+    collision_geom_ids = [
+        geom_id
+        for geom_id in range(model.ngeom)
+        if int(model.geom_bodyid[geom_id]) == handle_body_id
+        and int(model.geom_contype[geom_id]) != 0
+    ]
+
+    assert len(collision_geom_ids) == 1
+    collision_geom_id = collision_geom_ids[0]
+    assert model.geom_type[collision_geom_id] == mujoco.mjtGeom.mjGEOM_BOX
+    assert model.geom_size[collision_geom_id].tolist() == pytest.approx(
+        [0.1, 0.03, 0.03]
+    )
+    assert model.body_mass[handle_body_id] == pytest.approx(0.25)
+    expected_inertia = [0.00015, 0.0009083333333333334, 0.0009083333333333334]
+    assert model.body_inertia[handle_body_id].tolist() == pytest.approx(
+        expected_inertia
+    )
+
+
+def test_handle_acd_parts_are_loaded_as_convex_mesh_geoms(
+    tiny_acd_catalog: Path,
+) -> None:
+    mujoco = pytest.importorskip("mujoco")
+
+    artifact = compile_scene(_config(tiny_acd_catalog))
+    model = mujoco.MjModel.from_xml_string(artifact.xml)
+    handle_body_id = mujoco.mj_name2id(
+        model, mujoco.mjtObj.mjOBJ_BODY, "door__door_handle"
+    )
+    collision_geom_ids = [
+        geom_id
+        for geom_id in range(model.ngeom)
+        if int(model.geom_bodyid[geom_id]) == handle_body_id
+        and int(model.geom_contype[geom_id]) != 0
+    ]
+
+    # Only the two enabled slots become collision geoms; the 40 fixed-topology
+    # placeholders remain provenance data and never enter the MuJoCo model.
+    assert len(collision_geom_ids) == 2
+    assert all(
+        model.geom_type[geom_id] == mujoco.mjtGeom.mjGEOM_MESH
+        for geom_id in collision_geom_ids
+    )
+    assert all(int(model.geom_contype[geom_id]) == 16 for geom_id in collision_geom_ids)
+    assert all(
+        int(model.geom_conaffinity[geom_id]) == 6 for geom_id in collision_geom_ids
+    )
+    mesh_ids = [int(model.geom_dataid[geom_id]) for geom_id in collision_geom_ids]
+    assert len(set(mesh_ids)) == 2
+    assert sorted(
+        (int(model.mesh_vertnum[mesh_id]), int(model.mesh_facenum[mesh_id]))
+        for mesh_id in mesh_ids
+    ) == [(4, 4), (5, 6)]
+    assert model.body_mass[handle_body_id] == pytest.approx(0.25)
+    expected_inertia = [0.00015, 0.0009083333333333334, 0.0009083333333333334]
+    assert model.body_inertia[handle_body_id].tolist() == pytest.approx(
+        expected_inertia
+    )
+
+    visual_geom_id = mujoco.mj_name2id(
+        model, mujoco.mjtObj.mjOBJ_GEOM, "door__door_handle_visual"
+    )
+    assert model.geom_type[visual_geom_id] == mujoco.mjtGeom.mjGEOM_MESH
+    assert int(model.geom_contype[visual_geom_id]) == 0
+    assert int(model.geom_conaffinity[visual_geom_id]) == 0
+    sidecar_path = (
+        tiny_acd_catalog
+        / "components"
+        / "handles"
+        / "H003"
+        / "collision"
+        / "motrixsim_acd_v1.json"
+    )
+    assert sidecar_path.resolve() in artifact.dependencies
+
+
+def test_handle_collision_supplement_hash_mismatch_is_rejected(
+    tiny_acd_catalog: Path,
+) -> None:
+    sidecar_path = (
+        tiny_acd_catalog
+        / "components"
+        / "handles"
+        / "H003"
+        / "collision"
+        / "motrixsim_acd_v1.json"
+    )
+    sidecar_path.write_text(
+        sidecar_path.read_text(encoding="utf-8") + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="collision supplement sha256 mismatch"):
+        compile_scene(_config(tiny_acd_catalog))
+
+
+def test_handle_collision_supplement_invalid_face_is_rejected(
+    tiny_acd_catalog: Path,
+) -> None:
+    sidecar_path = (
+        tiny_acd_catalog
+        / "components"
+        / "handles"
+        / "H003"
+        / "collision"
+        / "motrixsim_acd_v1.json"
+    )
+    sidecar = json.loads(sidecar_path.read_text(encoding="utf-8"))
+    sidecar["parts"][0]["faces"][0][0] = len(sidecar["parts"][0]["vertices_m"])
+    sidecar_path.write_text(json.dumps(sidecar), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="invalid face index"):
+        compile_scene(_config(tiny_acd_catalog, verify_hashes=False))
+
+
+def test_handle_collision_supplement_unknown_representation_is_rejected(
+    tiny_acd_catalog: Path,
+) -> None:
+    sidecar_path = (
+        tiny_acd_catalog
+        / "components"
+        / "handles"
+        / "H003"
+        / "collision"
+        / "motrixsim_acd_v1.json"
+    )
+    sidecar = json.loads(sidecar_path.read_text(encoding="utf-8"))
+    sidecar["representation"] = "unknown_collision_v1"
+    sidecar_path.write_text(json.dumps(sidecar), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="representation mismatch"):
+        compile_scene(_config(tiny_acd_catalog, verify_hashes=False))
+
+
+def test_real_h004_uses_all_declared_acd_parts_if_assets_are_available() -> None:
+    mujoco = pytest.importorskip("mujoco")
+    root = Path(__file__).resolve().parents[1]
+    catalog = root / "third_party" / "unidoor_lever_catalog_pipeline_right_hinge"
+    package = (
+        root
+        / "assets"
+        / "scene_assets"
+        / "unidoor_lever_right_hinge"
+        / "scene_asset_package.json"
+    )
+    host = root / "assets" / "xmls" / "scenes" / "open_door_unidoor" / "demo.xml"
+    sidecar_path = (
+        catalog
+        / "components"
+        / "handles"
+        / "H004"
+        / "collision"
+        / "motrixsim_acd_v1.json"
+    )
+    if not package.is_file() or not host.is_file() or not sidecar_path.is_file():
+        pytest.skip("local UniDoor H004 collision assets are unavailable")
+
+    artifact = compile_scene(
+        _config(
+            catalog,
+            package=package,
+            host=host,
+            handle="H004",
+        )
+    )
+    model = mujoco.MjModel.from_xml_string(artifact.xml)
+    sidecar = json.loads(sidecar_path.read_text(encoding="utf-8"))
+    enabled_parts = [part for part in sidecar["parts"] if part["collision_enabled"]]
+    handle_body_id = mujoco.mj_name2id(
+        model, mujoco.mjtObj.mjOBJ_BODY, "door__door_handle"
+    )
+    collision_geom_ids = [
+        geom_id
+        for geom_id in range(model.ngeom)
+        if int(model.geom_bodyid[geom_id]) == handle_body_id
+        and int(model.geom_contype[geom_id]) != 0
+    ]
+
+    assert sidecar["actual_part_count"] == len(enabled_parts) == 14
+    assert len(collision_geom_ids) == len(enabled_parts)
+    assert all(
+        model.geom_type[geom_id] == mujoco.mjtGeom.mjGEOM_MESH
+        for geom_id in collision_geom_ids
+    )
+    assert sidecar_path.resolve() in artifact.dependencies
 
 
 def test_xyzw_orientation_is_emitted_as_mjcf_wxyz(tiny_catalog: Path) -> None:

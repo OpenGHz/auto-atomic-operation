@@ -210,7 +210,7 @@ worldbody
         ├── door_handle (门板的子 body，随门板旋转)
         │   ├── handle_hinge (把手下压关节)
         │   ├── door_handle_visual
-        │   ├── handle_lever_collision
+        │   ├── handle_lever_collision_part_* (每个启用 ACD 凸块一个 geom)
         │   └── handle_grasp_center
         └── door_lock (可选，仅 visual)
 ```
@@ -224,11 +224,14 @@ AAO 装配器的最小配置字段如下：
 | `package` | canonical scene asset package descriptor（可指向外部、可迁移 payload） |
 | `adapter` / `selection` | `unidoor.lever_door@1` 与 `door`/`handle` role selection |
 | `placement` / `namespace` | 将 canonical 门环境放入 host scene，并生成稳定 namespaced IDs |
-| `verify_hashes` | 校验选中 manifest、OBJ 和门碰撞 supplement 的 SHA-256 |
+| `verify_hashes` | 校验选中 manifest、OBJ 和 collision supplement 的 SHA-256 |
 
-`verify_hashes=true` 时，路径必须留在 catalog root 内；ACD sidecar 只保留为
-provenance，首版 AAO 采用门的 box supplement 与把手 AABB，不把 Praxis 的
-MotrixSim ACD 凸分解隐式改写成 AAO 碰撞体。
+路径必须留在 catalog root 内。把手声明
+`motrixsim_acd_convex_parts_v1` 时，AAO 会严格校验 sidecar，并将每个
+`collision_enabled=true` 的凸块分别编译成 MuJoCo mesh geom；禁用占位槽不参与
+碰撞或惯量。凸块数量不会改变把手质量，因为 ACD geoms 使用零 density，把手 body
+继续使用显式 `0.25 kg` 质量。没有 sidecar 的 component 才使用
+`handle_bounds_m` AABB fallback；已声明但损坏的 sidecar 不会静默降级。
 
 **拼装后的可视化是有的，但有不同层级：**
 
