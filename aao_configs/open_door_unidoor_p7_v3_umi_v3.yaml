@@ -4,6 +4,8 @@ defaults:
 
 scene_name: open_door_unidoor
 task_name: open_door_unidoor_p7_v3_umi_v3
+door_id: D001
+handle_id: H001
 
 env:
   scene:
@@ -13,8 +15,8 @@ env:
         package: ${oc.env:AAO_UNIDOOR_ASSET_PACKAGE,assets/scene_assets/unidoor_lever_right_hinge/scene_asset_package.json}
         adapter: unidoor.lever_door@1
         selection:
-          door: D001
-          handle: H003
+          door: ${door_id}
+          handle: ${handle_id}
         namespace: door
         # Flip the door around its panel centre (rather than its hinge origin)
         # so the handle and P7 are on the same side while the panel footprint
