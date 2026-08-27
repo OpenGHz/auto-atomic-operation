@@ -12,8 +12,12 @@ from auto_atom.framework import (
     PoseControlConfig,
     TaskFileConfig,
 )
-from auto_atom.backend.mjc.mujoco_backend import MujocoObjectHandler
+from auto_atom.backend.mjc.mujoco_backend import (
+    MujocoObjectHandler,
+    MujocoTaskBackend,
+)
 from auto_atom.runtime import (
+    ContactObservation,
     ControlResult,
     ControlSignal,
     EnvProtocol,
@@ -133,6 +137,14 @@ class _ExternalBackend(SceneBackend):
         _ = operator_name, object_name
         return np.asarray([False], dtype=bool)
 
+    def get_operator_contacts(
+        self,
+        operator_name: str,
+        env_index: int,
+    ) -> Optional[list[ContactObservation]]:
+        _ = operator_name, env_index
+        return None
+
 
 def test_eef_grasp_requirement_only_accepts_close_commands() -> None:
     assert EefControlConfig(close=True, require_grasp=True).require_grasp
@@ -175,6 +187,73 @@ def test_mujoco_object_handler_rejects_wrong_mask_shape() -> None:
 
     with np.testing.assert_raises_regex(ValueError, r"env_mask must have shape \(2,\)"):
         handler.set_pose(PoseState(), env_mask=np.asarray([True]))
+
+
+def test_mujoco_backend_observes_named_operator_contacts() -> None:
+    mujoco = pytest.importorskip("mujoco")
+    model = mujoco.MjModel.from_xml_string(
+        """
+        <mujoco>
+          <option gravity="0 0 0"/>
+          <worldbody>
+            <body name="operator_root">
+              <freejoint/>
+              <geom name="finger_geom" type="sphere" size="0.1"
+                    margin="0.02" gap="0.018"/>
+            </body>
+            <body name="door_panel">
+              <freejoint/>
+              <geom name="door_geom" type="box" size="0.1 0.1 0.1"/>
+            </body>
+            <body name="nearby_panel" pos="0.225 0 0">
+              <freejoint/>
+              <geom name="nearby_geom" type="box" size="0.1 0.1 0.1"
+                    margin="0.02" gap="0.018"/>
+            </body>
+          </worldbody>
+        </mujoco>
+        """
+    )
+    data = mujoco.MjData(model)
+    mujoco.mj_forward(model, data)
+    env = SimpleNamespace(
+        batch_size=1,
+        envs=[SimpleNamespace(model=model, data=data)],
+    )
+    operator_body_id = mujoco.mj_name2id(
+        model,
+        mujoco.mjtObj.mjOBJ_BODY,
+        "operator_root",
+    )
+    operator = SimpleNamespace(
+        get_operator_body_ids=lambda _model: frozenset({operator_body_id}),
+    )
+    door = MujocoObjectHandler(name="door", env=env, body_name="door_panel")
+    nearby = MujocoObjectHandler(name="nearby", env=env, body_name="nearby_panel")
+    backend = MujocoTaskBackend(
+        env=env,
+        operator_handlers={"arm": operator},
+        object_handlers={"door": door, "nearby": nearby},
+    )
+    assert any(int(data.contact[index].efc_address) < 0 for index in range(data.ncon))
+
+    contacts = backend.get_operator_contacts("arm", 0)
+
+    assert contacts is not None
+    assert len(contacts) == 1
+    contact = contacts[0]
+    assert contact.operator_body == "operator_root"
+    assert contact.operator_geom == "finger_geom"
+    assert contact.other_body == "door_panel"
+    assert contact.other_geom == "door_geom"
+    assert contact.signed_distance_m < 0.0
+    assert contact.penetration_depth_m > 0.0
+    assert len(contact.position_world_m) == 3
+    assert contact.normal_force_n is not None
+    assert np.isfinite(contact.normal_force_n)
+    assert contact.normal_force_n >= 0.0
+    assert backend.is_operator_contacting("arm", "door").tolist() == [True]
+    assert backend.is_operator_contacting("arm", "nearby").tolist() == [False]
 
 
 def test_object_handler_rejects_empty_identity() -> None:

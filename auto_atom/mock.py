@@ -15,6 +15,7 @@ from .framework import (
 )
 from .runtime import (
     ComponentRegistry,
+    ContactObservation,
     ControlResult,
     ControlSignal,
     ObjectHandler,
@@ -258,6 +259,18 @@ class MockSceneBackend(SceneBackend):
         _ = self.get_operator_handler(operator_name)
         _ = self.get_object_handler(object_name)
         return np.zeros(self.batch_size, dtype=bool)
+
+    def get_operator_contacts(
+        self,
+        operator_name: str,
+        env_index: int,
+    ) -> Optional[List[ContactObservation]]:
+        _ = self.get_operator_handler(operator_name)
+        if not 0 <= env_index < self.batch_size:
+            raise IndexError(
+                f"env_index must be in [0, {self.batch_size}), got {env_index}"
+            )
+        return []
 
     def get_grasped_object_name(
         self,

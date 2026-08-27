@@ -563,6 +563,7 @@ def _summary_result(
         "round_statuses": [],
         "final_stage": [],
         "failure_reasons": [],
+        "failure_records": [],
     }
     if not job_dir.exists():
         result["failure_reasons"] = ["Hydra job directory was not created."]
@@ -628,6 +629,13 @@ def _summary_result(
         if isinstance(reasons, list):
             result["failure_reasons"].extend(
                 str(reason) for reason in reasons if reason is not None
+            )
+        failure_records = round_result.get("failure_records")
+        if isinstance(failure_records, list):
+            result["failure_records"].extend(
+                {**record, "round_index": index - 1}
+                for record in failure_records
+                if isinstance(record, dict)
             )
 
     if invalid_reasons:
@@ -761,6 +769,7 @@ def _write_failures_csv(path: Path, results: Sequence[dict[str, Any]]) -> None:
         "job_dir",
         "final_stage",
         "failure_reason",
+        "contact_pairs",
         "reproduce_command",
     ]
     temporary = path.with_name(f".{path.name}.tmp")
@@ -780,10 +789,32 @@ def _write_failures_csv(path: Path, results: Sequence[dict[str, Any]]) -> None:
                     "job_dir": result["job_dir"],
                     "final_stage": "; ".join(result["final_stage"]),
                     "failure_reason": " | ".join(result["failure_reasons"]),
+                    "contact_pairs": _contact_pairs(result),
                     "reproduce_command": result["reproduce_command"],
                 }
             )
     temporary.replace(path)
+
+
+def _contact_pairs(result: dict[str, Any]) -> str:
+    pairs: list[str] = []
+    for record in result.get("failure_records", []):
+        details = record.get("details", {}) if isinstance(record, dict) else {}
+        snapshot = (
+            details.get("operator_contact_snapshot", {})
+            if isinstance(details, dict)
+            else {}
+        )
+        contacts = snapshot.get("contacts", []) if isinstance(snapshot, dict) else []
+        for contact in contacts:
+            if not isinstance(contact, dict):
+                continue
+            operator_geom = contact.get("operator_geom", "<operator>")
+            other_geom = contact.get("other_geom", "<scene>")
+            pair = f"{operator_geom} -> {other_geom}"
+            if pair not in pairs:
+                pairs.append(pair)
+    return "; ".join(pairs)
 
 
 def _report_exit_code(report: dict[str, Any]) -> int:

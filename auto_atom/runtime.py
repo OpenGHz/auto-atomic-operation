@@ -127,6 +127,41 @@ class ControlResult:
         )
 
 
+@dataclass(frozen=True)
+class ContactObservation:
+    """One backend-neutral contact between an operator and the scene."""
+
+    operator_body: str
+    operator_geom: str
+    other_body: str
+    other_geom: str
+    position_world_m: Position
+    signed_distance_m: float
+    penetration_depth_m: float
+    normal_force_n: Optional[float] = None
+    tangential_force_n: Optional[float] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Return a JSON-native representation for execution records."""
+        return {
+            "operator_body": self.operator_body,
+            "operator_geom": self.operator_geom,
+            "other_body": self.other_body,
+            "other_geom": self.other_geom,
+            "position_world_m": [float(value) for value in self.position_world_m],
+            "signed_distance_m": float(self.signed_distance_m),
+            "penetration_depth_m": float(self.penetration_depth_m),
+            "normal_force_n": (
+                None if self.normal_force_n is None else float(self.normal_force_n)
+            ),
+            "tangential_force_n": (
+                None
+                if self.tangential_force_n is None
+                else float(self.tangential_force_n)
+            ),
+        }
+
+
 @runtime_checkable
 class IKSolver(Protocol):
     def solve(
@@ -648,6 +683,19 @@ class SceneBackend(ABC):
         object_name: str,
     ) -> np.ndarray:
         """Return whether the operator contacts the object in each environment."""
+
+    @abstractmethod
+    def get_operator_contacts(
+        self,
+        operator_name: str,
+        env_index: int,
+    ) -> Optional[List[ContactObservation]]:
+        """Observe current contacts between an operator and non-operator bodies.
+
+        ``None`` means that the backend does not support contact observations;
+        an empty list means that it observed the environment and found no
+        current external contacts.
+        """
 
     def get_element_pose(self, name: str, env_index: int = 0) -> PoseState:  # noqa: ARG002
         raise NotImplementedError(
@@ -1180,6 +1228,13 @@ class TaskRunner:
             )
         return summary
 
+    def terminate_unfinished_at_update_limit(self, max_updates: int) -> TaskUpdate:
+        """Turn rollout-budget exhaustion into recorded terminal failures."""
+        self._require_stage_execution().terminate_unfinished_at_update_limit(
+            max_updates
+        )
+        return self._build_task_update()
+
     def from_yaml(self, path: str | Path) -> "TaskRunner":
         from .config_loader import load_task_file
 
@@ -1473,9 +1528,13 @@ class TaskRunner:
             "internal_updates": internal_updates,
         }
         if state.active is not None:
-            self._record_failure(env_index, state.active.plan, details)
+            details = self._record_failure(env_index, state.active.plan, details)
         elif state.stage_cursor < len(self._plan):
-            self._record_failure(env_index, self._plan[state.stage_cursor], details)
+            details = self._record_failure(
+                env_index,
+                self._plan[state.stage_cursor],
+                details,
+            )
         state.active = None
         state.done = True
         state.success = False
@@ -1638,9 +1697,13 @@ class TaskRunner:
             "fast_forward_updates": ticks,
         }
         if state.active is not None:
-            self._record_failure(env_index, state.active.plan, details)
+            details = self._record_failure(env_index, state.active.plan, details)
         elif state.stage_cursor < len(self._plan):
-            self._record_failure(env_index, self._plan[state.stage_cursor], details)
+            details = self._record_failure(
+                env_index,
+                self._plan[state.stage_cursor],
+                details,
+            )
         state.active = None
         state.done = True
         state.success = False
@@ -1728,8 +1791,12 @@ class TaskRunner:
         env_index: int,
         plan: StageExecutionPlan,
         details: Dict[str, Any],
-    ) -> None:
-        self._require_stage_execution().record_failure(env_index, plan, details)
+    ) -> Dict[str, Any]:
+        return self._require_stage_execution().record_failure(
+            env_index,
+            plan,
+            details,
+        )
 
     def _apply_waypoint_randomization(
         actions: List[PrimitiveAction],

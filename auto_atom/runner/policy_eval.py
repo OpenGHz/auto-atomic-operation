@@ -173,6 +173,7 @@ def main(cfg: DictConfig) -> None:
                     )
                 ),
                 records_fn=lambda: evaluator.records,
+                update_limit_fn=evaluator.terminate_unfinished_at_update_limit,
                 before_round_fn=lambda _r: getattr(policy, "reset", lambda: None)(),
                 reset_label="Reset evaluator",
                 start_label="Starting policy rollout...",

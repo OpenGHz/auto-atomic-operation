@@ -22,6 +22,7 @@ from auto_atom.policy_eval import (
 )
 from auto_atom.runtime import (
     ComponentRegistry,
+    ContactObservation,
     ControlResult,
     ControlSignal,
     PrimitiveAction,
@@ -964,6 +965,188 @@ def test_absolute_arc_preserves_raw_controller_terminal_signal(
         assert update.status.tolist() == [StageExecutionStatus.FAILED]
         assert update.details[0]["failure_category"] == failure_category
         assert tracker.raw_signals == [raw_signal]
+    finally:
+        executor.close()
+
+
+@pytest.mark.parametrize("execution_path", ["demo", "policy"])
+@pytest.mark.parametrize(
+    "raw_signal",
+    [ControlSignal.FAILED, ControlSignal.TIMED_OUT],
+)
+@pytest.mark.parametrize(
+    "has_contact",
+    [
+        pytest.param(True, id="observed-contact"),
+        pytest.param(False, id="observed-empty"),
+    ],
+)
+def test_terminal_action_failure_records_operator_contact_snapshot(
+    execution_path: str,
+    raw_signal: ControlSignal,
+    has_contact: bool,
+) -> None:
+    config = _absolute_arc_task_file(
+        f"absolute_arc_contacts_{execution_path}_{raw_signal.value}_{has_contact}",
+        target_angle=0.6,
+    )
+    executor, policy, update = _reset_arc_executor(execution_path, config)
+    try:
+        backend = executor._require_context().backend
+        observation = ContactObservation(
+            operator_body="eef_L53",
+            operator_geom="eef_left_finger_collision",
+            other_body="door__door_panel",
+            other_geom="door__door_panel_collision",
+            position_world_m=(1.25, 0.5, -0.2),
+            signed_distance_m=-0.0005,
+            penetration_depth_m=0.0005,
+            normal_force_n=107.31,
+            tangential_force_n=50.12,
+        )
+        observations = [observation] if has_contact else []
+        contact_queries: list[tuple[str, int]] = []
+
+        def get_operator_contacts(
+            operator_name: str,
+            env_index: int,
+        ) -> list[ContactObservation]:
+            contact_queries.append((operator_name, env_index))
+            return list(observations)
+
+        backend.get_operator_contacts = get_operator_contacts
+        tracker = _immediate_reached_motion(
+            backend,
+            initial_angles=(0.0,),
+            angles_after_reach=((0.2,),),
+            raw_signal=raw_signal,
+        )
+
+        update = _arc_executor_update(execution_path, executor, policy, update)
+
+        expected_snapshot = {
+            "status": "observed",
+            "contacts": [item.to_dict() for item in observations],
+        }
+        assert update.done.tolist() == [True]
+        assert update.success.tolist() == [False]
+        assert update.details[0]["operator_contact_snapshot"] == expected_snapshot
+        assert executor.records[-1].details["operator_contact_snapshot"] == (
+            expected_snapshot
+        )
+        assert contact_queries == [("arm", 0)]
+        assert tracker.raw_signals == [raw_signal]
+    finally:
+        executor.close()
+
+
+@pytest.mark.parametrize(
+    ("probe_error", "expected_snapshot"),
+    [
+        pytest.param(
+            None,
+            {"status": "unsupported", "contacts": []},
+            id="unsupported",
+        ),
+        pytest.param(
+            "contact probe failed",
+            {
+                "status": "error",
+                "error": "RuntimeError: contact probe failed",
+                "contacts": [],
+            },
+            id="error",
+        ),
+    ],
+)
+def test_contact_snapshot_diagnostics_do_not_mask_controller_failure(
+    probe_error: str | None,
+    expected_snapshot: dict[str, Any],
+) -> None:
+    config = _absolute_arc_task_file(
+        f"absolute_arc_contact_diagnostic_{probe_error or 'unsupported'}",
+        target_angle=0.6,
+    )
+    executor, policy, update = _reset_arc_executor("demo", config)
+    assert policy is None
+    try:
+        backend = executor._require_context().backend
+        contact_queries: list[tuple[str, int]] = []
+
+        def get_operator_contacts(
+            operator_name: str,
+            env_index: int,
+        ) -> list[ContactObservation] | None:
+            contact_queries.append((operator_name, env_index))
+            if probe_error is not None:
+                raise RuntimeError(probe_error)
+            return None
+
+        backend.get_operator_contacts = get_operator_contacts
+        tracker = _immediate_reached_motion(
+            backend,
+            initial_angles=(0.0,),
+            angles_after_reach=((0.2,),),
+            raw_signal=ControlSignal.FAILED,
+        )
+
+        update = _arc_executor_update("demo", executor, policy, update)
+
+        assert update.done.tolist() == [True]
+        assert update.success.tolist() == [False]
+        assert update.status.tolist() == [StageExecutionStatus.FAILED]
+        assert update.details[0]["failure_category"] == "controller_failure"
+        assert (
+            update.details[0]["failure_reason"] == "primitive action reported failure"
+        )
+        assert update.details[0]["operator_contact_snapshot"] == expected_snapshot
+        failure_record = executor.records[-1]
+        assert failure_record.details["failure_category"] == "controller_failure"
+        assert (
+            failure_record.details["failure_reason"]
+            == "primitive action reported failure"
+        )
+        assert failure_record.details["operator_contact_snapshot"] == (
+            expected_snapshot
+        )
+        assert contact_queries == [("arm", 0)]
+        assert tracker.raw_signals == [ControlSignal.FAILED]
+    finally:
+        executor.close()
+
+
+@pytest.mark.parametrize("execution_path", ["demo", "policy"])
+def test_update_limit_failure_records_operator_contacts(
+    execution_path: str,
+) -> None:
+    config = _absolute_arc_task_file(
+        f"absolute_arc_update_limit_{execution_path}",
+        target_angle=0.6,
+    )
+    executor, _policy, _update = _reset_arc_executor(execution_path, config)
+    try:
+        backend = executor._require_context().backend
+        observation = ContactObservation(
+            operator_body="eef_L53",
+            operator_geom="eef_left_finger_collision",
+            other_body="door__door_panel",
+            other_geom="door__door_panel_collision",
+            position_world_m=(1.25, 0.5, -0.2),
+            signed_distance_m=-0.0005,
+            penetration_depth_m=0.0005,
+            normal_force_n=107.31,
+            tangential_force_n=50.12,
+        )
+        backend.get_operator_contacts = lambda _operator, _env_index: [observation]
+
+        update = executor.terminate_unfinished_at_update_limit(0)
+
+        assert update.done.tolist() == [True]
+        assert update.success.tolist() == [False]
+        assert update.details[0]["failure_category"] == "max_updates_reached"
+        snapshot = update.details[0]["operator_contact_snapshot"]
+        assert snapshot == {"status": "observed", "contacts": [observation.to_dict()]}
+        assert executor.records[-1].details["operator_contact_snapshot"] == snapshot
     finally:
         executor.close()
 

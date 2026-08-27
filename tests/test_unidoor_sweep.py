@@ -83,6 +83,32 @@ def _summary(
     }
 
 
+def _door_panel_contact_failure_record() -> dict[str, object]:
+    return {
+        "env_index": 0,
+        "stage_index": 0,
+        "stage_name": "pick_handle",
+        "operator": "arm",
+        "operation": "pick",
+        "target_object": "door__door_handle",
+        "status": "failed",
+        "details": {
+            "event": "eef_timeout",
+            "operator_contact_snapshot": {
+                "status": "observed",
+                "contacts": [
+                    {
+                        "operator_body": "eef_L53",
+                        "operator_geom": "eef_left_finger_collision",
+                        "other_body": "door__door_panel",
+                        "other_geom": "door__door_panel_collision",
+                    }
+                ],
+            },
+        },
+    }
+
+
 def test_parse_config_accepts_kebab_case_and_comma_lists() -> None:
     config = parse_config(
         [
@@ -287,6 +313,89 @@ def test_aggregate_classifies_all_result_states(tmp_path: Path) -> None:
         "NOT_STARTED",
         "INVALID_SUMMARY",
     }
+
+
+def test_summary_result_preserves_failure_records(tmp_path: Path) -> None:
+    job = {
+        "job_num": 0,
+        "batch_num": 0,
+        "door_id": "D026",
+        "handle_id": "H006",
+        "relative_dir": "job",
+    }
+    job_dir = tmp_path / "job"
+    job_dir.mkdir()
+    failure_record = _door_panel_contact_failure_record()
+    _write_json(
+        job_dir / "summary.json",
+        {
+            "rounds": [
+                {
+                    "status": "FAIL",
+                    "final_success": [False],
+                    "final_stage": ["pick_handle"],
+                    "failure_reasons": ["primitive timeout"],
+                    "failure_records": [failure_record],
+                },
+                {
+                    "status": "FAIL",
+                    "final_success": [False],
+                    "final_stage": ["pick_handle"],
+                    "failure_reasons": ["primitive timeout"],
+                    "failure_records": [failure_record],
+                },
+            ]
+        },
+    )
+
+    result = _summary_result(job, tmp_path, expected_rounds=2)
+
+    assert result["status"] == "TASK_FAILURE"
+    assert result["failure_records"] == [
+        {**failure_record, "round_index": 0},
+        {**failure_record, "round_index": 1},
+    ]
+
+
+def test_failures_csv_includes_operator_contact_pairs(tmp_path: Path) -> None:
+    package_path = _asset_package(
+        tmp_path,
+        doors=("D026",),
+        handles=("H006",),
+    )
+    sweep_dir = tmp_path / "sweep"
+    config = UniDoorSweepConfig(asset_package=package_path)
+    manifest = _build_manifest(config, load_catalog(config), sweep_dir)
+    manifest["status"] = "FINISHED"
+    sweep_dir.mkdir()
+    _write_json(sweep_dir / MANIFEST_NAME, manifest)
+
+    job_dir = sweep_dir / manifest["jobs"][0]["relative_dir"]
+    job_dir.mkdir(parents=True)
+    _write_json(
+        job_dir / "summary.json",
+        {
+            "rounds": [
+                {
+                    "status": "FAIL",
+                    "final_success": [False],
+                    "final_stage": ["pick_handle"],
+                    "failure_reasons": ["primitive timeout"],
+                    "failure_records": [_door_panel_contact_failure_record()],
+                }
+            ]
+        },
+    )
+
+    aggregate_sweep(sweep_dir)
+
+    with (sweep_dir / FAILURES_NAME).open(encoding="utf-8", newline="") as stream:
+        failure_rows = list(csv.DictReader(stream))
+    assert len(failure_rows) == 1
+    assert (
+        failure_rows[0]["contact_pairs"]
+        == "eef_left_finger_collision -> door__door_panel_collision"
+    )
 
 
 @pytest.mark.parametrize(

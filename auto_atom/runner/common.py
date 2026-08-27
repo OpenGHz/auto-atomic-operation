@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+import math
+from dataclasses import asdict, dataclass, is_dataclass
+from enum import Enum
 from pathlib import Path
 from pprint import pprint
 from time import perf_counter
@@ -34,6 +36,7 @@ class ExampleLoopHooks:
     start_label: str = "Starting updates..."
     max_updates: Optional[int] = None
     print_updates: bool = True
+    update_limit_fn: Optional[Callable[[int], TaskUpdate]] = None
 
 
 def get_config_dir() -> Path:
@@ -123,6 +126,18 @@ def run_example_rounds(
 
         if not all_done and hooks.max_updates is not None:
             print(f"Reached max_updates={hooks.max_updates}, stopping rollout.")
+            if hooks.update_limit_fn is not None:
+                update = hooks.update_limit_fn(hooks.max_updates)
+                done_mask = np.asarray(update.done, dtype=bool)
+                if not bool(np.all(done_mask)):
+                    raise RuntimeError(
+                        "update_limit_fn must return a terminal TaskUpdate for "
+                        "every environment"
+                    )
+                newly_done = done_mask & (env_completion_steps < 0)
+                env_completion_steps[newly_done] = steps_used
+                env_completion_time_sec[newly_done] = elapsed_time_sec
+                all_done = True
 
         summary = hooks.summarize_fn(
             update,
@@ -274,11 +289,22 @@ def save_final_summary(
         failure_lines = _format_failure_lines(summary)
         if failure_lines:
             entry["failure_reasons"] = failure_lines
+        failure_records = _format_failure_records(summary)
+        if failure_records:
+            entry["failure_records"] = failure_records
         rounds_data.append(entry)
     data["rounds"] = rounds_data
 
     out = Path(path)
-    out.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n")
+    out.write_text(
+        json.dumps(
+            _json_native(data),
+            indent=2,
+            ensure_ascii=False,
+            allow_nan=False,
+        )
+        + "\n"
+    )
     print(f"Summary saved to {out.resolve()}")
     return out
 
@@ -324,6 +350,46 @@ def _format_failure_lines(summary: ExecutionSummary) -> List[str]:
         lines.append(f"failure reason (env {env_index}, stage {stage_name}): unknown")
 
     return lines
+
+
+def _format_failure_records(summary: ExecutionSummary) -> List[Dict[str, Any]]:
+    return [
+        {
+            "env_index": record.env_index,
+            "stage_index": record.stage_index,
+            "stage_name": record.stage_name,
+            "operator": record.operator,
+            "operation": record.operation,
+            "target_object": record.target_object,
+            "status": _json_native(record.status),
+            "details": _json_native(record.details),
+        }
+        for record in summary.records
+        if record.status == "failed"
+        or getattr(record.status, "value", None) == "failed"
+    ]
+
+
+def _json_native(value: Any) -> Any:
+    if isinstance(value, np.ndarray):
+        return [_json_native(item) for item in value.tolist()]
+    if isinstance(value, np.generic):
+        return _json_native(value.item())
+    if isinstance(value, Enum):
+        return value.value
+    if is_dataclass(value) and not isinstance(value, type):
+        return _json_native(asdict(value))
+    if isinstance(value, dict):
+        return {str(key): _json_native(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_native(item) for item in value]
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, float):
+        return value if math.isfinite(value) else str(value)
+    if value is None or isinstance(value, (str, int, bool)):
+        return value
+    return repr(value)
 
 
 def _group_completed_stage_info(

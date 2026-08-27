@@ -69,6 +69,7 @@ def main(cfg: DictConfig) -> None:
                     )
                 ),
                 records_fn=lambda: runner.records,
+                update_limit_fn=runner.terminate_unfinished_at_update_limit,
                 reset_label="Reset task",
                 start_label="Scene reset complete; viewer refreshed. Starting task updates...",
                 max_updates=max_updates,

@@ -30,6 +30,7 @@ from ...framework import (
 )
 from ...runtime import (
     ComponentRegistry,
+    ContactObservation,
     ControlResult,
     ControlSignal,
     IKSolver,
@@ -94,6 +95,16 @@ class MujocoControlConfig(BaseModel):
 
 _MAX_COLLISION_REJECTION_ATTEMPTS = 100
 _RandomizationAncestors = Set[str] | List[Set[str]]
+
+
+def _mujoco_element_name(
+    model: Any,
+    object_type: Any,
+    element_id: int,
+    fallback_prefix: str,
+) -> str:
+    name = mujoco.mj_id2name(model, object_type, element_id)
+    return name if name is not None else f"{fallback_prefix}#{element_id}"
 
 
 def _randomization_references(
@@ -2196,32 +2207,122 @@ class MujocoTaskBackend(SceneBackend):
     def is_operator_contacting(
         self, operator_name: str, object_name: str
     ) -> np.ndarray:
-        operator = self.get_operator_handler(operator_name)
         target = self.get_object_handler(object_name)
         if target is None:
             return np.zeros(self.batch_size, dtype=bool)
         result = np.zeros(self.batch_size, dtype=bool)
         for env_index, single_env in enumerate(self.env.envs):
-            model = single_env.model
-            target_bodies = target.get_descendant_body_ids(model)
+            target_bodies = target.get_descendant_body_ids(single_env.model)
             if not target_bodies:
                 continue
-            operator_bodies = operator.get_operator_body_ids(model)
-            geom_bodyid = model.geom_bodyid
-            data = single_env.data
-            for idx in range(data.ncon):
-                contact = data.contact[idx]
-                body1 = int(geom_bodyid[int(contact.geom1)])
-                body2 = int(geom_bodyid[int(contact.geom2)])
-                b1_target = body1 in target_bodies
-                b2_target = body2 in target_bodies
-                if not b1_target and not b2_target:
-                    continue
-                other_body = body2 if b1_target else body1
-                if other_body in operator_bodies:
+            for _, _, _, _, other_body in self._iter_operator_external_contacts(
+                operator_name,
+                env_index,
+            ):
+                if other_body in target_bodies:
                     result[env_index] = True
                     break
         return result
+
+    def get_operator_contacts(
+        self,
+        operator_name: str,
+        env_index: int,
+    ) -> Optional[List[ContactObservation]]:
+        observations: List[ContactObservation] = []
+        single_env = self.env.envs[env_index]
+        model = single_env.model
+        data = single_env.data
+        for (
+            contact_index,
+            operator_geom,
+            operator_body,
+            other_geom,
+            other_body,
+        ) in self._iter_operator_external_contacts(operator_name, env_index):
+            contact = data.contact[contact_index]
+            force = np.zeros(6, dtype=np.float64)
+            mujoco.mj_contactForce(model, data, contact_index, force)
+            observations.append(
+                ContactObservation(
+                    operator_body=_mujoco_element_name(
+                        model,
+                        mujoco.mjtObj.mjOBJ_BODY,
+                        operator_body,
+                        "body",
+                    ),
+                    operator_geom=_mujoco_element_name(
+                        model,
+                        mujoco.mjtObj.mjOBJ_GEOM,
+                        operator_geom,
+                        "geom",
+                    ),
+                    other_body=_mujoco_element_name(
+                        model,
+                        mujoco.mjtObj.mjOBJ_BODY,
+                        other_body,
+                        "body",
+                    ),
+                    other_geom=_mujoco_element_name(
+                        model,
+                        mujoco.mjtObj.mjOBJ_GEOM,
+                        other_geom,
+                        "geom",
+                    ),
+                    position_world_m=tuple(float(value) for value in contact.pos),
+                    signed_distance_m=float(contact.dist),
+                    penetration_depth_m=max(0.0, -float(contact.dist)),
+                    normal_force_n=abs(float(force[0])),
+                    tangential_force_n=float(np.linalg.norm(force[1:3])),
+                )
+            )
+        observations.sort(
+            key=lambda item: (
+                item.operator_body,
+                item.operator_geom,
+                item.other_body,
+                item.other_geom,
+                item.signed_distance_m,
+            )
+        )
+        return observations
+
+    def _iter_operator_external_contacts(
+        self,
+        operator_name: str,
+        env_index: int,
+    ) -> Iterator[Tuple[int, int, int, int, int]]:
+        if not 0 <= env_index < self.batch_size:
+            raise IndexError(
+                f"env_index must be in [0, {self.batch_size}), got {env_index}"
+            )
+        operator = self.get_operator_handler(operator_name)
+        single_env = self.env.envs[env_index]
+        model = single_env.model
+        data = single_env.data
+        operator_bodies = operator.get_operator_body_ids(model)
+        geom_bodyid = model.geom_bodyid
+        for contact_index in range(data.ncon):
+            contact = data.contact[contact_index]
+            if int(contact.efc_address) < 0:
+                # MuJoCo keeps contacts inside the broad collision margin in
+                # ``data.contact`` even when ``gap`` leaves their constraint
+                # inactive.  They are proximity candidates, not physical
+                # contacts, and must not satisfy CONTACTED or enter failure
+                # diagnostics as zero-force collisions.
+                continue
+            geom1 = int(contact.geom1)
+            geom2 = int(contact.geom2)
+            body1 = int(geom_bodyid[geom1])
+            body2 = int(geom_bodyid[geom2])
+            body1_is_operator = body1 in operator_bodies
+            body2_is_operator = body2 in operator_bodies
+            if body1_is_operator == body2_is_operator:
+                continue
+            if body1_is_operator:
+                yield contact_index, geom1, body1, geom2, body2
+            else:
+                yield contact_index, geom2, body2, geom1, body1
 
     def set_interest_objects_and_operations(
         self,

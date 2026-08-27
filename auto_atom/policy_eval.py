@@ -549,6 +549,15 @@ class PolicyEvaluator:
             elapsed_time_sec=elapsed_time_sec,
         )
 
+    def terminate_unfinished_at_update_limit(self, max_updates: int) -> TaskUpdate:
+        """Turn rollout-budget exhaustion into recorded terminal failures."""
+        self._raise_sim_loop_error()
+        with self._sim_lock:
+            self._require_stage_execution().terminate_unfinished_at_update_limit(
+                max_updates
+            )
+            return self._build_task_update()
+
     def _update_env(
         self,
         env_index: int,

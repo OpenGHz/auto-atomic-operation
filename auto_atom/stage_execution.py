@@ -97,15 +97,73 @@ class StageExecution:
         env_index: int,
         plan: StageExecutionPlan,
         details: Dict[str, Any],
-    ) -> None:
+    ) -> Dict[str, Any]:
+        enriched = dict(details)
+        try:
+            contacts = self.context.backend.get_operator_contacts(
+                plan.operator_name,
+                env_index,
+            )
+            contact_snapshot = {
+                "status": "unsupported" if contacts is None else "observed",
+                "contacts": (
+                    []
+                    if contacts is None
+                    else [contact.to_dict() for contact in contacts]
+                ),
+            }
+        except Exception as exc:  # diagnostic failure must not mask task failure
+            contact_snapshot = {
+                "status": "error",
+                "error": f"{type(exc).__name__}: {exc}",
+                "contacts": [],
+            }
+        enriched["operator_contact_snapshot"] = contact_snapshot
         self.records.append(
             self._record(
                 env_index,
                 plan,
                 StageExecutionStatus.FAILED,
-                details,
+                enriched,
             )
         )
+        return enriched
+
+    def terminate_unfinished_at_update_limit(self, max_updates: int) -> None:
+        """Fail every unfinished environment after the rollout budget is spent."""
+        if max_updates < 0:
+            raise ValueError("max_updates must be non-negative")
+        for env_index, state in enumerate(self.states):
+            if state.done:
+                continue
+            plan = (
+                state.active.plan
+                if state.active is not None
+                else self.plan[state.stage_cursor]
+                if state.stage_cursor < len(self.plan)
+                else None
+            )
+            if plan is None:
+                state.done = True
+                state.success = True
+                state.latest_status = StageExecutionStatus.SUCCEEDED
+                state.latest_details = {"event": "task_succeeded"}
+                continue
+            details = self.record_failure(
+                env_index,
+                plan,
+                {
+                    "event": "rollout_update_limit_reached",
+                    "failure_stage": "rollout",
+                    "failure_category": "max_updates_reached",
+                    "failure_reason": (
+                        f"reached max_updates={max_updates} before task completion"
+                    ),
+                    "env_index": env_index,
+                    "max_updates": max_updates,
+                },
+            )
+            self._set_failed(state, details)
 
     def advance_control(
         self,
@@ -210,7 +268,7 @@ class StageExecution:
                 feedback.signal,
                 env_index=env_index,
             )
-            self.record_failure(env_index, active.plan, failure)
+            failure = self.record_failure(env_index, active.plan, failure)
             self._set_failed(state, failure)
             return _EnvUpdateEvent(failed=True)
 
@@ -220,7 +278,11 @@ class StageExecution:
 
         success_failure = self._final_stage_failure(env_index, active)
         if success_failure is not None:
-            self.record_failure(env_index, active.plan, success_failure)
+            success_failure = self.record_failure(
+                env_index,
+                active.plan,
+                success_failure,
+            )
             self._set_failed(state, success_failure)
             return _EnvUpdateEvent(failed=True)
 
@@ -259,7 +321,7 @@ class StageExecution:
             )
         )
         if failure is not None:
-            self.record_failure(env_index, plan, failure)
+            failure = self.record_failure(env_index, plan, failure)
             self._set_failed(state, failure)
             return _EnvUpdateEvent(failed=True)
 
@@ -337,7 +399,7 @@ class StageExecution:
                 signal,
                 env_index=env_index,
             )
-            self.record_failure(env_index, active.plan, failure)
+            failure = self.record_failure(env_index, active.plan, failure)
             self._set_failed(state, failure)
             return _EnvUpdateEvent(control_tick=mode == "control", failed=True)
 
@@ -353,7 +415,7 @@ class StageExecution:
         active.action_index += 1
         mid_failure = self._mid_stage_failure(env_index, active, action)
         if mid_failure is not None:
-            self.record_failure(env_index, active.plan, mid_failure)
+            mid_failure = self.record_failure(env_index, active.plan, mid_failure)
             self._set_failed(state, mid_failure)
             return self._event_for_completed_action(
                 mode=mode,
@@ -383,7 +445,11 @@ class StageExecution:
             press_checked_at_eef=any(action.kind == "eef" for action in active.actions),
         )
         if success_failure is not None:
-            self.record_failure(env_index, active.plan, success_failure)
+            success_failure = self.record_failure(
+                env_index,
+                active.plan,
+                success_failure,
+            )
             self._set_failed(state, success_failure)
             return self._event_for_completed_action(
                 mode=mode,

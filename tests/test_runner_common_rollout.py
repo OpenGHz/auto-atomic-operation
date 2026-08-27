@@ -15,7 +15,12 @@ from auto_atom.runner.common import (
     run_example_rounds,
     save_final_summary,
 )
-from auto_atom.runtime import ExecutionSummary, TaskUpdate
+from auto_atom.runtime import (
+    ExecutionRecord,
+    ExecutionSummary,
+    StageExecutionStatus,
+    TaskUpdate,
+)
 
 
 def _update(done: Iterable[bool]) -> TaskUpdate:
@@ -123,6 +128,35 @@ def test_max_updates_is_total_step_budget(
     assert summary.updates_used == len(expected_step_indices)
     assert summary.timed_updates == expected_timed_updates
     assert summary.final_done.tolist() == [expected_done]
+
+
+def test_update_limit_callback_terminalizes_incomplete_rollout() -> None:
+    callback_limits: list[int] = []
+
+    def terminate(limit: int) -> TaskUpdate:
+        callback_limits.append(limit)
+        update = _update([True])
+        update.status[:] = StageExecutionStatus.FAILED
+        update.success[:] = False
+        return update
+
+    summary = run_example_rounds(
+        rounds=1,
+        use_input=False,
+        hooks=ExampleLoopHooks(
+            reset_fn=lambda: _update([False]),
+            step_fn=lambda _step, update: update,
+            summarize_fn=_summary,
+            records_fn=list,
+            max_updates=0,
+            update_limit_fn=terminate,
+        ),
+    )[0]
+
+    assert callback_limits == [0]
+    assert summary.final_done.tolist() == [True]
+    assert summary.final_success.tolist() == [False]
+    assert summary.env_completion_steps.tolist() == [0]
 
 
 def test_negative_max_updates_is_rejected() -> None:
@@ -286,6 +320,93 @@ def test_reported_loop_frequency_excludes_warmup(
     assert "0.4 Hz" in terminal_output
     assert saved["rounds"][0]["loop_frequency_hz"] == 0.4
     assert saved["rounds"][0]["timed_updates"] == 1
+
+
+def test_saved_summary_preserves_json_native_contact_failure_records(
+    tmp_path: Path,
+) -> None:
+    summary = _summary(
+        _update([False]),
+        updates_used=3,
+        max_updates=10,
+        elapsed_time_sec=0.25,
+    )
+    summary.final_done[:] = True
+    summary.final_status[:] = StageExecutionStatus.FAILED
+    summary.records = [
+        ExecutionRecord(
+            env_index=0,
+            stage_index=0,
+            stage_name="pick_handle",
+            operator="arm",
+            operation="pick",
+            target_object="door__door_handle",
+            blocking=True,
+            status=StageExecutionStatus.FAILED,
+            details={
+                "failure_reason": "gripper was blocked before grasping the handle",
+                "operator_contact_snapshot": {
+                    "status": "observed",
+                    "contacts": [
+                        {
+                            "operator_body": "eef_L53",
+                            "operator_geom": "eef_left_finger_collision",
+                            "other_body": "door__door_panel",
+                            "other_geom": "door__door_panel_collision",
+                            "position_world_m": (
+                                np.float64(1.508),
+                                np.float64(0.574),
+                                np.float64(-0.144),
+                            ),
+                            "signed_distance_m": np.float64(-0.000576),
+                            "penetration_depth_m": np.float64(0.000576),
+                            "normal_force_n": np.float32(107.31),
+                            "tangential_force_n": np.float32(50.13),
+                            "nonfinite_probe": np.float64(np.nan),
+                            "complex_probe": np.complex64(1 + 2j),
+                        }
+                    ],
+                },
+            },
+        )
+    ]
+
+    output_path = save_final_summary([summary], tmp_path / "summary.json")
+    saved = json.loads(output_path.read_text())
+
+    failure_records = saved["rounds"][0]["failure_records"]
+    assert failure_records == [
+        {
+            "env_index": 0,
+            "stage_index": 0,
+            "stage_name": "pick_handle",
+            "operator": "arm",
+            "operation": "pick",
+            "target_object": "door__door_handle",
+            "status": "failed",
+            "details": {
+                "failure_reason": "gripper was blocked before grasping the handle",
+                "operator_contact_snapshot": {
+                    "status": "observed",
+                    "contacts": [
+                        {
+                            "operator_body": "eef_L53",
+                            "operator_geom": "eef_left_finger_collision",
+                            "other_body": "door__door_panel",
+                            "other_geom": "door__door_panel_collision",
+                            "position_world_m": [1.508, 0.574, -0.144],
+                            "signed_distance_m": -0.000576,
+                            "penetration_depth_m": 0.000576,
+                            "normal_force_n": pytest.approx(107.31),
+                            "tangential_force_n": pytest.approx(50.13),
+                            "nonfinite_probe": "nan",
+                            "complex_probe": "(1+2j)",
+                        }
+                    ],
+                },
+            },
+        }
+    ]
 
 
 def test_max_updates_message_is_only_printed_for_an_incomplete_rollout(
