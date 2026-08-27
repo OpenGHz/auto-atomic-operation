@@ -851,9 +851,21 @@ def check_stage_condition(
     object_name = plan.stage.object
     backend = context.backend
     is_grasping = bool(backend.is_operator_grasping(operator_name)[env_index])
+    target_grasp_required = (
+        constraint == OperationConstraint.GRASPED
+        and plan.stage.operation in {Operation.PICK, Operation.PULL}
+    )
+    target_grasped: Optional[bool] = None
 
     if constraint == OperationConstraint.GRASPED:
-        satisfied = is_grasping
+        if target_grasp_required:
+            target_grasped = bool(
+                object_name
+                and backend.is_object_grasped(operator_name, object_name)[env_index]
+            )
+            satisfied = target_grasped
+        else:
+            satisfied = is_grasping
     elif constraint == OperationConstraint.RELEASED:
         satisfied = not is_grasping
     elif constraint == OperationConstraint.CONTACTED:
@@ -921,7 +933,7 @@ def check_stage_condition(
 
     if satisfied:
         return None
-    return _condition_failure_details(
+    details = _condition_failure_details(
         env_index=env_index,
         context=context,
         plan=plan,
@@ -932,6 +944,12 @@ def check_stage_condition(
         target_object_pose=target_object_pose,
         held_object_name=held_object_name,
     )
+    if target_grasp_required:
+        details["is_target_grasped"] = bool(target_grasped)
+        details["failure_reason"] = (
+            f"operator is not grasping required target '{object_name}'"
+        )
+    return details
 
 
 def _placed_condition_satisfied(

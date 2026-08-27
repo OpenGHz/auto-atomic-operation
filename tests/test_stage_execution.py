@@ -13,7 +13,7 @@ from typing import Any
 import numpy as np
 import pytest
 
-from auto_atom.framework import ArcControlConfig, TaskFileConfig
+from auto_atom.framework import ArcControlConfig, StageConfig, TaskFileConfig
 from auto_atom.mock import MockObjectHandler
 from auto_atom.policy_eval import (
     ConfigDrivenDemoPolicy,
@@ -27,6 +27,7 @@ from auto_atom.runtime import (
     PrimitiveAction,
     PoseState,
     StageExecutionStatus,
+    TaskFlowBuilder,
     TaskRunner,
 )
 
@@ -478,6 +479,155 @@ def test_config_driven_pull_checks_grasp_after_eef() -> None:
 
         assert update.success.tolist() == [False]
         assert update.details[0]["failure_category"] == "missing_grasp"
+    finally:
+        evaluator.close()
+
+
+@pytest.mark.parametrize("operation", ["pick", "pull"])
+@pytest.mark.parametrize(
+    ("param", "expected_joint_positions"),
+    [
+        pytest.param({}, [], id="generated-eef"),
+        pytest.param(
+            {
+                "eef": {
+                    "close": True,
+                    "joint_positions": [0.25],
+                    "require_grasp": False,
+                }
+            },
+            [0.25],
+            id="configured-eef",
+        ),
+    ],
+)
+def test_pick_and_pull_compile_target_required_grasp(
+    operation: str,
+    param: dict[str, Any],
+    expected_joint_positions: list[float],
+) -> None:
+    stage = StageConfig.model_validate(
+        {
+            "name": f"{operation}_target",
+            "object": "target",
+            "operation": operation,
+            "operator": "arm",
+            "param": param,
+        }
+    )
+
+    actions, _ = TaskFlowBuilder.build_actions(stage)
+
+    eef_actions = [action for action in actions if action.kind == "eef"]
+    assert len(eef_actions) == 1
+    assert eef_actions[0].eef is not None
+    assert eef_actions[0].eef.close is True
+    assert eef_actions[0].eef.joint_positions == expected_joint_positions
+    assert eef_actions[0].eef.require_grasp is True
+
+
+@pytest.mark.parametrize("operation", ["pick", "pull"])
+def test_pick_and_pull_reject_open_eef_override(operation: str) -> None:
+    stage = StageConfig.model_validate(
+        {
+            "name": f"{operation}_target",
+            "object": "target",
+            "operation": operation,
+            "operator": "arm",
+            "param": {"eef": {"close": False}},
+        }
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="pick and pull operations require a closing EEF command",
+    ):
+        TaskFlowBuilder.build_actions(stage)
+
+
+@pytest.mark.parametrize("operation", ["pick", "pull"])
+def test_pick_and_pull_reject_grasp_of_a_different_object(operation: str) -> None:
+    config = _task_file(
+        f"stage_execution_{operation}_target_grasp",
+        [
+            {
+                "name": f"{operation}_target",
+                "object": "target",
+                "operation": operation,
+                "operator": "arm",
+                "param": {},
+            }
+        ],
+    )
+    policy = ConfigDrivenDemoPolicy()
+    evaluator = PolicyEvaluator(action_applier=policy.action_applier).from_config(
+        config
+    )
+    backend = evaluator._context.backend
+    if operation == "pick":
+        grasp_checks = iter((False, True))
+        backend.is_operator_grasping = lambda _operator: np.asarray(
+            [next(grasp_checks)], dtype=bool
+        )
+    else:
+        backend.is_operator_grasping = lambda _operator: np.asarray([True], dtype=bool)
+    backend.is_object_grasped = lambda _operator, _object: np.asarray(
+        [False], dtype=bool
+    )
+    try:
+        update = _run_config_policy(evaluator, policy)
+
+        assert update.success.tolist() == [False]
+        assert update.details[0]["failure_category"] == "missing_grasp"
+        assert update.details[0]["target_object"] == "target"
+        assert update.details[0]["is_operator_grasping"] is True
+        assert update.details[0]["is_target_grasped"] is False
+    finally:
+        evaluator.close()
+
+
+@pytest.mark.parametrize("operation", ["pick", "pull"])
+def test_pick_and_pull_require_the_same_target_after_effect(
+    operation: str,
+) -> None:
+    config = _task_file(
+        f"stage_execution_{operation}_retained_target_grasp",
+        [
+            {
+                "name": f"{operation}_target",
+                "object": "target",
+                "operation": operation,
+                "operator": "arm",
+                "param": {"post_move": [_world_pose(0.3)]},
+            }
+        ],
+    )
+    policy = ConfigDrivenDemoPolicy()
+    evaluator = PolicyEvaluator(action_applier=policy.action_applier).from_config(
+        config
+    )
+    backend = evaluator._context.backend
+    if operation == "pick":
+        grasp_checks = iter((False, True, True))
+        target_checks = iter((True, False))
+        backend.is_operator_grasping = lambda _operator: np.asarray(
+            [next(grasp_checks)], dtype=bool
+        )
+    else:
+        target_checks = iter((True, True, False))
+        backend.is_operator_grasping = lambda _operator: np.asarray([True], dtype=bool)
+    backend.is_object_grasped = lambda _operator, _object: np.asarray(
+        [next(target_checks)], dtype=bool
+    )
+    try:
+        update = _run_config_policy(evaluator, policy)
+
+        assert update.success.tolist() == [False]
+        assert update.details[0]["failure_stage"] == "postcondition"
+        assert update.details[0]["failure_category"] == "missing_grasp"
+        assert update.details[0]["target_object"] == "target"
+        assert update.details[0]["is_operator_grasping"] is True
+        assert update.details[0]["is_target_grasped"] is False
     finally:
         evaluator.close()
 

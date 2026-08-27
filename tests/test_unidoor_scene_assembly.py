@@ -512,7 +512,7 @@ def test_demo_places_handle_and_robot_on_the_same_door_side() -> None:
     assert robot_side < 0.0
     assert grasp_side < 0.0
     assert data.xaxis[handle_joint_id].tolist() == pytest.approx([1.0, 0.0, 0.0])
-    assert list(config.task.stages[1].param.pre_move[0].arc.axis) == [1, 0, 0]
+    assert list(config.task.stages[1].param.post_move[0].arc.axis) == [1, 0, 0]
 
 
 def test_demo_final_approach_targets_the_explicit_grasp_site() -> None:
@@ -520,17 +520,25 @@ def test_demo_final_approach_targets_the_explicit_grasp_site() -> None:
     with initialize_config_dir(version_base=None, config_dir=str(root / "aao_configs")):
         config = compose(config_name="open_door_unidoor_p7_v3_umi_v3")
 
-    pick_stage, push_stage = config.task.stages
+    pick_stage, pull_stage, push_stage = config.task.stages
     assert pick_stage.name == "pick_handle"
     assert pick_stage.operation == "pick"
     assert pick_stage.site == "door__handle_grasp_center"
     assert list(pick_stage.param.pre_move[-1].position) == [0.02, 0.0, 0.0]
     assert pick_stage.param.pre_move[-1].tolerance.position == pytest.approx(0.002)
-    assert pick_stage.param.eef.require_grasp is True
+    assert "eef" not in pick_stage.param
+    assert pull_stage.name == "pull_handle"
+    assert pull_stage.operation == "pull"
+    assert "site" not in pull_stage
+    assert "pre_move" not in pull_stage.param
+    assert "eef" not in pull_stage.param
+    assert len(pull_stage.param.post_move) == 1
+    assert pull_stage.param.post_move[0].arc.pivot == "door__handle_hinge"
     assert push_stage.name == "push_open"
     assert push_stage.operation == "push"
     assert "site" not in push_stage
-    assert len(push_stage.param.pre_move) == 2
+    assert len(push_stage.param.pre_move) == 1
+    assert push_stage.param.pre_move[0].arc.pivot == "door__door_hinge"
     assert "post_move" not in push_stage.param
 
 
@@ -567,8 +575,8 @@ def test_demo_grasps_before_unlatching_and_unlocks_before_opening() -> None:
             mujoco.mjtObj.mjOBJ_EQUALITY,
             "door__door_latch_lock",
         )
-        saw_push_start = False
-        saw_door_arc = False
+        saw_pull_effect = False
+        saw_push_effect = False
         update = runner.reset()
         for _ in range(500):
             update = runner.update()
@@ -577,25 +585,31 @@ def test_demo_grasps_before_unlatching_and_unlocks_before_opening() -> None:
                 if bool(update.done[0]):
                     break
                 continue
-            if active.plan.stage.name != "push_open":
-                continue
-            if active.action_index == 0 and not saw_push_start:
-                saw_push_start = True
+            if (
+                active.plan.stage.name == "pull_handle"
+                and active.action_index == 1
+                and not saw_pull_effect
+            ):
+                saw_pull_effect = True
                 assert backend.is_object_grasped(
                     "arm", "door__door_handle"
                 ).tolist() == [True]
                 assert bool(single_env.data.eq_active[latch_id])
-            if active.action_index == 1:
-                saw_door_arc = True
+            if active.plan.stage.name == "push_open" and active.action_index == 0:
+                saw_push_effect = True
                 assert backend.get_joint_angle("door__handle_hinge", 0) >= 0.12
                 assert not bool(single_env.data.eq_active[latch_id])
+                assert backend.is_object_grasped(
+                    "arm", "door__door_handle"
+                ).tolist() == [True]
 
-        assert saw_push_start
-        assert saw_door_arc
+        assert saw_pull_effect
+        assert saw_push_effect
         assert update.done.tolist() == [True]
         assert update.success.tolist() == [True]
         assert [record.stage_name for record in runner.records] == [
             "pick_handle",
+            "pull_handle",
             "push_open",
         ]
         assert backend.get_joint_angle("door__door_hinge", 0) >= 0.18

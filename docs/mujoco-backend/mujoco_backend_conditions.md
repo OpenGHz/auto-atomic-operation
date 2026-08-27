@@ -246,7 +246,10 @@ The gripper action is "reached" based on the operation:
 
 ### 6.1 Closing with a required target grasp
 
-Set `task.stages[].param.eef.require_grasp: true`. Completion then requires
+`pick` and `pull` intrinsically compile their closing EEF with
+`require_grasp: true`; task YAML should not repeat it.  An explicit closing EEF
+on another operation can opt into the same behavior by setting
+`task.stages[].param.eef.require_grasp: true`. Completion then requires
 `_is_target_grasped()` to return true for the Stage target (see section 1).
 Neither reaching the commanded gripper position nor being blocked by an
 arbitrary object is accepted as completion.
@@ -259,8 +262,9 @@ arbitrary object is accepted as completion.
 
 ### 6.2 Closing without a required grasp
 
-With the default `require_grasp: false`, a detected target grasp still completes
-the primitive. Otherwise the positional fallback is:
+For a raw closing EEF outside `pick` and `pull`, the default is
+`require_grasp: false`. A detected target grasp still completes the primitive.
+Otherwise the positional fallback is:
 
 **Condition**: `actual_qpos >= target_ctrl - eef_tolerance`
 
@@ -282,12 +286,16 @@ Gripper has opened to within tolerance of fully open, or reached the minimum ope
 | `control.grasp.settle_steps` | `MujocoGraspConfig` | `5` | Steps to wait before grasp check |
 
 `require_grasp` belongs to the individual `eef` primitive rather than the
-operator defaults:
+operator defaults. `pick` and `pull` supply it automatically; use the explicit
+form for an EEF in another operation:
 
 ```yaml
-eef:
-  close: true
-  require_grasp: true
+operation: push
+param:
+  pre_move: [...]
+  eef:
+    close: true
+    require_grasp: true
 ```
 
 ---

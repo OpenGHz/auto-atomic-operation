@@ -936,7 +936,10 @@ class TaskFlowBuilder:
             actions.append(
                 PrimitiveAction(
                     kind="eef",
-                    eef=TaskFlowBuilder._grasp_eef(control),
+                    eef=TaskFlowBuilder._grasp_eef(
+                        control,
+                        require_target_grasp=True,
+                    ),
                     phase=TaskPhase.EEF,
                     waypoint=0,
                 )
@@ -1102,8 +1105,20 @@ class TaskFlowBuilder:
         return poses
 
     @staticmethod
-    def _grasp_eef(control: StageControlConfig) -> EefControlConfig:
-        return control.eef or EefControlConfig(close=True)
+    def _grasp_eef(
+        control: StageControlConfig,
+        *,
+        require_target_grasp: bool = False,
+    ) -> EefControlConfig:
+        eef = control.eef or EefControlConfig(close=True)
+        if require_target_grasp:
+            if not eef.close:
+                raise ValueError(
+                    "pick and pull operations require a closing EEF command"
+                )
+            if not eef.require_grasp:
+                return eef.model_copy(update={"require_grasp": True})
+        return eef
 
     @staticmethod
     def _release_eef(control: StageControlConfig) -> EefControlConfig:

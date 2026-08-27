@@ -27,7 +27,7 @@ env:
         path: ${assets_dir}/xmls/robots/p7_arm_v3_with_umi_gripper_v3.xml
   mask_objects: [door__door_handle]
   # Heat-map focus for the manipulated mask object; task.stages below is the
-  # authoritative PICK -> PUSH workflow.
+  # authoritative PICK -> PULL -> PUSH workflow.
   operations: [push]
   pre_step_callbacks:
     - _target_: auto_atom.callbacks.door_latch.DoorLatchCallback
@@ -65,18 +65,15 @@ task:
             max_angular_step: 0.2
             tolerance:
               position: 0.002
-        eef:
-          close: true
-          require_grasp: true
 
-    - name: push_open
+    - name: pull_handle
       object: door__door_handle
-      operation: push
+      operation: pull
       operator: arm
       param:
-        # PICK has already established and verified the grasp.  For PUSH,
-        # pre_move is the effect trajectory itself; there is no EEF boundary.
-        pre_move:
+        # PULL intrinsically verifies the Stage target grasp before rotation and
+        # checks that the same target remains grasped after the effect trajectory.
+        post_move:
           - arc:
               pivot: door__handle_hinge
               axis: [1, 0, 0]
@@ -86,6 +83,15 @@ task:
               absolute: true
               max_step: 0.03
             reference: world
+
+    - name: push_open
+      object: door__door_handle
+      operation: push
+      operator: arm
+      param:
+        # PULL has already rotated the handle and verified the retained grasp.
+        # PUSH has no EEF boundary; pre_move is the door-opening trajectory.
+        pre_move:
           - arc:
               pivot: door__door_hinge
               axis: [0, 0, -1]

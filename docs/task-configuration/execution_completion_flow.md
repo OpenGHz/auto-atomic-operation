@@ -51,24 +51,26 @@ even when the corresponding `param` entry is omitted.
 | `move` | **Required** (at least one pose) | Ignored, even if configured | Optional | `pre_move+ -> post_move*` |
 | `grasp` | Optional | **Generated** close action (or configured `eef`) | Optional | `pre_move* -> eef -> post_move*` |
 | `release` | Optional | **Generated** open action (or configured `eef`) | Optional | `pre_move* -> eef -> post_move*` |
-| `pick` | Optional | **Generated** close action (or configured `eef`) | Optional | `pre_move* -> eef -> post_move*` |
+| `pick` | Optional | **Generated** target-verified close action (or configured `eef`) | Optional | `pre_move* -> eef -> post_move*` |
 | `place` | Optional | **Generated** open action (or configured `eef`) | Optional | `pre_move* -> eef -> post_move*` |
 | `push` | **Required** (at least one pose) | Optional; only configured `eef` runs | Optional | `pre_move+ -> eef? -> post_move*` |
-| `pull` | Optional | **Generated** close action (or configured `eef`) | Optional | `pre_move* -> eef -> post_move*` |
+| `pull` | Optional | **Generated** target-verified close action (or configured `eef`) | Optional | `pre_move* -> eef -> post_move*` |
 | `press` | **Required** (at least one pose) | **Generated** close action (or configured `eef`) | Optional | `pre_move+ -> eef -> post_move*` |
 
 In the sequence column, `+` means one or more configured waypoints, `*` means
 zero or more, and `?` marks an optional singleton phase.
 
-For `grasp`, `release`, `pick`, `place`, `pull`, and `press`, an explicit
-`param.eef` replaces the operation's default command; it is not silently
-rewritten to match the operation name.  This is a low-level override: keep its
-open/close direction consistent with the operation unless intentionally
-changing that operation's semantics.  `require_grasp: true` is only valid on a
-closing command and adds a target-specific grasp check.  A `pick` or `pull`
-post-move cannot use `object_world`, or `auto` when the stage has an object,
-because that target would chase the grasped object.  Use `eef_world` for the
-usual fixed-world retreat target.
+For `grasp`, `release`, `place`, and `press`, an explicit `param.eef` replaces
+the operation's default command.  For `pick` and `pull`, an explicit EEF can
+customize the closing command, but target-grasp completion is intrinsic: the
+runner enforces `require_grasp: true` on that closing primitive and retains the
+other configured fields.  An opening EEF override is rejected for these two
+operations. `require_grasp: true` remains available to add the same
+target-specific primitive check to other operations with an explicit EEF. It
+is only valid on a closing command.  A `pick` or `pull` post-move cannot use
+`object_world`, or `auto` when the stage has an object, because that target
+would chase the grasped object.  Use `eef_world` for the usual fixed-world
+retreat target.
 
 Each primitive action keeps the configured phase and YAML waypoint index from
 which it was built:
@@ -220,16 +222,35 @@ configured primitive sequence used by `TaskRunner` and
 `ConfigDrivenDemoPolicy`.  A condition is evaluated by the shared stage state
 machine; the active backend defines how each predicate is measured.
 
+`pull` and `push` name condition contracts, not geometric directions.  Choose
+between them according to the state that must be verified: `pull` establishes
+or confirms a grasp of the Stage target after `eef` and requires the same
+target to remain grasped through the effect trajectory, while `push` requires
+target displacement and imposes no grasp condition.  A motion commonly
+described as pushing—or as neither pulling nor pushing—can therefore be
+configured as `pull` when the target-grasp-retention contract is the intended
+one.
+
+> **Compatibility**: `pick` and `pull` no longer accept a grasp of some other
+> registered object as satisfying their `grasped` condition.  Custom backends
+> must implement `is_object_grasped(operator, stage.object)` accurately; task
+> configs should remove redundant `require_grasp: true` entries from these two
+> operations.
+
 | Operation | Perform condition and timing | Success condition and timing |
 | --- | --- | --- |
 | `move` | None | `reached` after the final primitive (the last `post_move`, or the last `pre_move` when no post-move exists). |
 | `grasp` | `released` before the stage, before optional moves | `grasped` after the final primitive. |
 | `release` | `grasped` before the stage, before optional moves | `released` after the final primitive. |
-| `pick` | `released` before the stage | `grasped` after the final primitive; if the EEF primitive finishes while the operator grasps nothing, the stage can fail immediately. |
+| `pick` | `released` before the stage | The Stage target is `grasped` after the final primitive; the EEF primitive itself also waits for that target-specific grasp. |
 | `place` | `grasped` before the stage | `placed` after the final primitive, including release and any placement-tolerance check for the held object. |
 | `push` | None | `displaced` after the final primitive (normally after `post_move`). |
-| `pull` | The stage-start `grasped` check is intentionally skipped; `grasped` is checked immediately after `eef` before `post_move` | `grasped` again after the final primitive. |
+| `pull` | The stage-start check is intentionally skipped; the Stage target must be `grasped` immediately after `eef`, before `post_move` | The same Stage target is `grasped` again after the final primitive. |
 | `press` | None | `contacted` immediately after `eef`, before optional `post_move`; the successful contact is not rechecked at stage end. |
+
+> **Note**: The final target-specific `grasped` check is currently mandatory for
+> `pull`.  A future configuration option may allow a task to omit that final
+> check, but no such option exists today.
 
 `placed` combines release with the held object's target pose when a target and
 configured tolerance are available.  `displaced` compares the stage object's
@@ -242,7 +263,7 @@ and orientation tolerance for the stage's completion pose.
 | Condition | Meaning |
 | --- | --- |
 | `released` | The operator is not currently grasping any object. |
-| `grasped` | The operator is currently grasping an object.  This general predicate can be narrowed to the stage target with `require_grasp: true`. |
+| `grasped` | The operator is currently grasping an object.  `pick` and `pull` intrinsically narrow this condition to their Stage target; an explicit EEF on another operation can request the same target-specific primitive check with `require_grasp: true`. |
 | `contacted` | The backend reports that the operator is in contact with the stage target object. |
 | `displaced` | The target object's position moved beyond the configured displacement threshold from its initial stage pose. |
 | `reached` | The EEF is within position and orientation tolerances of the final target pose. |

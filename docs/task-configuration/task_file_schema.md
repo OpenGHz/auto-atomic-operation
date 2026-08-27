@@ -134,6 +134,12 @@ param:
   displacement_threshold: 0.01
 ```
 
+`require_grasp` is a low-level option for explicit closing EEF primitives.
+`pick` and `pull` enforce target-specific grasp completion intrinsically, so
+omit this field for those operations; their compiled closing primitive uses
+`true` even when an explicit closing EEF supplies other parameters. An
+explicit opening EEF is invalid for `pick` and `pull`.
+
 `rotation` is Euler roll/pitch/yaw in radians; `orientation` is an XYZW
 quaternion.  A waypoint may also set `relative`, `static`, interpolation step
 limits, `arc`, `tolerance`, and per-waypoint `randomization`.  Their detailed

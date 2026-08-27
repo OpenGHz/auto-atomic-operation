@@ -24,6 +24,22 @@ One configured task operation containing an ordered sequence of keypoints and it
 operation conditions.
 _Avoid_: Phase
 
+**Pick operation**:
+An atomic-operation contract that succeeds only when the stage target is grasped
+after its effect sequence.
+_Avoid_: Generic grasp
+
+**Pull operation**:
+An atomic-operation contract that requires the stage target to be grasped at the
+effect boundary and retain that same target through completion; the term does
+not specify motion direction.
+_Avoid_: Directional pull
+
+**Push operation**:
+An atomic-operation contract that judges success by target displacement without
+a grasp-retention requirement; the term does not specify motion direction.
+_Avoid_: Directional push
+
 **Stage execution**:
 The progression of one stage from its perform condition, through its primitive
 sequence, to a succeeded or failed terminal status.

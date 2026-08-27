@@ -100,10 +100,11 @@ assembly template，必须显式记录。运行时 adapter 不从 `hinge_side` �
 `door__door_hinge`。替换门或把手只需改 `selection`；替换另一类资产则实现一个
 新的 adapter，不需要修改 `EnvConfig`、Basis 或 viewer。
 
-执行流程由两个 Stage 明确分工：`pick_handle` 通过 grasp site 接近并在
-`require_grasp` 验证目标抓取后结束；`push_open` 延续该夹爪状态，依次执行把手
-和门铰链圆弧。`PUSH` 没有独立的 EEF 边界，因此这两段作用轨迹直接写在该
-Stage 的 `pre_move` 中。
+执行流程由三个 Stage 明确分工：`pick_handle` 通过 grasp site 接近，并按 `PICK`
+的内建契约验证目标抓取后结束；`pull_handle` 在 EEF 边界再次验证目标仍被
+抓住，再把把手圆弧作为 `post_move` 执行，因此旋转前后都会检查同一目标；
+`push_open` 则把门铰链圆弧作为 `pre_move` 执行，并以目标位移判定成功。
+这里的 `PULL` / `PUSH` 描述条件契约，而不是日常语义中的运动方向。
 
 预生成组合 XML 不参与运行时装配。它们仍可用于对比关节轴、site、尺寸和可选锁
 具的结构回归。结构加载通过不代表动态开门成功；waypoint、IK 可达性、碰撞和

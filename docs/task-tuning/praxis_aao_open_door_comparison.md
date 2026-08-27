@@ -263,7 +263,7 @@ settle 和安全 outcome 验证，也不能自动解决 `third_party/` 被 `.git
 | --- | --- | --- |
 | Praxis P7 staged 15° | H15-1 preflight PASS；attempt-001 的 H15-2 FAIL，原因 `swing_timeout`。最大门角 `0.237799451 rad = 13.6249°`，终态 `12.7797°`，没有进入 `GRIPPER_RELEASE/RETREAT/SETTLE`。hard safety violation steps 为 0，但 target/settle 缺失。 | 不能；这是当前官方的失败动态基线。 |
 | AAO `open_door_p7_v3_umi_v3` | 本次未重新运行。已有两个本地 demo summary 报告 `2/2` Stage success、206 updates；摘要没有门角或 outcome event。 | 只能称为 AAO framework-level Stage smoke success，不能据此证明达到 Praxis 的 15°门角或机构 outcome。 |
-| AAO `open_door_unidoor_p7_v3_umi_v3` | 55×47 共 2585 个组合均可编译。当前 `PICK → PUSH` 配置的 batch-2 headless rollout 为 `2/2` 成功、405 ticks：PICK 结束时双指抓持且门锁仍启用（把手 `0.041410 rad`）；PUSH 中把手到 `0.122283 rad` 后解锁；终态门角 `0.190528 rad`，两环境仍抓持目标。 | 已证明当前 D001/H003、0.20-rad 任务目标下的抓取—解锁—开门顺序成立；仍未覆盖 Praxis 的 15°、release/retreat/home/settle 和安全 outcome contract，不能视为与 Praxis 同口径成功。 |
+| AAO `open_door_unidoor_p7_v3_umi_v3` | 55×47 共 2585 个组合均可编译。当前 `PICK → PULL → PUSH` 配置通过 batch-1 headless 回归：`PULL` 在把手圆弧前确认目标抓取、圆弧后保持握持，`PUSH` 在把手达到解锁行程且门锁解除后才执行门圆弧，终态门角不低于 `0.18 rad`。拆分前 `PICK → PUSH` 配置的 batch-2 `2/2`、405 ticks 结果不作为当前流程的性能基线。 | 已证明当前 D001/H003、0.20-rad 任务目标下的三阶段条件与抓取—解锁—开门顺序成立；仍未覆盖 Praxis 的 15°、release/retreat/home/settle 和安全 outcome contract，不能视为与 Praxis 同口径成功。 |
 
 Praxis 数字证据见 `third_party/praxis/docs/STATUS.md:66-98`。历史 M1/30°成功记录已经被 D-038 标记为 retired，不应当用来掩盖当前 H15-2 失败。
 

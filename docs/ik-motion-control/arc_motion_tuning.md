@@ -91,8 +91,9 @@ clears `relock_zone`, the equality latch re-engages during the door push.
 3. Maintain a verified grasp so the handle stays depressed until the door clears
    `relock_zone`.
 
-For tasks where closing must establish a physical target grasp before any arc,
-make that primitive contract explicit:
+`pick` and `pull` already require a physical grasp of their Stage target before
+the effect trajectory.  For another operation that explicitly closes the EEF
+before an arc, make the same primitive contract explicit:
 
 ```yaml
 eef:
