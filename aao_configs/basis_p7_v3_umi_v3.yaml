@@ -8,6 +8,7 @@ env:
     layers:
       - kind: mjcf
         path: ${assets_dir}/xmls/robots/p7_arm_v3_with_umi_gripper_v3.xml
+        role: operator
   # Forward-reach home pose. Values mirror basis_p7_xf9600 — even though the
   # v3 arm has slightly different DH, the resulting TCP lands near typical
   # tabletop / door grasp targets and away from singularities.

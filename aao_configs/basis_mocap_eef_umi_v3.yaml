@@ -10,6 +10,7 @@ env:
     layers:
       - kind: mjcf
         path: ${assets_dir}/xmls/robots/umi_gripper_v3_mocap.xml
+        role: operator
   # Home pose at reset. Gripper hangs 0.4m above the floor; the driven
   # claw slide opens (qpos=0 = max open). Tasks can override
   # ``umi_freejoint`` for task-specific homes.
@@ -23,6 +24,7 @@ env:
   # overridden.
   cameras:
     - name: eef_wrist_cam
+      role: operator
       width: ${cam_width}
       height: ${cam_height}
       enable_color: ${enable_color}

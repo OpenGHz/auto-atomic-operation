@@ -23,6 +23,7 @@ env:
     #   parent_frame: eef_pose
     #   is_static: false
     - name: eef_wrist_cam
+      role: operator
       width: ${cam_width}
       height: ${cam_height}
       enable_color: ${enable_color}

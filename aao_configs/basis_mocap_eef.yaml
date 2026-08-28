@@ -10,6 +10,7 @@ env:
     layers:
       - kind: mjcf
         path: ${assets_dir}/xmls/robots/robotiq.xml
+        role: operator
   # Home pose at reset. The freejoint entry is the default "arm suspended 0.4m
   # above the floor" pose shared by most tasks; tasks that need a different
   # home (open_door, open/close_drawer, open/close_hinge_door) override

@@ -8,6 +8,7 @@ env:
     layers:
       - kind: mjcf
         path: ${assets_dir}/xmls/robots/airbot_play_with_g2p.xml
+        role: operator
   # Home pose is all-zero (matches the legacy <key name="home"> qpos)
   # so no initial_joint_positions entries are needed for the arm; qpos0
   # defaults suffice. Task-specific homes can still override.

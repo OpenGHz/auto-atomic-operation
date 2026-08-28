@@ -9,6 +9,7 @@ import numpy as np
 
 from .framework import (
     OPERATION_CONDITIONS,
+    AxisAlignmentOrientationGoalConfig,
     ControlledFrameKind,
     Operation,
     OperationConditionType,
@@ -17,6 +18,7 @@ from .framework import (
     PoseControlConfig,
     TaskPhase,
 )
+from .pose_goal import axis_alignment_error, resolve_axis_in_world
 from .runtime import (
     ActiveStageState,
     ControlResult,
@@ -92,6 +94,7 @@ class StageExecution:
             if not enabled:
                 continue
             self.context.clear_env_grasp_bindings(env_index)
+            self.context.clear_env_logical_object(env_index)
             state = _EnvRuntimeState()
             state.latest_details = details_factory(env_index)
             self.states[env_index] = state
@@ -103,14 +106,36 @@ class StageExecution:
         resolve_completion_pose: bool,
     ) -> _EnvUpdateEvent:
         """Start and validate a policy stage before its action is applied."""
-        return (
-            self._ensure_started(
-                env_index,
-                self.states[env_index],
-                resolve_completion_pose=resolve_completion_pose,
-            )
-            or _EnvUpdateEvent()
+        state = self.states[env_index]
+        start_event = self._ensure_started(
+            env_index,
+            state,
+            resolve_completion_pose=resolve_completion_pose,
         )
+        if start_event is not None:
+            return start_event
+
+        # External object-only policies do not run the materialized primitive
+        # that normally resolves a held-object waypoint.  Resolve and cache
+        # that semantic completion goal before the policy gets a chance to
+        # move the object, so relative/static references retain their start
+        # snapshot and the later postcondition check remains meaningful.
+        if resolve_completion_pose and self.context.is_object_only:
+            active = state.active
+            if active is not None:
+                completion_failure = self._resolve_external_completion_goal(
+                    env_index,
+                    active,
+                )
+                if completion_failure is not None:
+                    completion_failure = self.record_failure(
+                        env_index,
+                        active.plan,
+                        completion_failure,
+                    )
+                    self._set_failed(state, completion_failure)
+                    return _EnvUpdateEvent(failed=True)
+        return _EnvUpdateEvent()
 
     def record_failure(
         self,
@@ -119,25 +144,34 @@ class StageExecution:
         details: Dict[str, Any],
     ) -> Dict[str, Any]:
         enriched = dict(details)
-        try:
-            contacts = self.context.backend.get_operator_contacts(
-                plan.operator_name,
-                env_index,
-            )
+        if self.context.is_object_only:
+            # There is intentionally no physical operator in this mode, so a
+            # contact query would only manufacture an ``Unknown operator``
+            # diagnostic and obscure the actual object-only failure.
             contact_snapshot = {
-                "status": "unsupported" if contacts is None else "observed",
-                "contacts": (
-                    []
-                    if contacts is None
-                    else [contact.to_dict() for contact in contacts]
-                ),
-            }
-        except Exception as exc:  # diagnostic failure must not mask task failure
-            contact_snapshot = {
-                "status": "error",
-                "error": f"{type(exc).__name__}: {exc}",
+                "status": "not_applicable",
                 "contacts": [],
             }
+        else:
+            try:
+                contacts = self.context.backend.get_operator_contacts(
+                    plan.operator_name,
+                    env_index,
+                )
+                contact_snapshot = {
+                    "status": "unsupported" if contacts is None else "observed",
+                    "contacts": (
+                        []
+                        if contacts is None
+                        else [contact.to_dict() for contact in contacts]
+                    ),
+                }
+            except Exception as exc:  # diagnostic failure must not mask task failure
+                contact_snapshot = {
+                    "status": "error",
+                    "error": f"{type(exc).__name__}: {exc}",
+                    "contacts": [],
+                }
         enriched["operator_contact_snapshot"] = contact_snapshot
         self.records.append(
             self._record(
@@ -275,7 +309,7 @@ class StageExecution:
             feedback.signal,
             dict(feedback.details),
             mode="policy",
-            use_configured_identity=False,
+            use_configured_identity=self.context.is_object_only,
         )
 
     def _consume_external_feedback(
@@ -369,16 +403,56 @@ class StageExecution:
             return None
 
         plan = self.plan[state.stage_cursor]
-        failure = (
-            None
-            if plan.stage.operation == Operation.PULL
-            else check_stage_condition(
-                env_index=env_index,
-                context=self.context,
-                plan=plan,
-                condition_type=OperationConditionType.PERFORM,
+        if self.context.is_object_only:
+            carried = self.context.get_logical_carried_object(env_index)
+            if plan.stage.operation == Operation.PICK:
+                failure = (
+                    {
+                        "event": "stage_precondition_failed",
+                        "failure_stage": "precondition",
+                        "failure_category": "unexpected_logical_carry",
+                        "failure_reason": (
+                            f"environment already carries {carried!r} before pick"
+                        ),
+                        "execution_mode": "object_only",
+                        "env_index": env_index,
+                    }
+                    if carried is not None
+                    else None
+                )
+            elif plan.stage.operation == Operation.PLACE:
+                failure = (
+                    {
+                        "event": "stage_precondition_failed",
+                        "failure_stage": "precondition",
+                        "failure_category": "missing_logical_carry",
+                        "failure_reason": "place requires a preceding logical pick",
+                        "execution_mode": "object_only",
+                        "env_index": env_index,
+                    }
+                    if carried is None
+                    else None
+                )
+            else:
+                failure = {
+                    "event": "stage_precondition_failed",
+                    "failure_stage": "precondition",
+                    "failure_category": "unsupported_object_only_operation",
+                    "failure_reason": ("object_only supports only pick/place stages"),
+                    "execution_mode": "object_only",
+                    "env_index": env_index,
+                }
+        else:
+            failure = (
+                None
+                if plan.stage.operation == Operation.PULL
+                else check_stage_condition(
+                    env_index=env_index,
+                    context=self.context,
+                    plan=plan,
+                    condition_type=OperationConditionType.PERFORM,
+                )
             )
-        )
         if failure is not None:
             failure = self.record_failure(env_index, plan, failure)
             self._set_failed(state, failure)
@@ -419,18 +493,25 @@ class StageExecution:
         actions_override: Optional[List[PrimitiveAction]],
     ) -> ActiveStageState:
         backend = self.context.backend
-        operator = backend.get_operator_handler(plan.operator_name)
+        operator = (
+            None
+            if self.context.is_object_only
+            else backend.get_operator_handler(plan.operator_name)
+        )
         target = backend.get_object_handler(plan.stage.object)
         initial_object_pose = (
             None if target is None else target.get_pose().select(env_index)
         )
         held_object_name = (
-            backend.get_grasped_object_name(plan.operator_name, env_index)
+            self.context.get_logical_carried_object(env_index)
+            if self.context.is_object_only and plan.stage.operation == Operation.PLACE
+            else backend.get_grasped_object_name(plan.operator_name, env_index)
             if plan.stage.operation == Operation.PLACE
             else None
         )
         if (
-            held_object_name
+            not self.context.is_object_only
+            and held_object_name
             and self.context.get_grasp_binding(
                 env_index,
                 plan.operator_name,
@@ -654,6 +735,14 @@ class StageExecution:
         active: ActiveStageState,
     ) -> Optional[Dict[str, Any]]:
         """Synchronize binding state at an external-policy observation edge."""
+        # ``object_only`` deliberately instantiates no operator handlers.  An
+        # external policy may still drive the scene directly (for example by
+        # calling ``context.acquire_logical_object``/``apply_object_pose``),
+        # but there is no physical grasp state to synchronize here.  Skipping
+        # this probe keeps that path backend-independent and avoids turning a
+        # valid object-only policy update into ``Unknown operator 'object_only'``.
+        if self.context.is_object_only:
+            return None
         operator_name = active.plan.operator_name
         is_grasping = bool(
             self.context.backend.is_operator_grasping(operator_name)[env_index]
@@ -715,6 +804,63 @@ class StageExecution:
         active: ActiveStageState,
     ) -> Optional[Dict[str, Any]]:
         """Resolve a deferred external-policy goal once its binding exists."""
+        # Object-only execution has no operator or EEF completion pose.  Its
+        # external-policy contract is expressed through logical object state
+        # and held-object waypoints, so the physical completion resolver must
+        # not reject a stage merely because that EEF goal is unavailable.
+        if self.context.is_object_only:
+            if active.plan.stage.operation != Operation.PLACE:
+                return None
+            held_object_name = active.held_object_name
+            if not held_object_name:
+                return self._completion_resolution_failure(
+                    env_index,
+                    active,
+                    RuntimeError("object-only place has no logically carried object"),
+                )
+            carried_handler = self.context.backend.get_object_handler(held_object_name)
+            if carried_handler is None:
+                return self._completion_resolution_failure(
+                    env_index,
+                    active,
+                    KeyError(f"Unknown carried object {held_object_name!r}"),
+                )
+            virtual_object_pose = carried_handler.get_pose().select(env_index)
+            for action in active.actions:
+                if action.kind != "object_pose" or action.pose is None:
+                    continue
+                if action.resolved_object_motion_goal is not None:
+                    virtual_object_pose = (
+                        action.resolved_object_motion_goal.object_world_pose
+                    )
+                    continue
+                try:
+                    action.resolved_object_motion_goal = (
+                        TaskRunner._resolve_object_motion_goal(
+                            env_index=env_index,
+                            object_name=held_object_name,
+                            pose=action.pose,
+                            target=active.target,
+                            backend=self.context.backend,
+                            reference_site=active.plan.stage.site,
+                            current_object_pose=virtual_object_pose,
+                        )
+                    )
+                    virtual_object_pose = (
+                        action.resolved_object_motion_goal.object_world_pose
+                    )
+                except (
+                    KeyError,
+                    NotImplementedError,
+                    RuntimeError,
+                    ValueError,
+                ) as error:
+                    return self._completion_resolution_failure(
+                        env_index,
+                        active,
+                        error,
+                    )
+            return None
         if (
             active.completion_motion_goal is not None
             or self.completion_pose_resolver is None
@@ -841,6 +987,21 @@ class StageExecution:
         active: ActiveStageState,
         completed_action: PrimitiveAction,
     ) -> Optional[Dict[str, Any]]:
+        if self.context.is_object_only:
+            if (
+                completed_action.kind == "object_acquire"
+                and self.context.get_logical_carried_object(env_index)
+                != active.plan.stage.object
+            ):
+                return {
+                    "event": "logical_acquire_failed",
+                    "failure_stage": "execution",
+                    "failure_category": "logical_acquire_failed",
+                    "failure_reason": "logical pick did not acquire its target",
+                    "execution_mode": "object_only",
+                    "env_index": env_index,
+                }
+            return None
         if completed_action.kind != "eef":
             return None
         eef = completed_action.eef
@@ -912,6 +1073,8 @@ class StageExecution:
         *,
         press_checked_at_eef: bool = False,
     ) -> Optional[Dict[str, Any]]:
+        if self.context.is_object_only:
+            return self._final_object_only_stage_failure(env_index, active)
         if press_checked_at_eef and active.plan.stage.operation == Operation.PRESS:
             return None
         completion_motion_goal = (
@@ -938,6 +1101,171 @@ class StageExecution:
             target_motion_goal=target_motion_goal,
             held_object_name=active.held_object_name,
         )
+
+    def _final_object_only_stage_failure(
+        self,
+        env_index: int,
+        active: ActiveStageState,
+    ) -> Optional[Dict[str, Any]]:
+        """Validate logical acquire/release and the final transported pose."""
+        stage = active.plan.stage
+        carried = self.context.get_logical_carried_object(env_index)
+        if stage.operation == Operation.PICK:
+            if carried == stage.object:
+                return None
+            return {
+                "event": "stage_postcondition_failed",
+                "failure_stage": "postcondition",
+                "failure_category": "missing_logical_carry",
+                "failure_reason": "logical pick did not leave the target carried",
+                "execution_mode": "object_only",
+                "env_index": env_index,
+                "carried_object": carried or "",
+            }
+
+        if stage.operation != Operation.PLACE:
+            return {
+                "event": "stage_postcondition_failed",
+                "failure_stage": "postcondition",
+                "failure_category": "unsupported_object_only_operation",
+                "failure_reason": "object_only supports only pick/place stages",
+                "execution_mode": "object_only",
+                "env_index": env_index,
+            }
+        if carried is not None:
+            return {
+                "event": "stage_postcondition_failed",
+                "failure_stage": "postcondition",
+                "failure_category": "logical_release_failed",
+                "failure_reason": "logical place did not release the carried object",
+                "execution_mode": "object_only",
+                "env_index": env_index,
+                "carried_object": carried,
+            }
+        held_name = active.held_object_name
+        if not held_name:
+            return {
+                "event": "stage_postcondition_failed",
+                "failure_stage": "postcondition",
+                "failure_category": "missing_logical_carry",
+                "failure_reason": "place lost its carried object identity",
+                "execution_mode": "object_only",
+                "env_index": env_index,
+            }
+        final_goal = next(
+            (
+                action.resolved_object_motion_goal
+                for action in reversed(active.actions)
+                if action.kind == "object_pose"
+                and action.resolved_object_motion_goal is not None
+            ),
+            None,
+        )
+        if final_goal is None:
+            return {
+                "event": "stage_postcondition_failed",
+                "failure_stage": "postcondition",
+                "failure_category": "missing_object_goal",
+                "failure_reason": "place has no resolved held-object goal",
+                "execution_mode": "object_only",
+                "env_index": env_index,
+            }
+        handler = self.context.backend.get_object_handler(held_name)
+        if handler is None:
+            return {
+                "event": "stage_postcondition_failed",
+                "failure_stage": "postcondition",
+                "failure_category": "unknown_carried_object",
+                "failure_reason": f"unknown carried object {held_name!r}",
+                "execution_mode": "object_only",
+                "env_index": env_index,
+            }
+        current = handler.get_pose().select(env_index)
+        configured = final_goal.configured_pose
+        frame_name = configured.controlled_frame.frame
+        if frame_name is not None:
+            try:
+                current = self.context.backend.get_element_pose(
+                    frame_name,
+                    env_index,
+                )
+            except (KeyError, NotImplementedError, RuntimeError, ValueError) as error:
+                return {
+                    "event": "stage_postcondition_failed",
+                    "failure_stage": "postcondition",
+                    "failure_category": "object_frame_unavailable",
+                    "failure_reason": str(error),
+                    "execution_mode": "object_only",
+                    "env_index": env_index,
+                    "carried_object": held_name,
+                }
+
+        position_difference = np.asarray(
+            current.position[0],
+            dtype=np.float64,
+        ) - np.asarray(
+            final_goal.controlled_world_pose.position[0],
+            dtype=np.float64,
+        )
+        position_error = float(np.linalg.norm(position_difference))
+        tolerance = getattr(stage.param, "placed_tolerance", None)
+        position_tolerance = tolerance.position if tolerance is not None else None
+        orientation_tolerance = tolerance.orientation if tolerance is not None else None
+        position_ok = position_within_tolerance_nullable(
+            position_difference,
+            position_tolerance,
+        )
+        orientation_goal = configured.orientation_goal
+        if not _is_configured(orientation_tolerance):
+            orientation_error = 0.0
+            orientation_ok = True
+        elif isinstance(orientation_goal, AxisAlignmentOrientationGoalConfig):
+            # A partial orientation goal constrains only the configured axis;
+            # in-plane twist is intentionally free.  PlacedToleranceConfig
+            # documents list tolerances as invalid for this goal kind.
+            if final_goal.target_axis_world is None or isinstance(
+                orientation_tolerance, (list, np.ndarray)
+            ):
+                orientation_error = float("inf")
+                orientation_ok = False
+            else:
+                current_axis_world = resolve_axis_in_world(
+                    orientation_goal.controlled_axis,
+                    current,
+                )
+                orientation_error = axis_alignment_error(
+                    current_axis_world,
+                    final_goal.target_axis_world,
+                    orientation_goal.direction,
+                )
+                orientation_ok = orientation_error <= float(orientation_tolerance)
+        else:
+            orientation_error = float(
+                quaternion_angular_distance(
+                    current.orientation[0],
+                    final_goal.controlled_world_pose.orientation[0],
+                )
+            )
+            orientation_ok = orientation_within_tolerance_nullable(
+                current.orientation[0],
+                final_goal.controlled_world_pose.orientation[0],
+                orientation_tolerance,
+            )
+        if position_ok and orientation_ok:
+            return None
+        return {
+            "event": "stage_postcondition_failed",
+            "failure_stage": "postcondition",
+            "failure_category": "placement_failed",
+            "failure_reason": "carried object is outside the placement tolerance",
+            "execution_mode": "object_only",
+            "env_index": env_index,
+            "carried_object": held_name,
+            "position_error": position_error,
+            "orientation_error": orientation_error,
+            "position_tolerance": position_tolerance,
+            "orientation_tolerance": orientation_tolerance,
+        }
 
     def _target_object_pose(
         self,

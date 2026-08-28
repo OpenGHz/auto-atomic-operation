@@ -10,6 +10,7 @@ env:
     layers:
       - kind: mjcf
         path: ${assets_dir}/xmls/robots/xf9600_mocap.xml
+        role: operator
   # Home pose at reset. Arm hangs 0.4m above the floor; gripper fully open
   # (clawj = 0). Tasks can override ``xf9600_freejoint`` for task-specific homes.
   initial_joint_positions:
@@ -21,6 +22,7 @@ env:
   # basis camera list references ``wrist_cam`` and has to be overridden.
   cameras:
     - name: eef_wrist_cam
+      role: operator
       width: ${cam_width}
       height: ${cam_height}
       enable_color: ${enable_color}

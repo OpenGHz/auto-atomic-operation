@@ -36,6 +36,7 @@ from .framework import (
     AxisReference,
     ControlledFrameKind,
     EefControlConfig,
+    ExecutionMode,
     FixedOrientationGoalConfig,
     IntervalSelectionConfig,
     KeypointSide,
@@ -68,6 +69,7 @@ from .utils.pose import (
     quaternion_angular_distance,
     rotate_pose_around_axis,
 )
+from .utils.transformations import quaternion_slerp
 
 if TYPE_CHECKING:
     from .execution_timeline import ExecutionTimeline
@@ -628,6 +630,18 @@ class SceneBackend(ABC):
     def get_object_handler(self, name: str) -> Optional[ObjectHandler]:
         """Resolve an object handler by name. Empty names may return None."""
 
+    def apply_object_pose(
+        self,
+        object_name: str,
+        pose: PoseState,
+        env_mask: Optional[np.ndarray] = None,
+    ) -> None:
+        """Apply a kinematic object pose through the backend-neutral contract."""
+        handler = self.get_object_handler(object_name)
+        if handler is None:
+            raise KeyError(f"Unknown object {object_name!r}.")
+        handler.set_pose(pose, env_mask=env_mask)
+
     @abstractmethod
     def is_object_grasped(self, operator_name: str, object_name: str) -> np.ndarray:
         """Return whether the operator is currently grasping the given object."""
@@ -783,6 +797,7 @@ class PrimitiveAction:
     waypoint: Optional[int] = None
     completes_keypoint: bool = True
     resolved_motion_goal: Optional["ResolvedMotionGoal"] = None
+    resolved_object_motion_goal: Optional["ResolvedObjectMotionGoal"] = None
     reference_pose_snapshot: Optional[PoseState] = None
 
 
@@ -806,6 +821,10 @@ class ExecutionContext:
     task_file: TaskFileConfig
     plan: List["StageExecutionPlan"] = field(default_factory=list)
     grasp_bindings: Dict[tuple[int, str], "GraspBinding"] = field(
+        default_factory=dict,
+        repr=False,
+    )
+    logical_carried_objects: Dict[int, str] = field(
         default_factory=dict,
         repr=False,
     )
@@ -865,6 +884,59 @@ class ExecutionContext:
         for key in stale_keys:
             self.grasp_bindings.pop(key, None)
 
+    @property
+    def is_object_only(self) -> bool:
+        """Whether this context executes by kinematically transporting objects."""
+        return self.task_file.execution.mode == ExecutionMode.OBJECT_ONLY
+
+    def get_logical_carried_object(self, env_index: int) -> Optional[str]:
+        """Return the object logically carried in one object-only environment."""
+        return self.logical_carried_objects.get(env_index)
+
+    def acquire_logical_object(self, env_index: int, object_name: str) -> None:
+        """Start carrying an object without creating a physical grasp."""
+        if not self.is_object_only:
+            raise RuntimeError("Logical object acquisition requires object_only mode.")
+        if env_index in self.logical_carried_objects:
+            raise RuntimeError(
+                f"Environment {env_index} already carries "
+                f"{self.logical_carried_objects[env_index]!r}."
+            )
+        if self.backend.get_object_handler(object_name) is None:
+            raise KeyError(f"Unknown object {object_name!r}.")
+        self.logical_carried_objects[env_index] = object_name
+
+    def apply_object_pose(
+        self,
+        object_name: str,
+        pose: PoseState,
+        env_mask: Optional[np.ndarray] = None,
+    ) -> None:
+        """Apply a world-frame pose through the object-only execution API.
+
+        External policies should use this context-level method instead of
+        reaching through ``context.backend``.  Keeping the mode check here
+        prevents a kinematic object transport from being accidentally used in
+        a physical execution, while the backend remains responsible for the
+        concrete scene update.
+        """
+        if not self.is_object_only:
+            raise RuntimeError("Object pose transport requires object_only mode.")
+        self.backend.apply_object_pose(object_name, pose, env_mask=env_mask)
+
+    def release_logical_object(self, env_index: int) -> str:
+        """Stop carrying and return the released object identity."""
+        try:
+            return self.logical_carried_objects.pop(env_index)
+        except KeyError as exc:
+            raise RuntimeError(
+                f"Environment {env_index} has no logically carried object."
+            ) from exc
+
+    def clear_env_logical_object(self, env_index: int) -> None:
+        """Clear one environment's object-only carry state during reset."""
+        self.logical_carried_objects.pop(env_index, None)
+
 
 @dataclass(frozen=True)
 class GraspBinding:
@@ -884,6 +956,17 @@ class ResolvedMotionGoal:
     controlled_world_pose: PoseState
     command_pose: PoseControlConfig
     controlled_object_name: Optional[str] = None
+    target_axis_world: Optional[np.ndarray] = None
+
+
+@dataclass
+class ResolvedObjectMotionGoal:
+    """One held-object waypoint resolved to controlled-frame and root poses."""
+
+    configured_pose: PoseControlConfig
+    controlled_world_pose: PoseState
+    object_world_pose: PoseState
+    controlled_object_name: str
     target_axis_world: Optional[np.ndarray] = None
 
 
@@ -962,7 +1045,7 @@ class ExecutionSummary:
 @dataclass
 class ActiveStageState:
     plan: StageExecutionPlan
-    operator: OperatorHandler
+    operator: Optional[OperatorHandler]
     target: Optional[ObjectHandler]
     actions: List[PrimitiveAction]
     action_index: int = 0
@@ -1312,7 +1395,13 @@ class TaskRunner:
         updates_used: int = 0,
         elapsed_time_sec: float = 0.0,
     ) -> ExecutionSummary:
-        dt = self._context.backend.dt_per_update if self._context else 0.0
+        dt = (
+            0.0
+            if self._context is not None and self._context.is_object_only
+            else self._context.backend.dt_per_update
+            if self._context
+            else 0.0
+        )
         task_update = update or self._build_task_update()
         public_internal_updates = (
             int(np.max(self._public_internal_updates))
@@ -1374,6 +1463,8 @@ class TaskRunner:
                 validate_boundaries=True,
             )
             plan = list(timeline.stage_plans)
+            if context.is_object_only:
+                self._validate_object_only_plan(plan, timeline)
             context.plan = plan
             backend.setup(context.config)
             stage_execution = StageExecution(
@@ -1394,6 +1485,7 @@ class TaskRunner:
                             env_index,
                             stage_plan.operator_name,
                         ),
+                        context=self._require_context(),
                     )
                 ),
             )
@@ -1419,7 +1511,90 @@ class TaskRunner:
         timeline = self._require_timeline()
         actions = timeline.clone_stage_actions(plan.stage_index)
         TaskRunner._apply_waypoint_randomization(actions, self._require_context())
+        if self._require_context().is_object_only:
+            TaskRunner._materialize_object_only_actions(plan, actions)
         return actions
+
+    @staticmethod
+    def _validate_object_only_plan(
+        plan: List[StageExecutionPlan],
+        timeline: "ExecutionTimeline",
+    ) -> None:
+        """Fail before setup when a task cannot be represented object-only."""
+        allowed_references = {
+            PoseReference.AUTO,
+            PoseReference.WORLD,
+            PoseReference.OBJECT,
+            PoseReference.OBJECT_WORLD,
+        }
+        for stage_plan in plan:
+            stage = stage_plan.stage
+            if stage.operation not in {Operation.PICK, Operation.PLACE}:
+                raise ValueError(
+                    "execution.mode='object_only' supports only pick/place stages; "
+                    f"stage {stage_plan.stage_name!r} uses {stage.operation.value!r}."
+                )
+            if not stage.object:
+                raise ValueError(
+                    f"Object-only stage {stage_plan.stage_name!r} requires object."
+                )
+            actions = timeline.clone_stage_actions(stage_plan.stage_index)
+            held_actions = [
+                action
+                for action in actions
+                if action.phase == TaskPhase.PRE_MOVE
+                and action.kind == "pose"
+                and action.pose is not None
+                and action.pose.controlled_frame.kind == ControlledFrameKind.HELD_OBJECT
+            ]
+            if stage.operation == Operation.PLACE and not held_actions:
+                raise ValueError(
+                    f"Object-only place stage {stage_plan.stage_name!r} requires at "
+                    "least one pre_move waypoint with controlled_frame.kind="
+                    "'held_object'; EEF waypoints are approach motions and are skipped."
+                )
+            for action in held_actions:
+                assert action.pose is not None
+                if action.pose.reference not in allowed_references:
+                    raise ValueError(
+                        f"Object-only stage {stage_plan.stage_name!r} cannot resolve "
+                        f"held-object reference {action.pose.reference.value!r}."
+                    )
+                orientation_goal = action.pose.orientation_goal
+                if (
+                    isinstance(orientation_goal, AxisAlignmentOrientationGoalConfig)
+                    and orientation_goal.target_axis.reference == AxisReference.BASE
+                ):
+                    raise ValueError(
+                        f"Object-only stage {stage_plan.stage_name!r} cannot resolve "
+                        "an operator-base target axis. Use world or object."
+                    )
+
+    @staticmethod
+    def _materialize_object_only_actions(
+        plan: StageExecutionPlan,
+        actions: List[PrimitiveAction],
+    ) -> None:
+        """Replace physical primitives while preserving configured identities."""
+        for action in actions:
+            if plan.stage.operation == Operation.PICK:
+                action.kind = (
+                    "object_acquire" if action.phase == TaskPhase.EEF else "noop"
+                )
+            elif plan.stage.operation == Operation.PLACE:
+                is_held_waypoint = (
+                    action.phase == TaskPhase.PRE_MOVE
+                    and action.kind == "pose"
+                    and action.pose is not None
+                    and action.pose.controlled_frame.kind
+                    == ControlledFrameKind.HELD_OBJECT
+                )
+                if is_held_waypoint:
+                    action.kind = "object_pose"
+                elif action.phase == TaskPhase.EEF:
+                    action.kind = "object_release"
+                else:
+                    action.kind = "noop"
 
     def _interval_boundary_state_index(
         self,
@@ -1614,13 +1789,21 @@ class TaskRunner:
     ) -> Dict[str, Any]:
         execution = context.task_file.execution
         timeline = self._require_timeline()
-        return {
+        details = {
             "event": event,
             "update_boundary": timeline.update_boundary.value,
             "render_internal_updates": bool(execution.render_internal_updates),
             "internal_updates": internal_updates,
             "max_internal_updates_per_update": timeline.max_internal_updates_per_update,
         }
+        if context.is_object_only:
+            details.update(
+                {
+                    "mode": ExecutionMode.OBJECT_ONLY.value,
+                    "physics_semantics": "kinematic_object_transport",
+                }
+            )
+        return details
 
     def _fail_internal_update_limit(
         self,
@@ -1892,7 +2075,8 @@ class TaskRunner:
         return self._require_stage_execution().advance_control(
             env_index,
             use_configured_identity=(
-                self._require_timeline().interval_selection is not None
+                self._require_context().is_object_only
+                or self._require_timeline().interval_selection is not None
                 or self._require_timeline().update_boundary
                 != UpdateBoundary.CONTROL_TICK
             ),
@@ -2018,6 +2202,7 @@ class TaskRunner:
         backend: SceneBackend,
         env_mask: np.ndarray,
         grasp_binding: Optional[GraspBinding] = None,
+        context: Optional[ExecutionContext] = None,
     ) -> ControlResult:
         """Run one primitive action with operator/target/site resolved from the plan.
 
@@ -2025,6 +2210,15 @@ class TaskRunner:
         ``TaskRunner._update_env`` and ``ConfigDrivenDemoPolicy.action_applier``
         so callers cannot forget to forward fields like ``reference_site``.
         """
+        if context is not None and context.is_object_only:
+            return TaskRunner._run_object_only_action(
+                env_index=env_index,
+                plan=plan,
+                action=action,
+                context=context,
+                env_mask=env_mask,
+            )
+
         operator = backend.get_operator_handler(plan.operator_name)
         target = backend.get_object_handler(plan.stage.object)
         result = TaskRunner._run_action(
@@ -2043,6 +2237,320 @@ class TaskRunner:
             backend=backend,
             result=result,
         )
+
+    @staticmethod
+    def _run_object_only_action(
+        env_index: int,
+        plan: StageExecutionPlan,
+        action: PrimitiveAction,
+        context: ExecutionContext,
+        env_mask: np.ndarray,
+    ) -> ControlResult:
+        """Advance one kinematic object-only primitive."""
+        result = ControlResult.filled(context.backend.batch_size, ControlSignal.RUNNING)
+        details = result.details[env_index]
+        details["execution_mode"] = ExecutionMode.OBJECT_ONLY.value
+        try:
+            if action.kind == "noop":
+                result.signals[env_index] = ControlSignal.REACHED
+                details["event"] = "object_only_noop"
+                return result
+
+            if action.kind == "object_acquire":
+                context.acquire_logical_object(env_index, plan.stage.object)
+                result.signals[env_index] = ControlSignal.REACHED
+                details.update(
+                    {
+                        "event": "object_acquired",
+                        "carried_object": plan.stage.object,
+                    }
+                )
+                return result
+
+            if action.kind == "object_release":
+                released = context.release_logical_object(env_index)
+                result.signals[env_index] = ControlSignal.REACHED
+                details.update(
+                    {
+                        "event": "object_released",
+                        "carried_object": released,
+                    }
+                )
+                return result
+
+            if action.kind != "object_pose" or action.pose is None:
+                raise RuntimeError(f"Invalid object-only primitive {action.kind!r}.")
+
+            object_name = context.get_logical_carried_object(env_index)
+            if object_name is None:
+                raise RuntimeError(
+                    "Object-only pose requires a logically carried object."
+                )
+            reuse_goal = action.pose.static or action.pose.relative
+            goal = action.resolved_object_motion_goal if reuse_goal else None
+            if goal is None:
+                goal = TaskRunner._resolve_object_motion_goal(
+                    env_index=env_index,
+                    object_name=object_name,
+                    pose=action.pose,
+                    target=context.backend.get_object_handler(plan.stage.object),
+                    backend=context.backend,
+                    reference_site=plan.stage.site,
+                )
+                action.resolved_object_motion_goal = goal
+            reached, motion_details = TaskRunner._advance_object_motion_goal(
+                env_index=env_index,
+                goal=goal,
+                context=context,
+                env_mask=env_mask,
+            )
+            result.signals[env_index] = (
+                ControlSignal.REACHED if reached else ControlSignal.RUNNING
+            )
+            details.update(motion_details)
+            return result
+        except (KeyError, NotImplementedError, RuntimeError, ValueError) as error:
+            result.signals[env_index] = ControlSignal.FAILED
+            details.update(
+                {
+                    "event": "object_only_execution_failed",
+                    "failure_category": "object_only_execution_failed",
+                    "failure_reason": str(error),
+                }
+            )
+            return result
+
+    @staticmethod
+    def _resolve_object_motion_goal(
+        *,
+        env_index: int,
+        object_name: str,
+        pose: PoseControlConfig,
+        target: Optional[ObjectHandler],
+        backend: SceneBackend,
+        reference_site: Optional[str],
+        current_object_pose: Optional[PoseState] = None,
+    ) -> ResolvedObjectMotionGoal:
+        """Resolve a held-object waypoint without constructing an EEF command."""
+        if pose.controlled_frame.kind != ControlledFrameKind.HELD_OBJECT:
+            raise ValueError(
+                "Object-only motion requires controlled_frame='held_object'."
+            )
+        if pose.arc is not None:
+            raise ValueError("Object-only motion does not support arc waypoints.")
+        handler = backend.get_object_handler(object_name)
+        if handler is None:
+            raise KeyError(f"Unknown carried object {object_name!r}.")
+        actual_world_from_object = handler.get_pose().select(env_index)
+        world_from_object = (
+            actual_world_from_object
+            if current_object_pose is None
+            else current_object_pose
+        )
+        frame_name = pose.controlled_frame.frame
+        if frame_name is None:
+            world_from_controlled = world_from_object
+            object_from_controlled = PoseState()
+        else:
+            if not backend.is_element_rigidly_attached_to_object(
+                frame_name,
+                object_name,
+                env_index,
+            ):
+                raise ValueError(
+                    f"Controlled frame {frame_name!r} is not rigidly attached "
+                    f"to carried object {object_name!r}."
+                )
+            actual_world_from_controlled = backend.get_element_pose(
+                frame_name,
+                env_index,
+            )
+            object_from_controlled = compose_pose(
+                inverse_pose(actual_world_from_object),
+                actual_world_from_controlled,
+            )
+            world_from_controlled = compose_pose(
+                world_from_object,
+                object_from_controlled,
+            )
+
+        reference_pose = TaskRunner._resolve_object_reference_pose(
+            env_index=env_index,
+            pose=pose,
+            target=target,
+            backend=backend,
+            reference_site=reference_site,
+        )
+        local_pose = TaskRunner._pose_config_to_local_pose(pose)
+        current_local = compose_pose(
+            inverse_pose(reference_pose),
+            world_from_controlled,
+        )
+        has_fixed_orientation = bool(pose.orientation or pose.rotation) or isinstance(
+            pose.orientation_goal,
+            FixedOrientationGoalConfig,
+        )
+        if pose.relative:
+            target_local_pose = compose_pose(current_local, local_pose)
+        elif has_fixed_orientation:
+            target_local_pose = local_pose
+        else:
+            target_local_pose = PoseState(
+                position=local_pose.position[0],
+                orientation=current_local.orientation[0],
+            )
+
+        controlled_world_pose = compose_pose(reference_pose, target_local_pose)
+        target_axis_world: Optional[np.ndarray] = None
+        orientation_goal = pose.orientation_goal
+        if isinstance(orientation_goal, AxisAlignmentOrientationGoalConfig):
+            if orientation_goal.target_axis.reference == AxisReference.WORLD:
+                axis_reference_pose = None
+            elif orientation_goal.target_axis.reference == AxisReference.OBJECT:
+                axis_reference_pose = TaskRunner._object_target_reference_pose(
+                    env_index=env_index,
+                    target=target,
+                    backend=backend,
+                    reference_site=reference_site,
+                )
+            else:
+                raise ValueError("Object-only axis alignment cannot use BASE.")
+            target_axis_world = resolve_axis_in_world(
+                orientation_goal.target_axis.vector,
+                axis_reference_pose,
+            )
+            controlled_world_pose = PoseState(
+                position=controlled_world_pose.position[0],
+                orientation=resolve_axis_alignment_orientation(
+                    world_from_controlled,
+                    orientation_goal.controlled_axis,
+                    target_axis_world,
+                    orientation_goal.direction,
+                ),
+            )
+
+        return ResolvedObjectMotionGoal(
+            configured_pose=pose,
+            controlled_world_pose=controlled_world_pose,
+            object_world_pose=compose_pose(
+                controlled_world_pose,
+                inverse_pose(object_from_controlled),
+            ),
+            controlled_object_name=object_name,
+            target_axis_world=target_axis_world,
+        )
+
+    @staticmethod
+    def _resolve_object_reference_pose(
+        *,
+        env_index: int,
+        pose: PoseControlConfig,
+        target: Optional[ObjectHandler],
+        backend: SceneBackend,
+        reference_site: Optional[str],
+    ) -> PoseState:
+        reference = pose.reference
+        if reference == PoseReference.AUTO:
+            reference = (
+                PoseReference.OBJECT_WORLD
+                if target is not None
+                else PoseReference.WORLD
+            )
+        if reference == PoseReference.WORLD:
+            return PoseState()
+        object_reference = TaskRunner._object_target_reference_pose(
+            env_index=env_index,
+            target=target,
+            backend=backend,
+            reference_site=reference_site,
+        )
+        if reference == PoseReference.OBJECT:
+            return object_reference
+        if reference == PoseReference.OBJECT_WORLD:
+            return PoseState(position=object_reference.position[0])
+        raise ValueError(
+            f"Object-only motion cannot resolve operator-dependent reference "
+            f"{reference.value!r}."
+        )
+
+    @staticmethod
+    def _object_target_reference_pose(
+        *,
+        env_index: int,
+        target: Optional[ObjectHandler],
+        backend: SceneBackend,
+        reference_site: Optional[str],
+    ) -> PoseState:
+        if reference_site is not None:
+            return backend.get_element_pose(reference_site, env_index)
+        if target is None:
+            raise ValueError("Object reference requires a stage target object.")
+        return target.get_pose().select(env_index)
+
+    @staticmethod
+    def _advance_object_motion_goal(
+        *,
+        env_index: int,
+        goal: ResolvedObjectMotionGoal,
+        context: ExecutionContext,
+        env_mask: np.ndarray,
+    ) -> tuple[bool, Dict[str, Any]]:
+        handler = context.backend.get_object_handler(goal.controlled_object_name)
+        if handler is None:
+            raise KeyError(f"Unknown carried object {goal.controlled_object_name!r}.")
+        current = handler.get_pose().select(env_index)
+        target = goal.object_world_pose
+        position_delta = np.asarray(target.position[0]) - np.asarray(
+            current.position[0]
+        )
+        position_distance = float(np.linalg.norm(position_delta))
+        angular_distance = float(
+            quaternion_angular_distance(
+                current.orientation[0],
+                target.orientation[0],
+            )
+        )
+        motion = context.task_file.execution.object_motion
+        linear_step = float(
+            goal.configured_pose.max_linear_step
+            if goal.configured_pose.max_linear_step > 0.0
+            else motion.max_linear_step
+        )
+        angular_step = float(
+            goal.configured_pose.max_angular_step
+            if goal.configured_pose.max_angular_step > 0.0
+            else motion.max_angular_step
+        )
+        position_reached = position_distance <= linear_step
+        orientation_reached = angular_distance <= angular_step
+        next_position = np.asarray(target.position[0], dtype=np.float64)
+        if not position_reached:
+            next_position = np.asarray(current.position[0], dtype=np.float64) + (
+                position_delta * (linear_step / position_distance)
+            )
+        next_orientation = np.asarray(target.orientation[0], dtype=np.float64)
+        if not orientation_reached:
+            next_orientation = quaternion_slerp(
+                np.asarray(current.orientation[0], dtype=np.float64),
+                next_orientation,
+                fraction=angular_step / angular_distance,
+            )
+        context.backend.apply_object_pose(
+            goal.controlled_object_name,
+            PoseState(position=next_position, orientation=next_orientation),
+            env_mask=env_mask,
+        )
+        reached = position_reached and orientation_reached
+        return reached, {
+            "event": "object_pose_reached" if reached else "object_pose_running",
+            "carried_object": goal.controlled_object_name,
+            "target_position": [float(value) for value in target.position[0]],
+            "target_orientation": [float(value) for value in target.orientation[0]],
+            "position_error_before_step": position_distance,
+            "orientation_error_before_step": angular_distance,
+            "max_linear_step": linear_step,
+            "max_angular_step": angular_step,
+        }
 
     @staticmethod
     def _refine_absolute_arc_result(

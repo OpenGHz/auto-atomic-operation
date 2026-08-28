@@ -782,11 +782,38 @@ class IntervalSelectionConfig(BaseModel, frozen=True):
         return normalized
 
 
+class ExecutionMode(str, Enum):
+    """How configured task stages are executed."""
+
+    PHYSICAL = "physical"
+    """Execute every waypoint and end-effector command through an operator."""
+
+    OBJECT_ONLY = "object_only"
+    """Hide operators and kinematically transport picked objects."""
+
+
+class ObjectMotionExecutionConfig(BaseModel, frozen=True):
+    """Kinematic object-transport settings for ``object_only`` execution."""
+
+    model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid")
+
+    max_linear_step: PositiveFloat = 0.02
+    """Default maximum object translation per controller update, in metres."""
+
+    max_angular_step: PositiveFloat = 0.15
+    """Default maximum object rotation per controller update, in radians."""
+
+
 class ExecutionConfig(BaseModel, frozen=True):
     """TaskRunner execution policy for one runnable task file."""
 
     model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid")
 
+    mode: ExecutionMode = ExecutionMode.PHYSICAL
+    """Execution strategy. ``object_only`` removes configured operators and
+    directly moves the logically picked object along held-object waypoints."""
+    object_motion: ObjectMotionExecutionConfig = ObjectMotionExecutionConfig()
+    """Kinematic object-motion limits used only by ``object_only`` mode."""
     interval_selection: Optional[IntervalSelectionConfig] = None
     """Optional task interval. ``reset()`` advances to the configured start
     boundary, and execution succeeds at the configured stop boundary."""

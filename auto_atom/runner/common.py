@@ -16,6 +16,7 @@ from hydra.utils import instantiate
 from omegaconf import DictConfig, ListConfig, OmegaConf
 from pydantic import BaseModel
 
+from auto_atom.execution_config import prepare_task_config_for_instantiation
 from auto_atom.framework import TaskFileConfig
 from auto_atom.runtime import (
     ComponentRegistry,
@@ -47,7 +48,7 @@ def prepare_task_file(
     cfg: DictConfig, config_cls: BaseModel = TaskFileConfig
 ) -> TaskFileConfig:
     ComponentRegistry.clear()
-    raw = instantiate(cfg)
+    raw = instantiate(prepare_task_config_for_instantiation(cfg))
     # Strip OmegaConf wrappers so downstream code (framework / runtime /
     # backends) only ever sees plain Python types — no module outside this
     # entry-point layer should need to import omegaconf.

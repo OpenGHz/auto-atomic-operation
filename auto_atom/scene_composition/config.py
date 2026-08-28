@@ -75,6 +75,10 @@ class MjcfLayerConfig(BaseModel, frozen=True):
     namespace: str = ""
     """Optional namespace for metadata; existing XML names are not rewritten."""
 
+    role: Literal["scene", "operator"] = "scene"
+    """Semantic ownership used by execution policies to retain scene layers
+    while removing physical operator layers."""
+
     @field_validator("namespace")
     @classmethod
     def _namespace(cls, value: str) -> str:
@@ -96,6 +100,10 @@ class AssetAssemblyLayerConfig(BaseModel, frozen=True):
 
     kind: Literal["asset_assembly"] = "asset_assembly"
     """Layer discriminator."""
+
+    role: Literal["scene", "operator"] = "scene"
+    """Semantic ownership used by execution policies to remove operator
+    assembly layers together with operator MJCF layers."""
 
     package: Path
     """Package root or package descriptor path."""

@@ -10,3 +10,4 @@ env:
     layers:
       - kind: mjcf
         path: ${assets_dir}/xmls/robots/p7_arm_with_xf9600_composable.xml
+        role: operator

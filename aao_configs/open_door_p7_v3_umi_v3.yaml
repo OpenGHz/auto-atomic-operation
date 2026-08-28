@@ -10,6 +10,7 @@ env:
   # ``wrist_cam`` body in base_link) and add the scene's env2_cam.
   cameras:
     - name: eef_wrist_cam
+      role: operator
       width: ${cam_width}
       height: ${cam_height}
       enable_color: ${enable_color}

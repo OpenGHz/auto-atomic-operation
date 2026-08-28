@@ -13,6 +13,7 @@ env:
     layers:
       - kind: mjcf
         path: ${assets_dir}/xmls/robots/airbot_play_with_g2.xml
+        role: operator
   operators:
     arm:
       arm_actuators:

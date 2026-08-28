@@ -14,6 +14,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Mapping, Optional
 
 from .framework import (
+    ExecutionMode,
     IntervalSelectionConfig,
     KeypointSide,
     TaskKeypointConfig,
@@ -100,7 +101,11 @@ class ExecutionTimeline:
         )
 
         for stage_index, stage in enumerate(context.config.stages):
-            operator_name = builder._select_operator(stage, context.backend)
+            operator_name = (
+                "object_only"
+                if execution.mode == ExecutionMode.OBJECT_ONLY
+                else builder._select_operator(stage, context.backend)
+            )
             actions, last_orientation = builder.build_actions(
                 stage,
                 last_orientation,

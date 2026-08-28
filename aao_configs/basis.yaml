@@ -30,6 +30,7 @@ env:
   hide_operators_in_camera: false
   cameras:
     - name: wrist_cam
+      role: operator
       width: ${cam_width}
       height: ${cam_height}
       enable_color: ${enable_color}
@@ -58,6 +59,12 @@ env:
   heatmap_operations: ["pick", "place", "push", "pull", "press"]
 
 backend: auto_atom.backend.mjc.mujoco_backend.build_mujoco_backend
+
+execution:
+  mode: physical
+  object_motion:
+    max_linear_step: 0.02
+    max_angular_step: 0.15
 
 task:
   env_name: ${task_name}

@@ -14,6 +14,7 @@ from typing import Any, Dict
 from hydra.utils import instantiate
 from omegaconf import DictConfig, ListConfig, OmegaConf
 
+from .execution_config import prepare_task_config_for_instantiation
 from .framework import AutoAtomConfig, TaskFileConfig
 
 
@@ -46,8 +47,9 @@ def load_task_file(path: str | Path) -> TaskFileConfig:
     if not isinstance(config, DictConfig):
         raise TypeError(f"YAML root must be a mapping: {config_path}")
 
-    instantiate(config)
-    raw = OmegaConf.to_container(config, resolve=True)
+    prepared = prepare_task_config_for_instantiation(config)
+    instantiate(prepared)
+    raw = OmegaConf.to_container(prepared, resolve=True)
     if not isinstance(raw, dict):
         raise TypeError(f"YAML root must be a mapping: {config_path}")
     return TaskFileConfig.model_validate(raw)
@@ -80,8 +82,9 @@ def load_task_file_hydra(
     with initialize_config_dir(config_dir=resolved_dir, version_base=None):
         cfg = compose(config_name=config_name, overrides=overrides or [])
 
-    instantiate(cfg)
-    raw = OmegaConf.to_container(cfg, resolve=True)
+    prepared = prepare_task_config_for_instantiation(cfg)
+    instantiate(prepared)
+    raw = OmegaConf.to_container(prepared, resolve=True)
     if not isinstance(raw, dict):
         raise TypeError("Config root must be a mapping.")
     return TaskFileConfig.model_validate(raw)

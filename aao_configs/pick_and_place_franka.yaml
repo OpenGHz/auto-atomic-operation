@@ -11,6 +11,7 @@ env:
     layers:
       - kind: mjcf
         path: ${assets_dir}/xmls/robots/panda_robotiq.xml
+        role: operator
   mask_objects: ["source_block", "target_pedestal"]
   operations: ["pick", "place"]
   viewer:

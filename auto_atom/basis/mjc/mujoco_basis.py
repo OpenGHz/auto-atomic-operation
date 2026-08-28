@@ -13,7 +13,7 @@ import time
 from contextlib import contextmanager
 from enum import Enum
 from math import pi, tan
-from typing import Any, Callable, Dict, Iterator, List, Optional, Set, Tuple
+from typing import Any, Callable, Dict, Iterator, List, Literal, Optional, Set, Tuple
 
 import mujoco
 import numpy as np
@@ -53,6 +53,9 @@ class CameraSpec(BaseModel, frozen=True):
 
     name: str
     """The camera name as defined in the Mujoco model."""
+    role: Literal["scene", "operator"] = "scene"
+    """Semantic ownership used to remove operator-mounted cameras together
+    with an operator-only scene layer."""
     width: int = 640
     """The rendered image width in pixels."""
     height: int = 480

@@ -173,6 +173,7 @@ class ConfigDrivenDemoPolicy:
                     env_index,
                     plan.operator_name,
                 ),
+                context=context,
             )
             if result.signals[env_index] == ControlSignal.REACHED:
                 feedback.stage_action_sequence_done[env_index] = (
@@ -332,13 +333,15 @@ class PolicyEvaluator:
                 validate_boundaries=False,
             )
             plan = list(timeline.stage_plans)
+            if context.is_object_only:
+                TaskRunner._validate_object_only_plan(plan, timeline)
             context.plan = plan
             backend.setup(context.config)
             stage_execution = StageExecution(
                 context,
                 plan,
                 actions_factory=lambda stage_plan: (
-                    self._require_timeline().clone_stage_actions(stage_plan.stage_index)
+                    self._materialize_object_only_policy_actions(stage_plan)
                 ),
                 timeline=timeline,
                 completion_pose_resolver=self._resolve_completion_pose,
@@ -357,6 +360,16 @@ class PolicyEvaluator:
         self._records = self._stage_execution.records
         self._pending_sim_loop_freq = requested_sim_loop_frequency
         return self
+
+    def _materialize_object_only_policy_actions(
+        self,
+        plan: StageExecutionPlan,
+    ) -> List[PrimitiveAction]:
+        actions = self._require_timeline().clone_stage_actions(plan.stage_index)
+        if self._require_context().is_object_only:
+            TaskRunner._apply_waypoint_randomization(actions, self._require_context())
+            TaskRunner._materialize_object_only_actions(plan, actions)
+        return actions
 
     def reset(self, env_mask: Optional[np.ndarray] = None) -> TaskUpdate:
         self._raise_sim_loop_error()
@@ -743,6 +756,11 @@ class PolicyEvaluator:
                 self._builder_timelines[key] = timeline
         actions = timeline.clone_stage_actions(stage_index)
         TaskRunner._apply_waypoint_randomization(actions, self._require_context())
+        if self._require_context().is_object_only:
+            TaskRunner._materialize_object_only_actions(
+                self._plan[stage_index],
+                actions,
+            )
         return actions
 
     def stage_action_index(self, env_index: int, stage_index: int) -> int:
@@ -757,6 +775,8 @@ class PolicyEvaluator:
         env_index: int,
         active: ActiveStageState,
     ) -> Optional[ResolvedMotionGoal]:
+        if self._require_context().is_object_only:
+            return None
         action = self._completion_goal_action(active)
         if action is None or action.pose is None:
             return None

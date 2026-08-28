@@ -31,7 +31,7 @@ A composed runnable config normally exposes these top-level keys:
 | `backend` | Dotted import path to a backend factory, such as `auto_atom.backend.mjc.mujoco_backend.build_mujoco_backend`. |
 | `task` | `env_name`, ordered stages, seed, initial poses, and randomization. |
 | `task_operators` | Logical operator definitions keyed by name.  Backend-specific control and initial-state settings belong here. |
-| `execution` | Optional `TaskRunner` update-boundary and interval policy. |
+| `execution` | Optional `TaskRunner` policy, including update boundaries, interval selection, and the `physical` / `object_only` execution mode. |
 
 The CLI also accepts entry-point options such as `rounds`, `max_updates`,
 `print_updates`, `perf_count`, `policy`, `recorder`, and `replay`.  These are
@@ -91,6 +91,52 @@ task:
 
 task_operators:
   arm_a: {}
+```
+
+### Object-only execution
+
+Set one global execution override to run a task without loading a physical
+operator and without executing EEF approach/grasp/retract motions:
+
+```bash
+aao-demo --config-name dishwasher_plate execution.mode=object_only
+```
+
+`object_only` removes scene layers and cameras marked `role: operator` (legacy
+robot-layer paths and wrist-camera names are recognized as a fallback), clears
+operator bindings, and keeps only the scene objects. A `pick` establishes a
+logical carried-object identity; a `place` moves that object directly through
+its `controlled_frame.kind: held_object` waypoints using linear/quaternion
+interpolation, then releases it. EEF-only place waypoints are intentionally
+skipped and a place stage without a held-object waypoint fails validation.
+
+The default is `execution.mode: physical`, which preserves the ordinary
+operator-controlled behavior. Object-only is a kinematic/ghost transport mode:
+it validates task geometry and final placement, but does not claim physical
+grasp, contact, reachability, or collision success. Unsupported operations
+(`move`, `push`, `pull`, `press`, standalone `grasp`/`release`) fail fast in
+this mode. Tune interpolation limits with:
+
+```yaml
+execution:
+  mode: object_only
+  object_motion:
+    max_linear_step: 0.02   # metres per update
+    max_angular_step: 0.15  # radians per update
+```
+
+Layers and cameras can opt into filtering explicitly:
+
+```yaml
+env:
+  scene:
+    layers:
+      - kind: mjcf
+        path: assets/xmls/robots/my_robot.xml
+        role: operator
+  cameras:
+    - name: wrist_cam
+      role: operator
 ```
 
 For a complete runnable example, inspect `aao_configs/mock.yaml`.  Use

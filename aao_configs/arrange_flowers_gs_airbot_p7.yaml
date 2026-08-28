@@ -14,6 +14,7 @@ env:
   operations: ["pick", "place"]
   cameras:
     - name: eef_wrist_cam
+      role: operator
       width: ${cam_width}
       height: ${cam_height}
       enable_color: ${enable_color}

@@ -8,6 +8,7 @@ env:
     layers:
       - kind: mjcf
         path: ${assets_dir}/xmls/robots/p7_arm_with_g2p.xml
+        role: operator
   # Home pose at reset mirrors basis_p7_xf9600 for the 7 P7 arm hinges.
   # G2P passive linkage joints default from qpos0; only the driven claw slide
   # is opened explicitly.

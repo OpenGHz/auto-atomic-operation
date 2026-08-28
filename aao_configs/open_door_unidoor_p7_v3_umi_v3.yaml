@@ -27,6 +27,7 @@ env:
         verify_hashes: true
       - kind: mjcf
         path: ${assets_dir}/xmls/robots/p7_arm_v3_with_umi_gripper_v3.xml
+        role: operator
   mask_objects: [door__door_handle]
   # Heat-map focus for the manipulated mask object; task.stages below is the
   # authoritative PICK -> PULL -> PUSH workflow.

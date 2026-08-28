@@ -229,8 +229,26 @@ class MujocoObjectHandler(ObjectHandler):
             )
             if bid < 0:
                 continue
-            single_env.model.body_pos[bid] = [x, y, z]
-            single_env.model.body_quat[bid] = [qw, qx, qy, qz]
+            # ``body_pos``/``body_quat`` are stored in the parent body's local
+            # frame.  Static (non-freejoint) assets are often nested below a
+            # scene body, so writing the requested world pose directly here
+            # silently places them at the wrong location.  Convert world →
+            # parent-local just as the operator base-pose path does.
+            parent_id = int(single_env.model.body_parentid[bid])
+            parent_pos = single_env.data.xpos[parent_id].astype(np.float64)
+            parent_mat = (
+                single_env.data.xmat[parent_id].reshape(3, 3).astype(np.float64)
+            )
+            single_env.model.body_pos[bid] = parent_mat.T @ (
+                np.asarray([x, y, z], dtype=np.float64) - parent_pos
+            )
+            world_quat_wxyz = np.asarray([qw, qx, qy, qz], dtype=np.float64)
+            parent_quat_wxyz = single_env.data.xquat[parent_id].astype(np.float64)
+            inverse_parent_quat = np.empty(4, dtype=np.float64)
+            mujoco.mju_negQuat(inverse_parent_quat, parent_quat_wxyz)
+            local_quat = np.empty(4, dtype=np.float64)
+            mujoco.mju_mulQuat(local_quat, inverse_parent_quat, world_quat_wxyz)
+            single_env.model.body_quat[bid] = local_quat
             mujoco.mj_forward(single_env.model, single_env.data)
 
     def is_at_target(
@@ -1033,6 +1051,16 @@ class MujocoTaskBackend(SceneBackend):
         except KeyError as exc:
             known = ", ".join(sorted(self.object_handlers)) or "<empty>"
             raise KeyError(f"Unknown object '{name}'. Known objects: {known}") from exc
+
+    def apply_object_pose(
+        self,
+        object_name: str,
+        pose: PoseState,
+        env_mask: Optional[np.ndarray] = None,
+    ) -> None:
+        """Apply a kinematic object pose and refresh the passive viewer."""
+        super().apply_object_pose(object_name, pose, env_mask=env_mask)
+        self.env.refresh_viewer()
 
     def _record_default_poses(self) -> None:
         for name, handler in self.object_handlers.items():
