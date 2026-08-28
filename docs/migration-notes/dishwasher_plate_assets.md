@@ -112,6 +112,8 @@ joints belong to the dishwasher mechanism. The target is a child
 `dishwasher_rack1_target` body with a
 `dishwasher_rack1_target_site` site, so it follows rack motion and future task configuration
 can reference a real pose-bearing entity rather than infer a pose from a visual marker.
+The physical proxy retains the authored task mass of `0.35 kg`; the successful placement
+does not depend on making the plate artificially light.
 
 ## Collision representations
 
@@ -166,7 +168,9 @@ collision-manifest bindings:
 
 ```bash
 python -m pytest \
-  tests/test_dishwasher_plate_scene.py -q
+  tests/test_dishwasher_plate_scene.py \
+  tests/test_xf9600_contact_parameters.py \
+  tests/test_dishwasher_plate_end_to_end.py -q
 ```
 
 The runnable task composes successfully and is discoverable through the public task CLI:
@@ -183,17 +187,50 @@ in 6 updates, and the direct 0.15 m lift completed in 46 updates with semantic o
 of `0.01882 m` and `0.09819 rad`. Robotiq's wide cylinder contact slipped inside the gripper,
 while UMI v3 still had `0.05304 m` / `0.24893 rad` EEF error after 1200 lift updates.
 
-The current full physical run is nevertheless not recorded as an end-to-end success. After
-the verified XF9600 lift, the first `axis_alignment` waypoint reaches its derived EEF command
-but loses the two-sided plate grasp, so execution fails with
-`controlled_frame_validation_failed` (`expected 'plate2', got None`) after 307 rotation
-updates. Reversing the initial jaw polarity and splitting the swing through a 45-degree
-intermediate axis produced the same identity-loss boundary. This is not a configuration-load
-or motion-goal-resolution failure. The task validates configuration, measured grasp binding,
-semantic lift, partial-orientation resolution, and fail-fast held-object identity; successful
-vertical placement still requires a plate-grasp/operator dynamics contract that retains the
-plate through the swing. Relaxing final placement tolerance would not repair that loss of
-identity and would not be valid evidence.
+The physical setup was subsequently corrected without changing `plate2`'s mass:
+
+- The pick waypoint moved from the plate center to `[-0.115, 0, 0]` in the plate frame,
+  gripping 5.2 mm inside its `-X` rim. A one-sided source table now supports the center of
+  mass while leaving that rim and the open finger pads clear; the task no longer starts with
+  a free plate falling before contact.
+- The rack target moved one complete slot outward along rack-local `-Y`, from
+  `0.0265645 m` to `-0.0236405 m` (a `50.205 mm` shift). The matching allowed-contact
+  interval on the longitudinal support wire moved with it, so the target and contact policy
+  remain co-located while the gripper has more cabinet clearance. Its rack-local `X-Z`
+  center is `[-0.03487368, 0.20811805]`, computed from the plate radius and the equal-distance
+  tangent construction between support wires `c038` and `c050` under a circular-wire
+  cross-section approximation. The compiled collision proxies are square boxes, so the
+  result intentionally uses their soft-contact regime rather than claiming exact
+  zero-penetration tangency; it is not a hand-tuned hover pose above one unstable wire.
+- All four XF9600 finger pads now compile with `condim=4`,
+  `friction="1 0.02 0.01"`, and `solref="0.002 1"`. The fourth contact dimension
+  activates torsional friction without the earlier oversized `0.05 m` effective radius;
+  this task also reduces its joint target from the gripper's `0.020` full-close limit to
+  `0.019`. Together, the contact response, friction, and lower close command bound measured
+  gripper/plate overlap below the task's regression tolerance. The plate itself remains
+  `0.35 kg` with its existing `condim=6` contact proxy.
+- The mocap-to-interface weld uses `solref="0.10 1"` instead of `0.3 1`, reducing
+  command lag during the 90-degree swing without replacing the physical grasp with a rigid
+  plate attachment.
+- Opening now waits 30 control updates (one second at 30 Hz) before the placement
+  postcondition is evaluated. The regression then advances another second of free physics
+  and rechecks position, constrained axis, and drift. Success therefore requires bounded
+  post-release stability over that window rather than merely the instant the fingers
+  separate; it does not claim that residual velocity is exactly zero.
+
+With those changes and held-object semantic feedback correction, the bounded headless task
+completed both `pick_plate` and `place_plate_in_upper_rack`: the recorded run at
+`outputs/2026-08-28/15-08-25/summary.json` reports `1/1` success in 166 updates,
+`5.533 s` of simulated time, and `0.606 s` of measured wall time. A test hook inspects every
+1200 Hz physics substep: the plate does not contact any dishwasher proxy outside the two
+declared cradle supports, the four physical finger pads do not contact dishwasher collision
+geoms, and pad/plate contact penetration remains below `1.5 mm`. This gate covers the
+declared physical collision proxies;
+it does not turn the XF9600's non-colliding render meshes into physical shell proxies. The
+plate remains within the configured position and axis tolerances after an additional second
+of free settling. Held-object identity is still checked before every follow-up motion command;
+losing or replacing the plate remains a fail-fast error rather than being hidden by tolerance
+relaxation or a new grasp measurement.
 
 To smoke-test the host-plus-robot composition path independently of task execution:
 

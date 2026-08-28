@@ -9,11 +9,11 @@ env:
   # XF9600's stiff four-bar linkage requires the same 1200 Hz integration
   # rate used by its existing pick-and-place task.
   sim_freq: 1200
-  # Start at the horizontal plate's grasp pose.  This host scene intentionally
-  # contains no table layer, so approaching from the generic origin would let
-  # the free plate fall before the first grasp closes.
+  # Start at the horizontal plate's overhanging -X rim grasp.  The XF9600 EEF
+  # site is 0.10 m ahead of its freejoint in this orientation, so the freejoint
+  # starts 0.10 m farther along -X than the requested rim pose.
   initial_joint_positions:
-    xf9600_freejoint: [-0.55, -0.36, 0.223671074, 0.0, 0.0, -0.70710678, 0.70710678]
+    xf9600_freejoint: [-0.665, -0.36, 0.223671074, 0.0, 0.0, -0.70710678, 0.70710678]
   mask_objects: ["plate2", "dishwasher_rack1_target"]
   operations: ["pick", "place"]
   cameras:
@@ -42,6 +42,10 @@ task_operators:
       tolerance:
         position: 0.02
         orientation: 0.15
+      grasp:
+        # Keep the gripper open for one second at 30 Hz before the stage
+        # postcondition is evaluated, so placement means stable release.
+        release_settle_steps: 30
 
 task:
   # Keep the migrated plate's authored horizontal pose deterministic.  The
@@ -61,7 +65,10 @@ task:
       operator: arm
       param:
         pre_move:
-          - position: [0.0, 0.0, 0.0]
+          # Grip 5.2 mm inside the 120.2 mm plate rim.  The source table ends
+          # before this point, so the fingers can straddle the plate without
+          # intersecting either its center or the support.
+          - position: [-0.115, 0.0, 0.0]
             # Local +Y is the jaw-closing direction.  Align it with world +Z
             # so the open fingers straddle the horizontal plate thickness.
             orientation: [0.70710678, 0.0, 0.0, 0.70710678]
@@ -69,6 +76,9 @@ task:
             static: true
         eef:
           close: true
+          # Reduce the command slightly from the gripper's full-close limit;
+          # two-sided physical contact still has to verify the grasp.
+          joint_positions: [0.019]
 
     - name: place_plate_in_upper_rack
       object: dishwasher_rack1_target

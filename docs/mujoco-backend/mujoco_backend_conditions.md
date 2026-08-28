@@ -258,7 +258,7 @@ arbitrary object is accepted as completion.
 
 | Parameter | Location | Default | Description |
 |-----------|----------|---------|-------------|
-| `control.grasp.settle_steps` | `MujocoGraspConfig` | `5` | Simulation steps to wait before checking grasp |
+| `control.grasp.settle_steps` | `MujocoGraspConfig` | `5` | Control updates to wait before checking grasp |
 
 ### 6.2 Closing without a required grasp
 
@@ -283,7 +283,8 @@ Gripper has opened to within tolerance of fully open, or reached the minimum ope
 | Parameter | Location | Default | Description |
 |-----------|----------|---------|-------------|
 | `control.tolerance.eef` | `MujocoToleranceConfig` | `0.03` | Gripper position tolerance |
-| `control.grasp.settle_steps` | `MujocoGraspConfig` | `5` | Steps to wait before grasp check |
+| `control.grasp.settle_steps` | `MujocoGraspConfig` | `5` | Control updates to wait before grasp check |
+| `control.grasp.release_settle_steps` | `MujocoGraspConfig` | `0` | Control updates to wait after opening before completion |
 
 `require_grasp` belongs to the individual `eef` primitive rather than the
 operator defaults. `pick` and `pull` supply it automatically; use the explicit
@@ -327,7 +328,8 @@ task_operators:
       grasp:
         lateral_threshold: 0.0      # meters (0 = disabled, >0 to enable check)
         grasp_axis: 2               # 0=X, 1=Y, 2=Z (grasp direction)
-        settle_steps: 5             # simulation steps
+        settle_steps: 5             # control updates before grasp check
+        release_settle_steps: 0     # control updates after opening
       timeout_steps: 100            # max steps per action
 ```
 
@@ -338,7 +340,8 @@ task_operators:
 | `control.tolerance.eef` | 0.03 | - | Gripper position tolerance |
 | `control.grasp.lateral_threshold` | 0.0 | m | Max lateral distance for valid grasp (0=disabled) |
 | `control.grasp.grasp_axis` | 2 | - | Grasp direction axis (0=X, 1=Y, 2=Z) |
-| `control.grasp.settle_steps` | 5 | steps | Min steps before checking grasp |
+| `control.grasp.settle_steps` | 5 | updates | Min control updates before checking grasp |
+| `control.grasp.release_settle_steps` | 0 | updates | Min control updates after opening before completion |
 | `control.timeout_steps` | 100 | steps | Max steps per action before timeout |
 | `control.ik_unreachable_threshold` | 30 | streak | Consecutive IK failures inside `move_to_pose` after which the stage fails fast with `failure_category: ik_unreachable` instead of waiting for `timeout_steps` |
 

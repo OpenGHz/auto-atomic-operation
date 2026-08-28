@@ -14,6 +14,7 @@
     <mesh name="plate2_mesh" file="dishwasher_plate/plate2/plate2.obj"/>
     <include file="includes/dishwasher031_assets.xml"/>
     <material name="floor" rgba="0.20 0.22 0.25 1"/>
+    <material name="source_table" rgba="0.42 0.30 0.20 1"/>
     <material name="robot" rgba="0.25 0.55 0.85 1"/>
     <material name="target" rgba="0.15 0.75 0.25 0.65"/>
     <material name="plate" rgba="0.88 0.74 0.42 1"/>
@@ -40,8 +41,12 @@
         <!-- Generated geometry and task contact policy are versioned separately. -->
         <include file="includes/dishwasher031_rack1_vertical_collision.xml"/>
 
-        <!-- The target is rack-local and follows future rack motion. -->
-        <body name="dishwasher_rack1_target" pos="0.024907 0.0265645 0.223671074">
+        <!--
+          Rack-local stable cradle center.  In the X-Z section this is the
+          equal-distance circle center for the plate radius plus the 2.5 mm
+          wire half-width against support wires c038 and c050.
+        -->
+        <body name="dishwasher_rack1_target" pos="-0.03487368 -0.0236405 0.20811805">
           <geom name="target_pad" type="box" pos="0 0 -0.120665074"
                 size="0.012 0.012 0.0005" material="target"
                 contype="0" conaffinity="0"/>
@@ -54,6 +59,14 @@
     <!-- Planner-only floor guard prevents trajectories below the appliance and rack. -->
     <geom name="planner_floor_guard" type="box" pos="0 -0.20 -0.035"
           size="0.75 0.90 0.025" rgba="0 0 0 0" contype="0" conaffinity="0"/>
+
+    <!--
+      One-sided source table: its -X edge stops 80.2 mm inside the plate rim,
+      leaving the -X edge accessible to the gripper while supporting the
+      plate center of mass and the complete +X side.
+    -->
+    <geom name="source_table" type="box" pos="-0.405 -0.360 0.180560989"
+          size="0.085 0.160 0.030" material="source_table"/>
 
     <!-- plate2 is horizontal: the mesh and collision-cylinder normal is +Z. -->
     <body name="plate2" pos="-0.450 -0.360 0.223671074">

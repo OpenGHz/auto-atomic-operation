@@ -2120,8 +2120,15 @@ class TaskRunner:
         grasp_binding: Optional[GraspBinding] = None,
     ) -> ControlResult:
         if action.kind == "pose" and action.pose is not None:
-            reuse_resolved_goal = TaskRunner._should_reuse_resolved_motion_goal(
-                action.pose
+            existing_goal = action.resolved_motion_goal
+            pending_correction = (
+                existing_goal is not None
+                and action.resolved_pose is not None
+                and action.resolved_pose is not existing_goal.command_pose
+            )
+            reuse_resolved_goal = (
+                pending_correction
+                or TaskRunner._should_reuse_resolved_motion_goal(action.pose)
             )
             if reuse_resolved_goal and action.resolved_motion_goal is not None:
                 resolved_goal = action.resolved_motion_goal
@@ -2156,6 +2163,38 @@ class TaskRunner:
                     }
                     return failed
                 action.resolved_motion_goal = resolved_goal
+            if (
+                resolved_goal.configured_pose.controlled_frame.kind
+                == ControlledFrameKind.HELD_OBJECT
+            ):
+                try:
+                    # Validate before issuing another physical command.  The
+                    # resolved goal keeps its configured object identity, so a
+                    # lost or replaced object cannot be accepted as progress.
+                    TaskRunner.motion_goal_errors(
+                        env_index=env_index,
+                        operator=operator,
+                        backend=backend,
+                        goal=resolved_goal,
+                        require_held=True,
+                    )
+                except (
+                    KeyError,
+                    NotImplementedError,
+                    RuntimeError,
+                    ValueError,
+                ) as error:
+                    failed = ControlResult.filled(
+                        backend.batch_size,
+                        ControlSignal.RUNNING,
+                    )
+                    failed.signals[env_index] = ControlSignal.FAILED
+                    failed.details[env_index] = {
+                        "event": "controlled_frame_validation_failed",
+                        "failure_category": "controlled_frame_validation_failed",
+                        "failure_reason": str(error),
+                    }
+                    return failed
             # ``resolved_pose`` remains the concrete EEF command for callers
             # that inspect legacy runtime actions.  New execution logic uses
             # ``resolved_motion_goal`` as the semantic source of truth.
@@ -2165,13 +2204,79 @@ class TaskRunner:
                 target,
                 env_mask=env_mask,
             )
-            return TaskRunner._refine_controlled_goal_result(
+            refined = TaskRunner._refine_controlled_goal_result(
                 env_index=env_index,
                 operator=operator,
                 backend=backend,
                 goal=resolved_goal,
                 result=result,
             )
+            if (
+                pending_correction
+                and refined.signals[env_index] == ControlSignal.RUNNING
+                and action.resolved_pose is resolved_goal.command_pose
+            ):
+                # Keep a correction leg pending while the backend is moving,
+                # without changing the serialized command (and therefore
+                # without resetting controller progress/timeouts).  Object
+                # identity distinguishes the issued command from the next
+                # pending command while their values intentionally match.
+                resolved_goal.command_pose = resolved_goal.command_pose.model_copy()
+            elif (
+                pending_correction
+                and refined.signals[env_index] == ControlSignal.REACHED
+                and not TaskRunner._should_reuse_resolved_motion_goal(action.pose)
+            ):
+                # A correction leg intentionally freezes its semantic goal so
+                # the concrete backend command remains stable.  Do not let a
+                # live object/base reference complete against that old
+                # snapshot.  Refresh only the semantic target, then refine it
+                # from the *observed* held-object pose.  Issuing the nominal
+                # grasp-binding command again would undo the slip correction
+                # and oscillate between nominal and corrected commands.
+                try:
+                    refreshed_goal = TaskRunner._resolve_motion_goal(
+                        env_index=env_index,
+                        operator=operator,
+                        pose=action.pose,
+                        target=target,
+                        backend=backend,
+                        action=action,
+                        reference_site=reference_site,
+                        grasp_binding=grasp_binding,
+                    )
+                except (
+                    KeyError,
+                    NotImplementedError,
+                    RuntimeError,
+                    ValueError,
+                ) as error:
+                    failed = ControlResult.filled(
+                        backend.batch_size,
+                        ControlSignal.RUNNING,
+                    )
+                    failed.signals[env_index] = ControlSignal.FAILED
+                    failed.details[env_index] = {
+                        "event": "motion_goal_resolution_failed",
+                        "failure_category": "motion_goal_resolution_failed",
+                        "failure_reason": str(error),
+                        "operator": operator.name,
+                    }
+                    return failed
+                action.resolved_motion_goal = refreshed_goal
+                # Keep ``resolved_pose`` bound to the correction that was
+                # actually issued.  Refinement may create a new correction in
+                # ``refreshed_goal.command_pose``; their identity mismatch
+                # marks that command as pending without pretending the
+                # refreshed nominal command was sent to the backend.
+                return TaskRunner._refine_controlled_goal_result(
+                    env_index=env_index,
+                    operator=operator,
+                    backend=backend,
+                    goal=refreshed_goal,
+                    result=refined,
+                )
+            return refined
         if action.kind == "eef" and action.eef is not None:
             return operator.control_eef(action.eef, target, env_mask=env_mask)
         raise RuntimeError(f"Invalid primitive action '{action.kind}'.")
@@ -2273,18 +2378,99 @@ class TaskRunner:
             return ControlResult(signals=result.signals.copy(), details=details)
 
         signals = result.signals.copy()
-        signals[env_index] = ControlSignal.FAILED
-        details[env_index].update(
-            {
-                "event": "controlled_frame_not_reached",
-                "failure_category": "controlled_frame_not_reached",
-                "failure_reason": (
-                    "the EEF reached its derived command but the configured "
-                    "controlled frame did not reach the semantic goal"
+        if (
+            goal.configured_pose.controlled_frame.kind
+            == ControlledFrameKind.HELD_OBJECT
+        ):
+            goal.command_pose = TaskRunner._held_object_correction_command(
+                env_index=env_index,
+                operator=operator,
+                goal=goal,
+                current_controlled_pose=current_pose,
+            )
+            signals[env_index] = ControlSignal.RUNNING
+            details[env_index].update(
+                {
+                    "event": "controlled_frame_correction",
+                    "correction_command": {
+                        "position": [
+                            float(value) for value in goal.command_pose.position
+                        ],
+                        "orientation": [
+                            float(value) for value in goal.command_pose.orientation
+                        ],
+                    },
+                }
+            )
+        else:
+            # Preserve legacy EEF semantics: a controller that claims to have
+            # reached a command outside the configured tolerance is invalid.
+            signals[env_index] = ControlSignal.FAILED
+            details[env_index].update(
+                {
+                    "event": "controlled_frame_not_reached",
+                    "failure_category": "controlled_frame_not_reached",
+                    "failure_reason": (
+                        "the EEF reached its derived command but the configured "
+                        "controlled frame did not reach the semantic goal"
+                    ),
+                }
+            )
+        return ControlResult(signals=signals, details=details)
+
+    @staticmethod
+    def _held_object_correction_command(
+        env_index: int,
+        operator: OperatorHandler,
+        goal: ResolvedMotionGoal,
+        current_controlled_pose: PoseState,
+    ) -> PoseControlConfig:
+        """Return the next stable EEF command for a slipped held object.
+
+        The semantic controlled-frame target remains fixed.  Once the backend
+        reaches its current EEF command, the world-space transform that moves
+        the observed controlled frame to that target is applied to the current
+        EEF.  This closes the loop around grasp slip without remeasuring or
+        replacing the grasp binding.
+        """
+        configured = goal.configured_pose
+        if configured.controlled_frame.kind != ControlledFrameKind.HELD_OBJECT:
+            raise ValueError("Held-object correction requires a held-object goal.")
+
+        target_orientation = goal.controlled_world_pose.orientation[0]
+        orientation_goal = configured.orientation_goal
+        if isinstance(orientation_goal, AxisAlignmentOrientationGoalConfig):
+            if goal.target_axis_world is None:
+                raise RuntimeError(
+                    "Axis-alignment motion goal has no resolved target axis."
+                )
+            target_orientation = resolve_axis_alignment_orientation(
+                current_controlled_pose,
+                orientation_goal.controlled_axis,
+                goal.target_axis_world,
+                orientation_goal.direction,
+            )
+
+        corrected_controlled_pose = PoseState(
+            position=goal.controlled_world_pose.position[0],
+            orientation=target_orientation,
+        )
+        world_correction = compose_pose(
+            corrected_controlled_pose,
+            inverse_pose(current_controlled_pose),
+        )
+        current_eef_pose = operator.get_end_effector_pose().select(env_index)
+        corrected_eef_pose = compose_pose(world_correction, current_eef_pose)
+        return goal.command_pose.model_copy(
+            update={
+                "position": tuple(
+                    float(value) for value in corrected_eef_pose.position[0]
+                ),
+                "orientation": tuple(
+                    float(value) for value in corrected_eef_pose.orientation[0]
                 ),
             }
         )
-        return ControlResult(signals=signals, details=details)
 
     @staticmethod
     def motion_goal_errors(

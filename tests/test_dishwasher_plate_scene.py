@@ -10,6 +10,7 @@ from pathlib import Path
 import mujoco
 import numpy as np
 import pytest
+from omegaconf import OmegaConf
 
 from auto_atom.scene_composition import (
     MjcfLayerConfig,
@@ -23,6 +24,8 @@ _SCENE_ROOT = _ROOT / "assets/xmls/scenes/dishwasher_plate"
 _SCENE_FILE = "demo.xml"
 _COLLISION_ROOT = _ROOT / "assets/collision/dishwasher_plate"
 _ROBOT_XML = _ROOT / "assets/xmls/robots/robotiq.xml"
+_XF9600_XML = _ROOT / "assets/xmls/robots/xf9600_mocap.xml"
+_TASK_CONFIG = _ROOT / "aao_configs/dishwasher_plate.yaml"
 
 _ASSET_DIGESTS = {
     "assets/meshes/dishwasher_plate/dishwasher031/Body001.obj": (
@@ -280,7 +283,7 @@ def test_robotless_host_and_final_composed_scene_load() -> None:
     )
     np.testing.assert_allclose(
         data.site_xpos[target_site],
-        [0.024907, -0.3034355, 0.223671074],
+        [-0.03487368, -0.3536405, 0.20811805],
         atol=1.0e-12,
     )
     np.testing.assert_allclose(
@@ -290,6 +293,36 @@ def test_robotless_host_and_final_composed_scene_load() -> None:
     )
 
     plate_geom = _id(model, mujoco.mjtObj.mjOBJ_GEOM, "plate2_collision")
+    support_a = _id(
+        model,
+        mujoco.mjtObj.mjOBJ_GEOM,
+        "dishwasher_rack1_wire_c038_s000_001_contact",
+    )
+    support_b = _id(
+        model,
+        mujoco.mjtObj.mjOBJ_GEOM,
+        "dishwasher_rack1_wire_c050_s000_001_contact",
+    )
+    support_points = model.geom_pos[[support_a, support_b]][:, [0, 2]]
+    support_delta = support_points[1] - support_points[0]
+    support_distance = float(np.linalg.norm(support_delta))
+    upward_normal = (
+        np.asarray(
+            [-support_delta[1], support_delta[0]],
+            dtype=np.float64,
+        )
+        / support_distance
+    )
+    contact_radius = model.geom_size[plate_geom, 0] + model.geom_size[support_a, 0]
+    cradle_height = np.sqrt(contact_radius**2 - (support_distance / 2.0) ** 2)
+    expected_cradle_xz = support_points.mean(axis=0) + upward_normal * cradle_height
+    target_body = _id(model, mujoco.mjtObj.mjOBJ_BODY, "dishwasher_rack1_target")
+    np.testing.assert_allclose(
+        model.body_pos[target_body, [0, 2]],
+        expected_cradle_xz,
+        atol=5.0e-9,
+    )
+
     plate_axis = data.geom_xmat[plate_geom].reshape(3, 3)[:, 2]
     np.testing.assert_allclose(plate_axis, [0.0, 0.0, 1.0], atol=1.0e-12)
 
@@ -301,7 +334,7 @@ def test_robotless_host_and_final_composed_scene_load() -> None:
             and name.startswith("dishwasher_rack1_wire_")
         )
     ]
-    assert len(wire_names) == 255
+    assert len(wire_names) == 257
 
     for geom_name in (
         "dishwasher_body_visual_geom",
@@ -318,6 +351,137 @@ def test_robotless_host_and_final_composed_scene_load() -> None:
 
     assert np.isfinite(data.qpos).all()
     assert np.isfinite(data.geom_xpos).all()
+
+
+def test_source_table_exposes_the_configured_plate_rim_grasp() -> None:
+    """The plate is physically supported while its -X rim remains graspable."""
+
+    model = mujoco.MjModel.from_xml_path(str(_SCENE_ROOT / _SCENE_FILE))
+    data = mujoco.MjData(model)
+    mujoco.mj_forward(model, data)
+
+    source_table = _id(model, mujoco.mjtObj.mjOBJ_GEOM, "source_table")
+    plate = _id(model, mujoco.mjtObj.mjOBJ_GEOM, "plate2_collision")
+    plate_body = _id(model, mujoco.mjtObj.mjOBJ_BODY, "plate2")
+    assert model.body_mass[plate_body] == pytest.approx(0.35, abs=1.0e-12)
+    np.testing.assert_allclose(
+        data.geom_xpos[source_table],
+        [-0.405, -0.360, 0.180560989],
+        atol=1.0e-12,
+    )
+    np.testing.assert_allclose(
+        model.geom_size[source_table],
+        [0.085, 0.160, 0.030],
+        atol=1.0e-12,
+    )
+
+    table_top = data.geom_xpos[source_table, 2] + model.geom_size[source_table, 2]
+    plate_bottom = data.geom_xpos[plate, 2] - model.geom_size[plate, 1]
+    assert table_top == pytest.approx(plate_bottom, abs=1.0e-12)
+
+    task = OmegaConf.load(_TASK_CONFIG)
+    np.testing.assert_allclose(
+        task.env.initial_joint_positions.xf9600_freejoint,
+        [-0.665, -0.360, 0.223671074, 0.0, 0.0, -0.70710678, 0.70710678],
+        atol=1.0e-12,
+    )
+    rim_grasp = np.asarray(
+        task.task.stages[0].param.pre_move[0].position,
+        dtype=np.float64,
+    )
+    np.testing.assert_allclose(rim_grasp, [-0.115, 0.0, 0.0], atol=1.0e-12)
+    np.testing.assert_allclose(
+        task.task.stages[0].param.eef.joint_positions,
+        [0.019],
+        atol=1.0e-12,
+    )
+
+    plate_center_x = data.geom_xpos[plate, 0]
+    plate_minus_x_rim = plate_center_x - model.geom_size[plate, 0]
+    table_minus_x_edge = (
+        data.geom_xpos[source_table, 0] - model.geom_size[source_table, 0]
+    )
+    grasp_world_x = plate_center_x + rim_grasp[0]
+    assert plate_minus_x_rim < grasp_world_x < table_minus_x_edge
+    assert table_minus_x_edge < plate_center_x
+
+    # Compose the task's actual gripper and place its freejoint at the exact
+    # configured home.  This catches both the former plate/base-link visual
+    # overlap and a table edge that is too close to the open finger pads.
+    robot_model = load_composed_scene(
+        SceneConfig(
+            base=_SCENE_ROOT / _SCENE_FILE,
+            layers=(MjcfLayerConfig(path=_XF9600_XML),),
+        )
+    )
+    robot_data = mujoco.MjData(robot_model)
+    freejoint = _id(
+        robot_model,
+        mujoco.mjtObj.mjOBJ_JOINT,
+        "xf9600_freejoint",
+    )
+    qpos_address = int(robot_model.jnt_qposadr[freejoint])
+    initial_pose = np.asarray(
+        task.env.initial_joint_positions.xf9600_freejoint,
+        dtype=np.float64,
+    )
+    robot_data.qpos[qpos_address : qpos_address + 7] = initial_pose
+    mocap_body = _id(
+        robot_model,
+        mujoco.mjtObj.mjOBJ_BODY,
+        "xf9600_mocap",
+    )
+    mocap_id = int(robot_model.body_mocapid[mocap_body])
+    assert mocap_id >= 0
+    robot_data.mocap_pos[mocap_id] = initial_pose[:3]
+    robot_data.mocap_quat[mocap_id] = initial_pose[3:]
+    mujoco.mj_forward(robot_model, robot_data)
+
+    eef_site = _id(robot_model, mujoco.mjtObj.mjOBJ_SITE, "eef_pose")
+    np.testing.assert_allclose(
+        robot_data.site_xpos[eef_site],
+        [-0.565, -0.360, 0.223671074],
+        atol=1.0e-9,
+    )
+
+    robot_plate = _id(
+        robot_model,
+        mujoco.mjtObj.mjOBJ_GEOM,
+        "plate2_collision",
+    )
+    robot_table = _id(robot_model, mujoco.mjtObj.mjOBJ_GEOM, "source_table")
+    from_to = np.zeros(6, dtype=np.float64)
+    visual_clearances = []
+    table_clearances = []
+    for geom in range(robot_model.ngeom):
+        name = mujoco.mj_id2name(robot_model, mujoco.mjtObj.mjOBJ_GEOM, geom) or ""
+        if not name.startswith("eef_"):
+            continue
+        if robot_model.geom_group[geom] == 2:
+            visual_clearances.append(
+                mujoco.mj_geomDistance(
+                    robot_model,
+                    robot_data,
+                    robot_plate,
+                    geom,
+                    1.0,
+                    from_to,
+                )
+            )
+        if robot_model.geom_contype[geom] != 0:
+            table_clearances.append(
+                mujoco.mj_geomDistance(
+                    robot_model,
+                    robot_data,
+                    robot_table,
+                    geom,
+                    1.0,
+                    from_to,
+                )
+            )
+
+    assert min(visual_clearances) == pytest.approx(0.008634926, abs=1.0e-8)
+    assert min(table_clearances) == pytest.approx(0.051596335, abs=1.0e-8)
 
 
 def test_effort_motors_apply_force_to_their_named_joints() -> None:
@@ -431,7 +595,7 @@ def test_articulated_visual_collision_and_target_frames_move_together() -> None:
             ).startswith("dishwasher_rack1_wire_")
         ]
     )
-    assert wire_geoms.size == 255
+    assert wire_geoms.size == 257
 
 
 def test_ten_second_zero_control_mechanism_is_finite_and_nearly_stationary() -> None:
@@ -464,6 +628,60 @@ def test_collision_manifests_bind_the_migrated_payload() -> None:
     )
     proxy = json.loads(proxy_path.read_text())
     assert policy["proxy_sha256"] == _sha256(proxy_path)
+    assert policy["splits"] == [
+        {
+            "axis": "y",
+            "parts": [
+                {
+                    "lower_m": -0.199503,
+                    "role": "forbidden",
+                    "suffix": "front",
+                    "upper_m": -0.048743,
+                },
+                {
+                    "condim": 6,
+                    "friction": [1.0, 0.1, 0.02],
+                    "lower_m": -0.048743,
+                    "role": "allowed_contact",
+                    "suffix": "contact",
+                    "upper_m": 0.001462,
+                },
+                {
+                    "lower_m": 0.001462,
+                    "role": "forbidden",
+                    "suffix": "back",
+                    "upper_m": 0.306004,
+                },
+            ],
+            "segment_id": "c038_s000_001",
+        },
+        {
+            "axis": "y",
+            "parts": [
+                {
+                    "lower_m": -0.199504,
+                    "role": "forbidden",
+                    "suffix": "front",
+                    "upper_m": -0.048743,
+                },
+                {
+                    "condim": 6,
+                    "friction": [1.0, 0.1, 0.02],
+                    "lower_m": -0.048743,
+                    "role": "allowed_contact",
+                    "suffix": "contact",
+                    "upper_m": 0.001462,
+                },
+                {
+                    "lower_m": 0.001462,
+                    "role": "forbidden",
+                    "suffix": "back",
+                    "upper_m": 0.306004,
+                },
+            ],
+            "segment_id": "c050_s000_001",
+        },
+    ]
     assert (
         proxy["source"]["sha256"]
         == _ASSET_DIGESTS["assets/meshes/dishwasher_plate/dishwasher031/rack1.obj"]
@@ -477,3 +695,39 @@ def test_collision_manifests_bind_the_migrated_payload() -> None:
         == _ASSET_DIGESTS["assets/meshes/dishwasher_plate/plate2/plate2.obj"]
     )
     assert cover["sphere_count"] == 388
+
+    model = mujoco.MjModel.from_xml_path(str(_SCENE_ROOT / _SCENE_FILE))
+    expected_intervals = {
+        "c038_s000_001": {
+            "front": (-0.199503, -0.048743),
+            "contact": (-0.048743, 0.001462),
+            "back": (0.001462, 0.306004),
+        },
+        "c050_s000_001": {
+            "front": (-0.199504, -0.048743),
+            "contact": (-0.048743, 0.001462),
+            "back": (0.001462, 0.306004),
+        },
+    }
+    target = _id(model, mujoco.mjtObj.mjOBJ_BODY, "dishwasher_rack1_target")
+    for segment, intervals in expected_intervals.items():
+        for suffix, expected in intervals.items():
+            geom = _id(
+                model,
+                mujoco.mjtObj.mjOBJ_GEOM,
+                f"dishwasher_rack1_wire_{segment}_{suffix}",
+            )
+            center_y = model.geom_pos[geom, 1]
+            half_y = model.geom_size[geom, 1]
+            np.testing.assert_allclose(
+                [center_y - half_y, center_y + half_y],
+                expected,
+                atol=1.0e-12,
+            )
+            if suffix == "contact":
+                assert model.geom_condim[geom] == 6
+                assert model.body_pos[target, 1] == pytest.approx(
+                    model.geom_pos[geom, 1],
+                    abs=1.0e-12,
+                )
+    np.testing.assert_allclose(model.body_quat[target], [1.0, 0.0, 0.0, 0.0])

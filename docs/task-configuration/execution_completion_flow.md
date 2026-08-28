@@ -9,7 +9,8 @@ The short version is:
 - `eef` is a primitive gripper action.
 - A held-object pose goal is converted into an EEF command through the
   grasp-time measured binding, but completion is checked on the configured
-  object frame.
+  object frame; residual object error produces a stable follow-up correction
+  command rather than an immediate failure.
 - Each primitive action decides its own completion first.
 - The task runner then uses that primitive result to decide whether to continue the stage, fail the stage, or mark the stage successful.
 - Stage success is therefore built on primitive completion, but it is not identical to primitive completion.
@@ -115,10 +116,15 @@ For each control tick, the configured execution path:
    supplies only the required axis direction.
 4. For a held object, combines that goal with the measured grasp binding to
    derive the concrete world-frame EEF command.
-5. Commands the operator toward the derived EEF pose and waits for the backend
-   primitive to report `REACHED`.
-6. Measures the configured controlled frame after stepping and computes its
+5. Before issuing a held-object command, verifies that the operator still holds
+   the object recorded by that binding. The binding is not re-measured while
+   the action runs.
+6. Commands the operator toward one concrete EEF pose and keeps that command
+   stable until the backend primitive reports `REACHED`.
+7. Measures the configured controlled frame after stepping and computes its
    position and orientation errors against the semantic goal.
+8. If a held object remains outside tolerance, derives a follow-up EEF command
+   from the observed semantic error and continues the same primitive action.
 
 The primitive pose action is considered complete only when the configured
 controlled frame is within tolerance:
@@ -143,15 +149,49 @@ If that happens, the refined pose primitive returns:
 - `ControlSignal.REACHED`
 
 More precisely, the operator backend first reaches the derived EEF command,
-then `TaskRunner` validates the semantic frame. If the EEF reports `REACHED`
-but the held object/frame is outside tolerance, the primitive returns `FAILED`
-with `controlled_frame_not_reached`; it does not report a false success. A
-missing grasp binding or changed held-object identity also fails goal
-resolution instead of falling back to direct EEF control.
+then `TaskRunner` validates the semantic frame. If the held object/frame is
+still outside tolerance, it does not report a false success and does not
+immediately fail. Instead, it applies the world-space controlled-frame error to
+the current EEF:
+
+```text
+world_correction = target_controlled_pose @ inverse(current_controlled_pose)
+next_eef_pose = world_correction @ current_eef_pose
+```
+
+The primitive returns `RUNNING` with event `controlled_frame_correction`, sends
+that follow-up command on the next tick, and keeps its serialized value stable
+until the backend reaches it. This stability is important because changing a
+command every tick would reset backend controller progress and timeout state.
+If semantic error remains after the correction leg reaches, another correction
+is generated. A snapshotted goal then returns `REACHED`. Before a live,
+non-static reference can complete, its current semantic target/axis is resolved
+again. If that refreshed goal moved, the next command is derived from the
+observed held-object error and current EEF pose; the runtime does not reissue
+the nominal grasp-time binding command. The primitive returns `REACHED` only
+when the observed controlled frame also satisfies the refreshed live goal.
+
+For `axis_alignment`, the correction orientation is recomputed from the
+currently observed held-object orientation using the shortest swing to the
+target axis. It therefore corrects the constrained axis without restoring a
+previously frozen quaternion or removing the object's free twist.
+
+The feedback loop never re-measures the grasp binding to explain away slip. A
+missing binding fails initial goal resolution, and a lost or replaced held
+object returns `FAILED` with `controlled_frame_validation_failed` before the
+next physical motion command is issued. Legacy EEF-controlled goals retain
+their previous contract: if a backend reports the EEF command reached while
+the configured EEF tolerance is not satisfied, the primitive fails with
+`controlled_frame_not_reached`.
 
 If the action runs too long:
 
 - `ControlSignal.TIMED_OUT`
+
+A backend timeout remains terminal because each concrete correction command is
+kept stable while it runs. If individual correction legs keep reaching but the
+semantic object error never converges, the task/evaluation rollout update
+limit remains the outer termination safeguard.
 
 Otherwise:
 
@@ -401,13 +441,18 @@ flowchart TD
     D --> E[Run current primitive action]
     E --> F{Action kind}
     F -->|pose| R[Resolve controlled-frame goal and derived EEF command]
-    R --> G[move_to_pose]
+    R --> V{Goal valid and held identity unchanged?}
+    V -->|no| Z
+    V -->|yes| G[move_to_pose]
     F -->|eef| H[control_eef]
 
     G --> S{Derived EEF command reached?}
     S -->|no| I{Primitive signal}
-    S -->|yes| T[Validate configured controlled frame]
-    T --> I
+    S -->|yes| T{Controlled frame within tolerance?}
+    T -->|yes| I
+    T -->|held object: no| U[Create stable semantic correction command]
+    U --> I
+    T -->|EEF: no| Z
     H --> I
 
     I -->|RUNNING| J[Keep same action and stage running]
@@ -439,6 +484,9 @@ flowchart TD
 - `pre_move` and `post_move` completion is pose-tolerance based on the
   configured controlled frame; a held-object goal is not considered reached
   merely because its derived EEF command is reached.
+- A held object outside semantic tolerance stays on the same primitive and is
+  corrected from its observed error; its grasp binding is not silently
+  replaced, and identity loss still fails before another motion command.
 - `eef` completion is gripper-state based, with special grasp detection when closing on a target object.
 - A verified close establishes the measured grasp binding used by later
   held-object goals; release and reset clear it.

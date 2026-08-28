@@ -47,7 +47,7 @@
   </worldbody>
 
   <equality>
-    <weld body1="xf9600_mocap" body2="xf9600_interface" solref="0.3 1" solimp="0.95 0.99 0.001"/>
+    <weld body1="xf9600_mocap" body2="xf9600_interface" solref="0.10 1" solimp="0.95 0.99 0.001"/>
   </equality>
 
   <sensor>

@@ -18,11 +18,14 @@ from auto_atom.mock import (
     MockOperatorHandler,
     MockSceneBackend,
 )
-from auto_atom.pose_goal import resolve_axis_in_world
 from auto_atom.policy_eval import (
     ConfigDrivenDemoPolicy,
     ConfigDrivenEnvAction,
     ConfigDrivenPolicyAction,
+)
+from auto_atom.pose_goal import (
+    resolve_axis_alignment_orientation,
+    resolve_axis_in_world,
 )
 from auto_atom.runtime import (
     ActiveStageState,
@@ -435,6 +438,505 @@ def test_held_object_goal_rejects_changed_object_identity() -> None:
             backend=backend,
             grasp_binding=binding,
         )
+
+
+def test_held_object_slip_gets_stable_follow_up_command_without_rebinding() -> None:
+    context, backend = _context(
+        object_poses={"plate": PoseState(position=(0.0, 0.0, 0.0))}
+    )
+    operator = backend.get_operator_handler("arm")
+    operator.end_effector_pose = PoseState(position=(0.0, 0.0, 0.0))
+    backend.get_grasped_object_name = lambda operator_name, env_index: (
+        "plate" if operator_name == "arm" and env_index == 0 else None
+    )
+    binding = context.capture_grasp_binding(0, "arm", "plate")
+    pose = PoseControlConfig.model_validate(
+        {
+            "controlled_frame": {"kind": "held_object"},
+            "position": [1.0, 0.0, 0.0],
+            "orientation_goal": {
+                "kind": "fixed",
+                "quaternion_xyzw": [0.0, 0.0, 0.0, 1.0],
+            },
+            "reference": "world",
+            "static": True,
+            "tolerance": {"position": 0.001, "orientation": 0.001},
+        }
+    )
+    action = PrimitiveAction(kind="pose", pose=pose)
+    env_mask = np.asarray([True])
+
+    first = TaskRunner._run_action(
+        0,
+        operator,
+        action,
+        None,
+        backend,
+        env_mask,
+        grasp_binding=binding,
+    )
+    semantic_goal = action.resolved_motion_goal
+    assert first.signals[0] == ControlSignal.RUNNING
+    assert semantic_goal is not None
+    initial_command = semantic_goal.command_pose
+
+    # The EEF reaches the original command while the plate lags by 20 cm.
+    # Passing an incompatible remeasurement proves that the snapshotted goal
+    # and original binding identity are retained instead of silently rebound.
+    backend.get_object_handler("plate").set_pose(PoseState(position=(0.8, 0.0, 0.0)))
+    replacement_binding = GraspBinding(
+        env_index=0,
+        operator_name="arm",
+        object_name="plate",
+        eef_from_object=PoseState(position=(99.0, 0.0, 0.0)),
+    )
+    second = TaskRunner._run_action(
+        0,
+        operator,
+        action,
+        None,
+        backend,
+        env_mask,
+        grasp_binding=replacement_binding,
+    )
+
+    assert second.signals[0] == ControlSignal.RUNNING
+    assert second.details[0]["event"] == "controlled_frame_correction"
+    assert action.resolved_motion_goal is semantic_goal
+    assert semantic_goal.controlled_object_name == "plate"
+    np.testing.assert_allclose(
+        semantic_goal.controlled_world_pose.position[0],
+        [1.0, 0.0, 0.0],
+    )
+    assert semantic_goal.command_pose is not initial_command
+    np.testing.assert_allclose(
+        semantic_goal.command_pose.position,
+        [1.2, 0.0, 0.0],
+        atol=1.0e-12,
+    )
+
+    # A changed correction command takes the mock controller two updates.  It
+    # must remain byte-for-byte stable on the RUNNING tick, otherwise real
+    # backends would reset their per-command timeout/progress state forever.
+    correction_command = semantic_goal.command_pose
+    correction_payload = correction_command.model_dump(mode="json")
+    third = TaskRunner._run_action(
+        0,
+        operator,
+        action,
+        None,
+        backend,
+        env_mask,
+        grasp_binding=binding,
+    )
+    assert third.signals[0] == ControlSignal.RUNNING
+    assert semantic_goal.command_pose is not correction_command
+    assert semantic_goal.command_pose.model_dump(mode="json") == correction_payload
+    assert operator._progress[0] == 1
+
+    backend.get_object_handler("plate").set_pose(PoseState(position=(1.0, 0.0, 0.0)))
+    fourth = TaskRunner._run_action(
+        0,
+        operator,
+        action,
+        None,
+        backend,
+        env_mask,
+        grasp_binding=binding,
+    )
+    assert fourth.signals[0] == ControlSignal.REACHED
+
+
+def test_live_held_reference_resumes_after_one_stable_correction_leg() -> None:
+    context, backend = _context(
+        object_poses={
+            "plate": PoseState(position=(0.0, 0.0, 0.0)),
+            "rack": PoseState(position=(1.0, 0.0, 0.0)),
+        }
+    )
+    operator = backend.get_operator_handler("arm")
+    operator.end_effector_pose = PoseState(position=(0.0, 0.0, 0.0))
+    backend.get_grasped_object_name = lambda operator_name, env_index: (
+        "plate" if operator_name == "arm" and env_index == 0 else None
+    )
+    binding = context.capture_grasp_binding(0, "arm", "plate")
+    pose = PoseControlConfig.model_validate(
+        {
+            "controlled_frame": {"kind": "held_object"},
+            "position": [0.0, 0.0, 0.0],
+            "orientation_goal": {
+                "kind": "fixed",
+                "quaternion_xyzw": [0.0, 0.0, 0.0, 1.0],
+            },
+            "reference": "object",
+            "tolerance": {"position": 0.001, "orientation": 0.001},
+        }
+    )
+    action = PrimitiveAction(kind="pose", pose=pose)
+    env_mask = np.asarray([True])
+    rack = backend.get_object_handler("rack")
+
+    TaskRunner._run_action(
+        0,
+        operator,
+        action,
+        rack,
+        backend,
+        env_mask,
+        grasp_binding=binding,
+    )
+    first_goal = action.resolved_motion_goal
+    assert first_goal is not None
+    np.testing.assert_allclose(first_goal.controlled_world_pose.position, [[1.0, 0, 0]])
+
+    backend.get_object_handler("plate").set_pose(PoseState(position=(0.8, 0.0, 0.0)))
+    second = TaskRunner._run_action(
+        0,
+        operator,
+        action,
+        rack,
+        backend,
+        env_mask,
+        grasp_binding=binding,
+    )
+    assert second.signals[0] == ControlSignal.RUNNING
+    correction_goal = action.resolved_motion_goal
+    assert correction_goal is not None
+    assert correction_goal is not first_goal
+    correction_payload = correction_goal.command_pose.model_dump(mode="json")
+
+    rack.set_pose(PoseState(position=(2.0, 0.0, 0.0)))
+    third = TaskRunner._run_action(
+        0,
+        operator,
+        action,
+        rack,
+        backend,
+        env_mask,
+        grasp_binding=binding,
+    )
+    assert third.signals[0] == ControlSignal.RUNNING
+    assert action.resolved_motion_goal is correction_goal
+    assert correction_goal.command_pose.model_dump(mode="json") == correction_payload
+    np.testing.assert_allclose(
+        correction_goal.controlled_world_pose.position,
+        [[1.0, 0, 0]],
+    )
+
+    backend.get_object_handler("plate").set_pose(PoseState(position=(1.0, 0.0, 0.0)))
+    fourth = TaskRunner._run_action(
+        0,
+        operator,
+        action,
+        rack,
+        backend,
+        env_mask,
+        grasp_binding=binding,
+    )
+    assert fourth.signals[0] == ControlSignal.RUNNING
+    assert fourth.details[0]["event"] == "controlled_frame_correction"
+    refreshed_goal = action.resolved_motion_goal
+    assert refreshed_goal is not None
+    assert refreshed_goal is not correction_goal
+    assert action.resolved_pose is correction_goal.command_pose
+    assert action.resolved_pose is not refreshed_goal.command_pose
+    np.testing.assert_allclose(
+        refreshed_goal.controlled_world_pose.position,
+        [[2.0, 0.0, 0.0]],
+    )
+    np.testing.assert_allclose(
+        refreshed_goal.command_pose.position,
+        [2.2, 0.0, 0.0],
+        atol=1.0e-12,
+    )
+
+    # The refreshed semantic error creates a correction from the current
+    # plate/EEF state.  It must not issue the nominal grasp-binding command,
+    # which would move the already-corrected plate back toward the old pose.
+    backend.get_object_handler("plate").set_pose(PoseState(position=(2.0, 0.0, 0.0)))
+    fifth = TaskRunner._run_action(
+        0,
+        operator,
+        action,
+        rack,
+        backend,
+        env_mask,
+        grasp_binding=binding,
+    )
+    assert fifth.signals[0] == ControlSignal.RUNNING
+    assert action.resolved_motion_goal is refreshed_goal
+
+    sixth = TaskRunner._run_action(
+        0,
+        operator,
+        action,
+        rack,
+        backend,
+        env_mask,
+        grasp_binding=binding,
+    )
+    assert sixth.signals[0] == ControlSignal.REACHED
+
+
+def test_axis_correction_preserves_current_free_twist() -> None:
+    context, backend = _context(object_poses={"plate": PoseState()})
+    operator = backend.get_operator_handler("arm")
+    operator.end_effector_pose = PoseState()
+    backend.get_grasped_object_name = lambda operator_name, env_index: (
+        "plate" if operator_name == "arm" and env_index == 0 else None
+    )
+    binding = context.capture_grasp_binding(0, "arm", "plate")
+    pose = PoseControlConfig.model_validate(
+        {
+            "controlled_frame": {"kind": "held_object"},
+            "position": [0.0, 0.0, 0.0],
+            "orientation_goal": _axis_alignment_goal(),
+            "reference": "world",
+            "static": True,
+            "tolerance": {"position": 0.001, "orientation": 0.001},
+        }
+    )
+    action = PrimitiveAction(kind="pose", pose=pose)
+    env_mask = np.asarray([True])
+
+    TaskRunner._run_action(
+        0,
+        operator,
+        action,
+        None,
+        backend,
+        env_mask,
+        grasp_binding=binding,
+    )
+    goal = action.resolved_motion_goal
+    assert goal is not None
+
+    slipped_plate = PoseState(orientation=_axis_angle_quaternion((0.0, 0.0, 1.0), 0.7))
+    backend.get_object_handler("plate").set_pose(slipped_plate)
+    result = TaskRunner._run_action(
+        0,
+        operator,
+        action,
+        None,
+        backend,
+        env_mask,
+        grasp_binding=binding,
+    )
+
+    assert result.signals[0] == ControlSignal.RUNNING
+    current_eef = operator.get_end_effector_pose().select(0)
+    corrected_eef = PoseState(
+        position=goal.command_pose.position,
+        orientation=goal.command_pose.orientation,
+    )
+    world_correction = compose_pose(corrected_eef, inverse_pose(current_eef))
+    corrected_plate = compose_pose(world_correction, slipped_plate)
+    expected_orientation = resolve_axis_alignment_orientation(
+        slipped_plate,
+        (0.0, 0.0, 1.0),
+        np.asarray([0.0, 1.0, 0.0]),
+        "same",
+    )
+    _assert_pose_equivalent(
+        corrected_plate,
+        PoseState(orientation=expected_orientation),
+    )
+    np.testing.assert_allclose(
+        resolve_axis_in_world((0.0, 0.0, 1.0), corrected_plate),
+        [0.0, 1.0, 0.0],
+        atol=1.0e-12,
+    )
+    assert quaternion_angular_distance(
+        corrected_plate.orientation[0],
+        goal.controlled_world_pose.orientation[0],
+    ) == pytest.approx(0.7, abs=1.0e-12)
+
+
+def test_live_target_axis_refreshes_after_correction_and_converges() -> None:
+    context, backend = _context(
+        object_poses={"plate": PoseState(), "rack": PoseState()}
+    )
+    operator = backend.get_operator_handler("arm")
+    operator.end_effector_pose = PoseState()
+    backend.get_grasped_object_name = lambda operator_name, env_index: (
+        "plate" if operator_name == "arm" and env_index == 0 else None
+    )
+    binding = context.capture_grasp_binding(0, "arm", "plate")
+    rack = backend.get_object_handler("rack")
+    pose = PoseControlConfig.model_validate(
+        {
+            "controlled_frame": {"kind": "held_object"},
+            "position": [0.0, 0.0, 0.0],
+            "reference": "eef_world",
+            "orientation_goal": {
+                "kind": "axis_alignment",
+                "controlled_axis": [0.0, 0.0, 1.0],
+                "target_axis": {
+                    "vector": [1.0, 0.0, 0.0],
+                    "reference": "object",
+                },
+                "direction": "same",
+            },
+            "tolerance": {"position": 0.001, "orientation": 0.001},
+        }
+    )
+    action = PrimitiveAction(kind="pose", pose=pose)
+    env_mask = np.asarray([True])
+
+    first = TaskRunner._run_action(
+        0,
+        operator,
+        action,
+        rack,
+        backend,
+        env_mask,
+        grasp_binding=binding,
+    )
+    assert first.signals[0] == ControlSignal.RUNNING
+    initial_goal = action.resolved_motion_goal
+    assert initial_goal is not None
+    np.testing.assert_allclose(initial_goal.target_axis_world, [1.0, 0.0, 0.0])
+
+    second = TaskRunner._run_action(
+        0,
+        operator,
+        action,
+        rack,
+        backend,
+        env_mask,
+        grasp_binding=binding,
+    )
+    assert second.signals[0] == ControlSignal.RUNNING
+    assert second.details[0]["event"] == "controlled_frame_correction"
+    frozen_goal = action.resolved_motion_goal
+    assert frozen_goal is not None
+
+    rack.set_pose(
+        PoseState(
+            orientation=_axis_angle_quaternion(
+                (0.0, 0.0, 1.0),
+                np.pi / 2.0,
+            )
+        )
+    )
+    third = TaskRunner._run_action(
+        0,
+        operator,
+        action,
+        rack,
+        backend,
+        env_mask,
+        grasp_binding=binding,
+    )
+    assert third.signals[0] == ControlSignal.RUNNING
+    assert action.resolved_motion_goal is frozen_goal
+
+    plate_aligned_with_old_axis = PoseState(
+        orientation=resolve_axis_alignment_orientation(
+            PoseState(),
+            (0.0, 0.0, 1.0),
+            np.asarray([1.0, 0.0, 0.0]),
+            "same",
+        )
+    )
+    backend.get_object_handler("plate").set_pose(plate_aligned_with_old_axis)
+    fourth = TaskRunner._run_action(
+        0,
+        operator,
+        action,
+        rack,
+        backend,
+        env_mask,
+        grasp_binding=binding,
+    )
+    assert fourth.signals[0] == ControlSignal.RUNNING
+    assert fourth.details[0]["event"] == "controlled_frame_correction"
+    refreshed_goal = action.resolved_motion_goal
+    assert refreshed_goal is not None
+    assert refreshed_goal is not frozen_goal
+    np.testing.assert_allclose(refreshed_goal.target_axis_world, [0.0, 1.0, 0.0])
+
+    corrected_plate = PoseState(
+        orientation=resolve_axis_alignment_orientation(
+            plate_aligned_with_old_axis,
+            (0.0, 0.0, 1.0),
+            np.asarray([0.0, 1.0, 0.0]),
+            "same",
+        )
+    )
+    backend.get_object_handler("plate").set_pose(corrected_plate)
+    fifth = TaskRunner._run_action(
+        0,
+        operator,
+        action,
+        rack,
+        backend,
+        env_mask,
+        grasp_binding=binding,
+    )
+    assert fifth.signals[0] == ControlSignal.RUNNING
+    sixth = TaskRunner._run_action(
+        0,
+        operator,
+        action,
+        rack,
+        backend,
+        env_mask,
+        grasp_binding=binding,
+    )
+    assert sixth.signals[0] == ControlSignal.REACHED
+    np.testing.assert_allclose(
+        resolve_axis_in_world((0.0, 0.0, 1.0), corrected_plate),
+        [0.0, 1.0, 0.0],
+        atol=1.0e-12,
+    )
+
+
+def test_held_object_identity_change_fails_before_next_motion_command() -> None:
+    context, backend = _context(object_poses={"plate": PoseState()})
+    operator = backend.get_operator_handler("arm")
+    operator.end_effector_pose = PoseState()
+    held_name = {"value": "plate"}
+    backend.get_grasped_object_name = lambda operator_name, env_index: (
+        held_name["value"] if operator_name == "arm" and env_index == 0 else None
+    )
+    binding = context.capture_grasp_binding(0, "arm", "plate")
+    pose = PoseControlConfig.model_validate(
+        {
+            **_held_object_pose(position=(0.2, 0.0, 0.0)).model_dump(mode="json"),
+            "static": True,
+        }
+    )
+    action = PrimitiveAction(kind="pose", pose=pose)
+    env_mask = np.asarray([True])
+
+    first = TaskRunner._run_action(
+        0,
+        operator,
+        action,
+        None,
+        backend,
+        env_mask,
+        grasp_binding=binding,
+    )
+    assert first.signals[0] == ControlSignal.RUNNING
+    progress_before_identity_change = int(operator._progress[0])
+
+    held_name["value"] = "cup"
+    second = TaskRunner._run_action(
+        0,
+        operator,
+        action,
+        None,
+        backend,
+        env_mask,
+        grasp_binding=binding,
+    )
+
+    assert second.signals[0] == ControlSignal.FAILED
+    assert second.details[0]["event"] == "controlled_frame_validation_failed"
+    assert "expected 'plate', got 'cup'" in second.details[0]["failure_reason"]
+    assert int(operator._progress[0]) == progress_before_identity_change
 
 
 def test_task_flow_does_not_inject_legacy_orientation_into_orientation_goal() -> None:
