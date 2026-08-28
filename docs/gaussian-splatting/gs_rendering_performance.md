@@ -481,7 +481,7 @@ Config validator 会强制要求：
 
 ### 什么时候不该用
 
-- 各子 env 初始状态/扰动不同（如不同物体初始位置）——shared 模式下它们会全部归一到 env_0 的状态。
+- 各子 env 初始状态/扰动不同（如不同物体初始位置）——shared 模式只有一份物理状态；姿态写入会以 logical row 0 为 canonical，并在其他 active rows 不一致时明确报错。需要真正不同的物理状态时请使用 replicated 模式。
 - 需要不同的 action/teleport 到不同 env：shared 模式只取 `[0]`，其他会被丢弃。
 
 ### 实现要点

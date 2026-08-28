@@ -29,7 +29,7 @@ import sys
 import threading
 import time
 import traceback
-from typing import Callable
+from typing import Callable, Mapping
 
 import hydra
 import mujoco
@@ -41,9 +41,16 @@ from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, ListConfig, OmegaConf
 
 from auto_atom.basis.mjc.model_initialization import apply_initial_joint_positions
+from auto_atom.framework import PoseOverrideConfig, PoseReference
 from auto_atom.runner.common import get_config_dir
 from auto_atom.scene_composition import SceneConfig, load_composed_scene
-from auto_atom.utils.pose import euler_to_quaternion
+from auto_atom.utils.pose import (
+    PoseState,
+    compose_pose,
+    euler_to_quaternion,
+    quaternion_from_matrix_3x3,
+    resolve_pose_override,
+)
 
 _DEBUG = False
 
@@ -76,7 +83,9 @@ def _to_container(value):
     return value
 
 
-def _orientation_to_wxyz(orientation: list[float]) -> np.ndarray:
+def _orientation_to_wxyz(
+    orientation: list[float] | tuple[float, ...] | np.ndarray,
+) -> np.ndarray:
     """Accept YAML orientation (4 floats xyzw or 3 floats Euler rpy) and
     return a wxyz quaternion suitable for MuJoCo body_quat / mocap_quat."""
     if len(orientation) == 4:
@@ -105,6 +114,22 @@ def _find_freejoint_for_body(model: mujoco.MjModel, body_name: str) -> int:
     return -1
 
 
+def _resolve_body_name(model: mujoco.MjModel, requested_name: str) -> str:
+    """Resolve a logical object name to the body used by the composed scene.
+
+    Gaussian-rendering scene layers commonly expose a visual ``<name>_gs``
+    body alongside the logical object body.  The runtime object handler uses
+    that body when it is present, so the standalone viewer follows the same
+    convention.  Operator root bodies are passed through unchanged because
+    their configured name is already a physical binding, not a logical object
+    key.
+    """
+    gs_name = f"{requested_name}_gs"
+    if mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, gs_name) >= 0:
+        return gs_name
+    return requested_name
+
+
 def _set_body_pose(
     model: mujoco.MjModel,
     data: mujoco.MjData,
@@ -112,28 +137,227 @@ def _set_body_pose(
     position: list[float] | None,
     orientation: list[float] | None,
 ) -> bool:
-    """Apply a position+orientation override to a body. Uses the body's
-    freejoint qpos when available, otherwise mutates ``model.body_pos`` /
-    ``model.body_quat`` (treating it as world-relative — the parent must be
-    world for this to be an exact override). Returns True on success."""
-    bid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, body_name)
+    """Apply a world-frame position/orientation override to one body.
+
+    Freejoint qpos is already represented in world coordinates.  Static body
+    transforms, however, are stored in the parent body's local frame; convert
+    them explicitly so nested scene assets and operator roots behave exactly
+    like the backend object/base-pose paths.  ``mj_forward`` is run here so a
+    subsequent named-frame override observes the newly applied pose.
+    """
+    resolved_name = body_name
+    bid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, resolved_name)
     if bid < 0:
         print(f"[warn] body '{body_name}' not found; skipping initial_pose")
         return False
-    free_jid = _find_freejoint_for_body(model, body_name)
+    free_jid = _find_freejoint_for_body(model, resolved_name)
     if free_jid >= 0:
         addr = int(model.jnt_qposadr[free_jid])
         if position is not None:
             data.qpos[addr : addr + 3] = [float(v) for v in position[:3]]
         if orientation is not None:
             data.qpos[addr + 3 : addr + 7] = _orientation_to_wxyz(orientation)
+        dof_addr = int(model.jnt_dofadr[free_jid])
+        data.qvel[dof_addr : dof_addr + 6] = 0.0
+        mujoco.mj_forward(model, data)
         return True
-    # Static body: write into the model's body_pos / body_quat slot.
+
+    # Static body: body_pos/body_quat are parent-local, while the override
+    # contract is world-frame after reference resolution.
+    parent_id = int(model.body_parentid[bid])
+    parent_pos = np.asarray(data.xpos[parent_id], dtype=np.float64)
+    parent_rot = np.asarray(data.xmat[parent_id], dtype=np.float64).reshape(3, 3)
     if position is not None:
-        model.body_pos[bid] = [float(v) for v in position[:3]]
+        world_pos = np.asarray(position[:3], dtype=np.float64)
+        model.body_pos[bid] = parent_rot.T @ (world_pos - parent_pos)
     if orientation is not None:
-        model.body_quat[bid] = _orientation_to_wxyz(orientation)
+        world_quat = _orientation_to_wxyz(orientation)
+        parent_quat = np.asarray(data.xquat[parent_id], dtype=np.float64)
+        inverse_parent_quat = np.empty(4, dtype=np.float64)
+        mujoco.mju_negQuat(inverse_parent_quat, parent_quat)
+        local_quat = np.empty(4, dtype=np.float64)
+        mujoco.mju_mulQuat(local_quat, inverse_parent_quat, world_quat)
+        model.body_quat[bid] = local_quat
+    mujoco.mj_forward(model, data)
     return True
+
+
+def _set_camera_pose(
+    model: mujoco.MjModel,
+    data: mujoco.MjData,
+    camera_name: str,
+    pose: PoseState,
+) -> bool:
+    """Apply one world-frame camera pose as parent-local MuJoCo extrinsics."""
+    camera_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_CAMERA, camera_name)
+    if camera_id < 0:
+        print(
+            f"[warn] camera '{camera_name}' not found; skipping camera_initial_pose",
+            flush=True,
+        )
+        return False
+
+    mujoco.mj_forward(model, data)
+    parent_id = int(model.cam_bodyid[camera_id])
+    parent_pos = np.asarray(data.xpos[parent_id], dtype=np.float64)
+    parent_rot = np.asarray(data.xmat[parent_id], dtype=np.float64).reshape(3, 3)
+    world_pos = np.asarray(pose.position[0], dtype=np.float64)
+    model.cam_pos[camera_id] = parent_rot.T @ (world_pos - parent_pos)
+
+    qx, qy, qz, qw = (float(value) for value in pose.orientation[0])
+    world_quat_wxyz = np.asarray([qw, qx, qy, qz], dtype=np.float64)
+    parent_quat_wxyz = np.asarray(data.xquat[parent_id], dtype=np.float64)
+    inverse_parent_quat = np.empty(4, dtype=np.float64)
+    mujoco.mju_negQuat(inverse_parent_quat, parent_quat_wxyz)
+    local_quat = np.empty(4, dtype=np.float64)
+    mujoco.mju_mulQuat(local_quat, inverse_parent_quat, world_quat_wxyz)
+    model.cam_quat[camera_id] = local_quat
+    mujoco.mj_forward(model, data)
+    return True
+
+
+def _initial_pose_order(
+    overrides: Mapping[str, PoseOverrideConfig],
+) -> list[str]:
+    """Return object pose keys in dependency order and reject cycles."""
+    names = list(overrides)
+    declaration_index = {name: index for index, name in enumerate(names)}
+    dependencies: dict[str, set[str]] = {name: set() for name in names}
+    for name, config in overrides.items():
+        reference = getattr(config, "reference", None)
+        if (
+            isinstance(reference, str)
+            and not isinstance(reference, PoseReference)
+            and reference in dependencies
+        ):
+            dependencies[name].add(reference)
+
+    order: list[str] = []
+    visited: set[str] = set()
+    visiting: set[str] = set()
+
+    def visit(name: str) -> None:
+        if name in visited:
+            return
+        if name in visiting:
+            raise ValueError(f"Circular initial pose reference involving {name!r}")
+        visiting.add(name)
+        for dependency in sorted(dependencies[name], key=declaration_index.__getitem__):
+            visit(dependency)
+        visiting.remove(name)
+        visited.add(name)
+        order.append(name)
+
+    for name in names:
+        visit(name)
+    return order
+
+
+def _element_pose(
+    model: mujoco.MjModel,
+    data: mujoco.MjData,
+    name: str,
+) -> PoseState:
+    """Return a world pose for a MuJoCo site/body/geom/joint."""
+    sid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, name)
+    if sid >= 0:
+        return PoseState(
+            position=data.site_xpos[sid],
+            orientation=quaternion_from_matrix_3x3(data.site_xmat[sid].reshape(3, 3)),
+        )
+    bid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, name)
+    if bid >= 0:
+        return PoseState(
+            position=data.xpos[bid],
+            orientation=quaternion_from_matrix_3x3(data.xmat[bid].reshape(3, 3)),
+        )
+    gid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, name)
+    if gid >= 0:
+        return PoseState(
+            position=data.geom_xpos[gid],
+            orientation=quaternion_from_matrix_3x3(data.geom_xmat[gid].reshape(3, 3)),
+        )
+    jid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, name)
+    if jid >= 0:
+        # xanchor/xmat are the articulated joint frame after ``mj_forward``;
+        # parent-local body data would describe only the XML default pose.
+        body_id = int(model.jnt_bodyid[jid])
+        return PoseState(
+            position=data.xanchor[jid],
+            orientation=quaternion_from_matrix_3x3(data.xmat[body_id].reshape(3, 3)),
+        )
+    raise KeyError(
+        f"No site, body, geom, or joint named '{name}' found in the MuJoCo model"
+    )
+
+
+def _resolve_viewer_override(
+    raw_config: (
+        PoseOverrideConfig | Mapping[str, object] | list[float] | tuple[float, ...]
+    ),
+    fallback: PoseState,
+    model: mujoco.MjModel,
+    data: mujoco.MjData,
+    *,
+    context: str,
+    operator_frames: Mapping[str, Mapping[str, str]] | None = None,
+    allow_operator_aliases: bool = False,
+) -> PoseState:
+    """Resolve a shared pose override for the standalone viewer.
+
+    The resolver is intentionally the same ``resolve_pose_override`` used by
+    the runtime backend.  This function only supplies the MuJoCo-specific
+    reference-frame lookup (site/body/geom/joint and ``operator.base/eef``).
+    ``operator_frames`` is optional so existing callers and small unit-test
+    doubles can continue to resolve plain scene references.
+    """
+    if isinstance(raw_config, PoseOverrideConfig):
+        config = raw_config
+    elif isinstance(raw_config, (list, tuple)):
+        # The only legacy list form is the operator EEF pose.  Keep accepting
+        # tuples here because OmegaConf and test doubles may materialize them
+        # differently; the shared resolver consumes the canonical list form.
+        config = list(raw_config)
+    else:
+        config = PoseOverrideConfig.model_validate(raw_config)
+    reference = PoseReference.WORLD if isinstance(config, list) else config.reference
+    if isinstance(reference, PoseReference):
+        if reference != PoseReference.WORLD:
+            raise ValueError(
+                f"{context} reference {reference.value!r} is not supported by "
+                "the standalone viewer; use 'world' or a named scene element"
+            )
+        reference_pose = PoseState()
+    else:
+        try:
+            operator_reference = None
+            if (
+                allow_operator_aliases
+                and operator_frames is not None
+                and "." in reference
+            ):
+                operator_name, attribute = reference.rsplit(".", 1)
+                frame = operator_frames.get(operator_name)
+                if frame is not None and attribute in {"base", "eef"}:
+                    element_name = frame.get(attribute)
+                    if element_name:
+                        operator_reference = _element_pose(model, data, element_name)
+            if operator_reference is not None:
+                reference_pose = operator_reference
+            else:
+                try:
+                    reference_pose = _element_pose(model, data, reference)
+                except KeyError:
+                    # Match the runtime object's logical-name resolution for
+                    # Gaussian scenes, where ``name_gs`` is the physical
+                    # visual body backing a logical ``name`` key.
+                    resolved_reference = _resolve_body_name(model, reference)
+                    reference_pose = _element_pose(model, data, resolved_reference)
+        except KeyError as exc:
+            raise ValueError(
+                f"{context} reference {reference!r} is not a scene element"
+            ) from exc
+    return resolve_pose_override(config, fallback, reference_pose)
 
 
 def _apply_home_pose(
@@ -162,8 +386,17 @@ def _apply_home_pose(
     for joint_name in missing_joint_names:
         print(f"[warn] joint '{joint_name}' not found; skipping")
 
-    # Sync mocap bodies (if any) onto the freejoint they're welded to so the
-    # arm doesn't snap back when the viewer takes its first step.
+    _sync_mocap_bodies(model, data)
+
+
+def _sync_mocap_bodies(model: mujoco.MjModel, data: mujoco.MjData) -> None:
+    """Align mocap weld targets with their physical bodies.
+
+    The helper is called both after the joint home state and after any later
+    root-body pose override.  Keeping it separate prevents a base relocation
+    from being pulled back toward the stale mocap target on the first viewer
+    step.
+    """
     for eq in range(model.neq):
         if int(model.eq_type[eq]) != 1:  # mjEQ_WELD
             continue
@@ -180,8 +413,16 @@ def _apply_home_pose(
 
 
 def _extract_overrides(cfg: DictConfig) -> dict:
-    """Pull the four override surfaces out of a freshly-composed Hydra cfg
-    so reload can re-read them without restarting the process."""
+    """Extract viewer-relevant overrides from a freshly composed Hydra cfg.
+
+    Pose values are validated into the shared :class:`PoseOverrideConfig`
+    model here, rather than maintaining a viewer-only schema.  Operator frame
+    metadata is retained for resolving ``<operator>.base`` / ``.eef`` named
+    references at build time.  EEF initial poses are reported explicitly but
+    not applied: a standalone viewer has no backend IK/controller to turn a
+    world pose into fixed-arm joint qpos.  Camera initial poses are applied
+    directly because they are model-level extrinsics.
+    """
     env_cfg = cfg.env
     scene_data = _to_container(env_cfg.get("scene")) or {}
     operators_cfg = _to_container(env_cfg.get("operators")) or {}
@@ -194,6 +435,38 @@ def _extract_overrides(cfg: DictConfig) -> dict:
         )
     )
     sim_freq_raw = env_cfg.get("sim_freq")
+    raw_initial_poses = _to_container(cfg.get("task", {}).get("initial_pose")) or {}
+    initial_poses: dict[str, PoseOverrideConfig] = {}
+    for body_name, raw_override in raw_initial_poses.items():
+        if raw_override is None:
+            continue
+        initial_poses[str(body_name)] = PoseOverrideConfig.model_validate(raw_override)
+
+    raw_camera_initial_poses = (
+        _to_container(cfg.get("task", {}).get("camera_initial_pose")) or {}
+    )
+    camera_initial_poses: dict[str, PoseOverrideConfig] = {}
+    for camera_name, raw_override in raw_camera_initial_poses.items():
+        if raw_override is None:
+            continue
+        camera_initial_poses[str(camera_name)] = PoseOverrideConfig.model_validate(
+            raw_override
+        )
+
+    operator_frames: dict[str, dict[str, str]] = {}
+    for op_name, operator in operators_cfg.items():
+        if not isinstance(operator, Mapping):
+            continue
+        frame: dict[str, str] = {}
+        root_body = operator.get("root_body")
+        pose_site = operator.get("pose_site")
+        if root_body:
+            frame["base"] = str(root_body)
+        if pose_site:
+            frame["eef"] = str(pose_site)
+        if frame:
+            operator_frames[str(op_name)] = frame
+
     out: dict = {
         "scene": scene_data,
         "scene_base": str(scene_data["base"]),
@@ -205,15 +478,23 @@ def _extract_overrides(cfg: DictConfig) -> dict:
         "sim_freq": float(sim_freq_raw) if sim_freq_raw is not None else None,
         "actuator_names": actuator_names,
         "ijp": _to_container(env_cfg.get("initial_joint_positions")) or {},
-        "initial_pose": _to_container(cfg.get("task", {}).get("initial_pose")) or {},
+        "initial_pose": initial_poses,
+        "camera_initial_pose": camera_initial_poses,
         "op_bases": [],
+        "op_eef_poses": [],
+        "operator_frames": operator_frames,
     }
 
     task_operators_cfg = cfg.get("task_operators") or {}
     items = task_operators_cfg.items() if task_operators_cfg else []
     for op_name, op_node in items:
-        bp_cfg = _to_container((op_node.get("initial_state") or {}).get("base_pose"))
-        if not bp_cfg:
+        initial_state = op_node.get("initial_state") or {}
+        bp_raw = _to_container(initial_state.get("base_pose"))
+        if bp_raw is not None:
+            bp_cfg = PoseOverrideConfig.model_validate(bp_raw)
+        else:
+            bp_cfg = None
+        if bp_cfg is None:
             continue
         root_body = (operators_cfg.get(op_name) or {}).get("root_body")
         if not root_body:
@@ -223,6 +504,24 @@ def _extract_overrides(cfg: DictConfig) -> dict:
             )
             continue
         out["op_bases"].append((root_body, bp_cfg))
+
+    # The runtime backend can solve an initial EEF pose (and may use a
+    # reference such as ``base``), but this script only has a raw MjModel/Data
+    # pair.  Keep the configured values visible in diagnostics and make the
+    # limitation explicit instead of silently showing a different home pose.
+    for op_name, op_node in items:
+        initial_state = op_node.get("initial_state") or {}
+        eef_raw = _to_container(initial_state.get("eef_pose"))
+        if eef_raw is None:
+            continue
+        out["op_eef_poses"].append((str(op_name), eef_raw))
+        print(
+            f"[warn] task_operators.{op_name}.initial_state.eef_pose is "
+            "configured but view_scene cannot apply EEF poses without the "
+            "runtime backend IK/controller; showing the model/keyframe EEF "
+            "pose instead",
+            flush=True,
+        )
     return out
 
 
@@ -238,25 +537,116 @@ def _build(overrides: dict) -> tuple[mujoco.MjModel, mujoco.MjData]:
         mujoco.mj_resetDataKeyframe(m, d, 0)
     else:
         mujoco.mj_resetData(m, d)
+    # ``mj_resetData`` initializes qpos/qvel but does not guarantee that the
+    # derived world transforms (xpos/xmat/site_xpos/...) are current.  Pose
+    # overrides use those transforms as fallbacks and named references, so
+    # establish a valid snapshot before resolving the first entry.
+    mujoco.mj_forward(m, d)
 
-    # 1) task_operators.*.initial_state.base_pose — relocates the arm root
-    #    body so the arm sits at the right world pose.
-    for root_body, bp in overrides["op_bases"]:
-        _set_body_pose(m, d, root_body, bp.get("position"), bp.get("orientation"))
+    # 1) env.initial_joint_positions — mirror ``MujocoBasis.reset()`` before
+    # resolving any pose override.  In particular, mocap operators expose a
+    # freejoint in this map; applying it after a base override would silently
+    # undo the requested root pose.
+    _apply_home_pose(m, d, overrides["ijp"], overrides.get("actuator_names", []))
 
-    # 2) task.initial_pose — per-object overrides (freejoint qpos or static body_pos).
-    for body_name, override in overrides["initial_pose"].items():
-        override = override or {}
+    # 2) task.initial_pose — resolve and apply object poses.  Named
+    # references are sampled against the current scene state, so each update
+    # is forwarded before the next override (matching backend reset order).
+    initial_poses = overrides["initial_pose"]
+    for requested_name in _initial_pose_order(initial_poses):
+        override = initial_poses[requested_name]
+        if override is None:
+            continue
+        body_name = _resolve_body_name(m, requested_name)
+        if mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_BODY, body_name) < 0:
+            print(
+                f"[warn] body '{requested_name}' not found; skipping initial_pose",
+                flush=True,
+            )
+            continue
+        fallback = _element_pose(m, d, body_name)
+        resolved = _resolve_viewer_override(
+            override,
+            fallback,
+            m,
+            d,
+            context=f"initial_pose[{requested_name!r}]",
+            operator_frames=None,
+        )
         _set_body_pose(
             m,
             d,
             body_name,
-            override.get("position"),
-            override.get("orientation"),
+            resolved.position[0],
+            resolved.orientation[0],
         )
 
-    # 3) env.initial_joint_positions — joint-level home pose.
-    _apply_home_pose(m, d, overrides["ijp"], overrides.get("actuator_names", []))
+    # 3) task_operators.*.initial_state.base_pose — resolve only after all
+    # object initial poses have been applied, so a reference such as a handle
+    # site observes the final object placement.
+    for root_body, base_override in overrides["op_bases"]:
+        if base_override is None:
+            continue
+        if mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_BODY, root_body) < 0:
+            print(
+                f"[warn] operator root body '{root_body}' not found; "
+                "skipping initial_state.base_pose",
+                flush=True,
+            )
+            continue
+        fallback = _element_pose(m, d, root_body)
+        resolved = _resolve_viewer_override(
+            base_override,
+            fallback,
+            m,
+            d,
+            context=f"operator root body {root_body!r} base_pose",
+            operator_frames=None,
+        )
+        _set_body_pose(
+            m,
+            d,
+            root_body,
+            resolved.position[0],
+            resolved.orientation[0],
+        )
+
+    # A base override may have moved a physical body that is welded to a
+    # mocap target.  Re-sync after the relocation so the first viewer step
+    # preserves the configured base rather than applying a corrective weld
+    # impulse toward the pre-override home pose.
+    _sync_mocap_bodies(m, d)
+
+    # 4) task.camera_initial_pose — cameras are model-level extrinsics, so the
+    # standalone viewer can apply the same world-frame contract directly.
+    # Resolve after object/base overrides so named scene references observe the
+    # final composed placement.
+    for camera_name, camera_override in overrides.get(
+        "camera_initial_pose", {}
+    ).items():
+        if camera_override is None:
+            continue
+        camera_id = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_CAMERA, camera_name)
+        if camera_id < 0:
+            print(
+                f"[warn] camera '{camera_name}' not found; skipping camera_initial_pose",
+                flush=True,
+            )
+            continue
+        fallback = PoseState(
+            position=d.cam_xpos[camera_id],
+            orientation=quaternion_from_matrix_3x3(d.cam_xmat[camera_id].reshape(3, 3)),
+        )
+        resolved = _resolve_viewer_override(
+            camera_override,
+            fallback,
+            m,
+            d,
+            context=f"camera_initial_pose[{camera_name!r}]",
+            operator_frames=None,
+        )
+        _set_camera_pose(m, d, camera_name, resolved)
+
     return m, d
 
 
@@ -289,7 +679,8 @@ def _print_model_summary(model: mujoco.MjModel, overrides: dict) -> None:
         f"nbody={model.nbody} ngeom={model.ngeom}  "
         f"(mjcf={overrides['mjcf_paths']}, ijp={len(overrides['ijp'])}, "
         f"body_pose={len(overrides['initial_pose'])}, "
-        f"op_base={len(overrides['op_bases'])})"
+        f"op_base={len(overrides['op_bases'])}, "
+        f"camera_pose={len(overrides.get('camera_initial_pose', {}))})"
     )
 
 
@@ -715,7 +1106,8 @@ def main(cfg: DictConfig) -> None:
     print(
         f"[info] home   : {len(overrides['ijp'])} joint override(s), "
         f"{len(overrides['initial_pose'])} body pose(s), "
-        f"{len(overrides['op_bases'])} operator base(s)"
+        f"{len(overrides['op_bases'])} operator base(s), "
+        f"{len(overrides.get('camera_initial_pose', {}))} camera pose(s)"
     )
 
     if _DEBUG:

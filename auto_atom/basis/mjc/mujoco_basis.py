@@ -375,6 +375,25 @@ class MujocoBasis:
         self.model, self.data = self._load_model(config.scene, self.scene_artifact)
         if config.sim_freq is not None:
             self.model.opt.timestep = 1.0 / config.sim_freq
+
+        # MuJoCo's body/camera pose arrays are model (not data) state.  Task
+        # randomization and initial-pose overrides legitimately mutate these
+        # arrays, but ``mj_resetData(Keyframe)`` does not restore them.  Keep
+        # an immutable snapshot of the composed XML model so every reset starts
+        # from the same structural scene before higher layers re-apply their
+        # configured overrides.
+        self._model_body_pos_baseline = np.asarray(
+            self.model.body_pos, dtype=np.float64
+        ).copy()
+        self._model_body_quat_baseline = np.asarray(
+            self.model.body_quat, dtype=np.float64
+        ).copy()
+        self._model_cam_pos_baseline = np.asarray(
+            self.model.cam_pos, dtype=np.float64
+        ).copy()
+        self._model_cam_quat_baseline = np.asarray(
+            self.model.cam_quat, dtype=np.float64
+        ).copy()
         self.get_logger().info(
             f"Using timestep of {self.model.opt.timestep:.6f} seconds"
         )
@@ -555,7 +574,12 @@ class MujocoBasis:
         # the constraint-settle loop inside reset()) are bound. Without this,
         # the env's observable state stays at qpos0 until the caller invokes
         # reset() explicitly, so freejoint-based home poses wouldn't be seen.
-        self.reset()
+        # Do not dispatch a virtual ``reset`` from the base constructor:
+        # Gaussian-rendering subclasses initialise their reset-only fields
+        # after ``super().__init__`` returns.  The core reset is deliberately
+        # separate from the post-reset hook so no subclass code runs before
+        # subclass construction has completed.
+        MujocoBasis._reset_core(self)
 
         self._viewer_update_defer_depth = 0
         self._viewer_update_pending = False
@@ -911,6 +935,25 @@ class MujocoBasis:
     # Physics
     # ------------------------------------------------------------------
 
+    def _restore_model_pose_baseline(self) -> None:
+        """Restore model-level body and camera poses captured at load time.
+
+        ``mj_resetData`` only resets dynamic ``MjData`` values; it intentionally
+        leaves ``MjModel.body_pos/body_quat`` and ``cam_pos/cam_quat`` alone.
+        Those arrays are nevertheless mutated by static-object placement,
+        operator-base relocation, and camera randomization.  Restoring them at
+        the low-level reset seam prevents one episode's structural pose from
+        becoming the implicit baseline of the next episode.
+        """
+        self.model.body_pos[...] = self._model_body_pos_baseline
+        self.model.body_quat[...] = self._model_body_quat_baseline
+        self.model.cam_pos[...] = self._model_cam_pos_baseline
+        self.model.cam_quat[...] = self._model_cam_quat_baseline
+
+    def _after_reset(self) -> None:
+        """Hook for higher-level wrappers to restore derived reset state."""
+        return None
+
     def _sync_mocap_to_freejoint(self) -> None:
         """Synchronize mocap bodies with their weld-connected physical bodies.
 
@@ -936,7 +979,9 @@ class MujocoBasis:
             self.data.mocap_pos[mocap_id] = self.data.xpos[phys_id].copy()
             self.data.mocap_quat[mocap_id] = self.data.xquat[phys_id].copy()
 
-    def reset(self) -> None:
+    def _reset_core(self) -> None:
+        """Restore model/data state without invoking subclass lifecycle hooks."""
+        self._restore_model_pose_baseline()
         if self.model.nkey > 0:
             mujoco.mj_resetDataKeyframe(self.model, self.data, 0)
         else:
@@ -958,6 +1003,11 @@ class MujocoBasis:
         )
         self._sync_mocap_to_freejoint()
         self._prev_ctrl = None
+
+    def reset(self) -> None:
+        """Restore low-level state and notify higher-level wrappers."""
+        self._reset_core()
+        self._after_reset()
 
     def _snapshot_ctrl(self) -> None:
         """Capture current ctrl as the interpolation baseline for the next update."""

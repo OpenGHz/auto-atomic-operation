@@ -42,7 +42,9 @@ env:
   space, the replay pipeline excludes eef joints from `initial_joint_positions`
   and applies them through the mapper instead.
 - These overrides are applied **before** `_record_default_poses()`, so they
-  become the new baseline for any subsequent randomization.
+  become the baseline for randomization in the current rollout.  Every later
+  `reset()` restores the composed XML/model baseline first and reapplies the
+  override; sampled poses are never fed back as the next episode's baseline.
 
 ### Interaction with eef_mapper
 
@@ -54,11 +56,11 @@ distinction in mind when mixing the two.
 
 ## Initial Pose Override
 
-Before randomization is applied, you can override any object's initial pose
-(the baseline that randomization offsets from) using `initial_pose` under
-`task`.  This lets you set object positions from YAML without editing the
-MuJoCo XML or keyframe.  Both **freejoint** and **static** (fixed) bodies
-are supported.
+Before randomization is applied, you can override an object's initial pose (the
+baseline that randomization offsets from) using `initial_pose` under `task`.
+The same `PoseOverrideConfig` model is used for objects, cameras, and operator
+initial states; only the fields relevant to the selected owner are interpreted.
+Both **freejoint** and **static** (fixed) bodies are supported.
 
 ```yaml
 task:
@@ -95,6 +97,33 @@ task:
         y: [-0.015, 0.015]
 ```
 
+An operator base (or EEF home pose) can instead be expressed relative to a
+named scene element.  The element may be a site, body, geom, or joint exported
+by the composed MuJoCo model:
+
+```yaml
+task_operators:
+  arm:
+    initial_state:
+      base_pose:
+        reference: door__handle_grasp_center
+        # T_world_base = T_world_reference × T_reference_base
+        position: [0.2474, -0.4666, -0.1]
+        orientation: [0.0, 0.0, 0.70710678, 0.70710678]
+```
+
+The named frame is resolved independently for each environment during backend
+setup and reset.  It is a setup-time anchor: if the referenced joint later
+moves during a Stage, the robot base remains fixed.  A `base_pose` with
+`reference: world` keeps the ordinary world-frame behavior.  Built-in
+references other than `world` are rejected for a base pose; `reference: base`
+is meaningful for an EEF pose, not for the base itself.
+
+In joint mode the resolved base pose also relocates the physical operator root
+body. In pure mocap mode it updates the virtual base frame while the registered
+mocap home remains the physical pose; this distinction is intentional because
+the two control paths use different kinematic seams.
+
 These initial-state overrides are applied before operator randomization
 defaults are recorded, so:
 
@@ -112,26 +141,49 @@ whole robot base from YAML. Use
 [Tune Randomization Extremes](../tools/tune_randomization_extremes.md) to
 inspect the YAML-defined default state and the randomization ranges around it.
 
-### Fields
+### Shared `PoseOverrideConfig` fields
 
 | Field          | Format                                  | Default |
 |----------------|-----------------------------------------|---------|
-| `position`     | `[x, y, z]` — world-frame metres       | `null` (keep keyframe) |
-| `orientation`  | 4 floats: quaternion `[x, y, z, w]` **or** 3 floats: Euler `[roll, pitch, yaw]` in radians | `null` (keep keyframe) |
+| `position`     | `[x, y, z]` in the selected reference frame | `null` (preserve fallback) |
+| `orientation`  | 4 floats: quaternion `[x, y, z, w]` **or** 3 floats: Euler `[roll, pitch, yaw]` in radians | `null` (preserve fallback) |
+| `reference`    | `world`, `base` (EEF only), or a named scene element | `world` |
 
-Both fields are optional.  Omitting a field keeps the value defined in the
-XML keyframe for that component.
+Both pose fields are optional.  For a named reference, omitted components keep
+the fallback pose after it is transformed into that frame; provided components
+replace only that local component.  The six-value operator EEF shorthand
+`[x, y, z, yaw, pitch, roll]` is accepted as a complete world-frame pose; use
+the structured form for partial values or a non-world reference.
+
+The configuration boundary validates these shapes before a simulator is
+created: `position` must contain exactly three finite values, `orientation`
+must contain either three finite RPY values or four finite quaternion values,
+and a four-value quaternion must be non-zero.  The flat EEF shorthand must
+contain exactly six finite values.  Pose overrides are frozen models with tuple
+components, so a loaded configuration cannot be mutated in place.
 
 ### Interaction with randomization
 
-`initial_pose` is applied **after** the keyframe reset and **before**
-`_record_default_poses()`.  This means:
+`initial_pose` and operator initial states are applied **after** the keyframe
+reset and **before** `_record_default_poses()` / randomization.  This means:
 
-- The initial pose becomes the new **default/baseline** for randomization.
+- The initial pose becomes the **default/baseline** for randomization in that
+  reset.  A subsequent reset starts from the composed XML/model baseline and
+  reapplies the configured initial pose, so randomization offsets do not
+  accumulate across episodes.
 - `reference: relative` adds offsets on top of the initial pose (not the
   XML keyframe).
 - `reference: absolute_world` replaces sampled axes with absolute values
   as usual; unsampled axes fall back to the initial pose.
+
+Named initial-pose references are resolved after the keyframe reset and before
+pose randomization.  When a `reference` exactly matches another key in
+`task.initial_pose`, that entry is treated as a dependency and applied first;
+the dependency graph is topologically ordered and cycles are rejected before
+any scene pose is mutated.  References to scene frames that are not configured
+`initial_pose` keys are resolved directly from the current reset baseline.
+These are not randomization delta-carry references: use `task.randomization`
+when an entity should follow another entity's sampled displacement.
 
 ```yaml
 task:
@@ -466,18 +518,25 @@ task:
       # orientation omitted → keeps XML value
 ```
 
-Fields match `initial_pose` for objects:
+Camera overrides use the same `PoseOverrideConfig` as object and operator
+initial states.  The pose values are interpreted in the selected reference
+frame; `world` is the usual choice, while a named site/body/geom/joint can be
+used when the camera should be calibrated from a composed scene element.
 
 | Field          | Format                                                              | Default |
 |----------------|---------------------------------------------------------------------|---------|
-| `position`     | `[x, y, z]` — world-frame metres                                    | `null` (keep XML) |
-| `orientation`  | 4 floats: quaternion `[x, y, z, w]` **or** 3 floats: Euler `[roll, pitch, yaw]` in radians | `null` (keep XML) |
+| `position`     | `[x, y, z]` in the selected reference frame                         | `null` (preserve XML) |
+| `orientation`  | 4 floats: quaternion `[x, y, z, w]` **or** 3 floats: Euler `[roll, pitch, yaw]` in radians | `null` (preserve XML) |
+| `reference`    | `world` or a named scene element (site/body/geom/joint)              | `world` |
 
 Semantics:
 
 - Overrides are applied at each `reset()` **before** camera randomization
   records its defaults, so `camera_randomization` with `reference: relative`
   jitters around the overridden pose rather than the XML pose.
+- Named references are resolved once per environment during setup/reset.  They
+  are anchors, not tracking references: if the referenced articulated element
+  moves during a Stage, the camera keeps the resolved world pose.
 - For cameras marked `is_static: true` in `env.cameras`, the GS background
   is cached at the first render. When overriding such a camera's pose,
   make sure the override is applied before the first render — otherwise
@@ -511,7 +570,7 @@ Only `relative` (default) and `absolute_world` are supported for cameras:
 
 | `reference`       | Meaning                                                          |
 |-------------------|------------------------------------------------------------------|
-| `relative`        | Sampled values are **added** to the camera's default XML pose.   |
+| `relative`        | Sampled values are **added** to the camera's effective default pose (the XML pose unless `camera_initial_pose` overrides it). |
 | `absolute_world`  | Sampled values are **absolute world-frame** coordinates/angles.  |
 
 `absolute_base` and entity-name references are **rejected** because cameras have
@@ -521,8 +580,9 @@ no operator base frame and do not participate in entity dependency ordering.
 
 - Camera randomization is applied at each `reset()` **after** object and operator
   randomization.
-- The default camera pose (the baseline for `relative` mode) is the pose defined
-  in the MuJoCo XML, snapshotted during `setup()`.
+- The default camera pose (the baseline for `relative` mode) is the effective
+  pose recorded during `setup()`: the XML pose when no
+  `camera_initial_pose` entry exists, otherwise that resolved override.
 - Cameras do **not** participate in `collision_radius` rejection — they have no
   physical presence.
 - Camera randomization uses the same `task.seed` RNG as entity randomization for
@@ -545,38 +605,39 @@ The entity and camera randomization logic is implemented by
 
 ### Lifecycle
 
-1. **`setup()`** — snapshots canonical object poses, operator base poses, and
-   operator home EEF poses (after `env.reset()` and operator `home()`).
+1. **`setup()`** — starting from the constructed environment's keyframe state,
+   homes the operators, then applies `task.initial_pose`,
+   `task_operators.*.initial_state` (base first, EEF second), and
+   `task.camera_initial_pose`. Named references are resolved at this point
+   against the composed scene. The resulting object, operator, and camera
+   poses are recorded as the canonical randomization baselines.
 
-2. **`reset()`** — after restoring the scene to its canonical state:
-   - Calls `_record_default_poses()` if not already recorded.
-   - Calls `_apply_randomization()` which:
-     1. Topologically sorts the randomization keys by entity-reference
-        dependency, then groups reference-connected keys into components
-        (for example `vase` + `flower`).
-     2. Resolves each key to an object handler or operator handler.
-     3. For each axis with a `[min, max]` tuple (axes set to `None` are
-        skipped), samples a uniform random value.
-     4. Combines the sampled values with the default pose according to
-        `reference`:
-        - `relative` — adds the sampled values to the default pose
-          (translation additive; rotation additive in RPY then converted
-          back to quaternion).
-        - `absolute_world` — replaces the default pose's value on each
-          sampled axis with the sampled value; unsampled axes are left at
-          their default.
-        - `absolute_base` (operator EEF only) — transforms the default
-          EEF world pose into the operator's base frame, replaces sampled
-          axes there, then transforms the result back to world.
-     5. Runs collision rejection on the sampled component. If any member of the
-        component overlaps an unrelated accepted participant, the **entire
-        component** is re-sampled up to 100 times.
-     6. Applies object poses, operator base poses, and operator home EEF
-        poses through their respective APIs.
-   - Calls `_apply_camera_randomization()` (if `camera_randomization`
-     is configured) which samples camera poses and writes them to
-     `model.cam_pos` / `model.cam_quat` per environment.
-   - Refreshes the viewer.
+2. **`reset()`** — restores the keyframe, model-level XML poses, and
+   registered operator home/cache, reapplies all initial overrides (so a named
+   reference is resolved for the current environment row), and then calls
+   `_apply_randomization()`:
+   1. Topologically sorts the randomization keys by entity-reference
+      dependency, then groups reference-connected keys into components (for
+      example `vase` + `flower`).
+   2. Resolves each key to an object handler or operator handler.
+   3. For each axis with a `[min, max]` tuple (axes set to `None` are skipped),
+      samples a uniform random value.
+   4. Combines the sampled values with the default pose according to
+      `reference`:
+      - `relative` — adds the sampled values to the default pose (translation
+        additive; rotation additive in RPY then converted back to quaternion).
+      - `absolute_world` — replaces the default pose's value on each sampled
+        axis; unsampled axes are left at their default.
+      - `absolute_base` (operator EEF only) — transforms the default EEF world
+        pose into the operator's base frame, replaces sampled axes there, then
+        transforms the result back to world.
+   5. Runs collision rejection on the sampled component. If any member of the
+      component overlaps an unrelated accepted participant, the **entire
+      component** is re-sampled up to 100 times.
+   6. Applies object poses, operator base poses, and operator home EEF poses
+      through their respective APIs.
+   7. Calls `_apply_camera_randomization()` (if configured), then refreshes the
+      viewer.
 
 3. **`TaskRunner.reset()`** — after the backend reset, collects the realized
    poses of all task-relevant entities (stage operators/objects, plus any extra

@@ -28,6 +28,19 @@ The coordinate frame in which a waypoint's target position, orientation, or axis
 expressed; it does not identify which frame is being moved.
 _Avoid_: Controlled frame, controlled object
 
+**Pose override**:
+A setup-time declaration that replaces selected position and/or orientation
+components of an entity's initial pose in a reference frame.  The same concept
+applies to scene objects, cameras, and an operator's base or home EEF pose;
+omitted components retain the resolved fallback pose.
+_Avoid_: Arm-only pose config, ad-hoc placement offset
+
+**Operator home state**:
+The operator state restored at setup and reset: its base pose, home EEF pose,
+and gripper control value.  A home state is distinct from a Stage's transient
+motion target and is resolved before pose randomization baselines are recorded.
+_Avoid_: EEF initial pose, waypoint pose
+
 **Orientation goal**:
 A full or partial rotational requirement on a controlled frame; an axis-only goal
 leaves rotation about the constrained axis free.

@@ -93,6 +93,106 @@ task_operators:
   arm_a: {}
 ```
 
+### Operator definitions and initial state
+
+`task_operators` is the task-facing operator contract.  Its mapping key is the
+logical name used by `stage.operator`; the key is also the operator name, so a
+separate `name` field is normally unnecessary.  The corresponding
+`env.operators` entry binds that name to the simulator's root body, actuators,
+sites, and sensors.  Keep these two layers distinct: `env.operators` describes
+the physical binding, while `task_operators.<name>` supplies task control and
+initial-state values.
+
+The optional `initial_state` is applied after the scene keyframe reset and
+before operator randomization baselines are recorded.  It can set the base
+pose, home EEF pose, and gripper control independently:
+
+```yaml
+task_operators:
+  arm_a:
+    initial_state:
+      base_pose:
+        # A named site/body/geom/joint is resolved in the composed scene.
+        reference: door__handle_grasp_center
+        position: [0.25, -0.47, -0.10]       # local x/y/z in that frame
+        orientation: [0.0, 0.0, 0.7071, 0.7071]  # local xyzw quaternion
+      eef_pose:
+        # EEF poses may additionally use the operator's current base frame.
+        reference: base
+        position: [0.32, 0.0, 0.18]
+        orientation: [0.0, 1.5708, 0.0]      # local RPY (roll,pitch,yaw)
+      eef: 0.0                               # gripper control value
+```
+
+`base_pose` and `eef_pose` both use the shared `PoseOverrideConfig` model.  A
+pose may provide only `position`, only `orientation`, or both; an omitted
+component keeps the current fallback pose after it is expressed in the chosen
+reference frame.  Use `orientation: [x, y, z, w]` for an XYZW quaternion or
+three values in RPY order (`[roll, pitch, yaw]`) for Euler angles.  The accepted
+reference forms are:
+
+| Owner | Built-in references | Named references |
+| --- | --- | --- |
+| object `task.initial_pose` | `world` | MuJoCo site, body, geom, or joint |
+| camera `task.camera_initial_pose` | `world` | MuJoCo site, body, geom, or joint |
+| operator `base_pose` | `world` | MuJoCo site, body, geom, or joint |
+| operator `eef_pose` | `world`, `base` | MuJoCo site, body, geom, or joint; `<operator>.base` / `<operator>.eef` |
+
+Named references are setup/reset anchors, not live tracking references.  For
+object `initial_pose` entries, a reference that exactly matches another
+configured object key creates a dependency; keys are applied in topological
+order and circular references are rejected before any scene mutation.
+References to scene frames that are not configured object keys are resolved
+from the current reset baseline.  The backend resolves all operator base poses
+first, then EEF poses, and finally records the resolved values as the
+randomization baselines.  If the referenced articulated body moves later in a
+Stage, the robot does not follow it.  For a compact EEF
+home pose, the six-value form `[x, y, z, yaw, pitch, roll]` is also accepted and
+is interpreted as a complete world-frame pose; use the structured form when a
+reference frame or partial override is needed.
+
+`PoseOverrideConfig` validates `position` as exactly three finite values and
+`orientation` as either three finite RPY values or four finite, non-zero
+quaternion values.  The flat EEF form is exactly six finite values.  These
+models are frozen and store pose vectors as tuples, preventing accidental
+in-place mutation after task-file loading.
+
+#### Python API migration (intentional breaking change)
+
+`PoseOverrideConfig` is now the single public model for structured setup-time
+poses.  The former `InitialPoseConfig` and `ArmPoseConfig` classes were removed
+instead of kept as aliases, so Python callers must update imports and type
+annotations:
+
+| Before | Now |
+| --- | --- |
+| `InitialPoseConfig` for `task.initial_pose` | `PoseOverrideConfig` |
+| `ArmPoseConfig` for operator `base_pose` / structured `eef_pose` | `PoseOverrideConfig` |
+
+The YAML object keys (`position`, `orientation`, `reference`) are unchanged for
+existing structured entries, but the structured operator orientation semantics
+are intentionally normalized.  `task.initial_pose` already used RPY
+`[roll, pitch, yaw]`; the former `ArmPoseConfig` operator fields used the
+historical `[yaw, pitch, roll]` order and their values must therefore be
+reordered when migrating to `PoseOverrideConfig`.  The canonical orientation
+order is now RPY `[roll, pitch, yaw]` (or XYZW quaternion) everywhere in the
+structured model.
+The six-value operator EEF shorthand remains a deliberately supported input
+format, with its historical `[x, y, z, yaw, pitch, roll]` order; it is converted
+at the configuration boundary and is not a second pose model.  Code that
+constructs these models directly should import them from `auto_atom.framework`
+or the package root (`auto_atom.PoseOverrideConfig`).
+
+For a joint-mode operator, changing `base_pose` relocates the configured root
+body so the physical arm and its base-frame IK agree. A pure mocap operator
+keeps its registered physical mocap home and changes only the virtual base
+frame used for world/base conversion; use the operator's EEF pose or mocap home
+configuration when the physical mocap body itself must move.
+
+The `eef` scalar controls only the gripper command and does not alter either
+pose baseline.  If an `initial_state` field is omitted, the corresponding
+keyframe/registration pose remains the fallback.
+
 ### Object-only execution
 
 Set one global execution override to run a task without loading a physical
@@ -306,9 +406,9 @@ The following optional fields live under `task`:
 | Field | Description |
 | --- | --- |
 | `seed` | NumPy randomization seed; defaults to `0`, which selects an entropy-seeded generator rather than a reproducible fixed seed. |
-| `initial_pose` | Per-object position/orientation overrides applied after the XML keyframe and before randomization. |
+| `initial_pose` | Per-object `PoseOverrideConfig` values applied after the XML keyframe and before randomization. `reference` may be `world` or a named scene element. |
 | `randomization` | Per-object or operator pose ranges sampled at reset. Objects and operator `base` / `eef` entries accept either one range or a non-empty `regions` list for disjoint workspaces; operators use the nested form. |
-| `camera_initial_pose` | Per-camera pose overrides applied before camera randomization. |
+| `camera_initial_pose` | Per-camera `PoseOverrideConfig` values applied after the keyframe and before camera randomization. `reference` may be `world` or a named scene element. |
 | `camera_randomization` | Per-camera relative or absolute-world pose ranges. |
 | `randomization_debug` | Cycle through configured extrema before ordinary random sampling when enabled. |
 

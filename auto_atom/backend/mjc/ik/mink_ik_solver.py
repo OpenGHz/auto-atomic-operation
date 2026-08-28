@@ -23,7 +23,11 @@ import mink
 import mujoco
 import numpy as np
 
-from auto_atom.utils.pose import PoseState, quaternion_to_rotation_matrix
+from auto_atom.utils.pose import (
+    PoseState,
+    quaternion_from_matrix_3x3,
+    quaternion_to_rotation_matrix,
+)
 from auto_atom.utils.transformations import quaternion_multiply
 
 
@@ -109,18 +113,31 @@ class MinkIKSolver:
         # Limits.
         self._limits = [mink.ConfigurationLimit(model)]
 
-        # Base pose in world frame (fixed for this scene).
+        # Keep the root body id rather than a copied pose.  The task backend can
+        # relocate an operator base between resets (and the root may itself be
+        # nested under another body), so a construction-time ``body_pos``
+        # snapshot would become stale and is also only parent-local data.
         root_bid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, root_body_name)
         if root_bid < 0:
             raise ValueError(
                 f"Root body '{root_body_name}' not found in the MuJoCo model."
             )
-        self._base_pos: np.ndarray = model.body_pos[root_bid].astype(np.float64).copy()
-        wxyz = model.body_quat[root_bid].astype(np.float64)
-        # Store as xyzw (our internal convention).
-        self._base_quat_xyzw: np.ndarray = np.array(
-            [wxyz[1], wxyz[2], wxyz[3], wxyz[0]], dtype=np.float64
+        self._root_body_id = int(root_bid)
+
+    def _current_base_pose(self) -> tuple[np.ndarray, np.ndarray]:
+        """Read the root body's current world pose from Mink's FK state.
+
+        ``model.body_pos/body_quat`` are parent-local model parameters.  The
+        runtime may update them when applying ``initial_state.base_pose``;
+        reading ``Configuration.data.xpos/xmat`` after ``update()`` gives the
+        effective world pose for both nested and relocated roots.
+        """
+        data = self._configuration.data
+        position = np.asarray(data.xpos[self._root_body_id], dtype=np.float64).copy()
+        orientation = quaternion_from_matrix_3x3(
+            np.asarray(data.xmat[self._root_body_id], dtype=np.float64).reshape(3, 3)
         )
+        return position, np.asarray(orientation, dtype=np.float64)
 
     # ------------------------------------------------------------------
     # IKSolver protocol
@@ -147,33 +164,34 @@ class MinkIKSolver:
             Solved arm joint positions in the same order as
             ``arm_joint_names``, or ``None`` if the solve diverged.
         """
-        # --- Convert base-frame target → world-frame SE3 for mink ---
         if target_pose_in_base.batch_size != 1:
             raise ValueError(
                 "MinkIKSolver.solve expects a single-env PoseState, "
                 f"got batch_size={target_pose_in_base.batch_size}"
             )
 
-        R_base = quaternion_to_rotation_matrix(
-            tuple(float(v) for v in self._base_quat_xyzw)
-        )
+        # Seed the private FK configuration before converting the target.  In
+        # addition to preparing the IK loop, this refreshes the root body's
+        # world transform after any runtime base-pose relocation.
+        q = self._configuration.q.copy()
+        n = min(len(current_qpos), len(self._arm_qidx))
+        q[self._arm_qidx[:n]] = current_qpos[:n]
+        self._configuration.update(q)
+
+        # --- Convert base-frame target → world-frame SE3 for mink ---
+        base_pos, base_quat_xyzw = self._current_base_pose()
+        R_base = quaternion_to_rotation_matrix(tuple(float(v) for v in base_quat_xyzw))
         pos_b = np.asarray(target_pose_in_base.position[0], dtype=np.float64)
         quat_b = np.asarray(target_pose_in_base.orientation[0], dtype=np.float64)
 
-        pos_w = R_base @ pos_b + self._base_pos
-        quat_w = quaternion_multiply(self._base_quat_xyzw, quat_b)
+        pos_w = R_base @ pos_b + base_pos
+        quat_w = quaternion_multiply(base_quat_xyzw, quat_b)
 
         R_w = quaternion_to_rotation_matrix(tuple(float(v) for v in quat_w))
         target_se3 = mink.SE3.from_rotation_and_translation(
             mink.SO3.from_matrix(R_w), pos_w
         )
         self._eef_task.set_target(target_se3)
-
-        # --- Seed the IK configuration with the current arm joints ---
-        q = self._configuration.q.copy()
-        n = min(len(current_qpos), len(self._arm_qidx))
-        q[self._arm_qidx[:n]] = current_qpos[:n]
-        self._configuration.update(q)
 
         # Update posture target to current seed so IK stays near the seed.
         self._posture_task.set_target_from_configuration(self._configuration)

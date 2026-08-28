@@ -9,7 +9,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 from hydra import compose, initialize_config_dir
-from omegaconf import OmegaConf
+from omegaconf import OmegaConf, open_dict
 
 from auto_atom.scene_composition import (
     AssetAssemblyLayerConfig,
@@ -21,6 +21,7 @@ from auto_atom.scene_composition import (
 )
 from auto_atom.runner.common import prepare_task_file
 from auto_atom.runtime import TaskRunner
+from auto_atom.utils.pose import PoseState, compose_pose
 
 
 def _sha256(path: Path) -> str:
@@ -902,6 +903,73 @@ def test_demo_final_approach_targets_the_explicit_grasp_site() -> None:
     assert len(push_stage.param.pre_move) == 1
     assert push_stage.param.pre_move[0].arc.pivot == "door__door_hinge"
     assert "post_move" not in push_stage.param
+
+
+def test_operator_base_pose_can_be_anchored_to_a_named_scene_frame() -> None:
+    """A base override composes a fixed local transform with the grasp frame."""
+    mujoco = pytest.importorskip("mujoco")
+    root = Path(__file__).resolve().parents[1]
+    if not (
+        root
+        / "third_party"
+        / "unidoor_lever_catalog_pipeline_right_hinge"
+        / "product_space.json"
+    ).is_file():
+        pytest.skip("local UniDoor catalog is unavailable")
+
+    with initialize_config_dir(
+        version_base=None,
+        config_dir=str(root / "aao_configs"),
+    ):
+        config = compose(
+            config_name="open_door_unidoor_p7_v3_umi_v3",
+            overrides=[
+                "door_id=D001",
+                "handle_id=HL016",
+                "env.batch_size=1",
+                "env.cameras=[]",
+                "env.enabled_sensors=[]",
+                "env.viewer=null",
+            ],
+        )
+    with open_dict(config):
+        config.task_operators.arm.initial_state = {
+            "base_pose": {
+                "reference": "door__handle_grasp_center",
+                "position": [0.0, 0.5, -0.2],
+                "orientation": [0.0, 0.0, 0.0, 1.0],
+            }
+        }
+
+    runner = TaskRunner().from_config(prepare_task_file(config))
+    try:
+        backend = runner._context.backend
+        frame = backend.get_element_pose("door__handle_grasp_center", 0)
+        expected = compose_pose(
+            frame,
+            PoseState(position=[0.0, 0.5, -0.2], orientation=[0.0, 0.0, 0.0, 1.0]),
+        )
+        actual = backend.get_operator_handler("arm").get_base_pose().select(0)
+        np.testing.assert_allclose(actual.position, expected.position, atol=1e-6)
+        np.testing.assert_allclose(actual.orientation, expected.orientation, atol=1e-6)
+
+        # The frame is sampled at reset/setup, not followed while the door is
+        # articulated during execution.
+        before = actual.position.copy()
+        update = runner.reset()
+        del update
+        env = backend.get_env().envs[0]
+        hinge_id = mujoco.mj_name2id(
+            env.model,
+            mujoco.mjtObj.mjOBJ_JOINT,
+            "door__door_hinge",
+        )
+        env.data.qpos[env.model.jnt_qposadr[hinge_id]] = 0.2
+        mujoco.mj_forward(env.model, env.data)
+        after = backend.get_operator_handler("arm").get_base_pose().select(0)
+        np.testing.assert_allclose(after.position, before, atol=1e-6)
+    finally:
+        runner.close()
 
 
 def test_demo_grasps_before_unlatching_and_unlocks_before_opening() -> None:

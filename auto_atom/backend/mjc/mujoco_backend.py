@@ -14,14 +14,14 @@ from pydantic import BaseModel
 
 from ...basis.mjc.mujoco_env import BatchedUnifiedMujocoEnv, EnvConfig
 from ...framework import (
-    ArmPoseConfig,
     AutoAtomConfig,
     EefControlConfig,
-    InitialPoseConfig,
     OperatorConfig,
+    OperatorInitialState,
     OperatorRandomizationConfig,
     PlacedToleranceConfig,
     PoseControlConfig,
+    PoseOverrideConfig,
     PoseRandomizationSpec,
     PoseRandomRange,
     PoseReference,
@@ -50,6 +50,7 @@ from ...utils.pose import (
     quaternion_from_matrix_3x3,
     quaternion_to_rotation_matrix,
     quaternion_to_rpy,
+    resolve_pose_override,
 )
 from ...utils.transformations import quaternion_slerp
 
@@ -124,6 +125,72 @@ def _copy_randomization_ancestors(
     return set(ancestors)
 
 
+def _stateful_pose_indices(
+    env: Any,
+    pose: PoseState,
+    env_mask: Optional[np.ndarray],
+    *,
+    label: str,
+) -> tuple[int, ...]:
+    """Return physical rows for a pose mutation.
+
+    Replicated batches have one physical row per logical environment.  GS
+    shared-physics batches expose aliases of one physical row, so a stateful
+    pose must be identical for every logical row participating in the update;
+    otherwise a loop over aliases would silently leave the last row's value in
+    the model while callers still observe a different logical batch.  The
+    shared-batch contract uses logical row 0 as the canonical state-changing
+    value (the same rule as :class:`BatchExecutionAdapter`), even when a
+    partial mask selects another row.  The helper validates that contract and
+    returns one physical representative row.
+    """
+    batch_size = int(env.batch_size)
+    mask = (
+        np.ones(batch_size, dtype=bool)
+        if env_mask is None
+        else np.asarray(env_mask, dtype=bool).reshape(-1)
+    )
+    if mask.shape != (batch_size,):
+        raise ValueError(f"env_mask must have shape ({batch_size},), got {mask.shape}")
+    active = np.flatnonzero(mask)
+    if active.size == 0:
+        return ()
+    if not bool(getattr(env, "_share_physics", False)):
+        return tuple(int(index) for index in active)
+
+    representative = 0
+    ref_position = np.asarray(pose.position[representative], dtype=np.float64)
+    ref_orientation = np.asarray(pose.orientation[representative], dtype=np.float64)
+    ref_norm = float(np.linalg.norm(ref_orientation))
+    # ``representative`` is fixed at logical row 0 to match the shared
+    # BatchExecutionAdapter contract.  Do not use ``active[1:]`` here: a
+    # partial mask such as ``[False, True, True]`` would otherwise skip the
+    # first active row and fail to validate it against the canonical value.
+    for index_raw in active:
+        index = int(index_raw)
+        if index == representative:
+            continue
+        if not np.allclose(pose.position[index], ref_position, atol=1e-7, rtol=1e-7):
+            raise ValueError(
+                f"{label} differs across logical rows backed by shared physics; "
+                "use one shared pose or disable gaussian_render.share_physics."
+            )
+        orientation = np.asarray(pose.orientation[index], dtype=np.float64)
+        orientation_norm = float(np.linalg.norm(orientation))
+        dot = (
+            abs(float(np.dot(orientation, ref_orientation)))
+            / (orientation_norm * ref_norm)
+            if orientation_norm > 0.0 and ref_norm > 0.0
+            else 0.0
+        )
+        if not np.isclose(dot, 1.0, atol=1e-7, rtol=1e-7):
+            raise ValueError(
+                f"{label} differs across logical rows backed by shared physics; "
+                "use one shared pose or disable gaussian_render.share_physics."
+            )
+    return (representative,)
+
+
 @dataclass
 class _CollisionParticipant:
     owner: str
@@ -190,18 +257,14 @@ class MujocoObjectHandler(ObjectHandler):
 
     def set_pose(self, pose: PoseState, env_mask: Optional[np.ndarray] = None) -> None:
         pose = pose.broadcast_to(self.env.batch_size)
-        mask = (
-            np.ones(self.env.batch_size, dtype=bool)
-            if env_mask is None
-            else np.asarray(env_mask, dtype=bool).reshape(-1)
+        env_indices = _stateful_pose_indices(
+            self.env,
+            pose,
+            env_mask,
+            label=f"Object '{self.name}' pose",
         )
-        if mask.shape != (self.env.batch_size,):
-            raise ValueError(
-                f"env_mask must have shape ({self.env.batch_size},), got {mask.shape}"
-            )
-        for env_index, single_env in enumerate(self.env.envs):
-            if not mask[env_index]:
-                continue
+        for env_index in env_indices:
+            single_env = self.env.envs[env_index]
             x, y, z = pose.position[env_index]
             qx, qy, qz, qw = pose.orientation[env_index]
             if self.freejoint_name is not None:
@@ -762,27 +825,76 @@ class MujocoOperatorHandler(OperatorHandler):
 
     def home(self, env_mask: Optional[np.ndarray] = None) -> None:
         self.reset_state(env_mask)
-        self.env.home_operator(self.operator_name, env_mask=env_mask)
-        # Apply the desired eef ctrl value from _home_ctrl.  home_operator()
-        # restores from the env-level home_ctrl snapshot (captured at
-        # registration time), which does not reflect initial_state.eef
-        # changes.  We set ctrl here and step the simulation so the gripper
-        # linkage settles physically rather than jumping qpos directly.
         mask = self._normalize_mask(env_mask)
+        shared = bool(getattr(self.env, "_share_physics", False))
+
+        # ``home_operator`` writes the registered home controls (and the
+        # corresponding EEF qpos) immediately.  Capture the physical control
+        # value first so a newly configured ``initial_state.eef`` still gets
+        # the same controller-driven linkage settle as the historical path;
+        # comparing only after ``home_operator`` would make the values look
+        # equal and skip the settle entirely.  Keep one entry per physical
+        # replica because shared-physics exposes aliases for logical rows.
+        pre_home_ctrl: dict[int, float] = {}
+        for env_index, enabled in enumerate(mask):
+            if not enabled:
+                continue
+            physical_index = 0 if shared else env_index
+            if physical_index in pre_home_ctrl:
+                continue
+            pre_home_ctrl[physical_index] = float(
+                self.env.envs[physical_index].data.ctrl[self.eef_ctrl_index]
+            )
+
+        self.env.home_operator(self.operator_name, env_mask=env_mask)
+        # ``_home_ctrl`` is a per-logical-row view used only for the settling
+        # pass below.  The authoritative value lives in the env's
+        # ``_OperatorState.home_ctrl``; refresh the view after every reset so
+        # stale initial-state/randomization values cannot leak across episodes.
+        for env_index, enabled in enumerate(mask):
+            if not enabled:
+                continue
+            physical_index = 0 if shared else env_index
+            states = getattr(self.env.envs[physical_index], "_operator_states", None)
+            if states is None or self.operator_name not in states:
+                # Lightweight handler test doubles may not expose the
+                # concrete MuJoCo operator-state registry.  Production envs
+                # always do; retain the existing cache when the seam is absent.
+                continue
+            state = states[self.operator_name]
+            self._home_ctrl[env_index] = state.home_ctrl
+
+        # Apply the desired eef ctrl value from _home_ctrl.  home_operator()
+        # restores the env-level home_ctrl snapshot first; this second pass
+        # handles a configured EEF override and lets the linkage settle
+        # physically rather than jumping qpos directly.
         needs_settle = False
         for env_index, enabled in enumerate(mask):
             if not enabled:
                 continue
-            single_env = self.env.envs[env_index]
+            physical_index = 0 if shared else env_index
+            single_env = self.env.envs[physical_index]
             current = float(single_env.data.ctrl[self.eef_ctrl_index])
             target = float(self._home_ctrl[env_index, self.eef_ctrl_index])
-            if abs(current - target) > 1e-6:
+            # ``current`` is normally already ``target`` because
+            # ``home_operator`` restores the control snapshot.  The
+            # pre-home comparison is what detects a newly requested EEF
+            # control and preserves the physical settle step.
+            if (
+                abs(current - target) > 1e-6
+                or abs(pre_home_ctrl[physical_index] - target) > 1e-6
+            ):
                 single_env.data.ctrl[self.eef_ctrl_index] = target
                 needs_settle = True
         if needs_settle:
+            settled_physical: set[int] = set()
             for env_index, enabled in enumerate(mask):
                 if enabled:
-                    se = self.env.envs[env_index]
+                    physical_index = 0 if shared else env_index
+                    if physical_index in settled_physical:
+                        continue
+                    settled_physical.add(physical_index)
+                    se = self.env.envs[physical_index]
                     for _ in range(200):
                         mujoco.mj_step(se.model, se.data)
                     state = se._operator_states[self.operator_name]
@@ -809,15 +921,31 @@ class MujocoOperatorHandler(OperatorHandler):
         self,
         pose: PoseState,
         env_mask: Optional[np.ndarray] = None,
+        *,
+        apply_home: bool = True,
     ) -> None:
+        """Set the EEF pose restored by :meth:`home`.
+
+        ``apply_home`` lets a lifecycle coordinator stage several home-state
+        fields (base, EEF, and gripper) and perform one final homing pass.  The
+        default preserves the immediate-apply behavior used by randomization
+        and direct callers.
+        """
         pose = pose.broadcast_to(self.env.batch_size)
+        _stateful_pose_indices(
+            self.env,
+            pose,
+            env_mask,
+            label=f"Operator '{self.operator_name}' home EEF pose",
+        )
         self.env.set_operator_home_eef_pose(
             self.operator_name,
             pose.position,
             pose.orientation,
             env_mask=env_mask,
         )
-        self.home(env_mask)
+        if apply_home:
+            self.home(env_mask)
         mask = self._normalize_mask(env_mask)
         for env_index, enabled in enumerate(mask):
             if enabled:
@@ -828,6 +956,12 @@ class MujocoOperatorHandler(OperatorHandler):
     def set_pose(self, pose: PoseState, env_mask: Optional[np.ndarray] = None) -> None:
         self.reset_state(env_mask)
         pose = pose.broadcast_to(self.env.batch_size)
+        _stateful_pose_indices(
+            self.env,
+            pose,
+            env_mask,
+            label=f"Operator '{self.operator_name}' base pose",
+        )
         # ``OperatorHandler.set_pose`` is the runtime-facing "base pose" API.
         # For mocap operators this must only update the virtual base frame used
         # for world/base conversions and diagnostics, not physically move the
@@ -942,8 +1076,11 @@ class MujocoTaskBackend(SceneBackend):
         PoseRandomizationSpec | OperatorRandomizationConfig,
     ] = field(default_factory=dict)
     camera_randomization: Dict[str, PoseRandomRange] = field(default_factory=dict)
-    initial_poses: Dict[str, InitialPoseConfig] = field(default_factory=dict)
-    camera_initial_poses: Dict[str, InitialPoseConfig] = field(default_factory=dict)
+    initial_poses: Dict[str, PoseOverrideConfig] = field(default_factory=dict)
+    camera_initial_poses: Dict[str, PoseOverrideConfig] = field(default_factory=dict)
+    operator_initial_states: Dict[str, OperatorInitialState] = field(
+        default_factory=dict
+    )
     random_seed: Optional[int] = None
     randomization_debug: bool = False
     _rng: np.random.Generator = field(init=False, repr=False)
@@ -1001,6 +1138,7 @@ class MujocoTaskBackend(SceneBackend):
             operator.home()
         if self.initial_poses:
             self._apply_initial_poses()
+        self.apply_operator_initial_states(home=True)
         if self.camera_initial_poses:
             self._apply_camera_initial_poses()
         self._record_default_poses()
@@ -1012,12 +1150,14 @@ class MujocoTaskBackend(SceneBackend):
             operator.home(mask)
         if self.initial_poses:
             self._apply_initial_poses(mask)
+        self.apply_operator_initial_states(mask, home=True)
         if self.camera_initial_poses:
             self._apply_camera_initial_poses(mask)
         if not (
             self._default_object_poses
             or self._default_operator_base_poses
             or self._default_operator_eef_poses
+            or self._default_camera_poses
         ):
             self._record_default_poses()
         if self.randomization:
@@ -1071,6 +1211,196 @@ class MujocoTaskBackend(SceneBackend):
         for cam_name in self.camera_randomization:
             self._default_camera_poses[cam_name] = self._get_camera_pose(cam_name)
 
+    def _resolve_initial_reference_pose(
+        self,
+        reference: PoseReference | str,
+        env_index: int,
+        *,
+        operator_name: str | None = None,
+        allow_operator_base: bool = False,
+        context: str,
+    ) -> PoseState:
+        """Resolve one initial-pose reference through the backend seam.
+
+        Built-in ``world`` is the identity frame.  ``base`` is available only
+        when resolving an operator EEF pose.  Any other non-built-in string is
+        a named scene element (site/body/geom/joint).  Operator-frame aliases
+        are likewise limited to EEF overrides; a base override must anchor to
+        the world or a scene element so its resolution does not depend on
+        another operator's initialization order.
+        """
+        if isinstance(reference, PoseReference):
+            if reference == PoseReference.WORLD:
+                return PoseState()
+            if reference == PoseReference.BASE and allow_operator_base:
+                if operator_name is None:
+                    raise ValueError(f"{context} reference 'base' requires an operator")
+                return (
+                    self.operator_handlers[operator_name]
+                    .get_base_pose()
+                    .select(env_index)
+                )
+            raise ValueError(
+                f"{context} reference {reference.value!r} is not valid here; "
+                "use 'world' or a named scene element"
+            )
+
+        if not isinstance(reference, str) or not reference:
+            raise ValueError(
+                f"{context} reference must be 'world' or a scene element name"
+            )
+
+        # A reference that exactly names another configured object is resolved
+        # through its handler.  This takes precedence over a same-named site or
+        # body and, importantly, observes that object's already-applied initial
+        # pose (the caller orders such objects topologically).
+        if reference in self.object_handlers:
+            return self.object_handlers[reference].get_pose().select(env_index)
+
+        bare, attr = self._parse_entity_reference(reference)
+        if attr is not None:
+            if operator_name is None:
+                raise ValueError(
+                    f"{context} reference {reference!r} is an operator frame; "
+                    "operator frame aliases are only valid for operator poses"
+                )
+            if bare not in self.operator_handlers:
+                raise ValueError(
+                    f"{context} reference {reference!r} names an unknown operator"
+                )
+            if attr == "base":
+                return self.operator_handlers[bare].get_base_pose().select(env_index)
+            return (
+                self.operator_handlers[bare].get_end_effector_pose().select(env_index)
+            )
+
+        try:
+            return self.get_element_pose(reference, env_index)
+        except KeyError as exc:
+            raise ValueError(
+                f"{context} reference {reference!r} does not name a scene "
+                "site, body, geom, or joint"
+            ) from exc
+
+    def _resolve_initial_pose_batch(
+        self,
+        config: PoseOverrideConfig | list[float] | tuple[float, ...],
+        fallback_pose: PoseState,
+        env_mask: np.ndarray,
+        *,
+        operator_name: str | None = None,
+        allow_operator_base: bool = False,
+        context: str,
+    ) -> PoseState:
+        """Resolve an initial-pose config independently for each env row."""
+        if fallback_pose.batch_size != self.batch_size:
+            fallback_pose = fallback_pose.broadcast_to(self.batch_size)
+        positions = fallback_pose.position.copy()
+        orientations = fallback_pose.orientation.copy()
+        reference = (
+            PoseReference.WORLD
+            if isinstance(config, (list, tuple))
+            else config.reference
+        )
+        for env_index, enabled in enumerate(env_mask):
+            if not enabled:
+                continue
+            reference_pose = self._resolve_initial_reference_pose(
+                reference,
+                env_index,
+                operator_name=operator_name,
+                allow_operator_base=allow_operator_base,
+                context=context,
+            )
+            resolved = resolve_pose_override(
+                config,
+                fallback_pose.select(env_index),
+                reference_pose,
+            )
+            positions[env_index] = resolved.position[0]
+            orientations[env_index] = resolved.orientation[0]
+        return PoseState(position=positions, orientation=orientations)
+
+    def apply_operator_initial_states(
+        self,
+        env_mask: np.ndarray | None = None,
+        *,
+        home: bool = False,
+    ) -> None:
+        """Apply configured operator initial states through one pose resolver.
+
+        Base references are resolved after scene initial poses have been
+        applied.  ``home=False`` is used only while staging state changes;
+        setup/reset pass ``home=True`` so the physical arm state is homed once
+        after all configured fields have been resolved.
+        """
+        if not self.operator_initial_states:
+            return
+        mask = self._normalize_mask(env_mask)
+
+        # Resolve all bases first: an EEF override expressed in ``base`` must
+        # see the newly selected base frame.
+        for name, initial_state in self.operator_initial_states.items():
+            handler = self.operator_handlers.get(name)
+            if handler is None:
+                raise KeyError(f"Unknown operator in initial_state: {name!r}")
+            if initial_state is None or initial_state.base_pose is None:
+                continue
+            resolved = self._resolve_initial_pose_batch(
+                initial_state.base_pose,
+                handler.get_base_pose(),
+                mask,
+                context=f"operator {name} base_pose",
+            )
+            # Route the resolved pose through the handler seam so shared
+            # physics row validation, controller-state invalidation, and
+            # backend-specific base handling stay in one place.
+            handler.set_pose(resolved, env_mask=mask)
+
+        for name, initial_state in self.operator_initial_states.items():
+            handler = self.operator_handlers.get(name)
+            if handler is None:
+                raise KeyError(f"Unknown operator in initial_state: {name!r}")
+            if initial_state is None:
+                continue
+            has_override = (
+                initial_state.base_pose is not None
+                or initial_state.eef_pose is not None
+                or initial_state.eef is not None
+            )
+            if not has_override:
+                continue
+            if initial_state.eef_pose is not None:
+                resolved = self._resolve_initial_pose_batch(
+                    initial_state.eef_pose,
+                    handler.get_end_effector_pose(),
+                    mask,
+                    operator_name=name,
+                    allow_operator_base=True,
+                    context=f"operator {name} eef_pose",
+                )
+                handler.set_home_end_effector_pose(
+                    resolved,
+                    env_mask=mask,
+                    apply_home=False,
+                )
+            if initial_state.eef is not None:
+                eef_value = float(initial_state.eef)
+                shared = bool(getattr(handler.env, "_share_physics", False))
+                for env_index, enabled in enumerate(mask):
+                    if not enabled:
+                        continue
+                    # Shared physics has one physical operator state; update
+                    # it once while keeping the handler's logical view in
+                    # sync for the subsequent home/settle pass.
+                    physical_index = 0 if shared else env_index
+                    state = handler.env.envs[physical_index]._operator_states[name]
+                    state.home_ctrl[handler.eef_ctrl_index] = eef_value
+                    handler._home_ctrl[env_index, handler.eef_ctrl_index] = eef_value
+
+            if home:
+                handler.home(mask)
+
     def _apply_initial_poses(self, env_mask: np.ndarray | None = None) -> None:
         """Apply per-object initial pose overrides from config.
 
@@ -1078,36 +1408,95 @@ class MujocoTaskBackend(SceneBackend):
         recording and randomization.  Only the specified components (position
         and/or orientation) are overridden; the rest keep their keyframe value.
 
-        After setting each object's pose the recorded default is updated so
-        that subsequent randomization uses the new pose as its baseline.  This
-        allows callers to mutate ``self.initial_poses`` between resets for
-        per-episode initial conditions.
+        After setting each object's pose the selected rows of the recorded
+        default are updated so subsequent randomization uses the effective
+        initial pose as its baseline.  Unselected rows retain their existing
+        baselines, which keeps masked resets from absorbing a prior episode's
+        random sample.  Callers may mutate ``self.initial_poses`` between
+        resets for per-episode initial conditions.
         """
-        for name, cfg in self.initial_poses.items():
+        mask = self._normalize_mask(env_mask)
+        for name in self._initial_pose_order():
+            cfg = self.initial_poses[name]
             handler = self.object_handlers.get(name)
             if handler is None:
                 continue
             current = handler.get_pose()
-            pos = current.position
-            ori = current.orientation
-            if cfg.position is not None and len(cfg.position) >= 3:
-                pos = np.array(cfg.position[:3], dtype=np.float64)
-            if cfg.orientation is not None:
-                if len(cfg.orientation) == 3:
-                    ori = euler_to_quaternion(tuple(cfg.orientation))
-                elif len(cfg.orientation) == 4:
-                    ori = np.array(cfg.orientation, dtype=np.float64)
-                else:
-                    raise ValueError(
-                        f"initial_pose[{name!r}].orientation must be 3 floats "
-                        f"(Euler) or 4 floats (quaternion), got {len(cfg.orientation)}"
-                    )
-            handler.set_pose(
-                PoseState(position=pos, orientation=ori), env_mask=env_mask
+            # Keep one stable randomization baseline per logical environment.
+            # A masked reset must not copy an unselected row's episode pose
+            # (which may already include random offsets) into that baseline.
+            baseline = self._default_object_poses.get(name)
+            if baseline is None:
+                baseline = current
+            else:
+                try:
+                    baseline = baseline.broadcast_to(self.batch_size)
+                except ValueError:
+                    baseline = current
+            resolved = self._resolve_initial_pose_batch(
+                cfg,
+                current,
+                mask,
+                context=f"initial_pose[{name!r}]",
             )
+            handler.set_pose(resolved, env_mask=mask)
             # Keep recorded defaults in sync so randomization offsets from
             # the (possibly dynamic) initial pose, not the stale keyframe.
-            self._default_object_poses[name] = handler.get_pose()
+            effective = handler.get_pose()
+            positions = baseline.position.copy()
+            orientations = baseline.orientation.copy()
+            positions[mask] = effective.position[mask]
+            orientations[mask] = effective.orientation[mask]
+            self._default_object_poses[name] = PoseState(
+                position=positions,
+                orientation=orientations,
+            )
+
+    def _initial_pose_order(self) -> list[str]:
+        """Return configured initial-pose keys in dependency order.
+
+        A string reference that exactly matches another ``initial_poses`` key
+        depends on that key's effective pose.  Resolve those dependencies
+        before applying the dependent override, while retaining declaration
+        order for independent entries.  Cycles are rejected before any model
+        mutation so a failed configuration cannot leave a half-applied scene.
+        References that do not name an ``initial_poses`` key remain ordinary
+        MuJoCo scene-frame references and are resolved at application time.
+        """
+        names = list(self.initial_poses)
+        declaration_index = {name: index for index, name in enumerate(names)}
+        dependencies: dict[str, set[str]] = {name: set() for name in names}
+        for name in names:
+            config = self.initial_poses[name]
+            reference = getattr(config, "reference", None)
+            if (
+                isinstance(reference, str)
+                and not isinstance(reference, PoseReference)
+                and reference in dependencies
+            ):
+                dependencies[name].add(reference)
+
+        order: list[str] = []
+        visited: set[str] = set()
+        visiting: set[str] = set()
+
+        def visit(name: str) -> None:
+            if name in visited:
+                return
+            if name in visiting:
+                raise ValueError(f"Circular initial pose reference involving {name!r}")
+            visiting.add(name)
+            for dependency in sorted(
+                dependencies[name], key=declaration_index.__getitem__
+            ):
+                visit(dependency)
+            visiting.remove(name)
+            visited.add(name)
+            order.append(name)
+
+        for name in names:
+            visit(name)
+        return order
 
     def _apply_camera_initial_poses(self, env_mask: np.ndarray | None = None) -> None:
         """Apply per-camera initial pose overrides from config.
@@ -1117,37 +1506,35 @@ class MujocoTaskBackend(SceneBackend):
         specified components (position and/or orientation) are changed;
         the rest keep their XML value.
         """
-        mask = (
-            np.ones(self.batch_size, dtype=bool)
-            if env_mask is None
-            else np.asarray(env_mask, dtype=bool).reshape(-1)
-        )
+        mask = self._normalize_mask(env_mask)
         for cam_name, cfg in self.camera_initial_poses.items():
             current = self._get_camera_pose(cam_name)
-            pos = current.position
-            ori = current.orientation
-            if cfg.position is not None and len(cfg.position) >= 3:
-                pos = np.tile(
-                    np.array(cfg.position[:3], dtype=np.float64), (self.batch_size, 1)
-                )
-            if cfg.orientation is not None:
-                if len(cfg.orientation) == 3:
-                    q = euler_to_quaternion(tuple(cfg.orientation))
-                elif len(cfg.orientation) == 4:
-                    q = np.array(cfg.orientation, dtype=np.float64)
-                else:
-                    raise ValueError(
-                        f"camera_initial_pose[{cam_name!r}].orientation must be 3 "
-                        f"floats (Euler) or 4 floats (quaternion), got "
-                        f"{len(cfg.orientation)}"
-                    )
-                ori = np.tile(q, (self.batch_size, 1))
-            self._set_camera_pose(
-                cam_name, PoseState(position=pos, orientation=ori), mask
+            baseline = self._default_camera_poses.get(cam_name)
+            if baseline is None:
+                baseline = current
+            else:
+                try:
+                    baseline = baseline.broadcast_to(self.batch_size)
+                except ValueError:
+                    baseline = current
+            resolved = self._resolve_initial_pose_batch(
+                cfg,
+                current,
+                mask,
+                context=f"camera_initial_pose[{cam_name!r}]",
             )
-            # Keep recorded default in sync so camera_randomization
-            # offsets from the overridden pose.
-            self._default_camera_poses[cam_name] = self._get_camera_pose(cam_name)
+            self._set_camera_pose(cam_name, resolved, mask)
+            # Keep only selected rows in sync so camera_randomization offsets
+            # from the overridden pose without absorbing unselected samples.
+            effective = self._get_camera_pose(cam_name)
+            positions = baseline.position.copy()
+            orientations = baseline.orientation.copy()
+            positions[mask] = effective.position[mask]
+            orientations[mask] = effective.orientation[mask]
+            self._default_camera_poses[cam_name] = PoseState(
+                position=positions,
+                orientation=orientations,
+            )
 
     # ------------------------------------------------------------------
     #  Randomization: ordering, reference resolution, and application
@@ -2110,8 +2497,13 @@ class MujocoTaskBackend(SceneBackend):
     # ------------------------------------------------------------------
 
     def _get_camera_pose(self, cam_name: str) -> PoseState:
-        """Read the current camera pose from ``model.cam_pos`` / ``model.cam_quat``
-        across all envs and return as a batched ``PoseState`` (xyzw quaternion)."""
+        """Read a camera's world pose across all envs.
+
+        MuJoCo stores ``cam_pos``/``cam_quat`` in the attached body's local
+        frame.  The task-level pose contract is world-frame, so use the
+        derived ``cam_xpos``/``cam_xmat`` values here.  This matters for wrist
+        cameras and any camera mounted below an articulated scene body.
+        """
         positions = np.zeros((self.batch_size, 3), dtype=np.float64)
         orientations = np.zeros((self.batch_size, 4), dtype=np.float64)
         for env_index, single_env in enumerate(self.env.envs):
@@ -2120,9 +2512,15 @@ class MujocoTaskBackend(SceneBackend):
             )
             if cam_id < 0:
                 raise KeyError(f"Camera '{cam_name}' not found in the MuJoCo model.")
-            positions[env_index] = single_env.model.cam_pos[cam_id]
-            qw, qx, qy, qz = single_env.model.cam_quat[cam_id]
-            orientations[env_index] = [qx, qy, qz, qw]  # wxyz → xyzw
+            mujoco.mj_forward(single_env.model, single_env.data)
+            positions[env_index] = np.asarray(
+                single_env.data.cam_xpos[cam_id], dtype=np.float64
+            )
+            orientations[env_index] = quaternion_from_matrix_3x3(
+                np.asarray(single_env.data.cam_xmat[cam_id], dtype=np.float64).reshape(
+                    3, 3
+                )
+            )
         return PoseState(position=positions, orientation=orientations)
 
     def _set_camera_pose(
@@ -2131,20 +2529,40 @@ class MujocoTaskBackend(SceneBackend):
         pose: PoseState,
         env_mask: np.ndarray,
     ) -> None:
-        """Write a sampled camera pose back to ``model.cam_pos`` / ``model.cam_quat``."""
+        """Write world-frame camera poses as parent-local MuJoCo extrinsics."""
         pose = pose.broadcast_to(self.batch_size)
-        for env_index, single_env in enumerate(self.env.envs):
-            if not env_mask[env_index]:
-                continue
+        env_indices = _stateful_pose_indices(
+            self.env,
+            pose,
+            env_mask,
+            label=f"Camera '{cam_name}' pose",
+        )
+        for env_index in env_indices:
+            single_env = self.env.envs[env_index]
             cam_id = mujoco.mj_name2id(
                 single_env.model, mujoco.mjtObj.mjOBJ_CAMERA, cam_name
             )
             if cam_id < 0:
                 continue
-            x, y, z = pose.position[env_index]
+            model = single_env.model
+            data = single_env.data
+            mujoco.mj_forward(model, data)
+            parent_id = int(model.cam_bodyid[cam_id])
+            parent_pos = np.asarray(data.xpos[parent_id], dtype=np.float64)
+            parent_rot = np.asarray(data.xmat[parent_id], dtype=np.float64).reshape(
+                3, 3
+            )
+            world_pos = np.asarray(pose.position[env_index], dtype=np.float64)
+            model.cam_pos[cam_id] = parent_rot.T @ (world_pos - parent_pos)
+
             qx, qy, qz, qw = pose.orientation[env_index]
-            single_env.model.cam_pos[cam_id] = [x, y, z]
-            single_env.model.cam_quat[cam_id] = [qw, qx, qy, qz]  # xyzw → wxyz
+            world_quat_wxyz = np.asarray([qw, qx, qy, qz], dtype=np.float64)
+            parent_quat_wxyz = np.asarray(data.xquat[parent_id], dtype=np.float64)
+            inverse_parent_quat = np.empty(4, dtype=np.float64)
+            mujoco.mju_negQuat(inverse_parent_quat, parent_quat_wxyz)
+            local_quat = np.empty(4, dtype=np.float64)
+            mujoco.mju_mulQuat(local_quat, inverse_parent_quat, world_quat_wxyz)
+            model.cam_quat[cam_id] = local_quat
             mujoco.mj_forward(single_env.model, single_env.data)
 
     def _apply_camera_randomization(self, env_mask: np.ndarray) -> None:
@@ -2194,22 +2612,16 @@ class MujocoTaskBackend(SceneBackend):
             )
         jid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, name)
         if jid >= 0:
-            joint_bid = model.jnt_bodyid[jid]
-            parent_bid = model.body_parentid[joint_bid]
-            parent_pos = data.xpos[parent_bid]
-            parent_rot = data.xmat[parent_bid].reshape(3, 3)
-            body_local = model.body_pos[joint_bid]
-            anchor_in_parent = body_local + model.jnt_pos[jid]
-            world_pos = parent_pos + parent_rot @ anchor_in_parent
-            parent_quat_wxyz = data.xquat[parent_bid]
+            # MuJoCo publishes the articulated joint anchor and axis in world
+            # coordinates after ``mj_forward``.  Using the parent body's
+            # static transform here loses both the joint anchor offset and
+            # the current hinge/ball/free-joint orientation.
+            joint_bid = int(model.jnt_bodyid[jid])
+            world_pos = np.asarray(data.xanchor[jid], dtype=np.float64)
+            joint_rot = np.asarray(data.xmat[joint_bid], dtype=np.float64).reshape(3, 3)
             return PoseState(
                 position=world_pos,
-                orientation=(
-                    float(parent_quat_wxyz[1]),
-                    float(parent_quat_wxyz[2]),
-                    float(parent_quat_wxyz[3]),
-                    float(parent_quat_wxyz[0]),
-                ),
+                orientation=quaternion_from_matrix_3x3(joint_rot),
             )
         raise KeyError(
             f"No site, body, geom, or joint named '{name}' found in the MuJoCo model."
@@ -2464,36 +2876,6 @@ def create_mujoco_env(
     return BatchedUnifiedMujocoEnv(config.model_copy(update={"name": env_name}))
 
 
-def _resolve_arm_pose(arm_config, fallback_pose: PoseState) -> PoseState:
-    pose = fallback_pose
-    if isinstance(arm_config, list):
-        if len(arm_config) >= 6:
-            pose = PoseState(
-                position=tuple(float(v) for v in arm_config[:3]),
-                orientation=euler_to_quaternion(
-                    (arm_config[5], arm_config[4], arm_config[3])
-                ),
-            )
-    else:
-        if arm_config.position is not None and len(arm_config.position) >= 3:
-            pose = PoseState(
-                position=tuple(float(v) for v in arm_config.position[:3]),
-                orientation=pose.orientation,
-            )
-        if arm_config.orientation is not None:
-            ori = arm_config.orientation
-            if len(ori) == 3:
-                quat_xyzw = euler_to_quaternion((ori[2], ori[1], ori[0]))
-            elif len(ori) == 4:
-                quat_xyzw = np.array(ori, dtype=np.float64)
-            else:
-                raise ValueError(
-                    f"orientation must be 3 floats (Euler) or 4 floats (quaternion), got {len(ori)}"
-                )
-            pose = PoseState(position=pose.position, orientation=quat_xyzw)
-    return pose
-
-
 def build_mujoco_backend(
     task: AutoAtomConfig | Dict[str, Any],
     operators: Dict[str, OperatorConfig],
@@ -2599,40 +2981,6 @@ def build_mujoco_backend(
             },
         )
 
-    for operator in operator_configs:
-        if operator.initial_state is None:
-            continue
-        handler = operator_handlers[operator.name]
-        if operator.initial_state.base_pose is not None:
-            bp = operator.initial_state.base_pose
-            base_ps = _resolve_arm_pose(bp, handler.get_base_pose().select(0))
-            handler.env.override_operator_base_pose(
-                operator.name,
-                base_ps.broadcast_to(env.batch_size).position,
-                base_ps.broadcast_to(env.batch_size).orientation,
-            )
-
-        if operator.initial_state.eef_pose is not None:
-            eef_pose_config = operator.initial_state.eef_pose
-            pose = _resolve_arm_pose(
-                eef_pose_config, handler.get_end_effector_pose().select(0)
-            )
-            if (
-                isinstance(eef_pose_config, ArmPoseConfig)
-                and eef_pose_config.reference == PoseReference.BASE
-            ):
-                pose_b = pose.broadcast_to(env.batch_size)
-                pos_w, quat_w = handler.env.base_to_world(
-                    operator.name,
-                    np.asarray(pose_b.position, dtype=np.float32),
-                    np.asarray(pose_b.orientation, dtype=np.float32),
-                )
-                pose = PoseState(position=pos_w, orientation=quat_w)
-            handler.set_home_end_effector_pose(pose)
-
-        if operator.initial_state.eef is not None:
-            handler._home_ctrl[:, handler.eef_ctrl_index] = operator.initial_state.eef
-
     object_names = {stage.object for stage in config.stages if stage.object}
     # Also register objects mentioned in the randomization dict (they may not
     # appear in any stage but still need handlers for pose get/set).
@@ -2694,7 +3042,7 @@ def build_mujoco_backend(
             freejoint_name=freejoint_name,
         )
 
-    return MujocoTaskBackend(
+    backend = MujocoTaskBackend(
         env=env,
         operator_handlers=operator_handlers,
         object_handlers=object_handlers,
@@ -2702,6 +3050,12 @@ def build_mujoco_backend(
         camera_randomization=dict(config.camera_randomization),
         initial_poses=dict(config.initial_pose),
         camera_initial_poses=dict(config.camera_initial_pose),
+        operator_initial_states={
+            operator.name: operator.initial_state
+            for operator in operator_configs
+            if operator.initial_state is not None
+        },
         random_seed=config.seed if config.seed != 0 else None,
         randomization_debug=config.randomization_debug,
     )
+    return backend

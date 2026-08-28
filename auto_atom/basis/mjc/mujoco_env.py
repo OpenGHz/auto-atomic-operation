@@ -146,6 +146,19 @@ class _OperatorState:
     home_mocap_quat: np.ndarray  # float64, wxyz for mocap
     home_ctrl: np.ndarray  # float64
 
+    # Registration-time reset baseline.  Model pose arrays and these cached
+    # operator fields are both mutable during an episode; keeping the small
+    # numeric snapshot here lets the reset hook restore them without copying
+    # the IK solver or any other opaque runtime object.
+    baseline_base_pos: Optional[np.ndarray] = field(default=None, repr=False)
+    baseline_base_quat: Optional[np.ndarray] = field(default=None, repr=False)
+    baseline_tool_offset_pos: Optional[np.ndarray] = field(default=None, repr=False)
+    baseline_tool_offset_quat: Optional[np.ndarray] = field(default=None, repr=False)
+    baseline_home_arm_qpos: Optional[np.ndarray] = field(default=None, repr=False)
+    baseline_home_mocap_pos: Optional[np.ndarray] = field(default=None, repr=False)
+    baseline_home_mocap_quat: Optional[np.ndarray] = field(default=None, repr=False)
+    baseline_home_ctrl: Optional[np.ndarray] = field(default=None, repr=False)
+
     # Mocap mode IDs (-1 when joint mode).
     mocap_id: int = -1
     fj_qpos_adr: int = 0
@@ -257,6 +270,58 @@ class UnifiedMujocoEnv(MujocoBasis):
         # ``set_joint_limit_warning_enabled``.
         self._joint_limit_warning_enabled: bool = False
         self._auto_register_operators()
+
+    def _after_reset(self) -> None:
+        """Restore operator frame/home caches after the low-level reset.
+
+        ``MujocoBasis.reset`` restores model-level body/camera poses and
+        dynamic data.  Operator control keeps a second, derived cache in
+        ``_OperatorState``; without restoring it, a randomized base or EEF
+        home from the previous episode would be paired with the newly reset
+        model.  The hook is also invoked during base-class construction, so
+        tolerate the pre-registration phase where ``_operator_states`` is not
+        initialized yet.
+        """
+        states = getattr(self, "_operator_states", None)
+        if not states:
+            return
+        for state in states.values():
+            if state.baseline_base_pos is not None:
+                state.base_pos = state.baseline_base_pos.copy()
+            if state.baseline_base_quat is not None:
+                state.base_quat = state.baseline_base_quat.copy()
+            if state.baseline_tool_offset_pos is not None:
+                state.tool_offset_pos = state.baseline_tool_offset_pos.copy()
+            if state.baseline_tool_offset_quat is not None:
+                state.tool_offset_quat = state.baseline_tool_offset_quat.copy()
+            if state.baseline_home_arm_qpos is not None:
+                state.home_arm_qpos = state.baseline_home_arm_qpos.copy()
+            elif state.joint_mode:
+                state.home_arm_qpos = None
+            if state.baseline_home_mocap_pos is not None:
+                state.home_mocap_pos = state.baseline_home_mocap_pos.copy()
+            if state.baseline_home_mocap_quat is not None:
+                state.home_mocap_quat = state.baseline_home_mocap_quat.copy()
+            if state.baseline_home_ctrl is not None:
+                state.home_ctrl = state.baseline_home_ctrl.copy()
+
+            # Targets/plans are derived from the restored tool offset and must
+            # not retain a previous episode's waypoint or interpolation state.
+            state.target_pos_in_base = state.tool_offset_pos.copy()
+            state.target_quat_in_base = state.tool_offset_quat.copy()
+            state.planned_joint_start_qpos = (
+                state.home_arm_qpos.copy() if state.home_arm_qpos is not None else None
+            )
+            state.planned_joint_target_qpos = (
+                state.home_arm_qpos.copy() if state.home_arm_qpos is not None else None
+            )
+            state.planned_joint_progress = 1
+            state.planned_joint_steps_total = 1
+            state.planned_target_pos_in_base = state.tool_offset_pos.copy()
+            state.planned_target_quat_in_base = state.tool_offset_quat.copy()
+            state.ik_failure_streak = 0
+            if state.arm_joint_limit_warned is not None:
+                state.arm_joint_limit_warned.fill(0)
 
     def set_joint_limit_warning_enabled(self, enabled: bool) -> None:
         """Enable/disable the IK joint-limit-proximity warning (default off).
@@ -460,6 +525,19 @@ class UnifiedMujocoEnv(MujocoBasis):
             arm_joint_limited=arm_joint_limited,
             arm_joint_limit_warned=arm_joint_limit_warned,
         )
+        # Snapshot only numeric home/frame state.  In particular, do not copy
+        # ``ik_solver``: solver instances may own model-backed resources and
+        # are intentionally shared for the lifetime of this environment.
+        state.baseline_base_pos = state.base_pos.copy()
+        state.baseline_base_quat = state.base_quat.copy()
+        state.baseline_tool_offset_pos = state.tool_offset_pos.copy()
+        state.baseline_tool_offset_quat = state.tool_offset_quat.copy()
+        state.baseline_home_arm_qpos = (
+            state.home_arm_qpos.copy() if state.home_arm_qpos is not None else None
+        )
+        state.baseline_home_mocap_pos = state.home_mocap_pos.copy()
+        state.baseline_home_mocap_quat = state.home_mocap_quat.copy()
+        state.baseline_home_ctrl = state.home_ctrl.copy()
         self._operator_states[op_name] = state
 
     def _get_op(self, op_name: str) -> _OperatorState:

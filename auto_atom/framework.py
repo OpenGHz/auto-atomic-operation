@@ -847,12 +847,25 @@ class OperatorRandomizationConfig(BaseModel):
     """Optional single- or multi-region randomization for the end effector."""
 
 
-class InitialPoseConfig(BaseModel):
-    """Per-object initial pose override applied after keyframe reset, before randomization.
+class PoseOverrideConfig(BaseModel, frozen=True):
+    """A partial pose override expressed in a named reference frame.
 
-    When ``position`` or ``orientation`` is omitted the keyframe default is kept
-    for that component.  Orientation accepts either 4 floats (quaternion xyzw)
-    or 3 floats (Euler roll, pitch, yaw in radians).
+    This is the one configuration model used for initial object, camera, and
+    operator poses.  It intentionally contains only pose data; motion-specific
+    fields belong to :class:`PoseControlConfig`.
+
+    ``position`` and ``orientation`` are optional.  An omitted component keeps
+    the current pose component after transforming the fallback pose into the
+    selected reference frame.  ``orientation`` accepts either an ``xyzw``
+    quaternion (four values) or roll/pitch/yaw Euler angles (three values).
+
+    ``reference`` accepts the built-in :class:`PoseReference` values and a
+    named MuJoCo site/body/geom/joint.  Which references are legal is checked
+    by the owner-specific backend seam (objects/cameras accept scene frames;
+    operator EEF poses may additionally use ``base`` and operator frame
+    aliases).
+    Named-frame poses are resolved once during backend setup/reset; they do not
+    continue to follow an articulated frame during execution.
 
     Example YAML::
 
@@ -860,16 +873,115 @@ class InitialPoseConfig(BaseModel):
           source_block:
             position: [0.1, 0.0, 0.078]
             orientation: [0, 0, 0, 1]
-          cup:
-            position: [0.3, 0.1, 0.085]
+
+        task_operators:
+          arm:
+            initial_state:
+              base_pose:
+                reference: door__handle_grasp_center
+                position: [0.0, 0.45, 0.30]
+                orientation: [0, 0, 0, 1]
     """
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid")
 
-    position: Optional[List[float]] = None
-    """[x, y, z] world-frame position override."""
-    orientation: Optional[List[float]] = None
-    """Quaternion (4 floats, xyzw) or Euler angles (3 floats, roll/pitch/yaw in radians)."""
+    position: Optional[Position] = None
+    """Three-dimensional position in the selected reference frame."""
+    orientation: Optional[Union[Rotation, Orientation]] = None
+    """Quaternion ``[x, y, z, w]`` or RPY Euler ``[roll, pitch, yaw]``."""
+    reference: Union[PoseReference, str] = PoseReference.WORLD
+    """Built-in pose reference or a named scene element."""
+
+    @field_validator("position", mode="before")
+    @classmethod
+    def _validate_position_shape(cls, value: object) -> object:
+        """Reject malformed positions while the configuration is loaded.
+
+        The tuple annotation also enforces this shape, but doing the check at
+        the input boundary gives a stable, domain-specific error instead of a
+        union-branch error from Pydantic.  Non-sequence values are left to the
+        type validator so callers still receive the normal type diagnostic.
+        """
+        if value is None or isinstance(value, (str, bytes)):
+            return value
+        try:
+            length = len(value)  # type: ignore[arg-type]
+        except TypeError:
+            return value
+        if length != 3:
+            raise ValueError("position must contain exactly three values")
+        return value
+
+    @field_validator("position", mode="after")
+    @classmethod
+    def _validate_position_values(cls, value: Optional[Position]) -> Optional[Position]:
+        """Reject non-finite position coordinates."""
+        if value is not None and not all(
+            math.isfinite(component) for component in value
+        ):
+            raise ValueError("position must contain only finite values")
+        return value
+
+    @field_validator("orientation", mode="before")
+    @classmethod
+    def _validate_orientation_shape(cls, value: object) -> object:
+        """Reject orientation vectors other than RPY or quaternion forms."""
+        if value is None or isinstance(value, (str, bytes)):
+            return value
+        try:
+            length = len(value)  # type: ignore[arg-type]
+        except TypeError:
+            return value
+        if length not in (3, 4):
+            raise ValueError(
+                "orientation must contain exactly three RPY values or "
+                "four quaternion values"
+            )
+        return value
+
+    @field_validator("orientation", mode="after")
+    @classmethod
+    def _validate_orientation_values(
+        cls,
+        value: Optional[Union[Rotation, Orientation]],
+    ) -> Optional[Union[Rotation, Orientation]]:
+        """Reject non-finite angles and zero quaternions at the config seam."""
+        if value is None:
+            return value
+        if not all(math.isfinite(component) for component in value):
+            raise ValueError("orientation must contain only finite values")
+        if len(value) == 4:
+            norm_squared = math.fsum(component * component for component in value)
+            if norm_squared <= 1.0e-24:
+                raise ValueError("orientation quaternion must be finite and non-zero")
+        return value
+
+    @field_validator("reference", mode="before")
+    @classmethod
+    def _coerce_reference(cls, value: object) -> object:
+        """Keep built-in references typed while allowing named scene frames."""
+        if isinstance(value, str) and not isinstance(value, PoseReference):
+            try:
+                return PoseReference(value)
+            except ValueError:
+                # A non-built-in string is a scene element name.  The backend
+                # resolves and validates it once the composed model exists.
+                return value
+        return value
+
+    @field_validator("reference", mode="after")
+    @classmethod
+    def _validate_reference(
+        cls, value: Union[PoseReference, str]
+    ) -> Union[PoseReference, str]:
+        """Reject an empty named frame before backend resolution."""
+        if (
+            isinstance(value, str)
+            and not isinstance(value, PoseReference)
+            and not value.strip()
+        ):
+            raise ValueError("reference must be a non-empty frame name")
+        return value
 
 
 class AutoAtomConfig(BaseModel):
@@ -883,7 +995,7 @@ class AutoAtomConfig(BaseModel):
     """The registered environment name used to resolve the basis environment instance for the selected scene."""
     seed: int = 0
     """The random seed for the AutoAtom operator. This is used to ensure reproducibility of the operator's behavior."""
-    initial_pose: Dict[str, InitialPoseConfig] = Field(default_factory=dict)
+    initial_pose: Dict[str, PoseOverrideConfig] = Field(default_factory=dict)
     """Per-object initial pose overrides applied after keyframe reset, before
     randomization.  Keys are object names matching the MuJoCo body (or stage
     ``object`` field).  Supports both freejoint and static bodies."""
@@ -901,7 +1013,7 @@ class AutoAtomConfig(BaseModel):
     The direct ``PoseRandomRange`` shorthand is rejected at sample time for
     operator entries.
     """
-    camera_initial_pose: Dict[str, InitialPoseConfig] = Field(default_factory=dict)
+    camera_initial_pose: Dict[str, PoseOverrideConfig] = Field(default_factory=dict)
     """Per-camera initial pose overrides applied at each reset, before
     camera randomization records its defaults.
 
@@ -978,45 +1090,79 @@ class AutoAtomConfig(BaseModel):
     """When True the first N resets cycle through extreme poses (each axis at its min/max, then all-min and all-max) before switching to random sampling.  Use this to verify that configured ranges are not too large."""
 
 
-class ArmPoseConfig(BaseModel):
-    """Structured arm pose configuration with separate position and orientation."""
-
-    position: Optional[List[float]] = None
-    """3D position [x, y, z]. When omitted, keyframe position is kept."""
-
-    orientation: Optional[List[float]] = None
-    """Orientation as Euler angles [yaw, pitch, roll] (3 floats) or quaternion [x, y, z, w] (4 floats).
-    When omitted, keyframe orientation is kept."""
-
-    reference: PoseReference = PoseReference.WORLD
-    """Reference frame for interpreting position/orientation.
-    WORLD (default): pose is in world frame — backward compatible with mocap mode.
-    BASE: pose is relative to the operator's base frame — useful for arm setups."""
-
-
-class OperatorInitialState(BaseModel):
+class OperatorInitialState(BaseModel, frozen=True):
     """Optional override for an operator's home control state applied at reset."""
 
-    eef_pose: Optional[Union[List[float], ArmPoseConfig]] = None
+    model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid")
+
+    eef_pose: Optional[
+        Union[Tuple[float, float, float, float, float, float], PoseOverrideConfig]
+    ] = None
     """Override for the operator's home end-effector pose.
 
-    Supports two formats:
-    1. Flat list: [x, y, z, yaw, pitch, roll] (backward compatible)
-    2. Structured dict: {position: [x,y,z], orientation: [yaw,pitch,roll] or [x,y,z,w]}
+    Supports two input forms:
+    1. Compact six-value form: [x, y, z, yaw, pitch, roll]
+    2. Structured dict: {position: [x,y,z], orientation: [roll,pitch,yaw] or [x,y,z,w]}
        - Both position and orientation are optional in structured format
        - orientation can be Euler angles (3 floats) or quaternion (4 floats)
 
     When omitted the keyframe value is kept."""
 
+    @field_validator("eef_pose", mode="before")
+    @classmethod
+    def _validate_legacy_eef_shape(cls, value: object) -> object:
+        """Require the flat legacy EEF form to contain exactly six values."""
+        if value is None or isinstance(
+            value, (PoseOverrideConfig, Mapping, str, bytes)
+        ):
+            return value
+        try:
+            length = len(value)  # type: ignore[arg-type]
+        except TypeError:
+            return value
+        if length != 6:
+            raise ValueError(
+                "eef_pose legacy form must contain exactly six values: "
+                "[x, y, z, yaw, pitch, roll]"
+            )
+        return value
+
+    @field_validator("eef_pose", mode="after")
+    @classmethod
+    def _validate_eef_values(
+        cls,
+        value: Optional[
+            Union[Tuple[float, float, float, float, float, float], PoseOverrideConfig]
+        ],
+    ) -> Optional[
+        Union[Tuple[float, float, float, float, float, float], PoseOverrideConfig]
+    ]:
+        """Reject non-finite values in the flat EEF form."""
+        if value is None or isinstance(value, PoseOverrideConfig):
+            return value
+        if not all(math.isfinite(component) for component in value):
+            raise ValueError("eef_pose must contain only finite values")
+        return value
+
     eef: Optional[float] = None
     """Override value for the end-effector/gripper control.
     When omitted the keyframe value is kept."""
 
-    base_pose: Optional[ArmPoseConfig] = None
-    """Override for the operator's base world pose.
-    For a real arm: the arm base body's world pose (fixed mounting position).
-    For mocap: a virtual reference origin in world (defaults to keyframe mocap position).
-    When omitted, the base pose is read from the simulation state at init."""
+    @field_validator("eef", mode="after")
+    @classmethod
+    def _validate_eef_control(cls, value: Optional[float]) -> Optional[float]:
+        """Reject non-finite gripper controls before they reach a backend."""
+        if value is not None and not math.isfinite(value):
+            raise ValueError("eef must be finite")
+        return value
+
+    base_pose: Optional[PoseOverrideConfig] = None
+    """Override for the operator's base pose.
+
+    ``reference: world`` keeps the historical world-frame behavior.  A named
+    site/body/geom/joint expresses the base pose relative to that scene frame;
+    the resolved world pose is sampled at setup/reset and then held fixed.
+    """
 
 
 class OperatorConfig(BaseModel):

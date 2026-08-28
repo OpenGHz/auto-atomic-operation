@@ -7,6 +7,14 @@ The inspector also reloads the YAML values that define the **default** state:
 useful for iterating on both the nominal operator/object placement and the
 randomization ranges around that placement.
 
+All structured pose overrides use the shared `PoseOverrideConfig` contract.
+In particular, operator `base_pose` and structured `eef_pose` entries may use
+a named scene frame (or `base` for an EEF pose); the six-value EEF shorthand
+remains available as a complete world-frame pose. The inspector applies these
+through the backend before rebuilding its nominal targets. Named references
+are resolved at reload/reset time and are held as fixed world anchors while a
+task runs.
+
 **Script:** [examples/tune_randomization_extremes.py](../examples/tune_randomization_extremes.py)
 
 ## Usage

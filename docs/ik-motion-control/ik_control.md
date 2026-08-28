@@ -323,22 +323,51 @@ task_operators:
 - 减小 `n_iterations`（如 100），但需确保精度足够
 - 增大 `dt`（如 0.2），每步走更远但可能不稳定
 
-### 任务配置中的注意事项
+### 任务配置中的初始位姿与 IK
 
-对于 Franka 等固定基座机械臂：
+`task_operators.<name>.initial_state.base_pose` 描述的是**机械臂底座**的
+世界位姿，不是 EEF 初始位姿。`base_pose` 与 `eef_pose` 共用
+`PoseOverrideConfig`：`position` 和 `orientation` 可以分别省略，省略的分量
+从当前 keyframe/注册位姿继承；姿态三元组统一为 RPY 顺序
+`[roll, pitch, yaw]`，四元组为 XYZW quaternion。
 
-1. **所有 waypoint 都应显式指定 orientation**——如果省略，IK 可能求出不同的腕关节构型
-2. **keyframe 中的 joint7 应接近任务所需的末端朝向**——避免首次移动时大幅旋转
-3. **`base_pose` 应匹配 XML 中机械臂底座的实际位置**
+底座可以直接写在世界坐标系，也可以锚定到组合场景里的 site、body、geom 或
+joint。命名 frame 的变换约定为：
+
+```text
+T_world_base = T_world_reference × T_reference_base
+```
 
 ```yaml
 task_operators:
   arm:
     initial_state:
       base_pose:
-        position: [-0.45, -0.06, 0.0]  # 与 XML 中 link0 位置一致
-        orientation: [0, 0, 0, 1]
+        reference: door__handle_grasp_center
+        position: [0.2474, -0.4666, -0.10]  # reference frame
+        orientation: [0.0, 0.0, 0.7071, 0.7071]  # XYZW
+      eef_pose:
+        reference: base
+        position: [0.32, 0.0, 0.18]
+        orientation: [0.0, 1.5708, 0.0]  # RPY
 ```
+
+初始化顺序是：场景 keyframe → `env.initial_joint_positions` → operator home →
+`task.initial_pose` 对象覆盖 → operator `base_pose` → operator
+`eef_pose`/gripper control → randomization。命名引用只在 setup/reset 时解析并
+固定为世界位姿；被引用的关节之后运动时，底座不会跟随。
+在 joint-mode 下，解析后的 `base_pose` 同时移动物理 root body；纯 mocap
+operator 则只更新用于坐标换算的 virtual base，注册的 mocap home 不会因该
+字段被改写。
+`task.randomization.<name>.base/eef` 的随机化基线是上述覆盖后的实际 home
+位姿。
+
+对于 Franka 等固定基座机械臂：
+
+1. **所有 waypoint 都应显式指定 orientation**——如果省略，IK 可能求出不同的腕关节构型；
+2. **keyframe 中的 joint7 应接近任务所需的末端朝向**，避免首次移动时大幅旋转；
+3. 若不打算移动底座，`base_pose` 应与 XML 中机械臂根 body 的位置一致；若需要按门、桌面等
+   场景 frame 放置机械臂，则显式使用命名 `reference`，不要在多个配置层重复推导坐标。
 
 ### Home EEF 设置时的 IK 失败处理
 

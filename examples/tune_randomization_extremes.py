@@ -29,13 +29,13 @@ from hydra.core.global_hydra import GlobalHydra
 from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, OmegaConf
 
-from auto_atom.backend.mjc.mujoco_backend import MujocoTaskBackend, _resolve_arm_pose
+from auto_atom.backend.mjc.mujoco_backend import MujocoTaskBackend
 from auto_atom.framework import (
     AutoAtomConfig,
-    InitialPoseConfig,
     OperatorConfig,
     OperatorInitialState,
     OperatorRandomizationConfig,
+    PoseOverrideConfig,
     PoseRandomizationSpec,
     PoseRandomRange,
     PoseReference,
@@ -197,7 +197,7 @@ def _configure_tk_dpi_and_fonts(root: tk.Tk) -> None:
 @dataclass(frozen=True)
 class ReloadedTuningConfig:
     randomization: Dict[str, PoseRandomizationSpec | OperatorRandomizationConfig]
-    initial_poses: Dict[str, InitialPoseConfig]
+    initial_poses: Dict[str, PoseOverrideConfig]
     operator_initial_states: Dict[str, OperatorInitialState]
 
 
@@ -311,52 +311,6 @@ def _parse_tuning_config(cfg: DictConfig) -> ReloadedTuningConfig:
         initial_poses=dict(task_cfg.initial_pose),
         operator_initial_states=operator_initial_states,
     )
-
-
-def _apply_operator_initial_states(
-    backend: MujocoTaskBackend,
-    operator_initial_states: Dict[str, OperatorInitialState],
-) -> None:
-    for name, initial_state in operator_initial_states.items():
-        handler = backend.operator_handlers.get(name)
-        if handler is None:
-            print(f"[reload_initial_state] skip unknown operator={name}")
-            continue
-
-        if initial_state.base_pose is not None:
-            pose = _resolve_arm_pose(
-                initial_state.base_pose,
-                handler.get_base_pose().select(0),
-            )
-            pose = pose.broadcast_to(backend.batch_size)
-            handler.env.override_operator_base_pose(
-                handler.operator_name,
-                pose.position,
-                pose.orientation,
-            )
-
-        if initial_state.eef_pose is not None:
-            eef_pose_config = initial_state.eef_pose
-            pose = _resolve_arm_pose(
-                eef_pose_config,
-                handler.get_end_effector_pose().select(0),
-            )
-            if (
-                not isinstance(eef_pose_config, list)
-                and eef_pose_config.reference == PoseReference.BASE
-            ):
-                pose_b = pose.broadcast_to(backend.batch_size)
-                pos_w, quat_w = handler.env.base_to_world(
-                    handler.operator_name,
-                    np.asarray(pose_b.position, dtype=np.float32),
-                    np.asarray(pose_b.orientation, dtype=np.float32),
-                )
-                pose = PoseState(position=pos_w, orientation=quat_w)
-            handler.set_home_end_effector_pose(pose)
-
-        if initial_state.eef is not None:
-            handler._home_ctrl[:, handler.eef_ctrl_index] = float(initial_state.eef)
-            handler.home()
 
 
 @dataclass(frozen=True)
@@ -525,13 +479,14 @@ class RandomizationInspector:
         self.backend.randomization = dict(tuning_config.randomization)
         self.backend.initial_poses = dict(tuning_config.initial_poses)
         self.operator_initial_states = dict(tuning_config.operator_initial_states)
+        self.backend.operator_initial_states = dict(self.operator_initial_states)
 
         self.backend.get_env().reset()
         for operator in self.backend.operator_handlers.values():
             operator.home()
-        _apply_operator_initial_states(self.backend, self.operator_initial_states)
         if self.backend.initial_poses:
             self.backend._apply_initial_poses()  # type: ignore[attr-defined]
+        self.backend.apply_operator_initial_states(home=True)
         if self.backend.camera_initial_poses:
             self.backend._apply_camera_initial_poses()  # type: ignore[attr-defined]
 

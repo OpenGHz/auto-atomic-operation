@@ -7,7 +7,13 @@ from typing import Iterable, List, Optional, Tuple, Union
 
 import numpy as np
 
-from ..framework import Orientation, PoseControlConfig, Position, Rotation
+from ..framework import (
+    Orientation,
+    PoseControlConfig,
+    PoseOverrideConfig,
+    Position,
+    Rotation,
+)
 from .transformations import (
     concatenate_matrices,
     euler_from_matrix,
@@ -147,6 +153,83 @@ def inverse_pose(pose: PoseState) -> PoseState:
             )
         )
     return PoseState.stack(results)
+
+
+def resolve_pose_override(
+    config: PoseOverrideConfig | list[float] | tuple[float, ...],
+    fallback_pose_world: PoseState,
+    reference_pose_world: PoseState | None = None,
+) -> PoseState:
+    """Resolve one initial-pose override into a world-frame pose.
+
+    ``config`` is deliberately independent of the thing being moved.  The
+    caller resolves ``config.reference`` to ``reference_pose_world`` through
+    its backend seam, then this function applies the optional local position
+    and orientation fields.  Missing fields preserve the fallback pose after
+    it is transformed into the reference frame.  This gives objects, cameras,
+    and operators one consistent partial-override rule.
+
+    The compact six-value operator form is ``[x, y, z, yaw, pitch, roll]`` (or
+    the equivalent tuple) and is interpreted as a complete world-frame pose;
+    structured overrides remain the canonical model for partial or referenced
+    poses.
+    """
+    if isinstance(config, (list, tuple)):
+        if len(config) != 6:
+            raise ValueError(
+                "legacy EEF pose override must contain exactly six values: "
+                "[x, y, z, yaw, pitch, roll]"
+            )
+        return PoseState(
+            position=tuple(float(value) for value in config[:3]),
+            orientation=euler_to_quaternion(
+                (float(config[5]), float(config[4]), float(config[3]))
+            ),
+        )
+    if not isinstance(config, PoseOverrideConfig):
+        raise TypeError(
+            "pose override must be a PoseOverrideConfig or the legacy "
+            "[x, y, z, yaw, pitch, roll] sequence"
+        )
+
+    reference = (
+        reference_pose_world if reference_pose_world is not None else PoseState()
+    )
+    fallback_local = compose_pose(inverse_pose(reference), fallback_pose_world)
+    position = fallback_local.position[0].copy()
+    orientation = fallback_local.orientation[0].copy()
+
+    if config.position is not None:
+        if len(config.position) < 3:
+            raise ValueError(
+                "pose override position must contain at least three values"
+            )
+        position = np.asarray(config.position[:3], dtype=np.float64)
+    if config.orientation is not None:
+        if len(config.orientation) == 3:
+            orientation = np.asarray(
+                euler_to_quaternion(
+                    tuple(float(value) for value in config.orientation)
+                ),
+                dtype=np.float64,
+            )
+        elif len(config.orientation) == 4:
+            orientation = np.asarray(
+                normalize_quaternion(
+                    tuple(float(value) for value in config.orientation)
+                ),
+                dtype=np.float64,
+            )
+        else:
+            raise ValueError(
+                "pose override orientation must contain three RPY values or "
+                "four quaternion values"
+            )
+
+    return compose_pose(
+        reference,
+        PoseState(position=position, orientation=orientation),
+    )
 
 
 def euler_to_quaternion(rotation: Rotation) -> Orientation:
