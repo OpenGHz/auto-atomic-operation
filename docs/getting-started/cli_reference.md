@@ -7,37 +7,61 @@ Hydra multiruns, and `aao-info` introspects the task configs.
 ## `scripts/run_tests_safe.py`
 
 Use the repository test runner when running more than a small focused test. It
-executes test files serially in isolated, resource-bounded subprocesses, so a
-simulator crash, thread leak, or memory-heavy test cannot take down the whole
-pytest invocation. The default launcher is a user `systemd` scope with a CPU
-quota, one available CPU, cgroup memory/task limits, no swap, and a per-batch
-wall-clock limit. If a user systemd manager is unavailable, `auto` uses the
-explicitly weaker `prlimit` fallback (virtual-address-space limiting only).
+executes test files in isolated, resource-bounded subprocesses. Up to
+`--max-concurrency` batches may run at once (default: `4`) when the host can
+support them; each batch remains independently bounded, so a simulator crash,
+thread leak, or memory-heavy test cannot take down the whole pytest invocation.
+The requested value is an upper bound, not a promise: the runner records and
+uses a lower effective value when the selected CPU set, host/cgroup available
+memory, `batch-mode`, launcher guarantees, or shared CUDA devices require a
+clamp. The
+default CPU set selects one available core, so use a multi-core set such as
+`--cpu-set=0-3` (when those CPUs are available) when allowing four CPU-bound
+batches is appropriate. The default launcher is a user `systemd` scope with a
+CPU quota, cgroup memory/task limits, no swap, and a per-batch wall-clock limit.
+If a user systemd manager is unavailable, `auto` uses the explicitly weaker
+`prlimit` fallback and reduces concurrency to one batch.
+With the default 6 GiB per-batch memory ceiling, a machine with limited free RAM
+may still be clamped to one; use `--dry-run` to inspect the effective value before
+starting a larger run.
 
-The script never enables `pytest-xdist` or accepts `-n`/`--dist`; use batches for
-serial isolation instead. It neutralizes repository-level pytest `addopts` so a
-hidden parallel setting cannot bypass the runner; pass any desired safe options
-explicitly through `--pytest-args` or `PYTEST_ADDOPTS`. The latter are copied into
-the recorded command, while parallel, `addopts`-override, and caller-owned JUnit
-options are rejected. All repository-level `addopts` entries are intentionally
-ignored; copy any non-default options you need into `--pytest-args`.
+The script never enables `pytest-xdist` or accepts `-n`/`--dist`; bounded
+parallelism is at the batch level, while each batch itself runs one ordinary
+pytest process. It neutralizes repository-level pytest `addopts` so a hidden
+parallel setting cannot bypass the runner; pass any desired safe options
+explicitly through `--pytest-args` or `PYTEST_ADDOPTS`. The latter are copied
+into the recorded command, while parallel, `addopts`-override, and caller-owned
+JUnit options are rejected. All repository-level `addopts` entries are
+intentionally ignored; copy any non-default options you need into
+`--pytest-args`.
 
 Run it from the repository root with the project interpreter:
 
 ```bash
 PYTHON=/home/ghz/.mini_conda3/envs/airbot_play_data/bin/python
 
-# All pytest-discoverable files, one bounded batch per file (the default)
+# All pytest-discoverable files, one bounded batch per file (the default).
+# Up to four batches may overlap when the resource plan permits it.
 $PYTHON scripts/run_tests_safe.py
 
-# A focused serial run; quote a space-separated list or use commas
+# A focused run with up to four bounded batches; quote a space-separated list
+# or use commas. The CPU set makes four slots available when resources allow.
 $PYTHON scripts/run_tests_safe.py \
   --test-targets='tests/test_stage_execution.py tests/test_demo_eval_parity.py' \
-  --batch-size=1
+  --batch-size=1 \
+  --max-concurrency=4 \
+  --cpu-set=0-3
+
+# Force strict serial execution for simulator/GPU-sensitive tests
+$PYTHON scripts/run_tests_safe.py \
+  --test-targets='tests/test_stage_execution.py tests/test_demo_eval_parity.py' \
+  --max-concurrency=1
 
 # Inspect resolved targets and commands without starting pytest
 $PYTHON scripts/run_tests_safe.py \
   --test-targets='tests/test_stage_execution.py tests/test_demo_eval_parity.py' \
+  --max-concurrency=4 \
+  --cpu-set=0-3 \
   --dry-run
 
 # Stop after the first failed/timeout batch and choose explicit fallback mode
@@ -46,14 +70,19 @@ $PYTHON scripts/run_tests_safe.py \
 ```
 
 `--batch-mode=all` is available when a test suite relies on pytest state shared
-across files, but it deliberately gives up per-file failure isolation; the
-single scope still has the configured resource limits.
+across files, but it deliberately gives up per-file failure isolation and
+forces effective concurrency to one (there is only one batch); that scope
+still has the configured resource limits. For file batches, ordinary failures
+follow `--continue-on-failure`; resource-limit and cleanup failures stop new
+batches from being dispatched. Already-running batches continue under their
+own timeout and resource limits. An external interrupt instead enters the
+runner's bounded cleanup window.
 
 Each run creates `outputs/test-runs/<timestamp>/` (or the path supplied by
 `--output-dir`):
 
 ```text
-metadata.json              # limits, Git revision/dirty flag, exact argv, and batch states
+metadata.json              # limits, concurrency plan, Git state, exact argv, and batch states
 logs/batch-*.log            # pytest output and, for systemd, diagnostic journal tail
 junit/batch-*.xml           # one JUnit artifact per batch
 ```
@@ -74,9 +103,9 @@ and may terminate the writer with `SIGXFSZ`. The recorded command and target
 list in `metadata.json` make an individual batch reproducible. Exit code `0`
 means every batch passed; `1` means a test/launch/cleanup/resource/file-size
 failure; `2` means timeout or confirmed OOM; and `130` means the run was
-interrupted. Resource and cleanup failures stop the run before a later batch can
-start; ordinary test/launch failures follow `--continue-on-failure`. CPU and RAM
-limits do not cap GPU VRAM, so use
+interrupted. Resource and cleanup failures stop dispatching new batches; batches
+already running finish under their own bounds. Ordinary test/launch failures
+follow `--continue-on-failure`. CPU and RAM limits do not cap GPU VRAM, so use
 `--cuda-visible-devices` and avoid concurrent GPU-heavy runs when needed.
 
 ## aao-demo

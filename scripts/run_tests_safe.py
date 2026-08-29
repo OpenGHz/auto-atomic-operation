@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Run pytest with conservative resource limits and serial batch isolation.
+"""Run pytest with conservative resource limits and bounded batch isolation.
 
-The default mode runs one test module per bounded subprocess.  Each subprocess is
+The default mode runs one test module per bounded subprocess.  Up to
+``max_concurrency`` batches may run together, while each subprocess is
 placed in a transient user systemd scope when available, so a runaway simulator,
 thread pool, or memory leak is contained to that batch.  Results and logs are
 written below ``outputs/test-runs`` (which is ignored by git).
@@ -33,6 +34,7 @@ import sys
 import threading
 import time
 from collections.abc import Iterator, Mapping
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
@@ -97,6 +99,9 @@ class SafeTestConfig(BaseModel):
 
     batch_size: PositiveInt = Field(default=1, le=64)
     """Number of test files per isolated batch in ``file`` mode."""
+
+    max_concurrency: PositiveInt = Field(default=4, le=16)
+    """Requested maximum number of isolated batches running at once."""
 
     pytest_args: str = "-q"
     """Additional pytest arguments, parsed with shell-like quoting."""
@@ -194,6 +199,89 @@ class _TerminationResult:
 
     returncode: int | None
     cleanup_incomplete: bool = False
+
+
+@dataclass(frozen=True)
+class _ConcurrencyPlan:
+    """Requested and effective worker count, with transparent clamp reasons."""
+
+    requested: int
+    effective: int
+    reasons: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class _ActiveProcess:
+    """A running batch process that can be signalled by the coordinator."""
+
+    process: subprocess.Popen[str]
+    launcher: Literal["systemd", "prlimit"]
+    unit_name: str
+
+
+class _ActiveProcessRegistry:
+    """Thread-safe registry used to stop all active batches on interruption."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._active: dict[int, _ActiveProcess] = {}
+        self._stop_requested = threading.Event()
+
+    def register(
+        self,
+        batch_index: int,
+        process: subprocess.Popen[str],
+        launcher: Literal["systemd", "prlimit"],
+        unit_name: str,
+    ) -> None:
+        with self._lock:
+            self._active[batch_index] = _ActiveProcess(process, launcher, unit_name)
+
+    def unregister(self, batch_index: int) -> None:
+        with self._lock:
+            self._active.pop(batch_index, None)
+
+    def snapshot(self) -> tuple[tuple[int, _ActiveProcess], ...]:
+        with self._lock:
+            return tuple(self._active.items())
+
+    @property
+    def stop_requested(self) -> bool:
+        """Whether the coordinator has asked workers to stop."""
+        return self._stop_requested.is_set()
+
+    def request_stop(self) -> None:
+        """Set the stop latch and terminate every process known so far.
+
+        The latch closes the tiny ``Popen`` → ``register`` race: a worker that
+        starts after the coordinator has begun cleanup observes it immediately
+        and terminates its newly-created process before waiting on it.
+        """
+        self._stop_requested.set()
+        self.signal_all()
+
+    def signal_all(self) -> None:
+        """Request graceful termination for every currently registered batch.
+
+        The process-group signal is deliberately synchronous and cheap.  Each
+        worker's normal ``_terminate_process`` path performs the launcher-specific
+        scope stop and diagnostics, so the coordinator never serially waits on a
+        ``systemctl`` call while handling the first interrupt.
+        """
+        for _index, active in self.snapshot():
+            _send_process_group_signal(active.process, signal.SIGTERM)
+
+    def force_kill_all(self) -> None:
+        """Escalate interruption cleanup without waiting on a worker thread."""
+        for _index, active in self.snapshot():
+            _send_process_group_signal(active.process, signal.SIGKILL)
+            if active.launcher == "systemd":
+                _kill_unit(active.unit_name)
+
+    @property
+    def count(self) -> int:
+        with self._lock:
+            return len(self._active)
 
 
 def _now() -> str:
@@ -321,6 +409,195 @@ def _make_batches(targets: list[str], config: SafeTestConfig) -> list[_Batch]:
         _Batch(index=index, targets=tuple(targets[start : start + size]))
         for index, start in enumerate(range(0, len(targets), size), start=1)
     ]
+
+
+@contextmanager
+def _manifest_guard(lock: threading.Lock | None) -> Iterator[None]:
+    """Serialize in-place manifest updates and atomic metadata writes."""
+    if lock is None:
+        yield
+        return
+    with lock:
+        yield
+
+
+def _cpu_set_count(cpu_set: str) -> int | None:
+    """Count CPUs in the common taskset list/range syntax."""
+    selected: set[int] = set()
+    excluded: set[int] = set()
+    for raw_part in cpu_set.split(","):
+        part = raw_part.strip()
+        if not part:
+            continue
+        target = excluded if part.startswith("^") else selected
+        if part.startswith("^"):
+            part = part.removeprefix("^")
+        # taskset accepts an optional stride (for example ``0-7:2``).
+        stride = 1
+        if ":" in part:
+            part, raw_stride = part.split(":", 1)
+            try:
+                stride = int(raw_stride)
+            except ValueError:
+                return None
+            if stride <= 0:
+                return None
+        try:
+            if "-" in part:
+                start_text, end_text = part.split("-", 1)
+                start, end = int(start_text), int(end_text)
+                if end < start:
+                    return None
+                target.update(range(start, end + 1, stride))
+            else:
+                target.add(int(part))
+        except ValueError:
+            return None
+    if not selected:
+        return None
+    return max(1, len(selected - excluded))
+
+
+def _read_cgroup_bytes(path: Path) -> int | None:
+    """Read a cgroup byte counter, treating ``max`` as unlimited."""
+    try:
+        raw_value = path.read_text(encoding="utf-8").strip()
+    except (OSError, UnicodeError):
+        return None
+    if not raw_value or raw_value == "max":
+        return None
+    try:
+        value = int(raw_value.split()[0])
+    except (ValueError, IndexError):
+        return None
+    # cgroup v1 uses a very large sentinel for an unlimited limit.
+    return None if value >= 1 << 60 else max(0, value)
+
+
+def _cgroup_memory_available_bytes() -> int | None:
+    """Find remaining memory in this cgroup and finite ancestor limits."""
+    try:
+        cgroup_lines = (
+            Path("/proc/self/cgroup").read_text(encoding="utf-8").splitlines()
+        )
+    except (OSError, UnicodeError):
+        return None
+
+    candidates: list[tuple[Path, Path]] = []
+    for line in cgroup_lines:
+        hierarchy, separator, relative = line.partition(":")
+        if not separator:
+            continue
+        controllers, separator, relative = relative.partition(":")
+        if not separator:
+            continue
+        relative_path = relative.lstrip("/")
+        if hierarchy == "0":
+            candidates.append((Path("/sys/fs/cgroup"), Path(relative_path)))
+        elif "memory" in controllers.split(","):
+            candidates.append((Path("/sys/fs/cgroup/memory"), Path(relative_path)))
+
+    available_values: list[int] = []
+    for mount_root, relative_path in candidates:
+        directory = mount_root / relative_path
+        if not directory.is_dir():
+            continue
+        while True:
+            if (directory / "memory.max").is_file():
+                limit = _read_cgroup_bytes(directory / "memory.max")
+                current = _read_cgroup_bytes(directory / "memory.current")
+                if limit is not None and current is not None:
+                    available_values.append(max(0, limit - current))
+            elif (directory / "memory.limit_in_bytes").is_file():
+                limit = _read_cgroup_bytes(directory / "memory.limit_in_bytes")
+                current = _read_cgroup_bytes(directory / "memory.usage_in_bytes")
+                if limit is not None and current is not None:
+                    available_values.append(max(0, limit - current))
+            if directory == mount_root or mount_root not in directory.parents:
+                break
+            directory = directory.parent
+    return min(available_values) if available_values else None
+
+
+def _available_memory_mb() -> int | None:
+    """Read conservative available memory from host and cgroup state."""
+    host_available_mb: int | None = None
+    try:
+        for line in Path("/proc/meminfo").read_text(encoding="utf-8").splitlines():
+            key, separator, value = line.partition(":")
+            if key == "MemAvailable" and separator:
+                amount_kib = int(value.strip().split()[0])
+                host_available_mb = max(1, amount_kib // 1024)
+                break
+    except (OSError, ValueError, IndexError):
+        host_available_mb = None
+
+    cgroup_available_bytes = _cgroup_memory_available_bytes()
+    cgroup_available_mb = (
+        max(1, cgroup_available_bytes // (1024 * 1024))
+        if cgroup_available_bytes is not None
+        else None
+    )
+    if host_available_mb is None:
+        return cgroup_available_mb
+    if cgroup_available_mb is None:
+        return host_available_mb
+    return min(host_available_mb, cgroup_available_mb)
+
+
+def _plan_concurrency(
+    config: SafeTestConfig,
+    launcher: Literal["systemd", "prlimit"],
+    batches: list[_Batch],
+) -> _ConcurrencyPlan:
+    """Derive a safe effective worker count from the requested upper bound.
+
+    ``max_concurrency`` is intentionally a request rather than a promise.  The
+    runner clamps it when the selected CPU set, available memory, GPU visibility,
+    or weak fallback launcher cannot safely support all requested batches.  The
+    reasons are persisted in metadata so a run remains explainable/reproducible.
+    """
+    requested = int(config.max_concurrency)
+    effective = min(requested, len(batches))
+    reasons: list[str] = []
+    if config.batch_mode == "all" and effective > 1:
+        effective = 1
+        reasons.append("batch_mode=all has one shared batch")
+
+    cpu_slots = _cpu_set_count(config.cpu_set)
+    if cpu_slots is not None and effective > cpu_slots:
+        effective = cpu_slots
+        reasons.append(f"cpu_set provides only {cpu_slots} slot(s)")
+
+    available_mb = _available_memory_mb()
+    if available_mb is not None:
+        # Keep roughly one quarter of currently available host memory for the
+        # desktop, kernel, and non-test processes.  At least one slot remains so
+        # a constrained machine still produces a useful bounded result.
+        memory_budget_mb = max(1, available_mb * 3 // 4)
+        memory_slots = max(1, memory_budget_mb // int(config.memory_max_mb))
+        if effective > memory_slots:
+            effective = memory_slots
+            reasons.append(
+                f"available memory budget allows {memory_slots} slot(s) "
+                f"({available_mb} MiB available)"
+            )
+
+    if launcher == "prlimit" and effective > 1:
+        # prlimit cannot enforce aggregate RSS, task, or swap limits; serial is
+        # the only safe default when the cgroup launcher is unavailable.
+        effective = 1
+        reasons.append("prlimit fallback has no aggregate cgroup protection")
+
+    if (
+        config.cuda_visible_devices
+        and config.cuda_visible_devices.strip()
+        and effective > 1
+    ):
+        effective = 1
+        reasons.append("CUDA visibility is shared; GPU batches stay serial")
+
+    return _ConcurrencyPlan(requested, max(1, effective), tuple(reasons))
 
 
 def _contains_parallel_pytest_option(args: list[str]) -> bool:
@@ -1186,6 +1463,8 @@ def _finalize_batch(
     cleanup_incomplete: bool = False,
     timeout_expired: bool = False,
     file_size_limit_hit: bool = False,
+    manifest_lock: threading.Lock | None = None,
+    manifest_open: threading.Event | None = None,
 ) -> _BatchResult:
     """Persist one batch outcome in one place for normal and launch failures."""
     elapsed = time.monotonic() - started
@@ -1221,21 +1500,31 @@ def _finalize_batch(
         command=command,
         reason=reason,
     )
-    entry = manifest["batches"][batch.index - 1]
-    entry.update(
-        {
-            "status": result.status,
-            "returncode": result.returncode,
-            "reason": result.reason,
-            "elapsed_seconds": round(result.elapsed_seconds, 3),
-            "finished_at": finished_at,
-            "log": str(result.log_path.relative_to(output)),
-            "junit": str(result.junit_path.relative_to(output)),
-            "command": list(result.command),
-            "cleanup_incomplete": cleanup_incomplete,
-        }
-    )
-    _write_json(output / "metadata.json", manifest)
+    try:
+        log_reference = str(result.log_path.relative_to(output))
+    except ValueError:
+        log_reference = str(result.log_path)
+    try:
+        junit_reference = str(result.junit_path.relative_to(output))
+    except ValueError:
+        junit_reference = str(result.junit_path)
+    with _manifest_guard(manifest_lock):
+        if manifest_open is None or manifest_open.is_set():
+            entry = manifest["batches"][batch.index - 1]
+            entry.update(
+                {
+                    "status": result.status,
+                    "returncode": result.returncode,
+                    "reason": result.reason,
+                    "elapsed_seconds": round(result.elapsed_seconds, 3),
+                    "finished_at": finished_at,
+                    "log": log_reference,
+                    "junit": junit_reference,
+                    "command": list(result.command),
+                    "cleanup_incomplete": cleanup_incomplete,
+                }
+            )
+            _write_json(output / "metadata.json", manifest)
     print(f"  {result.status} ({result.elapsed_seconds:.1f}s); log={result.log_path}")
     return result
 
@@ -1290,18 +1579,34 @@ def _run_batch(
     batch: _Batch,
     output: Path,
     manifest: dict[str, Any],
+    *,
+    manifest_lock: threading.Lock | None = None,
+    active_registry: _ActiveProcessRegistry | None = None,
+    manifest_open: threading.Event | None = None,
 ) -> _BatchResult:
+    if manifest_open is not None and not manifest_open.is_set():
+        return _synthetic_batch_result(
+            batch=batch,
+            output=output,
+            manifest=manifest,
+            reason="batch was queued after the run was closed",
+            interrupted=True,
+            manifest_lock=manifest_lock,
+            manifest_open=manifest_open,
+        )
     log_path = output / "logs" / f"batch-{batch.index:03d}.log"
     junit_path = output / "junit" / f"batch-{batch.index:03d}.xml"
     log_path.parent.mkdir(parents=True, exist_ok=True)
     junit_path.parent.mkdir(parents=True, exist_ok=True)
     unit_name = _batch_unit_name(batch.index)
     command: tuple[str, ...] = ()
-    manifest_entry = manifest["batches"][batch.index - 1]
-    manifest_entry["command"] = None
-    manifest_entry["junit"] = str(junit_path.relative_to(output))
-    manifest_entry["unit"] = unit_name if launcher == "systemd" else None
-    _write_json(output / "metadata.json", manifest)
+    with _manifest_guard(manifest_lock):
+        if manifest_open is None or manifest_open.is_set():
+            manifest_entry = manifest["batches"][batch.index - 1]
+            manifest_entry["command"] = None
+            manifest_entry["junit"] = str(junit_path.relative_to(output))
+            manifest_entry["unit"] = unit_name if launcher == "systemd" else None
+            _write_json(output / "metadata.json", manifest)
     started = time.monotonic()
     started_at = _now()
     try:
@@ -1325,9 +1630,14 @@ def _run_batch(
             systemd_properties={},
             journal="",
             launch_error=f"batch launch failed: {exc}",
+            manifest_lock=manifest_lock,
+            manifest_open=manifest_open,
         )
-    manifest_entry["command"] = list(command)
-    _write_json(output / "metadata.json", manifest)
+    with _manifest_guard(manifest_lock):
+        if manifest_open is None or manifest_open.is_set():
+            manifest_entry = manifest["batches"][batch.index - 1]
+            manifest_entry["command"] = list(command)
+            _write_json(output / "metadata.json", manifest)
     log_path.write_text(
         f"started_at: {started_at}\ncommand: {shlex.join(command)}\n\n",
         encoding="utf-8",
@@ -1342,6 +1652,7 @@ def _run_batch(
     launch_error: str | None = None
     systemd_properties: dict[str, str] = {}
     journal = ""
+    registered = False
     with log_path.open("a", encoding="utf-8") as log_stream:
         try:
             # Keep the short fork/exec window atomic.  If an external signal
@@ -1357,6 +1668,23 @@ def _run_batch(
                     text=True,
                     start_new_session=True,
                 )
+            if active_registry is not None:
+                # Register immediately after Popen returns.  The registry's
+                # stop latch closes the fork/register interruption window.
+                active_registry.register(batch.index, process, launcher, unit_name)
+                registered = True
+                if active_registry.stop_requested and process.poll() is None:
+                    interrupted = True
+                    termination = _terminate_process(
+                        process,
+                        launcher,
+                        unit_name,
+                        int(config.kill_after_seconds),
+                    )
+                    returncode = termination.returncode
+                    cleanup_incomplete = (
+                        cleanup_incomplete or termination.cleanup_incomplete
+                    )
             try:
                 parent_wait_seconds = (
                     int(config.timeout_minutes) * 60
@@ -1364,6 +1692,12 @@ def _run_batch(
                     + 15
                 )
                 returncode = process.wait(timeout=parent_wait_seconds)
+                if (
+                    active_registry is not None
+                    and active_registry.stop_requested
+                    and returncode not in {0, None}
+                ):
+                    interrupted = True
             except subprocess.TimeoutExpired:
                 timeout_expired = True
                 termination = _terminate_process(
@@ -1410,28 +1744,34 @@ def _run_batch(
             launch_error = f"batch execution failed: {exc}"
             log_stream.write(f"batch execution failed: {exc!r}\n")
         finally:
-            with _suppress_interrupt_signals():
-                if process is not None and _batch_needs_termination(
-                    process, launcher, unit_name
-                ):
-                    termination = _terminate_process(
-                        process,
-                        launcher,
-                        unit_name,
-                        int(config.kill_after_seconds),
-                    )
-                    returncode = termination.returncode
-                    cleanup_incomplete = (
-                        cleanup_incomplete or termination.cleanup_incomplete
-                    )
-                if launcher == "systemd" and process is not None:
-                    # Capture cgroup/journal evidence before reset-failed removes
-                    # the transient unit's result metadata.
-                    systemd_properties = _unit_properties(unit_name)
-                    journal = _unit_journal(unit_name)
-                    _cleanup_unit(unit_name)
-                if journal:
-                    log_stream.write(f"\nsystemd_journal_tail:\n{journal.rstrip()}\n")
+            try:
+                with _suppress_interrupt_signals():
+                    if process is not None and _batch_needs_termination(
+                        process, launcher, unit_name
+                    ):
+                        termination = _terminate_process(
+                            process,
+                            launcher,
+                            unit_name,
+                            int(config.kill_after_seconds),
+                        )
+                        returncode = termination.returncode
+                        cleanup_incomplete = (
+                            cleanup_incomplete or termination.cleanup_incomplete
+                        )
+                    if launcher == "systemd" and process is not None:
+                        # Capture cgroup/journal evidence before reset-failed removes
+                        # the transient unit's result metadata.
+                        systemd_properties = _unit_properties(unit_name)
+                        journal = _unit_journal(unit_name)
+                        _cleanup_unit(unit_name)
+                    if journal:
+                        log_stream.write(
+                            f"\nsystemd_journal_tail:\n{journal.rstrip()}\n"
+                        )
+            finally:
+                if active_registry is not None and registered:
+                    active_registry.unregister(batch.index)
     file_size_limit_hit = _file_size_limit_evidence(log_path)
     return _finalize_batch(
         batch=batch,
@@ -1449,7 +1789,375 @@ def _run_batch(
         cleanup_incomplete=cleanup_incomplete,
         timeout_expired=timeout_expired,
         file_size_limit_hit=file_size_limit_hit,
+        manifest_lock=manifest_lock,
+        manifest_open=manifest_open,
     )
+
+
+def _synthetic_batch_result(
+    *,
+    batch: _Batch,
+    output: Path,
+    manifest: dict[str, Any],
+    reason: str,
+    interrupted: bool,
+    manifest_lock: threading.Lock,
+    manifest_open: threading.Event | None = None,
+) -> _BatchResult:
+    """Create a persisted result when a scheduler worker cannot return one."""
+    log_path = output / "logs" / f"batch-{batch.index:03d}.log"
+    junit_path = output / "junit" / f"batch-{batch.index:03d}.xml"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    junit_path.parent.mkdir(parents=True, exist_ok=True)
+    if not log_path.exists():
+        log_path.write_text(
+            f"started_at: {_now()}\ncommand: <worker did not return>\n\n",
+            encoding="utf-8",
+        )
+    with log_path.open("a", encoding="utf-8") as stream:
+        stream.write(f"scheduler: {reason}\n")
+    return _finalize_batch(
+        batch=batch,
+        output=output,
+        manifest=manifest,
+        command=(),
+        log_path=log_path,
+        junit_path=junit_path,
+        started=time.monotonic(),
+        returncode=None,
+        interrupted=interrupted,
+        systemd_properties={},
+        journal="",
+        launch_error=None if interrupted else reason,
+        manifest_lock=manifest_lock,
+        manifest_open=manifest_open,
+    )
+
+
+def _run_batches(
+    config: SafeTestConfig,
+    root: Path,
+    launcher: Literal["systemd", "prlimit"],
+    batches: list[_Batch],
+    output: Path,
+    manifest: dict[str, Any],
+) -> tuple[list[_BatchResult], bool]:
+    """Run a bounded number of isolated batches concurrently.
+
+    The scheduler deliberately owns dispatch and fail-fast policy while
+    ``_run_batch`` owns one batch's process/resource lifecycle.  At most
+    ``max_concurrency`` futures are submitted; all futures completing in one
+    observation window are consumed before another batch is dispatched.  This
+    prevents a fast failure from being hidden behind an unbounded queue.
+    """
+    if not batches:
+        return [], False
+
+    worker_count = max(1, min(int(config.max_concurrency), len(batches)))
+    manifest_lock = threading.Lock()
+    active_registry = _ActiveProcessRegistry()
+    manifest_open = threading.Event()
+    manifest_open.set()
+    completion_times: dict[int, float] = {}
+    completion_sequence: dict[int, int] = {}
+    completion_times_lock = threading.Lock()
+    completion_sequence_counter = [0]
+    futures: dict[Future[_BatchResult], _Batch] = {}
+    results_by_index: dict[int, _BatchResult] = {}
+    completion_order: list[int] = []
+    submitted: set[int] = set()
+    in_flight = 0
+    peak_in_flight = 0
+    interrupted = False
+    stop_dispatch = False
+    next_batch_position = 0
+
+    output.mkdir(parents=True, exist_ok=True)
+    (output / "logs").mkdir(parents=True, exist_ok=True)
+    (output / "junit").mkdir(parents=True, exist_ok=True)
+    with _manifest_guard(manifest_lock):
+        concurrency = manifest.setdefault("concurrency", {})
+        requested = int(concurrency.get("requested", int(config.max_concurrency)))
+        concurrency.update(
+            {
+                "requested": requested,
+                "effective": worker_count,
+                "reasons": list(concurrency.get("reasons", [])),
+                "peak_active": int(concurrency.get("peak_active", 0)),
+                "completion_order": list(concurrency.get("completion_order", [])),
+            }
+        )
+        _write_json(output / "metadata.json", manifest)
+
+    executor = ThreadPoolExecutor(
+        max_workers=worker_count,
+        thread_name_prefix="aao-test-batch",
+    )
+
+    def mark_running(batch: _Batch) -> None:
+        with _manifest_guard(manifest_lock):
+            entry = manifest["batches"][batch.index - 1]
+            entry.update({"started_at": _now(), "status": "RUNNING"})
+            _write_json(output / "metadata.json", manifest)
+
+    def submit_batch(batch: _Batch) -> None:
+        nonlocal in_flight, next_batch_position, peak_in_flight
+        mark_running(batch)
+
+        def invoke() -> _BatchResult:
+            try:
+                return _run_batch(
+                    config,
+                    root,
+                    launcher,
+                    batch,
+                    output,
+                    manifest,
+                    manifest_lock=manifest_lock,
+                    active_registry=active_registry,
+                    manifest_open=manifest_open,
+                )
+            finally:
+                _record_batch_completion(
+                    batch.index,
+                    completion_times,
+                    completion_sequence,
+                    completion_sequence_counter,
+                    completion_times_lock,
+                )
+
+        # Keep submission and bookkeeping atomic with respect to the CLI signal
+        # handler.  Otherwise a SIGINT could leave a running future absent from
+        # ``futures`` (or absent from ``submitted``) and therefore outside the
+        # cleanup/accounting path.
+        with _suppress_interrupt_signals():
+            future = executor.submit(invoke)
+            futures[future] = batch
+            submitted.add(batch.index)
+            in_flight += 1
+            peak_in_flight = max(peak_in_flight, in_flight)
+            next_batch_position += 1
+        with _manifest_guard(manifest_lock):
+            concurrency = manifest.setdefault("concurrency", {})
+            concurrency["peak_active"] = max(
+                int(concurrency.get("peak_active", 0)), peak_in_flight
+            )
+            _write_json(output / "metadata.json", manifest)
+
+    def mark_not_started(batch: _Batch, reason: str) -> None:
+        with _manifest_guard(manifest_lock):
+            entry = manifest["batches"][batch.index - 1]
+            if entry.get("status") in {"NOT_STARTED", "RUNNING"}:
+                entry.update({"status": "NOT_STARTED", "reason": reason})
+            _write_json(output / "metadata.json", manifest)
+
+    def cancel_pending(reason: str) -> None:
+        """Cancel executor work that has not begun and mark it explicitly."""
+        nonlocal in_flight
+        for future, batch in list(futures.items()):
+            if future.cancel():
+                futures.pop(future, None)
+                in_flight = max(0, in_flight - 1)
+                mark_not_started(batch, reason)
+
+    def completed_futures() -> set[Future[_BatchResult]]:
+        return {future for future in futures if future.done()}
+
+    def ordered_futures(
+        done: set[Future[_BatchResult]],
+    ) -> list[Future[_BatchResult]]:
+        with completion_times_lock:
+            return sorted(
+                done,
+                key=lambda future: (
+                    completion_sequence.get(futures[future].index, 10**18),
+                    completion_times.get(futures[future].index, float("inf")),
+                    futures[future].index,
+                ),
+            )
+
+    def record_result(batch: _Batch, result: _BatchResult) -> None:
+        """Make scheduler metadata complete even for injected/test workers."""
+        try:
+            log_reference = str(result.log_path.relative_to(output))
+        except ValueError:
+            log_reference = str(result.log_path)
+        try:
+            junit_reference = str(result.junit_path.relative_to(output))
+        except ValueError:
+            junit_reference = str(result.junit_path)
+        with _manifest_guard(manifest_lock):
+            if not manifest_open.is_set():
+                return
+            entry = manifest["batches"][batch.index - 1]
+            entry.update(
+                {
+                    "status": result.status,
+                    "returncode": result.returncode,
+                    "reason": result.reason,
+                    "elapsed_seconds": round(result.elapsed_seconds, 3),
+                    "finished_at": entry.get("finished_at") or _now(),
+                    "log": log_reference,
+                    "junit": junit_reference,
+                    "command": list(result.command),
+                }
+            )
+            _write_json(output / "metadata.json", manifest)
+
+    def consume_future(future: Future[_BatchResult]) -> None:
+        nonlocal in_flight, interrupted, stop_dispatch
+        batch = futures.pop(future)
+        in_flight = max(0, in_flight - 1)
+        try:
+            result = future.result()
+            if not isinstance(result, _BatchResult):
+                raise TypeError(
+                    "batch worker returned an unexpected result type: "
+                    f"{type(result).__name__}"
+                )
+        except KeyboardInterrupt:
+            interrupted = True
+            stop_dispatch = True
+            with _suppress_interrupt_signals():
+                active_registry.request_stop()
+            result = _synthetic_batch_result(
+                batch=batch,
+                output=output,
+                manifest=manifest,
+                reason="batch worker raised KeyboardInterrupt",
+                interrupted=True,
+                manifest_lock=manifest_lock,
+                manifest_open=manifest_open,
+            )
+        except BaseException as exc:  # noqa: BLE001 - isolate worker failures
+            result = _synthetic_batch_result(
+                batch=batch,
+                output=output,
+                manifest=manifest,
+                reason=f"batch worker raised {type(exc).__name__}: {exc}",
+                interrupted=False,
+                manifest_lock=manifest_lock,
+                manifest_open=manifest_open,
+            )
+        record_result(batch, result)
+        results_by_index[batch.index] = result
+        completion_order.append(batch.index)
+        with _manifest_guard(manifest_lock):
+            concurrency = manifest.setdefault("concurrency", {})
+            concurrency["completion_order"] = list(completion_order)
+            _write_json(output / "metadata.json", manifest)
+        if result.status == "INTERRUPTED":
+            interrupted = True
+            stop_dispatch = True
+            with _suppress_interrupt_signals():
+                active_registry.request_stop()
+            cancel_pending("stopped after an interruption")
+        elif result.status in _RESOURCE_FAILURE_STATUSES or (
+            result.status != "PASSED" and not config.continue_on_failure
+        ):
+            stop_dispatch = True
+
+    def drain_until(deadline: float | None) -> None:
+        nonlocal interrupted
+        while futures and (deadline is None or time.monotonic() < deadline):
+            timeout = None
+            if deadline is not None:
+                timeout = max(0.01, min(0.2, deadline - time.monotonic()))
+            done, _pending = wait(
+                tuple(futures), timeout=timeout, return_when=FIRST_COMPLETED
+            )
+            if not done:
+                continue
+            ordered_done = ordered_futures(set(done))
+            for future in ordered_done:
+                if future in futures:
+                    consume_future(future)
+
+    try:
+        while next_batch_position < len(batches) and len(futures) < worker_count:
+            submit_batch(batches[next_batch_position])
+
+        while futures:
+            done, _pending = wait(tuple(futures), return_when=FIRST_COMPLETED)
+            # Consume every completion observed in this window before refilling
+            # slots, so simultaneous failures cannot be outrun by new work.
+            while done or completed_futures():
+                done.update(completed_futures())
+                for future in ordered_futures(set(done)):
+                    if future in futures:
+                        consume_future(future)
+                done = set()
+            if stop_dispatch:
+                continue
+            while next_batch_position < len(batches) and len(futures) < worker_count:
+                submit_batch(batches[next_batch_position])
+    except KeyboardInterrupt:
+        interrupted = True
+        stop_dispatch = True
+        with _suppress_interrupt_signals():
+            active_registry.request_stop()
+            cancel_pending("stopped before batch process started")
+            # Give running workers their configured cleanup grace period, then
+            # escalate process groups/scopes once more.  This wait is intentionally
+            # bounded so Ctrl-C cannot leave the coordinator stuck indefinitely.
+            drain_until(time.monotonic() + max(5, int(config.kill_after_seconds) + 5))
+            if futures:
+                active_registry.force_kill_all()
+                drain_until(time.monotonic() + 5)
+    finally:
+        # Do not let a late worker rewrite a terminal manifest.  Real workers
+        # normally have drained by this point; this event also protects the
+        # bounded-interruption path from pathological Python workers.
+        if interrupted:
+            with _suppress_interrupt_signals():
+                active_registry.request_stop()
+                cancel_pending("stopped before batch process started")
+                with _manifest_guard(manifest_lock):
+                    manifest_open.clear()
+        # Normal completion has no live futures and can join workers.  The
+        # interruption path uses cancel_futures and a non-blocking shutdown after
+        # its bounded drain; active subprocesses have already been signalled.
+        with _suppress_interrupt_signals():
+            executor.shutdown(wait=not interrupted, cancel_futures=True)
+
+    if interrupted and futures:
+        # A pathological Python worker can outlive the bounded drain even after
+        # its child process was killed.  Make the persisted state explicit; the
+        # executor is detached above and no new work can be dispatched.
+        with _manifest_guard(manifest_lock):
+            for batch in futures.values():
+                entry = manifest["batches"][batch.index - 1]
+                if entry.get("status") == "RUNNING":
+                    entry.update(
+                        {
+                            "status": "INTERRUPTED",
+                            "reason": "worker did not finish before interruption cleanup deadline",
+                            "finished_at": _now(),
+                        }
+                    )
+            _write_json(output / "metadata.json", manifest)
+
+    for batch in batches:
+        if batch.index not in submitted:
+            mark_not_started(batch, "stopped before this batch was dispatched")
+    if not interrupted:
+        with _manifest_guard(manifest_lock):
+            manifest_open.clear()
+    return [results_by_index[index] for index in sorted(results_by_index)], interrupted
+
+
+def _record_batch_completion(
+    batch_index: int,
+    completion_times: dict[int, float],
+    completion_sequence: dict[int, int],
+    sequence_counter: list[int],
+    lock: threading.Lock,
+) -> None:
+    """Record completion in the worker before its future becomes observable."""
+    with lock:
+        sequence_counter[0] += 1
+        completion_sequence[batch_index] = sequence_counter[0]
+        completion_times[batch_index] = time.monotonic()
 
 
 def _mark_interrupted_batch(
@@ -1482,7 +2190,7 @@ def _finalize_run(
     """Write the terminal manifest and derive the process exit code."""
     entries = manifest["batches"]
     for entry in entries:
-        if entry["status"] == "NOT_STARTED":
+        if entry["status"] == "NOT_STARTED" and not entry.get("reason"):
             entry["reason"] = "stopped before this batch"
     statuses = [entry["status"] for entry in entries]
     manifest["status"] = (
@@ -1518,15 +2226,25 @@ def _finalize_run(
 
 
 def run_tests(config: SafeTestConfig) -> int:
-    """Resolve targets and run bounded serial pytest batches."""
+    """Resolve targets and run resource-bounded pytest batches."""
     root = _resolve_repo_root(config)
     targets = _expand_targets(config, root)
     batches = _make_batches(targets, config)
     launcher = _select_launcher(config)
+    concurrency_plan = _plan_concurrency(config, launcher, batches)
+    effective_config = config.model_copy(
+        update={"max_concurrency": concurrency_plan.effective}
+    )
     if config.dry_run:
         print(f"launcher: {launcher}")
         print(f"repo_root: {root}")
         print(f"batches: {len(batches)}")
+        print(f"max_concurrency_requested: {concurrency_plan.requested}")
+        print(f"max_concurrency_effective: {concurrency_plan.effective}")
+        if concurrency_plan.reasons:
+            print("max_concurrency_clamp_reasons:")
+            for reason in concurrency_plan.reasons:
+                print(f"  - {reason}")
         for batch in batches:
             junit = Path("<output>") / "junit" / f"batch-{batch.index:03d}.xml"
             command = _build_command(
@@ -1551,6 +2269,13 @@ def run_tests(config: SafeTestConfig) -> int:
         "launcher": launcher,
         "python_executable": str(config.python_executable.expanduser().resolve()),
         "pytest_args": config.pytest_args,
+        "concurrency": {
+            "requested": concurrency_plan.requested,
+            "effective": concurrency_plan.effective,
+            "reasons": list(concurrency_plan.reasons),
+            "peak_active": 0,
+            "completion_order": [],
+        },
         "resource_limits": {
             "cpu_set": config.cpu_set,
             "cpu_quota_percent": config.cpu_quota_percent,
@@ -1590,48 +2315,26 @@ def run_tests(config: SafeTestConfig) -> int:
 
     results: list[_BatchResult] = []
     interrupted = False
-    current_batch: _Batch | None = None
     try:
         with _interrupt_signals():
-            try:
-                for batch in batches:
-                    current_batch = batch
-                    manifest["batches"][batch.index - 1].update(
-                        {"started_at": _now(), "status": "RUNNING"}
-                    )
-                    _write_json(output / "metadata.json", manifest)
-                    result = _run_batch(config, root, launcher, batch, output, manifest)
-                    results.append(result)
-                    current_batch = None
-                    if result.status == "INTERRUPTED":
-                        interrupted = True
-                        break
-                    if result.status in _RESOURCE_FAILURE_STATUSES:
-                        break
-                    if result.status != "PASSED" and not config.continue_on_failure:
-                        break
-            except KeyboardInterrupt:
-                interrupted = True
-                _mark_interrupted_batch(
-                    manifest,
-                    current_batch,
-                    "user interrupt before batch process started",
-                )
-            with _suppress_interrupt_signals():
-                return _finalize_run(
-                    manifest=manifest,
-                    batches=batches,
-                    results=results,
-                    interrupted=interrupted,
-                    output=output,
-                )
+            results, interrupted = _run_batches(
+                effective_config,
+                root,
+                launcher,
+                batches,
+                output,
+                manifest,
+            )
+        with _suppress_interrupt_signals():
+            return _finalize_run(
+                manifest=manifest,
+                batches=batches,
+                results=results,
+                interrupted=interrupted,
+                output=output,
+            )
     except KeyboardInterrupt:
         interrupted = True
-        _mark_interrupted_batch(
-            manifest,
-            current_batch,
-            "user interrupt before batch process started",
-        )
         with _suppress_interrupt_signals():
             return _finalize_run(
                 manifest=manifest,
