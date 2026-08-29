@@ -4,13 +4,11 @@ from __future__ import annotations
 
 import inspect
 import logging
-import math
 import operator
 import weakref
 from abc import ABC, abstractmethod
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, field
-from enum import Enum
 from pathlib import Path
 from typing import (
     TYPE_CHECKING,
@@ -29,8 +27,24 @@ from typing import (
 
 import numpy as np
 
+from .execution_model import (
+    ActiveStageState,
+    ArcExecutionSnapshot,
+    ControlResult,
+    ControlSignal,
+    ExecutionRecord,
+    ExecutionTimelineProtocol,
+    PrimitiveAction,
+    ResolvedMotionGoal,
+    ResolvedObjectMotionGoal,
+    StageExecutionPlan,
+    StageExecutionStatus,
+    _EnvRuntimeState,
+    _EnvUpdateEvent,
+    _ResolvedTaskKeypoint,
+)
+from .execution_timeline import TaskFlowBuilder
 from .framework import (
-    ArcControlConfig,
     AutoAtomConfig,
     AxisAlignmentOrientationGoalConfig,
     AxisReference,
@@ -41,20 +55,31 @@ from .framework import (
     IntervalSelectionConfig,
     KeypointSide,
     Operation,
-    Orientation,
     PoseControlConfig,
     PoseReference,
     Position,
     RandomizationReference,
-    StageConfig,
-    StageControlConfig,
     TaskFileConfig,
     TaskKeypointConfig,
     TaskPhase,
     UpdateBoundary,
 )
+from .motion_goal import (
+    motion_goal_errors as _motion_goal_errors,
+)
+from .motion_goal import (
+    object_target_reference_pose as _object_target_reference_pose,
+)
+from .motion_goal import (
+    pose_config_to_local_pose as _pose_config_to_local_pose,
+)
+from .motion_goal import (
+    resolve_object_motion_goal as _resolve_object_motion_goal,
+)
+from .motion_goal import (
+    resolve_object_reference_pose as _resolve_object_reference_pose,
+)
 from .pose_goal import (
-    axis_alignment_error,
     resolve_axis_alignment_orientation,
     resolve_axis_in_world,
 )
@@ -63,7 +88,6 @@ from .utils.pose import (
     compose_pose,
     euler_to_quaternion,
     inverse_pose,
-    normalize_quaternion,
     pose_config_to_pose_state,
     position_within_tolerance,
     quaternion_angular_distance,
@@ -72,24 +96,9 @@ from .utils.pose import (
 from .utils.transformations import quaternion_slerp
 
 if TYPE_CHECKING:
-    from .execution_timeline import ExecutionTimeline
     from .stage_execution import StageExecution
 
 logger = logging.getLogger(__name__)
-
-
-class StageExecutionStatus(str, Enum):
-    PENDING = "pending"
-    RUNNING = "running"
-    SUCCEEDED = "succeeded"
-    FAILED = "failed"
-
-
-class ControlSignal(str, Enum):
-    RUNNING = "running"
-    REACHED = "reached"
-    TIMED_OUT = "timed_out"
-    FAILED = "failed"
 
 
 @dataclass
@@ -113,31 +122,6 @@ class ObjectHandler(ABC):
         env_mask: Optional[np.ndarray] = None,  # noqa: ARG002
     ) -> None:
         """Set the object's batched world pose for selected environments."""
-
-
-@dataclass
-class ControlResult:
-    signals: np.ndarray
-    details: List[Dict[str, Any]] = field(default_factory=list)
-
-    def __post_init__(self) -> None:
-        self.signals = np.asarray(self.signals, dtype=object).reshape(-1)
-        if not self.details:
-            self.details = [{} for _ in range(len(self.signals))]
-        if len(self.details) != len(self.signals):
-            raise ValueError("details length must match signals length")
-
-    @classmethod
-    def filled(
-        cls,
-        batch_size: int,
-        signal: ControlSignal,
-        details: Optional[List[Dict[str, Any]]] = None,
-    ) -> "ControlResult":
-        return cls(
-            signals=np.asarray([signal] * batch_size, dtype=object),
-            details=details or [{} for _ in range(batch_size)],
-        )
 
 
 @dataclass(frozen=True)
@@ -779,42 +763,6 @@ def _teardown_backend_after_initialization_failure(backend: SceneBackend) -> Non
 
 
 @dataclass
-class ArcExecutionSnapshot:
-    start_eef_pose: Optional[PoseState] = None
-    pivot_world_pos: Optional[Position] = None
-    control_ticks: int = 0
-
-
-@dataclass
-class PrimitiveAction:
-    kind: str
-    pose: Optional[PoseControlConfig] = None
-    eef: Optional[EefControlConfig] = None
-    resolved_pose: Optional[PoseControlConfig] = None
-    arc_snapshot: Optional[ArcExecutionSnapshot] = None
-    arc_cumulative_angle: Optional[float] = None
-    phase: Optional[TaskPhase] = None
-    waypoint: Optional[int] = None
-    completes_keypoint: bool = True
-    resolved_motion_goal: Optional["ResolvedMotionGoal"] = None
-    resolved_object_motion_goal: Optional["ResolvedObjectMotionGoal"] = None
-    reference_pose_snapshot: Optional[PoseState] = None
-
-
-@dataclass
-class ExecutionRecord:
-    env_index: int
-    stage_index: int
-    stage_name: str
-    operator: str
-    operation: str
-    target_object: str
-    blocking: bool
-    status: StageExecutionStatus
-    details: Dict[str, Any] = field(default_factory=dict)
-
-
-@dataclass
 class ExecutionContext:
     config: AutoAtomConfig
     backend: SceneBackend
@@ -949,67 +897,6 @@ class GraspBinding:
 
 
 @dataclass
-class ResolvedMotionGoal:
-    """One semantic controlled-frame goal and its concrete EEF command."""
-
-    configured_pose: PoseControlConfig
-    controlled_world_pose: PoseState
-    command_pose: PoseControlConfig
-    controlled_object_name: Optional[str] = None
-    target_axis_world: Optional[np.ndarray] = None
-
-
-@dataclass
-class ResolvedObjectMotionGoal:
-    """One held-object waypoint resolved to controlled-frame and root poses."""
-
-    configured_pose: PoseControlConfig
-    controlled_world_pose: PoseState
-    object_world_pose: PoseState
-    controlled_object_name: str
-    target_axis_world: Optional[np.ndarray] = None
-
-
-@dataclass
-class StageExecutionPlan:
-    stage_index: int
-    stage: StageConfig
-    operator_name: str
-
-    @property
-    def stage_name(self) -> str:
-        return self.stage.name or f"stage_{self.stage_index}"
-
-
-@dataclass(frozen=True)
-class _ResolvedTaskKeypoint:
-    stage_index: int
-    stage_name: str
-    phase: TaskPhase
-    waypoint: int
-
-    def matches(self, configured: TaskKeypointConfig) -> bool:
-        return (
-            self.stage_name == configured.stage
-            and self.phase == configured.phase
-            and self.waypoint == configured.waypoint
-        )
-
-
-@dataclass(frozen=True)
-class _EnvUpdateEvent:
-    """Boundaries crossed by one internal controller update."""
-
-    control_tick: bool = False
-    primitive_reached: bool = False
-    keypoint_reached: bool = False
-    stage_succeeded: bool = False
-    failed: bool = False
-    completed_position: Optional[_ResolvedTaskKeypoint] = None
-    completed_keypoint: Optional[_ResolvedTaskKeypoint] = None
-
-
-@dataclass
 class TaskUpdate:
     stage_index: Optional[np.ndarray]
     stage_name: List[str]
@@ -1042,32 +929,6 @@ class ExecutionSummary:
     timed_updates: Optional[int] = None
 
 
-@dataclass
-class ActiveStageState:
-    plan: StageExecutionPlan
-    operator: Optional[OperatorHandler]
-    target: Optional[ObjectHandler]
-    actions: List[PrimitiveAction]
-    action_index: int = 0
-    initial_object_pose: Optional[PoseState] = None
-    held_object_name: Optional[str] = None
-    completion_pose: Optional[PoseControlConfig] = None
-    completion_motion_goal: Optional[ResolvedMotionGoal] = None
-
-
-@dataclass
-class _EnvRuntimeState:
-    stage_cursor: int = 0
-    active: Optional[ActiveStageState] = None
-    done: bool = False
-    success: bool = False
-    phase: Optional[str] = None
-    phase_step: Optional[int] = None
-    latest_status: StageExecutionStatus = StageExecutionStatus.PENDING
-    latest_details: Dict[str, Any] = field(default_factory=dict)
-    reported_keypoint: Optional[_ResolvedTaskKeypoint] = None
-
-
 class ComponentRegistry:
     _env_instances: ClassVar[Dict[str, Any]] = {}
 
@@ -1095,275 +956,6 @@ class ComponentRegistry:
         cls._env_instances.clear()
 
 
-class TaskFlowBuilder:
-    """Build stage plans and primitive action lists from validated config."""
-
-    def compile(
-        self,
-        context: ExecutionContext,
-        *,
-        validate_boundaries: bool = True,
-    ) -> "ExecutionTimeline":
-        """Compile the static execution timeline for this builder."""
-
-        from .execution_timeline import ExecutionTimeline
-
-        return ExecutionTimeline.compile(
-            self,
-            context,
-            validate_boundaries=validate_boundaries,
-        )
-
-    @staticmethod
-    def _select_operator(stage: StageConfig, backend: SceneBackend) -> str:
-        if not stage.operator:
-            raise ValueError("Stage did not specify an operator.")
-        handler = backend.get_operator_handler(stage.operator)
-        if handler.name != stage.operator:
-            raise ValueError(
-                "Backend returned an operator handler with mismatched identity: "
-                f"requested {stage.operator!r}, got {handler.name!r}."
-            )
-        return stage.operator
-
-    @staticmethod
-    def build_actions(
-        stage: StageConfig,
-        last_orientation: Optional[Orientation] = None,
-    ) -> tuple[List[PrimitiveAction], Optional[Orientation]]:
-        control = TaskFlowBuilder._normalize_control(stage)
-
-        if stage.operation in {Operation.MOVE, Operation.PUSH, Operation.PRESS}:
-            actions, last_orientation = TaskFlowBuilder._build_pose_actions(
-                TaskFlowBuilder._require_moves(stage, control, "pre_move"),
-                last_orientation,
-                phase=TaskPhase.PRE_MOVE,
-            )
-        else:
-            actions, last_orientation = TaskFlowBuilder._build_pose_actions(
-                control.pre_move,
-                last_orientation,
-                phase=TaskPhase.PRE_MOVE,
-            )
-
-        if stage.operation == Operation.GRASP:
-            actions.append(
-                PrimitiveAction(
-                    kind="eef",
-                    eef=TaskFlowBuilder._grasp_eef(control),
-                    phase=TaskPhase.EEF,
-                    waypoint=0,
-                )
-            )
-        elif stage.operation == Operation.RELEASE:
-            actions.append(
-                PrimitiveAction(
-                    kind="eef",
-                    eef=TaskFlowBuilder._release_eef(control),
-                    phase=TaskPhase.EEF,
-                    waypoint=0,
-                )
-            )
-        elif stage.operation in {Operation.PICK, Operation.PULL}:
-            actions.append(
-                PrimitiveAction(
-                    kind="eef",
-                    eef=TaskFlowBuilder._grasp_eef(
-                        control,
-                        require_target_grasp=True,
-                    ),
-                    phase=TaskPhase.EEF,
-                    waypoint=0,
-                )
-            )
-            for i, pm in enumerate(control.post_move):
-                if pm.reference == PoseReference.OBJECT_WORLD or (
-                    pm.reference == PoseReference.AUTO and stage.object
-                ):
-                    raise ValueError(
-                        f"Stage '{stage.name or stage.operation.value}': post_move[{i}] uses "
-                        f"reference '{pm.reference.value}' which tracks the target object. "
-                        f"After a pick/pull, the grasped object moves with the EEF, causing "
-                        f"a runaway feedback loop. Use 'eef_world' instead."
-                    )
-        elif stage.operation == Operation.PLACE:
-            actions.append(
-                PrimitiveAction(
-                    kind="eef",
-                    eef=TaskFlowBuilder._release_eef(control),
-                    phase=TaskPhase.EEF,
-                    waypoint=0,
-                )
-            )
-        elif stage.operation == Operation.PRESS:
-            actions.append(
-                PrimitiveAction(
-                    kind="eef",
-                    eef=TaskFlowBuilder._grasp_eef(control),
-                    phase=TaskPhase.EEF,
-                    waypoint=0,
-                )
-            )
-        elif stage.operation == Operation.PUSH:
-            if control.eef is not None:
-                actions.append(
-                    PrimitiveAction(
-                        kind="eef",
-                        eef=control.eef,
-                        phase=TaskPhase.EEF,
-                        waypoint=0,
-                    )
-                )
-        elif stage.operation != Operation.MOVE:
-            raise NotImplementedError(
-                f"Unsupported operation '{stage.operation.value}'."
-            )
-
-        post_actions, last_orientation = TaskFlowBuilder._build_pose_actions(
-            control.post_move,
-            last_orientation,
-            phase=TaskPhase.POST_MOVE,
-        )
-        actions.extend(post_actions)
-        return actions, last_orientation
-
-    @staticmethod
-    def _normalize_control(stage: StageConfig) -> StageControlConfig:
-        if isinstance(stage.param, StageControlConfig):
-            return stage.param
-        if isinstance(stage.param, PoseControlConfig):
-            return StageControlConfig(pre_move=[stage.param])
-        if isinstance(stage.param, EefControlConfig):
-            return StageControlConfig(eef=stage.param)
-        raise TypeError(
-            f"Stage '{stage.name or stage.operation.value}' has unsupported param type "
-            f"'{type(stage.param).__name__}'."
-        )
-
-    @staticmethod
-    def _build_pose_actions(
-        poses: List[PoseControlConfig],
-        last_orientation: Optional[Orientation] = None,
-        *,
-        phase: TaskPhase = TaskPhase.PRE_MOVE,
-    ) -> tuple[List[PrimitiveAction], Optional[Orientation]]:
-        actions: List[PrimitiveAction] = []
-        for waypoint, pose in enumerate(poses):
-            effective_pose = pose
-            controls_eef = pose.controlled_frame.kind == ControlledFrameKind.EEF
-            if pose.orientation_goal is not None or not controls_eef:
-                # A partial or fixed controlled-frame goal is already a complete
-                # orientation contract, and a held-object waypoint compiles to
-                # an EEF orientation only after the measured binding is known.
-                # Either case invalidates the static legacy inheritance chain.
-                last_orientation = None
-            elif pose.orientation and controls_eef:
-                last_orientation = pose.orientation
-            elif pose.rotation and controls_eef:
-                last_orientation = euler_to_quaternion(
-                    tuple(float(v) for v in pose.rotation)
-                )
-            elif last_orientation is not None and controls_eef:
-                effective_pose = pose.model_copy(
-                    update={"orientation": last_orientation}
-                )
-
-            if effective_pose.arc is not None:
-                sub_poses = TaskFlowBuilder._split_arc(effective_pose)
-                if effective_pose.arc.absolute:
-                    for sub_index, sp in enumerate(sub_poses):
-                        actions.append(
-                            PrimitiveAction(
-                                kind="pose",
-                                pose=sp,
-                                phase=phase,
-                                waypoint=waypoint,
-                                completes_keypoint=sub_index == len(sub_poses) - 1,
-                            )
-                        )
-                else:
-                    arc_snapshot = ArcExecutionSnapshot()
-                    cumulative_angle = 0.0
-                    for sub_index, sp in enumerate(sub_poses):
-                        assert sp.arc is not None
-                        cumulative_angle += sp.arc.angle
-                        actions.append(
-                            PrimitiveAction(
-                                kind="pose",
-                                pose=sp,
-                                phase=phase,
-                                waypoint=waypoint,
-                                completes_keypoint=sub_index == len(sub_poses) - 1,
-                                arc_snapshot=arc_snapshot,
-                                arc_cumulative_angle=cumulative_angle,
-                            )
-                        )
-            else:
-                actions.append(
-                    PrimitiveAction(
-                        kind="pose",
-                        pose=effective_pose,
-                        phase=phase,
-                        waypoint=waypoint,
-                    )
-                )
-        return actions, last_orientation
-
-    @staticmethod
-    def _split_arc(pose: PoseControlConfig) -> List[PoseControlConfig]:
-        arc = pose.arc
-        assert arc is not None
-        if arc.absolute:
-            return [pose]
-        total = abs(arc.angle)
-        n_steps = max(1, math.ceil(total / arc.max_step))
-        step_angle = arc.angle / n_steps
-        return [
-            PoseControlConfig(
-                arc=ArcControlConfig(
-                    pivot=arc.pivot,
-                    axis=arc.axis,
-                    angle=step_angle,
-                ),
-                reference=pose.reference,
-            )
-            for _ in range(n_steps)
-        ]
-
-    @staticmethod
-    def _require_moves(
-        stage: StageConfig,
-        control: StageControlConfig,
-        field_name: str,
-    ) -> List[PoseControlConfig]:
-        poses = getattr(control, field_name)
-        if not poses:
-            raise ValueError(
-                f"Stage '{stage.name or stage.operation.value}' requires at least one pose target in '{field_name}'."
-            )
-        return poses
-
-    @staticmethod
-    def _grasp_eef(
-        control: StageControlConfig,
-        *,
-        require_target_grasp: bool = False,
-    ) -> EefControlConfig:
-        eef = control.eef or EefControlConfig(close=True)
-        if require_target_grasp:
-            if not eef.close:
-                raise ValueError(
-                    "pick and pull operations require a closing EEF command"
-                )
-            if not eef.require_grasp:
-                return eef.model_copy(update={"require_grasp": True})
-        return eef
-
-    @staticmethod
-    def _release_eef(control: StageControlConfig) -> EefControlConfig:
-        return control.eef or EefControlConfig(close=False)
-
-
 class TaskRunner:
     """Stateful batch task executor controlled by ``reset`` and repeated ``update`` calls."""
 
@@ -1376,7 +968,7 @@ class TaskRunner:
         self._has_reset: np.ndarray = np.zeros(0, dtype=bool)
         self._public_internal_updates: np.ndarray = np.zeros(0, dtype=np.int64)
         self._last_execution_details: List[Dict[str, Any]] = []
-        self._timeline: Optional["ExecutionTimeline"] = None
+        self._timeline: Optional[ExecutionTimelineProtocol] = None
         self._stage_execution: Optional["StageExecution"] = None
 
     @property
@@ -1518,7 +1110,7 @@ class TaskRunner:
     @staticmethod
     def _validate_object_only_plan(
         plan: List[StageExecutionPlan],
-        timeline: "ExecutionTimeline",
+        timeline: ExecutionTimelineProtocol,
     ) -> None:
         """Fail before setup when a task cannot be represented object-only."""
         allowed_references = {
@@ -2331,113 +1923,15 @@ class TaskRunner:
         reference_site: Optional[str],
         current_object_pose: Optional[PoseState] = None,
     ) -> ResolvedObjectMotionGoal:
-        """Resolve a held-object waypoint without constructing an EEF command."""
-        if pose.controlled_frame.kind != ControlledFrameKind.HELD_OBJECT:
-            raise ValueError(
-                "Object-only motion requires controlled_frame='held_object'."
-            )
-        if pose.arc is not None:
-            raise ValueError("Object-only motion does not support arc waypoints.")
-        handler = backend.get_object_handler(object_name)
-        if handler is None:
-            raise KeyError(f"Unknown carried object {object_name!r}.")
-        actual_world_from_object = handler.get_pose().select(env_index)
-        world_from_object = (
-            actual_world_from_object
-            if current_object_pose is None
-            else current_object_pose
-        )
-        frame_name = pose.controlled_frame.frame
-        if frame_name is None:
-            world_from_controlled = world_from_object
-            object_from_controlled = PoseState()
-        else:
-            if not backend.is_element_rigidly_attached_to_object(
-                frame_name,
-                object_name,
-                env_index,
-            ):
-                raise ValueError(
-                    f"Controlled frame {frame_name!r} is not rigidly attached "
-                    f"to carried object {object_name!r}."
-                )
-            actual_world_from_controlled = backend.get_element_pose(
-                frame_name,
-                env_index,
-            )
-            object_from_controlled = compose_pose(
-                inverse_pose(actual_world_from_object),
-                actual_world_from_controlled,
-            )
-            world_from_controlled = compose_pose(
-                world_from_object,
-                object_from_controlled,
-            )
-
-        reference_pose = TaskRunner._resolve_object_reference_pose(
+        """Resolve an object-only goal through the shared motion-goal module."""
+        return _resolve_object_motion_goal(
             env_index=env_index,
+            object_name=object_name,
             pose=pose,
             target=target,
             backend=backend,
             reference_site=reference_site,
-        )
-        local_pose = TaskRunner._pose_config_to_local_pose(pose)
-        current_local = compose_pose(
-            inverse_pose(reference_pose),
-            world_from_controlled,
-        )
-        has_fixed_orientation = bool(pose.orientation or pose.rotation) or isinstance(
-            pose.orientation_goal,
-            FixedOrientationGoalConfig,
-        )
-        if pose.relative:
-            target_local_pose = compose_pose(current_local, local_pose)
-        elif has_fixed_orientation:
-            target_local_pose = local_pose
-        else:
-            target_local_pose = PoseState(
-                position=local_pose.position[0],
-                orientation=current_local.orientation[0],
-            )
-
-        controlled_world_pose = compose_pose(reference_pose, target_local_pose)
-        target_axis_world: Optional[np.ndarray] = None
-        orientation_goal = pose.orientation_goal
-        if isinstance(orientation_goal, AxisAlignmentOrientationGoalConfig):
-            if orientation_goal.target_axis.reference == AxisReference.WORLD:
-                axis_reference_pose = None
-            elif orientation_goal.target_axis.reference == AxisReference.OBJECT:
-                axis_reference_pose = TaskRunner._object_target_reference_pose(
-                    env_index=env_index,
-                    target=target,
-                    backend=backend,
-                    reference_site=reference_site,
-                )
-            else:
-                raise ValueError("Object-only axis alignment cannot use BASE.")
-            target_axis_world = resolve_axis_in_world(
-                orientation_goal.target_axis.vector,
-                axis_reference_pose,
-            )
-            controlled_world_pose = PoseState(
-                position=controlled_world_pose.position[0],
-                orientation=resolve_axis_alignment_orientation(
-                    world_from_controlled,
-                    orientation_goal.controlled_axis,
-                    target_axis_world,
-                    orientation_goal.direction,
-                ),
-            )
-
-        return ResolvedObjectMotionGoal(
-            configured_pose=pose,
-            controlled_world_pose=controlled_world_pose,
-            object_world_pose=compose_pose(
-                controlled_world_pose,
-                inverse_pose(object_from_controlled),
-            ),
-            controlled_object_name=object_name,
-            target_axis_world=target_axis_world,
+            current_object_pose=current_object_pose,
         )
 
     @staticmethod
@@ -2449,28 +1943,13 @@ class TaskRunner:
         backend: SceneBackend,
         reference_site: Optional[str],
     ) -> PoseState:
-        reference = pose.reference
-        if reference == PoseReference.AUTO:
-            reference = (
-                PoseReference.OBJECT_WORLD
-                if target is not None
-                else PoseReference.WORLD
-            )
-        if reference == PoseReference.WORLD:
-            return PoseState()
-        object_reference = TaskRunner._object_target_reference_pose(
+        """Resolve an object-relative reference through the shared module."""
+        return _resolve_object_reference_pose(
             env_index=env_index,
+            pose=pose,
             target=target,
             backend=backend,
             reference_site=reference_site,
-        )
-        if reference == PoseReference.OBJECT:
-            return object_reference
-        if reference == PoseReference.OBJECT_WORLD:
-            return PoseState(position=object_reference.position[0])
-        raise ValueError(
-            f"Object-only motion cannot resolve operator-dependent reference "
-            f"{reference.value!r}."
         )
 
     @staticmethod
@@ -2481,11 +1960,13 @@ class TaskRunner:
         backend: SceneBackend,
         reference_site: Optional[str],
     ) -> PoseState:
-        if reference_site is not None:
-            return backend.get_element_pose(reference_site, env_index)
-        if target is None:
-            raise ValueError("Object reference requires a stage target object.")
-        return target.get_pose().select(env_index)
+        """Return the target reference pose through the shared module."""
+        return _object_target_reference_pose(
+            env_index=env_index,
+            target=target,
+            backend=backend,
+            reference_site=reference_site,
+        )
 
     @staticmethod
     def _advance_object_motion_goal(
@@ -2989,59 +2470,14 @@ class TaskRunner:
         *,
         require_held: bool,
     ) -> tuple[np.ndarray, float, PoseState]:
-        """Return position and orientation error for a resolved semantic goal."""
-        configured = goal.configured_pose
-        if configured.controlled_frame.kind == ControlledFrameKind.EEF:
-            current_pose = operator.get_end_effector_pose().select(env_index)
-        else:
-            if not goal.controlled_object_name:
-                raise RuntimeError(
-                    "Held-object motion goal has no controlled identity."
-                )
-            if require_held:
-                actual_name = backend.get_grasped_object_name(operator.name, env_index)
-                if actual_name != goal.controlled_object_name:
-                    raise RuntimeError(
-                        "Held-object identity changed while executing motion goal: "
-                        f"expected {goal.controlled_object_name!r}, got {actual_name!r}."
-                    )
-            handler = backend.get_object_handler(goal.controlled_object_name)
-            if handler is None:
-                raise RuntimeError(
-                    f"Unknown controlled object {goal.controlled_object_name!r}."
-                )
-            frame_name = configured.controlled_frame.frame
-            current_pose = (
-                handler.get_pose().select(env_index)
-                if frame_name is None
-                else backend.get_element_pose(frame_name, env_index)
-            )
-
-        position_error = np.asarray(
-            current_pose.position[0],
-            dtype=np.float64,
-        ) - np.asarray(goal.controlled_world_pose.position[0], dtype=np.float64)
-        orientation_goal = configured.orientation_goal
-        if isinstance(orientation_goal, AxisAlignmentOrientationGoalConfig):
-            if goal.target_axis_world is None:
-                raise RuntimeError(
-                    "Axis-alignment motion goal has no resolved target axis."
-                )
-            current_axis_world = resolve_axis_in_world(
-                orientation_goal.controlled_axis,
-                current_pose,
-            )
-            orientation_error = axis_alignment_error(
-                current_axis_world,
-                goal.target_axis_world,
-                orientation_goal.direction,
-            )
-        else:
-            orientation_error = quaternion_angular_distance(
-                current_pose.orientation[0],
-                goal.controlled_world_pose.orientation[0],
-            )
-        return position_error, float(orientation_error), current_pose
+        """Measure a semantic goal through the shared motion-goal module."""
+        return _motion_goal_errors(
+            env_index=env_index,
+            operator=operator,
+            backend=backend,
+            goal=goal,
+            require_held=require_held,
+        )
 
     @staticmethod
     def _resolve_arc_command(
@@ -3436,12 +2872,8 @@ class TaskRunner:
 
     @staticmethod
     def _pose_config_to_local_pose(pose: PoseControlConfig) -> PoseState:
-        if isinstance(pose.orientation_goal, FixedOrientationGoalConfig):
-            return PoseState(
-                position=pose.position or (0.0, 0.0, 0.0),
-                orientation=normalize_quaternion(pose.orientation_goal.quaternion_xyzw),
-            )
-        return pose_config_to_pose_state(pose)
+        """Convert a pose config through the shared motion-goal module."""
+        return _pose_config_to_local_pose(pose)
 
     @staticmethod
     def _set_interest_focus(self) -> None:
@@ -3626,7 +3058,7 @@ class TaskRunner:
             raise RuntimeError("TaskRunner is not initialized. Call from_yaml() first.")
         return self._context
 
-    def _require_timeline(self) -> "ExecutionTimeline":
+    def _require_timeline(self) -> ExecutionTimelineProtocol:
         if self._timeline is None:
             raise RuntimeError("TaskRunner is not initialized. Call from_yaml() first.")
         return self._timeline

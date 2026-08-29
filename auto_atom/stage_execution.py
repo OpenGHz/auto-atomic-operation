@@ -3,10 +3,24 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 import numpy as np
 
+from .execution_model import (
+    ActiveStageState,
+    ControlResult,
+    ControlSignal,
+    ExecutionRecord,
+    ExecutionTimelineProtocol,
+    PrimitiveAction,
+    ResolvedMotionGoal,
+    StageExecutionPlan,
+    StageExecutionStatus,
+    _EnvRuntimeState,
+    _EnvUpdateEvent,
+    _ResolvedTaskKeypoint,
+)
 from .framework import (
     OPERATION_CONDITIONS,
     AxisAlignmentOrientationGoalConfig,
@@ -18,22 +32,8 @@ from .framework import (
     PoseControlConfig,
     TaskPhase,
 )
+from .motion_goal import motion_goal_errors, resolve_object_motion_goal
 from .pose_goal import axis_alignment_error, resolve_axis_in_world
-from .runtime import (
-    ActiveStageState,
-    ControlResult,
-    ControlSignal,
-    ExecutionContext,
-    ExecutionRecord,
-    PrimitiveAction,
-    ResolvedMotionGoal,
-    StageExecutionPlan,
-    StageExecutionStatus,
-    TaskRunner,
-    _EnvRuntimeState,
-    _EnvUpdateEvent,
-    _ResolvedTaskKeypoint,
-)
 from .utils.pose import (
     PoseState,
     orientation_within_tolerance_nullable,
@@ -41,9 +41,6 @@ from .utils.pose import (
     position_within_tolerance_nullable,
     quaternion_angular_distance,
 )
-
-if TYPE_CHECKING:
-    from .execution_timeline import ExecutionTimeline
 
 StageActionsFactory = Callable[[StageExecutionPlan], List[PrimitiveAction]]
 StageActionRunner = Callable[
@@ -68,13 +65,13 @@ class StageExecution:
 
     def __init__(
         self,
-        context: ExecutionContext,
+        context: Any,
         plan: List[StageExecutionPlan],
         *,
         actions_factory: StageActionsFactory,
         action_runner: Optional[StageActionRunner] = None,
         completion_pose_resolver: Optional[CompletionPoseResolver] = None,
-        timeline: Optional["ExecutionTimeline"] = None,
+        timeline: Optional[ExecutionTimelineProtocol] = None,
     ) -> None:
         self.context = context
         self.plan = plan
@@ -835,16 +832,14 @@ class StageExecution:
                     )
                     continue
                 try:
-                    action.resolved_object_motion_goal = (
-                        TaskRunner._resolve_object_motion_goal(
-                            env_index=env_index,
-                            object_name=held_object_name,
-                            pose=action.pose,
-                            target=active.target,
-                            backend=self.context.backend,
-                            reference_site=active.plan.stage.site,
-                            current_object_pose=virtual_object_pose,
-                        )
+                    action.resolved_object_motion_goal = resolve_object_motion_goal(
+                        env_index=env_index,
+                        object_name=held_object_name,
+                        pose=action.pose,
+                        target=active.target,
+                        backend=self.context.backend,
+                        reference_site=active.plan.stage.site,
+                        current_object_pose=virtual_object_pose,
                     )
                     virtual_object_pose = (
                         action.resolved_object_motion_goal.object_world_pose
@@ -1628,7 +1623,7 @@ class StageExecution:
 
 def check_stage_condition(
     env_index: int,
-    context: ExecutionContext,
+    context: Any,
     plan: StageExecutionPlan,
     condition_type: OperationConditionType,
     initial_pose: Optional[PoseState] = None,
@@ -1706,17 +1701,15 @@ def check_stage_condition(
         )
         if completion_motion_goal is not None:
             try:
-                position_difference, orientation_error, _ = (
-                    TaskRunner.motion_goal_errors(
-                        env_index=env_index,
-                        operator=operator,
-                        backend=backend,
-                        goal=completion_motion_goal,
-                        require_held=(
-                            completion_motion_goal.configured_pose.controlled_frame.kind.value
-                            == "held_object"
-                        ),
-                    )
+                position_difference, orientation_error, _ = motion_goal_errors(
+                    env_index=env_index,
+                    operator=operator,
+                    backend=backend,
+                    goal=completion_motion_goal,
+                    require_held=(
+                        completion_motion_goal.configured_pose.controlled_frame.kind.value
+                        == "held_object"
+                    ),
                 )
             except (KeyError, NotImplementedError, RuntimeError, ValueError):
                 satisfied = False
@@ -1781,7 +1774,7 @@ def check_stage_condition(
 def _placed_condition_satisfied(
     *,
     env_index: int,
-    context: ExecutionContext,
+    context: Any,
     plan: StageExecutionPlan,
     is_grasping: bool,
     target_object_pose: Optional[PoseState],
@@ -1839,7 +1832,7 @@ def _placed_condition_satisfied(
     )
     if semantic_goal is not None:
         try:
-            position_difference, orientation_error, _ = TaskRunner.motion_goal_errors(
+            position_difference, orientation_error, _ = motion_goal_errors(
                 env_index=env_index,
                 operator=context.backend.get_operator_handler(plan.operator_name),
                 backend=context.backend,
@@ -1886,7 +1879,7 @@ def _is_configured(value: Any) -> bool:
 def _condition_failure_details(
     *,
     env_index: int,
-    context: ExecutionContext,
+    context: Any,
     plan: StageExecutionPlan,
     condition_type: OperationConditionType,
     constraint: OperationConstraint,
@@ -1972,7 +1965,7 @@ def _condition_failure_details(
 def _add_reached_failure_details(
     details: Dict[str, Any],
     env_index: int,
-    context: ExecutionContext,
+    context: Any,
     plan: StageExecutionPlan,
     completion_pose: Optional[PoseControlConfig],
     completion_motion_goal: Optional[ResolvedMotionGoal],
@@ -1998,14 +1991,12 @@ def _add_reached_failure_details(
             )
         )
         try:
-            position_error, orientation_error, current_pose = (
-                TaskRunner.motion_goal_errors(
-                    env_index=env_index,
-                    operator=operator,
-                    backend=context.backend,
-                    goal=completion_motion_goal,
-                    require_held=False,
-                )
+            position_error, orientation_error, current_pose = motion_goal_errors(
+                env_index=env_index,
+                operator=operator,
+                backend=context.backend,
+                goal=completion_motion_goal,
+                require_held=False,
             )
         except (KeyError, NotImplementedError, RuntimeError, ValueError) as error:
             details["motion_goal_error"] = str(error)
@@ -2043,7 +2034,7 @@ def _add_reached_failure_details(
 def _add_placed_failure_details(
     details: Dict[str, Any],
     env_index: int,
-    context: ExecutionContext,
+    context: Any,
     plan: StageExecutionPlan,
     target_object_pose: Optional[PoseState],
     target_motion_goal: Optional[ResolvedMotionGoal],
@@ -2063,14 +2054,12 @@ def _add_placed_failure_details(
             target_motion_goal.configured_pose.controlled_frame.model_dump(mode="json")
         )
         try:
-            position_error, orientation_error, current_pose = (
-                TaskRunner.motion_goal_errors(
-                    env_index=env_index,
-                    operator=context.backend.get_operator_handler(plan.operator_name),
-                    backend=context.backend,
-                    goal=target_motion_goal,
-                    require_held=False,
-                )
+            position_error, orientation_error, current_pose = motion_goal_errors(
+                env_index=env_index,
+                operator=context.backend.get_operator_handler(plan.operator_name),
+                backend=context.backend,
+                goal=target_motion_goal,
+                require_held=False,
             )
         except (KeyError, NotImplementedError, RuntimeError, ValueError) as error:
             details["motion_goal_error"] = str(error)

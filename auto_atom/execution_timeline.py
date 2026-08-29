@@ -8,29 +8,305 @@ remains in per-environment runtime action lists.
 
 from __future__ import annotations
 
+import math
 from copy import deepcopy
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Mapping, Optional
+from typing import Any, List, Mapping, Optional
 
-from .framework import (
-    ExecutionMode,
-    IntervalSelectionConfig,
-    KeypointSide,
-    TaskKeypointConfig,
-    TaskPhase,
-    UpdateBoundary,
-    _phase_waypoint_count,
-)
-from .runtime import (
+from .execution_model import (
+    ArcExecutionSnapshot,
     PrimitiveAction,
     StageExecutionPlan,
     _EnvUpdateEvent,
     _ResolvedTaskKeypoint,
 )
+from .framework import (
+    ArcControlConfig,
+    ControlledFrameKind,
+    EefControlConfig,
+    ExecutionMode,
+    IntervalSelectionConfig,
+    KeypointSide,
+    Operation,
+    Orientation,
+    PoseControlConfig,
+    PoseReference,
+    StageConfig,
+    StageControlConfig,
+    TaskKeypointConfig,
+    TaskPhase,
+    UpdateBoundary,
+    _phase_waypoint_count,
+)
+from .utils.pose import euler_to_quaternion
 
-if TYPE_CHECKING:
-    from .runtime import ExecutionContext, TaskFlowBuilder
+
+class TaskFlowBuilder:
+    """Build stage plans and primitive action lists from validated config."""
+
+    def compile(
+        self,
+        context: Any,
+        *,
+        validate_boundaries: bool = True,
+    ) -> "ExecutionTimeline":
+        """Compile the static execution timeline for this builder."""
+
+        return ExecutionTimeline.compile(
+            self,
+            context,
+            validate_boundaries=validate_boundaries,
+        )
+
+    @staticmethod
+    def _select_operator(stage: StageConfig, backend: Any) -> str:
+        if not stage.operator:
+            raise ValueError("Stage did not specify an operator.")
+        handler = backend.get_operator_handler(stage.operator)
+        if handler.name != stage.operator:
+            raise ValueError(
+                "Backend returned an operator handler with mismatched identity: "
+                f"requested {stage.operator!r}, got {handler.name!r}."
+            )
+        return stage.operator
+
+    @staticmethod
+    def build_actions(
+        stage: StageConfig,
+        last_orientation: Optional[Orientation] = None,
+    ) -> tuple[List[PrimitiveAction], Optional[Orientation]]:
+        control = TaskFlowBuilder._normalize_control(stage)
+
+        if stage.operation in {Operation.MOVE, Operation.PUSH, Operation.PRESS}:
+            actions, last_orientation = TaskFlowBuilder._build_pose_actions(
+                TaskFlowBuilder._require_moves(stage, control, "pre_move"),
+                last_orientation,
+                phase=TaskPhase.PRE_MOVE,
+            )
+        else:
+            actions, last_orientation = TaskFlowBuilder._build_pose_actions(
+                control.pre_move,
+                last_orientation,
+                phase=TaskPhase.PRE_MOVE,
+            )
+
+        if stage.operation == Operation.GRASP:
+            actions.append(
+                PrimitiveAction(
+                    kind="eef",
+                    eef=TaskFlowBuilder._grasp_eef(control),
+                    phase=TaskPhase.EEF,
+                    waypoint=0,
+                )
+            )
+        elif stage.operation == Operation.RELEASE:
+            actions.append(
+                PrimitiveAction(
+                    kind="eef",
+                    eef=TaskFlowBuilder._release_eef(control),
+                    phase=TaskPhase.EEF,
+                    waypoint=0,
+                )
+            )
+        elif stage.operation in {Operation.PICK, Operation.PULL}:
+            actions.append(
+                PrimitiveAction(
+                    kind="eef",
+                    eef=TaskFlowBuilder._grasp_eef(
+                        control,
+                        require_target_grasp=True,
+                    ),
+                    phase=TaskPhase.EEF,
+                    waypoint=0,
+                )
+            )
+            for i, pm in enumerate(control.post_move):
+                if pm.reference == PoseReference.OBJECT_WORLD or (
+                    pm.reference == PoseReference.AUTO and stage.object
+                ):
+                    raise ValueError(
+                        f"Stage '{stage.name or stage.operation.value}': post_move[{i}] uses "
+                        f"reference '{pm.reference.value}' which tracks the target object. "
+                        f"After a pick/pull, the grasped object moves with the EEF, causing "
+                        f"a runaway feedback loop. Use 'eef_world' instead."
+                    )
+        elif stage.operation == Operation.PLACE:
+            actions.append(
+                PrimitiveAction(
+                    kind="eef",
+                    eef=TaskFlowBuilder._release_eef(control),
+                    phase=TaskPhase.EEF,
+                    waypoint=0,
+                )
+            )
+        elif stage.operation == Operation.PRESS:
+            actions.append(
+                PrimitiveAction(
+                    kind="eef",
+                    eef=TaskFlowBuilder._grasp_eef(control),
+                    phase=TaskPhase.EEF,
+                    waypoint=0,
+                )
+            )
+        elif stage.operation == Operation.PUSH:
+            if control.eef is not None:
+                actions.append(
+                    PrimitiveAction(
+                        kind="eef",
+                        eef=control.eef,
+                        phase=TaskPhase.EEF,
+                        waypoint=0,
+                    )
+                )
+        elif stage.operation != Operation.MOVE:
+            raise NotImplementedError(
+                f"Unsupported operation '{stage.operation.value}'."
+            )
+
+        post_actions, last_orientation = TaskFlowBuilder._build_pose_actions(
+            control.post_move,
+            last_orientation,
+            phase=TaskPhase.POST_MOVE,
+        )
+        actions.extend(post_actions)
+        return actions, last_orientation
+
+    @staticmethod
+    def _normalize_control(stage: StageConfig) -> StageControlConfig:
+        if isinstance(stage.param, StageControlConfig):
+            return stage.param
+        if isinstance(stage.param, PoseControlConfig):
+            return StageControlConfig(pre_move=[stage.param])
+        if isinstance(stage.param, EefControlConfig):
+            return StageControlConfig(eef=stage.param)
+        raise TypeError(
+            f"Stage '{stage.name or stage.operation.value}' has unsupported param type "
+            f"'{type(stage.param).__name__}'."
+        )
+
+    @staticmethod
+    def _build_pose_actions(
+        poses: List[PoseControlConfig],
+        last_orientation: Optional[Orientation] = None,
+        *,
+        phase: TaskPhase = TaskPhase.PRE_MOVE,
+    ) -> tuple[List[PrimitiveAction], Optional[Orientation]]:
+        actions: List[PrimitiveAction] = []
+        for waypoint, pose in enumerate(poses):
+            effective_pose = pose
+            controls_eef = pose.controlled_frame.kind == ControlledFrameKind.EEF
+            if pose.orientation_goal is not None or not controls_eef:
+                # A partial or fixed controlled-frame goal is already a complete
+                # orientation contract, and a held-object waypoint compiles to
+                # an EEF orientation only after the measured binding is known.
+                # Either case invalidates the static legacy inheritance chain.
+                last_orientation = None
+            elif pose.orientation and controls_eef:
+                last_orientation = pose.orientation
+            elif pose.rotation and controls_eef:
+                last_orientation = euler_to_quaternion(
+                    tuple(float(v) for v in pose.rotation)
+                )
+            elif last_orientation is not None and controls_eef:
+                effective_pose = pose.model_copy(
+                    update={"orientation": last_orientation}
+                )
+
+            if effective_pose.arc is not None:
+                sub_poses = TaskFlowBuilder._split_arc(effective_pose)
+                if effective_pose.arc.absolute:
+                    for sub_index, sp in enumerate(sub_poses):
+                        actions.append(
+                            PrimitiveAction(
+                                kind="pose",
+                                pose=sp,
+                                phase=phase,
+                                waypoint=waypoint,
+                                completes_keypoint=sub_index == len(sub_poses) - 1,
+                            )
+                        )
+                else:
+                    arc_snapshot = ArcExecutionSnapshot()
+                    cumulative_angle = 0.0
+                    for sub_index, sp in enumerate(sub_poses):
+                        assert sp.arc is not None
+                        cumulative_angle += sp.arc.angle
+                        actions.append(
+                            PrimitiveAction(
+                                kind="pose",
+                                pose=sp,
+                                phase=phase,
+                                waypoint=waypoint,
+                                completes_keypoint=sub_index == len(sub_poses) - 1,
+                                arc_snapshot=arc_snapshot,
+                                arc_cumulative_angle=cumulative_angle,
+                            )
+                        )
+            else:
+                actions.append(
+                    PrimitiveAction(
+                        kind="pose",
+                        pose=effective_pose,
+                        phase=phase,
+                        waypoint=waypoint,
+                    )
+                )
+        return actions, last_orientation
+
+    @staticmethod
+    def _split_arc(pose: PoseControlConfig) -> List[PoseControlConfig]:
+        arc = pose.arc
+        assert arc is not None
+        if arc.absolute:
+            return [pose]
+        total = abs(arc.angle)
+        n_steps = max(1, math.ceil(total / arc.max_step))
+        step_angle = arc.angle / n_steps
+        return [
+            PoseControlConfig(
+                arc=ArcControlConfig(
+                    pivot=arc.pivot,
+                    axis=arc.axis,
+                    angle=step_angle,
+                ),
+                reference=pose.reference,
+            )
+            for _ in range(n_steps)
+        ]
+
+    @staticmethod
+    def _require_moves(
+        stage: StageConfig,
+        control: StageControlConfig,
+        field_name: str,
+    ) -> List[PoseControlConfig]:
+        poses = getattr(control, field_name)
+        if not poses:
+            raise ValueError(
+                f"Stage '{stage.name or stage.operation.value}' requires at least one pose target in '{field_name}'."
+            )
+        return poses
+
+    @staticmethod
+    def _grasp_eef(
+        control: StageControlConfig,
+        *,
+        require_target_grasp: bool = False,
+    ) -> EefControlConfig:
+        eef = control.eef or EefControlConfig(close=True)
+        if require_target_grasp:
+            if not eef.close:
+                raise ValueError(
+                    "pick and pull operations require a closing EEF command"
+                )
+            if not eef.require_grasp:
+                return eef.model_copy(update={"require_grasp": True})
+        return eef
+
+    @staticmethod
+    def _release_eef(control: StageControlConfig) -> EefControlConfig:
+        return control.eef or EefControlConfig(close=False)
 
 
 @dataclass(frozen=True)
@@ -79,7 +355,7 @@ class ExecutionTimeline:
     def compile(
         cls,
         builder: "TaskFlowBuilder",
-        context: "ExecutionContext",
+        context: Any,
         *,
         validate_boundaries: bool = True,
     ) -> "ExecutionTimeline":
