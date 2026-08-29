@@ -4,6 +4,81 @@ The package provides four console entry points. `aao-demo` and `aao-eval` are
 powered by [Hydra](https://hydra.cc), `aao-unidoor-sweep` orchestrates bounded
 Hydra multiruns, and `aao-info` introspects the task configs.
 
+## `scripts/run_tests_safe.py`
+
+Use the repository test runner when running more than a small focused test. It
+executes test files serially in isolated, resource-bounded subprocesses, so a
+simulator crash, thread leak, or memory-heavy test cannot take down the whole
+pytest invocation. The default launcher is a user `systemd` scope with a CPU
+quota, one available CPU, cgroup memory/task limits, no swap, and a per-batch
+wall-clock limit. If a user systemd manager is unavailable, `auto` uses the
+explicitly weaker `prlimit` fallback (virtual-address-space limiting only).
+
+The script never enables `pytest-xdist` or accepts `-n`/`--dist`; use batches for
+serial isolation instead. It neutralizes repository-level pytest `addopts` so a
+hidden parallel setting cannot bypass the runner; pass any desired safe options
+explicitly through `--pytest-args` or `PYTEST_ADDOPTS`. The latter are copied into
+the recorded command, while parallel, `addopts`-override, and caller-owned JUnit
+options are rejected. All repository-level `addopts` entries are intentionally
+ignored; copy any non-default options you need into `--pytest-args`.
+
+Run it from the repository root with the project interpreter:
+
+```bash
+PYTHON=/home/ghz/.mini_conda3/envs/airbot_play_data/bin/python
+
+# All pytest-discoverable files, one bounded batch per file (the default)
+$PYTHON scripts/run_tests_safe.py
+
+# A focused serial run; quote a space-separated list or use commas
+$PYTHON scripts/run_tests_safe.py \
+  --test-targets='tests/test_stage_execution.py tests/test_demo_eval_parity.py' \
+  --batch-size=1
+
+# Inspect resolved targets and commands without starting pytest
+$PYTHON scripts/run_tests_safe.py \
+  --test-targets='tests/test_stage_execution.py tests/test_demo_eval_parity.py' \
+  --dry-run
+
+# Stop after the first failed/timeout batch and choose explicit fallback mode
+$PYTHON scripts/run_tests_safe.py \
+  --no-continue-on-failure --launcher=prlimit
+```
+
+`--batch-mode=all` is available when a test suite relies on pytest state shared
+across files, but it deliberately gives up per-file failure isolation; the
+single scope still has the configured resource limits.
+
+Each run creates `outputs/test-runs/<timestamp>/` (or the path supplied by
+`--output-dir`):
+
+```text
+metadata.json              # limits, Git revision/dirty flag, exact argv, and batch states
+logs/batch-*.log            # pytest output and, for systemd, diagnostic journal tail
+junit/batch-*.xml           # one JUnit artifact per batch
+```
+
+`--max-file-size-mb` defaults to `256` and is an `RLIMIT_FSIZE` per-regular-file
+cap inherited by the batch and its descendants. It is a guard against runaway
+artifacts, not a total output-directory quota; raise it when a test intentionally
+writes a larger video, model, or coverage artifact.
+
+Batch states are `PASSED`, `TEST_FAILURE`, `TIMEOUT`, `OOM`,
+`RESOURCE_KILL`, `FILE_SIZE_LIMIT`, `CLEANUP_FAILURE`, `LAUNCH_FAILURE`, or
+`INTERRUPTED`. `RESOURCE_KILL` means the process was SIGKILLed without reliable
+evidence distinguishing an OOM from timeout escalation. `FILE_SIZE_LIMIT` means
+Linux `RLIMIT_FSIZE` (`--max-file-size-mb`) was reached: it caps the size of
+each regular file written by the batch process or its descendants (including
+JUnit, coverage, videos, and caches), not aggregate log output or disk usage,
+and may terminate the writer with `SIGXFSZ`. The recorded command and target
+list in `metadata.json` make an individual batch reproducible. Exit code `0`
+means every batch passed; `1` means a test/launch/cleanup/resource/file-size
+failure; `2` means timeout or confirmed OOM; and `130` means the run was
+interrupted. Resource and cleanup failures stop the run before a later batch can
+start; ordinary test/launch failures follow `--continue-on-failure`. CPU and RAM
+limits do not cap GPU VRAM, so use
+`--cuda-visible-devices` and avoid concurrent GPU-heavy runs when needed.
+
 ## aao-demo
 
 Run a task-runner demo.
