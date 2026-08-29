@@ -889,6 +889,12 @@ def test_demo_final_approach_targets_the_explicit_grasp_site() -> None:
         pick_stage.param.pre_move[-1].tolerance.position
         < config.task_operators.arm.control.tolerance.position
     )
+    base_pose = config.task_operators.arm.initial_state.base_pose
+    assert base_pose.reference == "door__handle_grasp_center"
+    assert list(base_pose.position) == pytest.approx([0.2474, -0.4666, -0.1])
+    assert list(base_pose.orientation) == pytest.approx(
+        [0.0, 0.0, 0.70710678, 0.70710678]
+    )
     assert "eef" not in pick_stage.param
     assert pull_stage.name == "pull_handle"
     assert pull_stage.operation == "pull"

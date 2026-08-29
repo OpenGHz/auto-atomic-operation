@@ -108,6 +108,15 @@ task:
 
 task_operators:
   arm:
+    initial_state:
+      base_pose:
+        # Keep the robot base at a stable offset from the selected handle.
+        # The offset reproduces the existing D001/H001 world placement while
+        # allowing every catalog handle to bring the arm to the same relative
+        # interaction pose.
+        reference: door__handle_grasp_center
+        position: [0.2474, -0.4666, -0.1]
+        orientation: [0.0, 0.0, 0.70710678, 0.70710678]
     control:
       tolerance:
         # The UMI v3 closing span is only 0.0165.  The inherited 0.012
