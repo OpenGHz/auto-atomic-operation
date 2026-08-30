@@ -85,6 +85,15 @@ class UniDoorSweepConfig(BaseModel, frozen=True):
     traversal_order: Literal["door-first", "handle-first"] = "door-first"
     """Outer loop of the door/handle Cartesian product."""
 
+    simple_test: bool = False
+    """Test one door across handles plus one handle across doors."""
+
+    simple_test_door: str | None = None
+    """Door anchor for simple-test mode; defaults to the first selected door."""
+
+    simple_test_handle: str | None = None
+    """Handle anchor for simple-test mode; defaults to the first selected handle."""
+
     output_dir: Path | None = None
     """Exact result directory; otherwise a timestamped directory is created."""
 
@@ -149,6 +158,12 @@ class UniDoorSweepConfig(BaseModel, frozen=True):
             self.report is not None or self.resume is not None or self.resume_latest
         ) and self.dry_run:
             raise ValueError("--dry-run is only valid when planning a new sweep.")
+        if not self.simple_test and (
+            self.simple_test_door is not None or self.simple_test_handle is not None
+        ):
+            raise ValueError(
+                "--simple-test-door and --simple-test-handle require --simple-test."
+            )
         return self
 
 
@@ -365,6 +380,62 @@ def _hydra_command(
     return command
 
 
+def _combination_groups(
+    config: UniDoorSweepConfig,
+    doors: Sequence[str],
+    handles: Sequence[str],
+) -> tuple[list[tuple[str, str, list[tuple[str, str]]]], dict[str, Any]]:
+    """Build ordered groups whose Cartesian product exactly matches the plan."""
+    if config.simple_test:
+        anchor_door = config.simple_test_door or doors[0]
+        anchor_handle = config.simple_test_handle or handles[0]
+        if anchor_door not in doors:
+            raise ValueError(
+                f"Simple-test door {anchor_door!r} is not in the selected doors."
+            )
+        if anchor_handle not in handles:
+            raise ValueError(
+                f"Simple-test handle {anchor_handle!r} is not in the selected handles."
+            )
+        groups = [
+            (
+                "door",
+                anchor_door,
+                [(anchor_door, handle_id) for handle_id in handles],
+            ),
+            (
+                "handle",
+                anchor_handle,
+                [
+                    (door_id, anchor_handle)
+                    for door_id in doors
+                    if door_id != anchor_door
+                ],
+            ),
+        ]
+        return [group for group in groups if group[2]], {
+            "mode": "simple-test",
+            "door_id": anchor_door,
+            "handle_id": anchor_handle,
+        }
+
+    outer_role = "door" if config.traversal_order == "door-first" else "handle"
+    outer_ids = doors if outer_role == "door" else handles
+    groups = []
+    for outer_id in outer_ids:
+        combinations = (
+            [(outer_id, handle_id) for handle_id in handles]
+            if outer_role == "door"
+            else [(door_id, outer_id) for door_id in doors]
+        )
+        groups.append((outer_role, outer_id, combinations))
+    return groups, {
+        "mode": "cartesian",
+        "door_id": None,
+        "handle_id": None,
+    }
+
+
 def _build_manifest(
     config: UniDoorSweepConfig,
     catalog: _Catalog,
@@ -391,19 +462,8 @@ def _build_manifest(
     batches: list[dict[str, Any]] = []
     job_num = 0
     batch_num = 0
-    if config.traversal_order == "door-first":
-        outer_role = "door"
-        outer_groups = [
-            (door_id, [(door_id, handle_id) for handle_id in handles])
-            for door_id in doors
-        ]
-    else:
-        outer_role = "handle"
-        outer_groups = [
-            (handle_id, [(door_id, handle_id) for door_id in doors])
-            for handle_id in handles
-        ]
-    for outer_id, combinations in outer_groups:
+    combination_groups, selection_mode = _combination_groups(config, doors, handles)
+    for outer_role, outer_id, combinations in combination_groups:
         for offset in range(0, len(combinations), effective_batch_size):
             batch_combinations = combinations[offset : offset + effective_batch_size]
             batch_doors = list(dict.fromkeys(door for door, _ in batch_combinations))
@@ -487,6 +547,9 @@ def _build_manifest(
             "launcher_batch_size": config.launcher_batch_size,
             "max_concurrency": config.max_concurrency,
             "traversal_order": config.traversal_order,
+            "simple_test": config.simple_test,
+            "simple_test_door": selection_mode["door_id"],
+            "simple_test_handle": selection_mode["handle_id"],
             "stop_on_failure": config.stop_on_failure,
             "headless": config.headless,
         },
@@ -496,6 +559,7 @@ def _build_manifest(
             "max_concurrency": config.max_concurrency,
             "launcher_policy": "joblib_when_parallel",
             "traversal_order": config.traversal_order,
+            "selection_mode": selection_mode["mode"],
             "stop_on_failure": config.stop_on_failure,
         },
         "progress": {
@@ -524,6 +588,9 @@ def _build_manifest(
             "traversal_order": config.traversal_order,
             "excluded_doors": list(config.exclude_doors),
             "excluded_handles": list(config.exclude_handles),
+            "mode": selection_mode["mode"],
+            "simple_test_door": selection_mode["door_id"],
+            "simple_test_handle": selection_mode["handle_id"],
             "combination_count": len(jobs),
         },
         "git": git_state,
@@ -1151,6 +1218,10 @@ def _append_resume_batches(
         )
     )
     config.setdefault("traversal_order", traversal_order)
+    selection = manifest.get("selection", {})
+    selection_mode = str(selection.get("mode", "cartesian"))
+    simple_test_door = selection.get("simple_test_door")
+    simple_test_handle = selection.get("simple_test_handle")
     batch_size = (
         min(requested_batch_size, max_concurrency)
         if stop_on_failure
@@ -1163,19 +1234,28 @@ def _append_resume_batches(
             "max_concurrency": max_concurrency,
             "launcher_policy": "joblib_when_parallel",
             "traversal_order": traversal_order,
+            "selection_mode": selection_mode,
             "stop_on_failure": stop_on_failure,
         }
     )
 
-    outer_role = "door" if traversal_order == "door-first" else "handle"
     jobs_by_outer_id: dict[str, list[dict[str, Any]]] = {}
     for job in unresolved_jobs:
-        outer_id = str(job[f"{outer_role}_id"])
-        jobs_by_outer_id.setdefault(outer_id, []).append(job)
+        if selection_mode == "simple-test":
+            outer_role = "door" if job["door_id"] == simple_test_door else "handle"
+            outer_id = str(
+                simple_test_door if outer_role == "door" else simple_test_handle
+            )
+        else:
+            outer_role = "door" if traversal_order == "door-first" else "handle"
+            outer_id = str(job[f"{outer_role}_id"])
+        group_key = f"{outer_role}:{outer_id}"
+        jobs_by_outer_id.setdefault(group_key, []).append(job)
 
     new_batches: list[dict[str, Any]] = []
     new_batch_numbers: set[int] = set()
-    for outer_id, outer_jobs in jobs_by_outer_id.items():
+    for group_key, outer_jobs in jobs_by_outer_id.items():
+        outer_role, outer_id = group_key.split(":", maxsplit=1)
         for offset in range(0, len(outer_jobs), batch_size):
             batch_jobs = outer_jobs[offset : offset + batch_size]
             door_ids = list(dict.fromkeys(str(job["door_id"]) for job in batch_jobs))

@@ -239,6 +239,15 @@ aao-unidoor-sweep \
 
 # Hold each handle fixed and traverse all selected doors before the next handle
 aao-unidoor-sweep --traversal-order handle-first
+
+# Quick cross-section: first door x all handles, then first handle x other doors
+aao-unidoor-sweep --simple-test
+
+# Choose the two anchors explicitly
+aao-unidoor-sweep \
+  --simple-test \
+  --simple-test-door D003 \
+  --simple-test-handle H007
 ```
 
 `--exclude-doors` and `--exclude-handles` are applied after the positive
@@ -249,6 +258,13 @@ and exclusions that leave no door or no handle, are rejected before launch.
 `--traversal-order door-first` is the default: each door is paired with all
 handles before moving to the next door. Use `handle-first` to invert the loops.
 The selected order is stored in the manifest and retained by resume runs.
+
+`--simple-test` avoids the full Cartesian product. It runs one selected door
+against every selected handle, then one selected handle against every remaining
+selected door, for `door_count + handle_count - 1` combinations. The anchors
+default to the first selected door and handle; `--simple-test-door` and
+`--simple-test-handle` override them. Positive selections and exclusions are
+applied first, so they can narrow what “every” means.
 
 By default, Hydra's Joblib launcher runs up to four combinations concurrently.
 Change the bound with `--max-concurrency`; set it to `1` to use Hydra's basic

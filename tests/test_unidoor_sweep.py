@@ -147,6 +147,7 @@ def test_parse_config_accepts_kebab_case_and_comma_lists() -> None:
     assert config.launcher_batch_size == 3
     assert config.max_concurrency == 2
     assert config.traversal_order == "handle-first"
+    assert config.simple_test is False
     assert config.stop_on_failure is True
     assert config.verbose is False
     assert config.dry_run is True
@@ -163,6 +164,8 @@ def test_parse_config_accepts_kebab_case_and_comma_lists() -> None:
         parse_config(["--resume-latest", "--output-dir", "run"])
     with pytest.raises(ValueError, match="only valid when planning"):
         parse_config(["--resume-latest", "--dry-run"])
+    with pytest.raises(ValueError, match="require --simple-test"):
+        parse_config(["--simple-test-door", "D001"])
 
 
 def test_load_catalog_follows_asset_package_component_index(tmp_path: Path) -> None:
@@ -245,6 +248,9 @@ def test_manifest_applies_exclusions_after_positive_selection(tmp_path: Path) ->
         "excluded_doors": ["D001"],
         "excluded_handles": ["H001"],
         "traversal_order": "door-first",
+        "mode": "cartesian",
+        "simple_test_door": None,
+        "simple_test_handle": None,
         "combination_count": 2,
     }
     assert [(job["door_id"], job["handle_id"]) for job in manifest["jobs"]] == [
@@ -355,6 +361,89 @@ def test_manifest_can_traverse_handles_before_doors(tmp_path: Path) -> None:
     assert "handle_id=H003" in first_batch["argv"]
 
 
+def test_simple_test_uses_first_selected_anchors_by_default(tmp_path: Path) -> None:
+    package_path = _asset_package(
+        tmp_path,
+        doors=("D002", "D001", "D003"),
+        handles=("H003", "H001", "H002"),
+    )
+    config = UniDoorSweepConfig(
+        asset_package=package_path,
+        simple_test=True,
+        launcher_batch_size=8,
+        max_concurrency=8,
+    )
+
+    manifest = _build_manifest(config, load_catalog(config), tmp_path / "sweep")
+
+    assert [(job["door_id"], job["handle_id"]) for job in manifest["jobs"]] == [
+        ("D002", "H003"),
+        ("D002", "H001"),
+        ("D002", "H002"),
+        ("D001", "H003"),
+        ("D003", "H003"),
+    ]
+    assert manifest["selection"]["mode"] == "simple-test"
+    assert manifest["selection"]["simple_test_door"] == "D002"
+    assert manifest["selection"]["simple_test_handle"] == "H003"
+    assert manifest["selection"]["combination_count"] == 5
+    assert [batch["outer_role"] for batch in manifest["batches"]] == [
+        "door",
+        "handle",
+    ]
+
+
+def test_simple_test_accepts_explicit_anchors_after_filtering(tmp_path: Path) -> None:
+    package_path = _asset_package(
+        tmp_path,
+        doors=("D001", "D002", "D003"),
+        handles=("H001", "H002", "H003"),
+    )
+    config = UniDoorSweepConfig(
+        asset_package=package_path,
+        simple_test=True,
+        simple_test_door="D003",
+        simple_test_handle="H002",
+        exclude_doors=["D001"],
+        exclude_handles=["H003"],
+    )
+
+    manifest = _build_manifest(config, load_catalog(config), tmp_path / "sweep")
+
+    assert [(job["door_id"], job["handle_id"]) for job in manifest["jobs"]] == [
+        ("D003", "H001"),
+        ("D003", "H002"),
+        ("D002", "H002"),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("door_id", "handle_id", "error"),
+    [
+        ("D999", None, "Simple-test door"),
+        (None, "H999", "Simple-test handle"),
+        ("D001", None, "Simple-test door"),
+    ],
+)
+def test_simple_test_rejects_unselected_anchors(
+    tmp_path: Path,
+    door_id: str | None,
+    handle_id: str | None,
+    error: str,
+) -> None:
+    package_path = _asset_package(tmp_path)
+    config = UniDoorSweepConfig(
+        asset_package=package_path,
+        simple_test=True,
+        simple_test_door=door_id,
+        simple_test_handle=handle_id,
+        exclude_doors=["D001"] if door_id == "D001" else [],
+    )
+
+    with pytest.raises(ValueError, match=error):
+        _build_manifest(config, load_catalog(config), tmp_path / "sweep")
+
+
 def test_manifest_uses_bounded_parallel_waves_when_stopping_on_failure(
     tmp_path: Path,
 ) -> None:
@@ -378,6 +467,7 @@ def test_manifest_uses_bounded_parallel_waves_when_stopping_on_failure(
         "max_concurrency": 2,
         "launcher_policy": "joblib_when_parallel",
         "traversal_order": "door-first",
+        "selection_mode": "cartesian",
         "stop_on_failure": True,
     }
     assert [batch["handle_ids"] for batch in manifest["batches"]] == [
@@ -896,6 +986,40 @@ def test_handle_first_resume_preserves_outer_loop(tmp_path: Path) -> None:
     assert "handle_id=H001" in new_batches[0]["argv"]
     assert new_batches[1]["door_ids"] == ["D001", "D002"]
     assert new_batches[1]["handle_ids"] == ["H002"]
+
+
+def test_simple_test_resume_preserves_cross_section(tmp_path: Path) -> None:
+    package_path = _asset_package(
+        tmp_path,
+        doors=("D001", "D002", "D003"),
+        handles=("H001", "H002", "H003"),
+    )
+    sweep_dir = tmp_path / "sweep"
+    config = UniDoorSweepConfig(
+        asset_package=package_path,
+        simple_test=True,
+        launcher_batch_size=8,
+        max_concurrency=8,
+    )
+    manifest = _build_manifest(config, load_catalog(config), sweep_dir)
+    sweep_dir.mkdir()
+    completed_job = manifest["jobs"][0]
+    completed_dir = sweep_dir / completed_job["relative_dir"]
+    completed_dir.mkdir(parents=True)
+    _write_json(completed_dir / "summary.json", _summary(status="OK", success=True))
+    manifest["resume_count"] = 1
+
+    unresolved = _unresolved_jobs(manifest, sweep_dir)
+    batch_numbers = _append_resume_batches(manifest, sweep_dir, unresolved)
+    new_batches = [
+        batch for batch in manifest["batches"] if batch["batch_num"] in batch_numbers
+    ]
+
+    assert [batch["outer_role"] for batch in new_batches] == ["door", "handle"]
+    assert [batch["outer_id"] for batch in new_batches] == ["D001", "H001"]
+    assert new_batches[0]["handle_ids"] == ["H002", "H003"]
+    assert new_batches[1]["door_ids"] == ["D002", "D003"]
+    assert new_batches[1]["handle_ids"] == ["H001"]
 
 
 def test_report_can_discover_raw_hydra_jobs_without_manifest(tmp_path: Path) -> None:
