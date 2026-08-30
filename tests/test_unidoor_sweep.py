@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -15,6 +16,7 @@ from auto_atom.runner.unidoor_sweep import (
     UniDoorSweepConfig,
     _append_resume_batches,
     _build_manifest,
+    _latest_sweep_dir,
     _report_exit_code,
     _run_batches,
     _summary_result,
@@ -143,9 +145,16 @@ def test_parse_config_accepts_kebab_case_and_comma_lists() -> None:
     assert config.dry_run is True
 
     assert parse_config(["--no-stop-on-failure"]).stop_on_failure is False
+    assert parse_config(["--resume-latest"]).resume_latest is True
 
     with pytest.raises(ValueError, match="greater than 0"):
         parse_config(["--rounds", "0"])
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        parse_config(["--resume", "run", "--resume-latest"])
+    with pytest.raises(ValueError, match="cannot be combined with --output-dir"):
+        parse_config(["--resume-latest", "--output-dir", "run"])
+    with pytest.raises(ValueError, match="only valid when planning"):
+        parse_config(["--resume-latest", "--dry-run"])
 
 
 def test_load_catalog_follows_asset_package_component_index(tmp_path: Path) -> None:
@@ -768,3 +777,31 @@ def test_dry_run_does_not_create_output_or_launch(
 
     assert run_unidoor_sweep(config) == 0
     assert not output_dir.exists()
+
+
+def test_latest_sweep_dir_uses_manifest_mtime_and_skips_invalid_runs(
+    tmp_path: Path,
+) -> None:
+    older = tmp_path / "20260830-120000"
+    newer = tmp_path / "20260831-120000"
+    invalid = tmp_path / "20260901-120000"
+    for sweep_dir in (older, newer, invalid):
+        sweep_dir.mkdir()
+    _write_json(older / MANIFEST_NAME, {"schema_version": 1, "jobs": []})
+    _write_json(newer / MANIFEST_NAME, {"schema_version": 1, "jobs": []})
+    (invalid / MANIFEST_NAME).write_text("not json", encoding="utf-8")
+    older_time = 1_700_000_000_000_000_000
+    newer_time = older_time + 1_000_000_000
+    (older / MANIFEST_NAME).touch()
+    (newer / MANIFEST_NAME).touch()
+    os.utime(older / MANIFEST_NAME, ns=(older_time, older_time))
+    os.utime(newer / MANIFEST_NAME, ns=(newer_time, newer_time))
+
+    assert _latest_sweep_dir(tmp_path) == newer
+
+
+def test_latest_sweep_dir_rejects_missing_or_empty_roots(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="does not exist"):
+        _latest_sweep_dir(tmp_path / "missing")
+    with pytest.raises(ValueError, match="No valid UniDoor sweeps"):
+        _latest_sweep_dir(tmp_path)

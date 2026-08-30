@@ -91,6 +91,9 @@ class UniDoorSweepConfig(BaseModel, frozen=True):
     resume: Path | None = None
     """Resume unresolved batches from an existing sweep directory."""
 
+    resume_latest: bool = False
+    """Resume the most recently updated valid sweep in the default output root."""
+
     rounds: PositiveInt = 1
     """Demo rounds executed for every door and handle combination."""
 
@@ -114,14 +117,28 @@ class UniDoorSweepConfig(BaseModel, frozen=True):
 
     @model_validator(mode="after")
     def validate_modes(self) -> Self:
-        selected_modes = sum(value is not None for value in (self.report, self.resume))
+        selected_modes = sum(
+            (
+                self.report is not None,
+                self.resume is not None,
+                self.resume_latest,
+            )
+        )
         if selected_modes > 1:
-            raise ValueError("--report and --resume are mutually exclusive.")
+            raise ValueError(
+                "--report, --resume, and --resume-latest are mutually exclusive."
+            )
         if self.report is not None and self.output_dir is not None:
             raise ValueError("--report cannot be combined with --output-dir.")
-        if self.resume is not None and self.output_dir is not None:
-            raise ValueError("--resume cannot be combined with --output-dir.")
-        if (self.report is not None or self.resume is not None) and self.dry_run:
+        if (
+            self.resume is not None or self.resume_latest
+        ) and self.output_dir is not None:
+            raise ValueError(
+                "--resume and --resume-latest cannot be combined with --output-dir."
+            )
+        if (
+            self.report is not None or self.resume is not None or self.resume_latest
+        ) and self.dry_run:
             raise ValueError("--dry-run is only valid when planning a new sweep.")
         return self
 
@@ -516,6 +533,26 @@ def _load_manifest(sweep_dir: Path) -> dict[str, Any]:
     ):
         raise ValueError(f"Unsupported or incomplete sweep manifest: {path}")
     return manifest
+
+
+def _latest_sweep_dir(output_root: Path) -> Path:
+    """Return the valid sweep whose manifest was updated most recently."""
+    output_root = output_root.expanduser().resolve()
+    if not output_root.is_dir():
+        raise ValueError(f"UniDoor sweep output root does not exist: {output_root}")
+
+    candidates: list[tuple[int, str, Path]] = []
+    for manifest_path in output_root.glob(f"*/{MANIFEST_NAME}"):
+        sweep_dir = manifest_path.parent
+        try:
+            _load_manifest(sweep_dir)
+            modified_ns = manifest_path.stat().st_mtime_ns
+        except (OSError, ValueError):
+            continue
+        candidates.append((modified_ns, sweep_dir.name, sweep_dir))
+    if not candidates:
+        raise ValueError(f"No valid UniDoor sweeps found under {output_root}.")
+    return max(candidates)[2]
 
 
 def _stream_command(
@@ -1232,8 +1269,14 @@ def run_unidoor_sweep(config: UniDoorSweepConfig) -> int:
         _print_report(report)
         return _report_exit_code(report)
 
-    if config.resume is not None:
-        sweep_dir = _resolve_from(config.resume, Path.cwd())
+    if config.resume is not None or config.resume_latest:
+        sweep_dir = (
+            _latest_sweep_dir((Path.cwd() / DEFAULT_OUTPUT_ROOT).resolve())
+            if config.resume_latest
+            else _resolve_from(config.resume, Path.cwd())
+        )
+        if config.resume_latest:
+            print(f"Latest sweep: {sweep_dir}")
         manifest = _load_manifest(sweep_dir)
         unresolved = _unresolved_jobs(manifest, sweep_dir)
         if not unresolved:

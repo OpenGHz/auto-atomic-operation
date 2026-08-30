@@ -292,11 +292,14 @@ and each retry is preserved below a versioned `resume/<attempt>/` directory:
 ```bash
 aao-unidoor-sweep --report outputs/unidoor-sweeps/20260827-180000
 aao-unidoor-sweep --resume outputs/unidoor-sweeps/20260827-180000
+aao-unidoor-sweep --resume-latest
 ```
 
 Use `--report` when only rebuilding `report.json` and `failures.csv`. A resume
 also retries task-level failures, missing/invalid summaries, launcher failures,
-and combinations that never started.
+and combinations that never started. `--resume-latest` selects the valid sweep
+under `outputs/unidoor-sweeps/` whose manifest was updated most recently;
+explicit `--resume` remains available when reproducing an older run.
 
 Exit code `0` means every combination succeeded. A strict stop returns `1` for
 a task-level failure or `2` for an infrastructure/launcher failure; later
