@@ -236,12 +236,19 @@ aao-unidoor-sweep \
 aao-unidoor-sweep \
   --exclude-doors D003,D007 \
   --exclude-handles H002,HL016
+
+# Hold each handle fixed and traverse all selected doors before the next handle
+aao-unidoor-sweep --traversal-order handle-first
 ```
 
 `--exclude-doors` and `--exclude-handles` are applied after the positive
 `--doors`/`--handles` selection. Therefore they can either subtract from the
 whole catalog or from an explicit subset. Unknown or duplicate excluded IDs,
 and exclusions that leave no door or no handle, are rejected before launch.
+
+`--traversal-order door-first` is the default: each door is paired with all
+handles before moving to the next door. Use `handle-first` to invert the loops.
+The selected order is stored in the manifest and retained by resume runs.
 
 By default, Hydra's Joblib launcher runs up to four combinations concurrently.
 Change the bound with `--max-concurrency`; set it to `1` to use Hydra's basic

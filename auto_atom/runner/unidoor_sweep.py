@@ -15,7 +15,7 @@ from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Literal, Sequence
 
 from omegaconf import OmegaConf
 from pydantic import (
@@ -81,6 +81,9 @@ class UniDoorSweepConfig(BaseModel, frozen=True):
 
     exclude_handles: list[str] = []
     """Handle IDs removed after applying ``handles``; repeat or use a comma list."""
+
+    traversal_order: Literal["door-first", "handle-first"] = "door-first"
+    """Outer loop of the door/handle Cartesian product."""
 
     output_dir: Path | None = None
     """Exact result directory; otherwise a timestamped directory is created."""
@@ -314,7 +317,7 @@ def _select_ids(
 def _hydra_command(
     *,
     config_name: str,
-    door_id: str,
+    door_ids: Sequence[str],
     handle_ids: Sequence[str],
     batch_dir: Path,
     rounds: int,
@@ -323,7 +326,8 @@ def _hydra_command(
     headless: bool,
     max_concurrency: int,
 ) -> list[str]:
-    concurrency = min(max_concurrency, len(handle_ids))
+    job_count = len(door_ids) * len(handle_ids)
+    concurrency = min(max_concurrency, job_count)
     launcher = "joblib" if concurrency > 1 else "basic"
     command = [
         sys.executable,
@@ -335,7 +339,7 @@ def _hydra_command(
         config_name,
         f"hydra/launcher={launcher}",
         "hydra/sweeper=basic",
-        f"door_id={door_id}",
+        f"door_id={','.join(door_ids)}",
         f"handle_id={','.join(handle_ids)}",
         "env.batch_size=1",
         "task.seed=" + str(seed),
@@ -387,14 +391,32 @@ def _build_manifest(
     batches: list[dict[str, Any]] = []
     job_num = 0
     batch_num = 0
-    for door_id in doors:
-        for offset in range(0, len(handles), effective_batch_size):
-            batch_handles = handles[offset : offset + effective_batch_size]
-            batch_relative_dir = Path("batches") / f"{batch_num:04d}__{door_id}"
+    if config.traversal_order == "door-first":
+        outer_role = "door"
+        outer_groups = [
+            (door_id, [(door_id, handle_id) for handle_id in handles])
+            for door_id in doors
+        ]
+    else:
+        outer_role = "handle"
+        outer_groups = [
+            (handle_id, [(door_id, handle_id) for door_id in doors])
+            for handle_id in handles
+        ]
+    for outer_id, combinations in outer_groups:
+        for offset in range(0, len(combinations), effective_batch_size):
+            batch_combinations = combinations[offset : offset + effective_batch_size]
+            batch_doors = list(dict.fromkeys(door for door, _ in batch_combinations))
+            batch_handles = list(
+                dict.fromkeys(handle for _, handle in batch_combinations)
+            )
+            batch_relative_dir = (
+                Path("batches") / f"{batch_num:04d}__{outer_role}_{outer_id}"
+            )
             batch_dir = sweep_dir / batch_relative_dir
             command = _hydra_command(
                 config_name=config.config_name,
-                door_id=door_id,
+                door_ids=batch_doors,
                 handle_ids=batch_handles,
                 batch_dir=batch_dir,
                 rounds=config.rounds,
@@ -404,7 +426,7 @@ def _build_manifest(
                 max_concurrency=config.max_concurrency,
             )
             batch_job_numbers: list[int] = []
-            for local_num, handle_id in enumerate(batch_handles):
+            for local_num, (door_id, handle_id) in enumerate(batch_combinations):
                 relative_dir = batch_relative_dir / (
                     f"{local_num}__{door_id}__{handle_id}"
                 )
@@ -435,9 +457,12 @@ def _build_manifest(
             batches.append(
                 {
                     "batch_num": batch_num,
-                    "door_id": door_id,
+                    "traversal_order": config.traversal_order,
+                    "outer_role": outer_role,
+                    "outer_id": outer_id,
+                    "door_ids": batch_doors,
                     "handle_ids": list(batch_handles),
-                    "launcher": "joblib" if len(batch_handles) > 1 else "basic",
+                    "launcher": ("joblib" if len(batch_combinations) > 1 else "basic"),
                     "relative_dir": batch_relative_dir.as_posix(),
                     "job_numbers": batch_job_numbers,
                     "argv": command,
@@ -461,6 +486,7 @@ def _build_manifest(
             "seed": config.seed,
             "launcher_batch_size": config.launcher_batch_size,
             "max_concurrency": config.max_concurrency,
+            "traversal_order": config.traversal_order,
             "stop_on_failure": config.stop_on_failure,
             "headless": config.headless,
         },
@@ -469,6 +495,7 @@ def _build_manifest(
             "effective_launcher_batch_size": effective_batch_size,
             "max_concurrency": config.max_concurrency,
             "launcher_policy": "joblib_when_parallel",
+            "traversal_order": config.traversal_order,
             "stop_on_failure": config.stop_on_failure,
         },
         "progress": {
@@ -494,6 +521,7 @@ def _build_manifest(
         "selection": {
             "doors": list(doors),
             "handles": list(handles),
+            "traversal_order": config.traversal_order,
             "excluded_doors": list(config.exclude_doors),
             "excluded_handles": list(config.exclude_handles),
             "combination_count": len(jobs),
@@ -1116,6 +1144,13 @@ def _append_resume_batches(
         config.get("max_concurrency", execution.get("max_concurrency", 1))
     )
     config.setdefault("max_concurrency", max_concurrency)
+    traversal_order = str(
+        config.get(
+            "traversal_order",
+            manifest.get("selection", {}).get("traversal_order", "door-first"),
+        )
+    )
+    config.setdefault("traversal_order", traversal_order)
     batch_size = (
         min(requested_batch_size, max_concurrency)
         if stop_on_failure
@@ -1127,29 +1162,35 @@ def _append_resume_batches(
             "effective_launcher_batch_size": batch_size,
             "max_concurrency": max_concurrency,
             "launcher_policy": "joblib_when_parallel",
+            "traversal_order": traversal_order,
             "stop_on_failure": stop_on_failure,
         }
     )
 
-    jobs_by_door: dict[str, list[dict[str, Any]]] = {}
+    outer_role = "door" if traversal_order == "door-first" else "handle"
+    jobs_by_outer_id: dict[str, list[dict[str, Any]]] = {}
     for job in unresolved_jobs:
-        jobs_by_door.setdefault(str(job["door_id"]), []).append(job)
+        outer_id = str(job[f"{outer_role}_id"])
+        jobs_by_outer_id.setdefault(outer_id, []).append(job)
 
     new_batches: list[dict[str, Any]] = []
     new_batch_numbers: set[int] = set()
-    for door_id, door_jobs in jobs_by_door.items():
-        for offset in range(0, len(door_jobs), batch_size):
-            batch_jobs = door_jobs[offset : offset + batch_size]
-            handle_ids = [str(job["handle_id"]) for job in batch_jobs]
+    for outer_id, outer_jobs in jobs_by_outer_id.items():
+        for offset in range(0, len(outer_jobs), batch_size):
+            batch_jobs = outer_jobs[offset : offset + batch_size]
+            door_ids = list(dict.fromkeys(str(job["door_id"]) for job in batch_jobs))
+            handle_ids = list(
+                dict.fromkeys(str(job["handle_id"]) for job in batch_jobs)
+            )
             relative_batch_dir = (
                 Path("resume")
                 / f"{resume_number:04d}"
                 / "batches"
-                / f"{next_batch_num:04d}__{door_id}"
+                / f"{next_batch_num:04d}__{outer_role}_{outer_id}"
             )
             command = _hydra_command(
                 config_name=str(config["config_name"]),
-                door_id=door_id,
+                door_ids=door_ids,
                 handle_ids=handle_ids,
                 batch_dir=sweep_dir / relative_batch_dir,
                 rounds=int(config["rounds"]),
@@ -1160,7 +1201,7 @@ def _append_resume_batches(
             )
             for local_num, job in enumerate(batch_jobs):
                 relative_dir = relative_batch_dir / (
-                    f"{local_num}__{door_id}__{job['handle_id']}"
+                    f"{local_num}__{job['door_id']}__{job['handle_id']}"
                 )
                 attempts = job.setdefault("attempts", [])
                 if not attempts:
@@ -1189,9 +1230,12 @@ def _append_resume_batches(
             new_batches.append(
                 {
                     "batch_num": next_batch_num,
-                    "door_id": door_id,
+                    "traversal_order": traversal_order,
+                    "outer_role": outer_role,
+                    "outer_id": outer_id,
+                    "door_ids": door_ids,
                     "handle_ids": handle_ids,
-                    "launcher": "joblib" if len(handle_ids) > 1 else "basic",
+                    "launcher": "joblib" if len(batch_jobs) > 1 else "basic",
                     "relative_dir": relative_batch_dir.as_posix(),
                     "job_numbers": [int(job["job_num"]) for job in batch_jobs],
                     "argv": command,
@@ -1271,7 +1315,9 @@ def _run_batches(
 
         heading = (
             f"\n=== Hydra batch {position}/{len(selected)} "
-            f"(catalog batch {batch['batch_num']}, door {batch['door_id']}) ===\n"
+            f"(catalog batch {batch['batch_num']}, "
+            f"{batch.get('outer_role', 'door')} "
+            f"{batch.get('outer_id', batch.get('door_id'))}) ===\n"
         )
         if verbose:
             print(heading, end="")

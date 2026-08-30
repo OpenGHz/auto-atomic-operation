@@ -132,6 +132,8 @@ def test_parse_config_accepts_kebab_case_and_comma_lists() -> None:
             "3",
             "--max-concurrency",
             "2",
+            "--traversal-order",
+            "handle-first",
             "--dry-run",
         ]
     )
@@ -144,6 +146,7 @@ def test_parse_config_accepts_kebab_case_and_comma_lists() -> None:
     assert config.rounds == 2
     assert config.launcher_batch_size == 3
     assert config.max_concurrency == 2
+    assert config.traversal_order == "handle-first"
     assert config.stop_on_failure is True
     assert config.verbose is False
     assert config.dry_run is True
@@ -241,6 +244,7 @@ def test_manifest_applies_exclusions_after_positive_selection(tmp_path: Path) ->
         "handles": ["H003", "H002"],
         "excluded_doors": ["D001"],
         "excluded_handles": ["H001"],
+        "traversal_order": "door-first",
         "combination_count": 2,
     }
     assert [(job["door_id"], job["handle_id"]) for job in manifest["jobs"]] == [
@@ -318,6 +322,39 @@ def test_manifest_uses_bounded_joblib_batches(tmp_path: Path) -> None:
     assert "hydra.sweeper.max_batch_size=1" not in first_command
 
 
+def test_manifest_can_traverse_handles_before_doors(tmp_path: Path) -> None:
+    package_path = _asset_package(
+        tmp_path,
+        doors=("D002", "D001"),
+        handles=("H003", "H001"),
+    )
+    config = UniDoorSweepConfig(
+        asset_package=package_path,
+        traversal_order="handle-first",
+        launcher_batch_size=2,
+        max_concurrency=2,
+    )
+
+    manifest = _build_manifest(config, load_catalog(config), tmp_path / "sweep")
+
+    assert [(job["door_id"], job["handle_id"]) for job in manifest["jobs"]] == [
+        ("D002", "H003"),
+        ("D001", "H003"),
+        ("D002", "H001"),
+        ("D001", "H001"),
+    ]
+    assert manifest["selection"]["traversal_order"] == "handle-first"
+    assert manifest["config"]["traversal_order"] == "handle-first"
+    assert manifest["execution"]["traversal_order"] == "handle-first"
+    first_batch = manifest["batches"][0]
+    assert first_batch["outer_role"] == "handle"
+    assert first_batch["outer_id"] == "H003"
+    assert first_batch["door_ids"] == ["D002", "D001"]
+    assert first_batch["handle_ids"] == ["H003"]
+    assert "door_id=D002,D001" in first_batch["argv"]
+    assert "handle_id=H003" in first_batch["argv"]
+
+
 def test_manifest_uses_bounded_parallel_waves_when_stopping_on_failure(
     tmp_path: Path,
 ) -> None:
@@ -340,6 +377,7 @@ def test_manifest_uses_bounded_parallel_waves_when_stopping_on_failure(
         "effective_launcher_batch_size": 2,
         "max_concurrency": 2,
         "launcher_policy": "joblib_when_parallel",
+        "traversal_order": "door-first",
         "stop_on_failure": True,
     }
     assert [batch["handle_ids"] for batch in manifest["batches"]] == [
@@ -362,7 +400,7 @@ def test_manifest_quotes_hydra_output_paths(tmp_path: Path) -> None:
     manifest = _build_manifest(config, load_catalog(config), sweep_dir)
 
     command = manifest["batches"][0]["argv"]
-    assert f'hydra.sweep.dir="{sweep_dir}/batches/0000__D001"' in command
+    assert f'hydra.sweep.dir="{sweep_dir}/batches/0000__door_D001"' in command
 
 
 def test_stream_command_tees_stdout_and_stderr(
@@ -821,6 +859,43 @@ def test_resume_retries_failure_and_suffix_without_repeating_success(
     assert "hydra/launcher=joblib" in new_batches[0]["argv"]
     assert "hydra.launcher.n_jobs=2" in new_batches[0]["argv"]
     assert all(batch["resume_attempt"] == 1 for batch in new_batches)
+
+
+def test_handle_first_resume_preserves_outer_loop(tmp_path: Path) -> None:
+    package_path = _asset_package(
+        tmp_path,
+        doors=("D001", "D002"),
+        handles=("H001", "H002"),
+    )
+    sweep_dir = tmp_path / "sweep"
+    config = UniDoorSweepConfig(
+        asset_package=package_path,
+        traversal_order="handle-first",
+        launcher_batch_size=2,
+        max_concurrency=2,
+    )
+    manifest = _build_manifest(config, load_catalog(config), sweep_dir)
+    sweep_dir.mkdir()
+    first_job = manifest["jobs"][0]
+    first_dir = sweep_dir / first_job["relative_dir"]
+    first_dir.mkdir(parents=True)
+    _write_json(first_dir / "summary.json", _summary(status="OK", success=True))
+    manifest["resume_count"] = 1
+
+    unresolved = _unresolved_jobs(manifest, sweep_dir)
+    batch_numbers = _append_resume_batches(manifest, sweep_dir, unresolved)
+    new_batches = [
+        batch for batch in manifest["batches"] if batch["batch_num"] in batch_numbers
+    ]
+
+    assert [batch["outer_id"] for batch in new_batches] == ["H001", "H002"]
+    assert [batch["job_numbers"] for batch in new_batches] == [[1], [2, 3]]
+    assert new_batches[0]["door_ids"] == ["D002"]
+    assert new_batches[0]["handle_ids"] == ["H001"]
+    assert "door_id=D002" in new_batches[0]["argv"]
+    assert "handle_id=H001" in new_batches[0]["argv"]
+    assert new_batches[1]["door_ids"] == ["D001", "D002"]
+    assert new_batches[1]["handle_ids"] == ["H002"]
 
 
 def test_report_can_discover_raw_hydra_jobs_without_manifest(tmp_path: Path) -> None:
