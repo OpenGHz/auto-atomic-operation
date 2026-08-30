@@ -259,6 +259,11 @@ and a disabled viewer. It preserves the task's cameras, sensors, timeouts,
 control rates, and callback behavior. A full catalog run takes hours; use a
 subset first when validating a new task configuration.
 
+The terminal shows one compact progress bar by default. Hydra, MuJoCo, and task
+execution output is retained in `sweep.log`; pass `--verbose` to stream it live
+for debugging. At exit the CLI prints the output directory containing all
+artifacts.
+
 ### Sweep outputs and failure records
 
 The default root is `outputs/unidoor-sweeps/<timestamp>/`:

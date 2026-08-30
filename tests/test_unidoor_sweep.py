@@ -1,4 +1,4 @@
-"""Tests for the bounded serial UniDoor matrix sweep CLI."""
+"""Tests for the bounded UniDoor matrix sweep CLI."""
 
 from __future__ import annotations
 
@@ -145,9 +145,11 @@ def test_parse_config_accepts_kebab_case_and_comma_lists() -> None:
     assert config.launcher_batch_size == 3
     assert config.max_concurrency == 2
     assert config.stop_on_failure is True
+    assert config.verbose is False
     assert config.dry_run is True
 
     assert parse_config(["--no-stop-on-failure"]).stop_on_failure is False
+    assert parse_config(["--verbose"]).verbose is True
     assert parse_config(["--resume-latest"]).resume_latest is True
 
     with pytest.raises(ValueError, match="greater than 0"):
@@ -385,6 +387,25 @@ def test_stream_command_tees_stdout_and_stderr(
     assert "sentinel-err" in captured
     assert "sentinel-out" in log_path.read_text(encoding="utf-8")
     assert "sentinel-err" in log_path.read_text(encoding="utf-8")
+
+
+def test_stream_command_can_log_without_echoing(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    log_path = tmp_path / "sweep.log"
+
+    returncode = _stream_command(
+        [sys.executable, "-c", "print('log-only-sentinel')"],
+        workdir=tmp_path,
+        environment={},
+        log_path=log_path,
+        echo=False,
+    )
+
+    assert returncode == 0
+    assert "log-only-sentinel" not in capsys.readouterr().out
+    assert "log-only-sentinel" in log_path.read_text(encoding="utf-8")
 
 
 def test_aggregate_classifies_all_result_states(tmp_path: Path) -> None:

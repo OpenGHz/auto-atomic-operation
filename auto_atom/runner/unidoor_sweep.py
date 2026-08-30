@@ -118,6 +118,9 @@ class UniDoorSweepConfig(BaseModel, frozen=True):
     dry_run: bool = False
     """Print the complete plan without creating files or launching simulations."""
 
+    verbose: bool = False
+    """Stream Hydra and simulator logs instead of showing compact progress."""
+
     @model_validator(mode="after")
     def validate_modes(self) -> Self:
         selected_modes = sum(
@@ -584,6 +587,7 @@ def _stream_command(
     workdir: Path,
     environment: dict[str, str],
     log_path: Path,
+    echo: bool = True,
 ) -> int:
     process_environment = os.environ.copy()
     process_environment.update(environment)
@@ -613,7 +617,8 @@ def _stream_command(
                 previous_handlers.pop(signum, None)
         try:
             for line in process.stdout:
-                print(line, end="", flush=True)
+                if echo:
+                    print(line, end="", flush=True)
                 log.write(line)
                 log.flush()
             return process.wait()
@@ -990,7 +995,14 @@ def _report_exit_code(report: dict[str, Any]) -> int:
     return 0
 
 
-def _print_report(report: dict[str, Any]) -> None:
+def _print_artifacts(report: dict[str, Any]) -> None:
+    print(f"Output: {Path(report['sweep_dir'])}")
+
+
+def _print_report(report: dict[str, Any], *, verbose: bool = False) -> None:
+    if not verbose:
+        _print_artifacts(report)
+        return
     counts = report["counts"]
     print(
         "Sweep report: "
@@ -1033,6 +1045,18 @@ def _print_report(report: dict[str, Any]) -> None:
             f"Stopped at job {stopped_job_num}; rerun with --resume "
             f"{report['sweep_dir']} after applying a fix."
         )
+
+
+def _render_progress(completed: int, total: int) -> None:
+    width = 30
+    ratio = completed / total if total else 1.0
+    filled = min(width, int(width * ratio))
+    bar = "#" * filled + "-" * (width - filled)
+    line = f"[{bar}] {completed}/{total} ({ratio:.0%})"
+    if sys.stdout.isatty():
+        print(f"\r{line}", end="", flush=True)
+    else:
+        print(line, flush=True)
 
 
 def _unresolved_jobs(
@@ -1186,6 +1210,7 @@ def _run_batches(
     sweep_dir: Path,
     *,
     batch_numbers: set[int] | None = None,
+    verbose: bool = False,
 ) -> tuple[list[int], bool]:
     batches = manifest["batches"]
     selected = [
@@ -1210,6 +1235,10 @@ def _run_batches(
     returncodes: list[int] = []
     interrupted = False
     log_path = sweep_dir / LOG_NAME
+    completed_count = 0
+    total_count = len(selected_job_numbers)
+    if not verbose:
+        _render_progress(completed_count, total_count)
     for position, batch in enumerate(selected, start=1):
         batch_jobs = [
             jobs_by_number[int(job_num)] for job_num in batch.get("job_numbers", [])
@@ -1244,7 +1273,8 @@ def _run_batches(
             f"\n=== Hydra batch {position}/{len(selected)} "
             f"(catalog batch {batch['batch_num']}, door {batch['door_id']}) ===\n"
         )
-        print(heading, end="")
+        if verbose:
+            print(heading, end="")
         with log_path.open("a", encoding="utf-8") as log:
             log.write(heading)
             log.write(shlex.join(batch["argv"]) + "\n")
@@ -1254,17 +1284,22 @@ def _run_batches(
                 workdir=Path.cwd(),
                 environment=environment,
                 log_path=log_path,
+                echo=verbose,
             )
         except KeyboardInterrupt:
             interrupted = True
             break
         except OSError as exc:
             message = f"Could not launch Hydra batch {batch['batch_num']}: {exc}"
-            print(message, file=sys.stderr)
+            if verbose:
+                print(message, file=sys.stderr)
             with log_path.open("a", encoding="utf-8") as log:
                 log.write(message + "\n")
             returncode = 127
         returncodes.append(returncode)
+        completed_count += len(batch_jobs)
+        if not verbose:
+            _render_progress(completed_count, total_count)
         finished_at = _now_iso()
         failed_results: list[tuple[dict[str, Any], dict[str, Any]]] = []
         for job in batch_jobs:
@@ -1315,16 +1350,19 @@ def _run_batches(
             )
             manifest["status"] = "STOPPED_ON_FAILURE"
             _write_json(sweep_dir / MANIFEST_NAME, manifest)
-            print(
-                f"Stopped at job {failed_job['job_num']} "
-                f"({failed_job['door_id']} + {failed_job['handle_id']}): "
-                f"{failed_result['status']}: {reason}"
-            )
+            if verbose:
+                print(
+                    f"Stopped at job {failed_job['job_num']} "
+                    f"({failed_job['door_id']} + {failed_job['handle_id']}): "
+                    f"{failed_result['status']}: {reason}"
+                )
             break
 
         _write_json(sweep_dir / MANIFEST_NAME, manifest)
-        if returncode != 0:
+        if returncode != 0 and verbose:
             print(f"Hydra batch {batch['batch_num']} exited {returncode}.")
+    if not verbose and sys.stdout.isatty():
+        print()
     return returncodes, interrupted
 
 
@@ -1332,7 +1370,7 @@ def run_unidoor_sweep(config: UniDoorSweepConfig) -> int:
     """Run, resume, or report a UniDoor matrix sweep."""
     if config.report is not None:
         report = aggregate_sweep(_resolve_from(config.report, Path.cwd()))
-        _print_report(report)
+        _print_report(report, verbose=config.verbose)
         return _report_exit_code(report)
 
     if config.resume is not None or config.resume_latest:
@@ -1341,13 +1379,13 @@ def run_unidoor_sweep(config: UniDoorSweepConfig) -> int:
             if config.resume_latest
             else _resolve_from(config.resume, Path.cwd())
         )
-        if config.resume_latest:
+        if config.resume_latest and config.verbose:
             print(f"Latest sweep: {sweep_dir}")
         manifest = _load_manifest(sweep_dir)
         unresolved = _unresolved_jobs(manifest, sweep_dir)
         if not unresolved:
             report = aggregate_sweep(sweep_dir)
-            _print_report(report)
+            _print_report(report, verbose=config.verbose)
             return _report_exit_code(report)
         manifest["resume_count"] = int(manifest.get("resume_count", 0)) + 1
         previous_returncodes = manifest.get("launcher_returncodes", [])
@@ -1384,14 +1422,16 @@ def run_unidoor_sweep(config: UniDoorSweepConfig) -> int:
             manifest,
             sweep_dir,
             batch_numbers=batch_numbers,
+            verbose=config.verbose,
         )
     else:
         sweep_dir, manifest = _prepare_new_sweep(config)
-        print(
-            f"Planned {manifest['selection']['combination_count']} combinations in "
-            f"{len(manifest['batches'])} bounded Hydra waves."
-        )
-        print(f"Output: {sweep_dir}")
+        if config.verbose:
+            print(
+                f"Planned {manifest['selection']['combination_count']} combinations in "
+                f"{len(manifest['batches'])} bounded Hydra waves."
+            )
+            print(f"Output: {sweep_dir}")
         if config.dry_run:
             for batch in manifest["batches"]:
                 print(shlex.join(batch["argv"]))
@@ -1399,7 +1439,11 @@ def run_unidoor_sweep(config: UniDoorSweepConfig) -> int:
         sweep_dir.mkdir(parents=True, exist_ok=True)
         manifest["status"] = "RUNNING"
         _write_json(sweep_dir / MANIFEST_NAME, manifest)
-        returncodes, interrupted = _run_batches(manifest, sweep_dir)
+        returncodes, interrupted = _run_batches(
+            manifest,
+            sweep_dir,
+            verbose=config.verbose,
+        )
 
     manifest["launcher_returncodes"].extend(returncodes)
     if interrupted:
@@ -1409,7 +1453,7 @@ def run_unidoor_sweep(config: UniDoorSweepConfig) -> int:
     manifest["finished_at"] = _now_iso()
     _write_json(sweep_dir / MANIFEST_NAME, manifest)
     report = aggregate_sweep(sweep_dir)
-    _print_report(report)
+    _print_report(report, verbose=config.verbose)
     if interrupted:
         return 130
     return _report_exit_code(report)
