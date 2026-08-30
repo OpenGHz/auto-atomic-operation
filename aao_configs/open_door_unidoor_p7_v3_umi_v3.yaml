@@ -45,6 +45,18 @@ env:
         relock_zone: 0.02
 
 task:
+  randomization:
+    arm:
+      base:
+        # Small independent perturbations around the handle-anchored base pose.
+        # Translation is in metres; rotation is in RPY radians.
+        reference: relative
+        x: [-0.01, 0.01]
+        y: [-0.01, 0.01]
+        z: [-0.005, 0.005]
+        roll: [-0.02, 0.02]
+        pitch: [-0.02, 0.02]
+        yaw: [-0.03, 0.03]
   stages:
     - name: pick_handle
       object: door__door_handle

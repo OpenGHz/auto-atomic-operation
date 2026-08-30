@@ -11,6 +11,8 @@ import pytest
 from hydra import compose, initialize_config_dir
 from omegaconf import OmegaConf, open_dict
 
+from auto_atom.runner.common import prepare_task_file
+from auto_atom.runtime import TaskRunner
 from auto_atom.scene_composition import (
     AssetAssemblyLayerConfig,
     MjcfLayerConfig,
@@ -19,8 +21,6 @@ from auto_atom.scene_composition import (
     compile_scene,
     load_composed_scene,
 )
-from auto_atom.runner.common import prepare_task_file
-from auto_atom.runtime import TaskRunner
 from auto_atom.utils.pose import PoseState, compose_pose
 
 
@@ -895,6 +895,14 @@ def test_demo_final_approach_targets_the_explicit_grasp_site() -> None:
     assert list(base_pose.orientation) == pytest.approx(
         [0.0, 0.0, 0.70710678, 0.70710678]
     )
+    base_randomization = config.task.randomization.arm.base
+    assert base_randomization.reference == "relative"
+    assert list(base_randomization.x) == pytest.approx([-0.01, 0.01])
+    assert list(base_randomization.y) == pytest.approx([-0.01, 0.01])
+    assert list(base_randomization.z) == pytest.approx([-0.005, 0.005])
+    assert list(base_randomization.roll) == pytest.approx([-0.02, 0.02])
+    assert list(base_randomization.pitch) == pytest.approx([-0.02, 0.02])
+    assert list(base_randomization.yaw) == pytest.approx([-0.03, 0.03])
     assert "eef" not in pick_stage.param
     assert pull_stage.name == "pull_handle"
     assert pull_stage.operation == "pull"
@@ -936,6 +944,7 @@ def test_operator_base_pose_can_be_anchored_to_a_named_scene_frame() -> None:
                 "env.cameras=[]",
                 "env.enabled_sensors=[]",
                 "env.viewer=null",
+                "task.randomization.arm.base=null",
             ],
         )
     with open_dict(config):
