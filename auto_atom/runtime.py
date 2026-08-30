@@ -1714,74 +1714,56 @@ class TaskRunner:
             rand = action.pose.randomization
             if rand is None:
                 continue
-            if rand.reference == RandomizationReference.ABSOLUTE_BASE:
-                raise ValueError(
-                    "Per-waypoint randomization does not support "
-                    "'absolute_base'. Set the waypoint's own `reference` "
-                    "field (e.g. BASE) and use 'absolute_world' or "
-                    "'relative' instead."
-                )
-            if not isinstance(rand.reference, RandomizationReference):
-                raise ValueError(
-                    f"Per-waypoint randomization does not support "
-                    f"entity-name references (got "
-                    f"reference={rand.reference!r}). Use 'relative' or "
-                    f"'absolute_world' instead."
-                )
-            is_absolute = rand.reference == RandomizationReference.ABSOLUTE_WORLD
-            pos_ranges = (rand.x, rand.y, rand.z)
-            rot_ranges = (rand.roll, rand.pitch, rand.yaw)
+            for reference in rand.references():
+                if reference == RandomizationReference.ABSOLUTE_BASE:
+                    raise ValueError(
+                        "Per-waypoint randomization does not support "
+                        "'absolute_base'. Set the waypoint's own `reference` "
+                        "field (e.g. BASE) and use 'absolute_world' or "
+                        "'relative' instead."
+                    )
+                if not isinstance(reference, RandomizationReference):
+                    raise ValueError(
+                        f"Per-waypoint randomization does not support "
+                        f"entity-name references (got reference={reference!r}). "
+                        f"Use 'relative' or 'absolute_world' instead."
+                    )
             pos = list(action.pose.position)
-            for axis, rng_pair in enumerate(pos_ranges):
+            for axis, axis_name in enumerate(("x", "y", "z")):
+                rng_pair = rand.axis_range(axis_name)
                 if rng_pair is None:
                     continue
                 sampled = float(rng.uniform(*rng_pair))
-                if is_absolute:
+                if (
+                    rand.axis_reference(axis_name)
+                    == RandomizationReference.ABSOLUTE_WORLD
+                ):
                     pos[axis] = sampled
                 else:
                     pos[axis] += sampled
             action.pose = action.pose.model_copy(
                 update={"position": tuple(pos), "randomization": None}
             )
-            if any(r is not None for r in rot_ranges):
+            rot_axes = ("roll", "pitch", "yaw")
+            if any(rand.axis_range(axis_name) is not None for axis_name in rot_axes):
                 ori = action.pose.orientation
                 if ori and len(ori) == 4:
                     from .utils.pose import quaternion_to_rpy
 
-                    r0, p0, y0 = quaternion_to_rpy(np.asarray(ori))
-                    if is_absolute:
-                        r_val = (
-                            r0
-                            if rot_ranges[0] is None
-                            else float(rng.uniform(*rot_ranges[0]))
-                        )
-                        p_val = (
-                            p0
-                            if rot_ranges[1] is None
-                            else float(rng.uniform(*rot_ranges[1]))
-                        )
-                        y_val = (
-                            y0
-                            if rot_ranges[2] is None
-                            else float(rng.uniform(*rot_ranges[2]))
-                        )
-                    else:
-                        r_val = r0 + (
-                            0.0
-                            if rot_ranges[0] is None
-                            else float(rng.uniform(*rot_ranges[0]))
-                        )
-                        p_val = p0 + (
-                            0.0
-                            if rot_ranges[1] is None
-                            else float(rng.uniform(*rot_ranges[1]))
-                        )
-                        y_val = y0 + (
-                            0.0
-                            if rot_ranges[2] is None
-                            else float(rng.uniform(*rot_ranges[2]))
-                        )
-                    new_ori = euler_to_quaternion((r_val, p_val, y_val))
+                    rotation = list(quaternion_to_rpy(np.asarray(ori)))
+                    for axis, axis_name in enumerate(rot_axes):
+                        rng_pair = rand.axis_range(axis_name)
+                        if rng_pair is None:
+                            continue
+                        sampled = float(rng.uniform(*rng_pair))
+                        if (
+                            rand.axis_reference(axis_name)
+                            == RandomizationReference.ABSOLUTE_WORLD
+                        ):
+                            rotation[axis] = sampled
+                        else:
+                            rotation[axis] += sampled
+                    new_ori = euler_to_quaternion(tuple(rotation))
                     action.pose = action.pose.model_copy(
                         update={"orientation": tuple(float(v) for v in new_ori)}
                     )

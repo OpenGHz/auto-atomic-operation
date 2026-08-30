@@ -123,6 +123,29 @@ def test_waypoint_randomization_uses_task_seed_without_backend_private_rng() -> 
         ComponentRegistry.clear()
 
 
+def test_waypoint_axis_reference_overrides_global_reference() -> None:
+    ComponentRegistry.clear()
+    runner = TaskRunner().from_config(
+        _config(
+            "timeline_axis_reference",
+            seed=73,
+            waypoint_randomization={
+                "reference": "relative",
+                "x": [0.1, 0.1],
+                "z": {"range": [0.8, 0.8], "reference": "absolute_world"},
+            },
+        )
+    )
+    try:
+        actions = runner._materialize_stage_actions(runner._plan[0])
+
+        assert actions[0].pose is not None
+        assert actions[0].pose.position == (0.2, 0.0, 0.8)
+    finally:
+        runner.close()
+        ComponentRegistry.clear()
+
+
 def test_timeline_clone_isolates_runtime_state_but_preserves_arc_snapshot_alias() -> (
     None
 ):

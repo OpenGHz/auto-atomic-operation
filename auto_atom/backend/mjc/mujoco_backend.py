@@ -113,7 +113,10 @@ def _randomization_references(
     spec: PoseRandomizationSpec,
 ) -> tuple[Union[RandomizationReference, str], ...]:
     """Return every reference declared by a randomization spec."""
-    return tuple(region.reference for region in pose_randomization_regions(spec))
+    references: list[Union[RandomizationReference, str]] = []
+    for region in pose_randomization_regions(spec):
+        references.extend(region.references())
+    return tuple(dict.fromkeys(references))
 
 
 def _copy_randomization_ancestors(
@@ -207,7 +210,7 @@ class _PendingRandomizationAction:
     label: str
     pose: PoseState
     radius: float | np.ndarray
-    reference: Optional[Union[RandomizationReference, str]] = None
+    references: tuple[Union[RandomizationReference, str], ...] = ()
     ancestors: _RandomizationAncestors = field(default_factory=set)
 
 
@@ -1663,17 +1666,19 @@ class MujocoTaskBackend(SceneBackend):
 
     def _reference_ancestors(
         self,
-        reference: Union[RandomizationReference, str],
+        references: tuple[Union[RandomizationReference, str], ...],
         selected_ancestors: Dict[str, Set[str]],
     ) -> Set[str]:
-        if isinstance(reference, RandomizationReference):
-            return set()
-        bare, attr = self._parse_entity_reference(reference)
-        if attr is None and bare in self.operator_handlers:
-            attr = "base"
-        reference_key = f"{bare}.{attr}" if attr is not None else bare
-        ancestors = {bare}
-        ancestors.update(selected_ancestors.get(reference_key, ()))
+        ancestors: Set[str] = set()
+        for reference in references:
+            if isinstance(reference, RandomizationReference):
+                continue
+            bare, attr = self._parse_entity_reference(reference)
+            if attr is None and bare in self.operator_handlers:
+                attr = "base"
+            reference_key = f"{bare}.{attr}" if attr is not None else bare
+            ancestors.add(bare)
+            ancestors.update(selected_ancestors.get(reference_key, ()))
         return ancestors
 
     def _validate_pose_randomization_spec(
@@ -1685,34 +1690,41 @@ class MujocoTaskBackend(SceneBackend):
     ) -> None:
         """Validate every region against its target context before sampling."""
         for region_index, region in enumerate(pose_randomization_regions(spec)):
-            if (
-                region.reference == RandomizationReference.ABSOLUTE_BASE
-                and not allow_absolute_base
-            ):
-                raise ValueError(
-                    f"{label} randomization region {region_index} cannot use "
-                    "'absolute_base' — only operator end-effector "
-                    "randomization is defined in a base frame."
-                )
-            reference = region.reference
-            if isinstance(reference, RandomizationReference):
-                continue
-            bare, attr = self._parse_entity_reference(reference)
-            if attr is not None and bare not in self.operator_handlers:
-                raise ValueError(
-                    f"{label} randomization region {region_index} reference "
-                    f"'{reference}' uses '.{attr}', but '{bare}' is not a "
-                    "known operator."
-                )
-            if (
-                attr is None
-                and bare not in self.object_handlers
-                and bare not in self.operator_handlers
-            ):
-                raise ValueError(
-                    f"{label} randomization region {region_index} reference "
-                    f"'{reference}' is not a known object or operator."
-                )
+            references = region.references()
+            if RandomizationReference.ABSOLUTE_BASE in references:
+                if not allow_absolute_base:
+                    raise ValueError(
+                        f"{label} randomization region {region_index} cannot use "
+                        "'absolute_base' — only operator end-effector "
+                        "randomization is defined in a base frame."
+                    )
+                if any(
+                    reference != RandomizationReference.ABSOLUTE_BASE
+                    for reference in references
+                ):
+                    raise ValueError(
+                        f"{label} randomization region {region_index} cannot mix "
+                        "'absolute_base' with references in other frames."
+                    )
+            for reference in references:
+                if isinstance(reference, RandomizationReference):
+                    continue
+                bare, attr = self._parse_entity_reference(reference)
+                if attr is not None and bare not in self.operator_handlers:
+                    raise ValueError(
+                        f"{label} randomization region {region_index} reference "
+                        f"'{reference}' uses '.{attr}', but '{bare}' is not a "
+                        "known operator."
+                    )
+                if (
+                    attr is None
+                    and bare not in self.object_handlers
+                    and bare not in self.operator_handlers
+                ):
+                    raise ValueError(
+                        f"{label} randomization region {region_index} reference "
+                        f"'{reference}' is not a known object or operator."
+                    )
 
     def _validate_randomization_configuration(self) -> None:
         """Validate target-specific rules for all configured regions."""
@@ -2005,12 +2017,12 @@ class MujocoTaskBackend(SceneBackend):
                     working_poses[key] = pose
                     env_sampled_poses[key] = pose
                 for action in actions:
-                    if action.reference is None:
+                    if not action.references:
                         raise ValueError(
-                            f"Sampled action '{action.label}' has no reference"
+                            f"Sampled action '{action.label}' has no references"
                         )
                     action.ancestors = self._reference_ancestors(
-                        action.reference,
+                        action.references,
                         selected_ancestors,
                     )
                     action_ancestors = set(action.ancestors)
@@ -2064,7 +2076,7 @@ class MujocoTaskBackend(SceneBackend):
 
         selected_range = self._select_randomization_region(action_spec.randomization)
         if action_spec.kind == "object":
-            if selected_range.reference == RandomizationReference.ABSOLUTE_BASE:
+            if RandomizationReference.ABSOLUTE_BASE in selected_range.references():
                 raise ValueError(
                     f"Object '{name}' randomization cannot use 'absolute_base' — "
                     "only operator end-effector randomization is defined in a "
@@ -2083,13 +2095,13 @@ class MujocoTaskBackend(SceneBackend):
                     label=action_spec.label,
                     pose=sampled,
                     radius=float(selected_range.collision_radius),
-                    reference=selected_range.reference,
+                    references=selected_range.references(),
                 )
             ]
 
         handler = self.operator_handlers[name]
         if action_spec.kind == "operator_base":
-            if selected_range.reference == RandomizationReference.ABSOLUTE_BASE:
+            if RandomizationReference.ABSOLUTE_BASE in selected_range.references():
                 raise ValueError(
                     f"Operator '{name}' base randomization cannot use "
                     "'absolute_base' — the base IS the frame."
@@ -2121,7 +2133,7 @@ class MujocoTaskBackend(SceneBackend):
                 label=action_spec.label,
                 pose=sampled,
                 radius=float(selected_range.collision_radius),
-                reference=selected_range.reference,
+                references=selected_range.references(),
             )
         ]
 
@@ -2136,13 +2148,18 @@ class MujocoTaskBackend(SceneBackend):
             name,
             self.object_handlers[name].get_pose(),
         ).select(env_index)
-        base_pose = self._resolve_reference_base_pose_for_env(
-            rand_range.reference,
+        reference_poses = self._resolve_reference_poses_for_env(
+            rand_range,
             sampled_poses,
             default_pose,
             env_index,
         )
-        return self._sample_random_pose_single(base_pose, rand_range, 0)
+        return self._sample_random_pose_single(
+            default_pose,
+            rand_range,
+            0,
+            reference_poses=reference_poses,
+        )
 
     def _sample_operator_base_pose_for_env(
         self,
@@ -2156,13 +2173,18 @@ class MujocoTaskBackend(SceneBackend):
             name,
             handler.get_base_pose(),
         ).select(env_index)
-        base_pose = self._resolve_reference_base_pose_for_env(
-            rand_range.reference,
+        reference_poses = self._resolve_reference_poses_for_env(
+            rand_range,
             sampled_poses,
             default_base,
             env_index,
         )
-        return self._sample_random_pose_single(base_pose, rand_range, 0)
+        return self._sample_random_pose_single(
+            default_base,
+            rand_range,
+            0,
+            reference_poses=reference_poses,
+        )
 
     def _operator_default_eef_following_base(
         self,
@@ -2223,40 +2245,64 @@ class MujocoTaskBackend(SceneBackend):
         env_index: int,
         sampled_poses: Dict[str, PoseState],
     ) -> PoseState:
-        # ``RandomizationReference`` enums (relative / absolute_world /
-        # absolute_base) leave the default untouched in the resolver, so we
-        # re-anchor here to make the EEF default rigidly track the operator's
-        # current base. Entity-name references ("arm.base", "vase", ...) ARE
-        # handled by the resolver, which carries the referenced entity's
-        # sample-vs-default delta on top of ``default_pose``; if we also
-        # re-anchored here, an "<own_op>.base" reference would double-count
-        # the base delta.
-        if isinstance(rand_range.reference, RandomizationReference):
-            default_for_resolver, base_world = (
-                self._operator_default_eef_following_base(
-                    name, handler, env_index, sampled_poses
-                )
-            )
-        else:
-            default_for_resolver = self._default_operator_eef_poses.get(
-                name, handler.get_end_effector_pose()
-            ).select(env_index)
-            base_world = sampled_poses.get(name)
-            if base_world is None:
-                base_world = handler.get_base_pose().select(env_index)
-        base_pose_for_sampler = self._resolve_reference_base_pose_for_env(
-            rand_range.reference,
-            sampled_poses,
-            default_for_resolver,
+        following_base_default, base_world = self._operator_default_eef_following_base(
+            name,
+            handler,
             env_index,
+            sampled_poses,
         )
-        if rand_range.reference != RandomizationReference.ABSOLUTE_BASE:
-            return self._sample_random_pose_single(base_pose_for_sampler, rand_range, 0)
-        default_in_base = compose_pose(inverse_pose(base_world), base_pose_for_sampler)
-        sampled_in_base = self._sample_random_pose_single(
-            default_in_base, rand_range, 0
+        references = rand_range.references()
+        if references == (RandomizationReference.ABSOLUTE_BASE,):
+            default_in_base = compose_pose(
+                inverse_pose(base_world),
+                following_base_default,
+            )
+            sampled_in_base = self._sample_random_pose_single(
+                default_in_base,
+                rand_range,
+                0,
+            )
+            return compose_pose(base_world, sampled_in_base)
+
+        snapshot_default = self._default_operator_eef_poses.get(
+            name,
+            handler.get_end_effector_pose(),
+        ).select(env_index)
+        reference_poses: Dict[Union[RandomizationReference, str], PoseState] = {}
+        for reference in references:
+            if isinstance(reference, RandomizationReference):
+                reference_poses[reference] = following_base_default
+            else:
+                reference_poses[reference] = self._resolve_reference_base_pose_for_env(
+                    reference,
+                    sampled_poses,
+                    snapshot_default,
+                    env_index,
+                )
+        return self._sample_random_pose_single(
+            following_base_default,
+            rand_range,
+            0,
+            reference_poses=reference_poses,
         )
-        return compose_pose(base_world, sampled_in_base)
+
+    def _resolve_reference_poses_for_env(
+        self,
+        rand_range: PoseRandomRange,
+        sampled_poses: Dict[str, PoseState],
+        default_pose: PoseState,
+        env_index: int,
+    ) -> Dict[Union[RandomizationReference, str], PoseState]:
+        """Resolve every reference used by one range to its baseline pose."""
+        return {
+            reference: self._resolve_reference_base_pose_for_env(
+                reference,
+                sampled_poses,
+                default_pose,
+                env_index,
+            )
+            for reference in rand_range.references()
+        }
 
     def _resolve_reference_base_pose_for_env(
         self,
@@ -2430,66 +2476,72 @@ class MujocoTaskBackend(SceneBackend):
         base_pose: PoseState,
         rand_range: PoseRandomRange,
         env_index: int,
+        *,
+        reference_poses: Optional[
+            Mapping[Union[RandomizationReference, str], PoseState]
+        ] = None,
     ) -> PoseState:
         base_pose = base_pose.broadcast_to(self.batch_size)
-        position = np.asarray(base_pose.position[env_index], dtype=np.float64).copy()
-        orientation = np.asarray(
-            base_pose.orientation[env_index],
-            dtype=np.float64,
-        ).copy()
-        is_absolute = rand_range.reference in (
-            RandomizationReference.ABSOLUTE_WORLD,
-            RandomizationReference.ABSOLUTE_BASE,
+        pose_by_reference = {
+            reference: pose.broadcast_to(self.batch_size)
+            for reference, pose in (reference_poses or {}).items()
+        }
+
+        def _baseline(reference: Union[RandomizationReference, str]) -> PoseState:
+            return pose_by_reference.get(reference, base_pose)
+
+        position = np.empty(3, dtype=np.float64)
+        for axis_index, axis_name in enumerate(("x", "y", "z")):
+            reference = rand_range.axis_reference(axis_name)
+            baseline = _baseline(reference)
+            value = float(baseline.position[env_index, axis_index])
+            rng_pair = rand_range.axis_range(axis_name)
+            if rng_pair is not None:
+                sampled = float(self._rng.uniform(*rng_pair))
+                if reference in (
+                    RandomizationReference.ABSOLUTE_WORLD,
+                    RandomizationReference.ABSOLUTE_BASE,
+                ):
+                    value = sampled
+                else:
+                    value += sampled
+            position[axis_index] = value
+
+        rotation_axes = ("roll", "pitch", "yaw")
+        rotation_references = tuple(
+            rand_range.axis_reference(axis_name) for axis_name in rotation_axes
         )
-        pos_ranges = (rand_range.x, rand_range.y, rand_range.z)
-        rot_ranges = (rand_range.roll, rand_range.pitch, rand_range.yaw)
-        rot_any = any(r is not None for r in rot_ranges)
-        for axis, rng_pair in enumerate(pos_ranges):
-            if rng_pair is None:
-                continue
-            sampled = float(self._rng.uniform(*rng_pair))
-            if is_absolute:
-                position[axis] = sampled
-            else:
-                position[axis] += sampled
-        if rot_any:
-            r0, p0, y0 = quaternion_to_rpy(orientation)
-            if is_absolute:
-                r_val = (
-                    r0
-                    if rot_ranges[0] is None
-                    else float(self._rng.uniform(*rot_ranges[0]))
-                )
-                p_val = (
-                    p0
-                    if rot_ranges[1] is None
-                    else float(self._rng.uniform(*rot_ranges[1]))
-                )
-                y_val = (
-                    y0
-                    if rot_ranges[2] is None
-                    else float(self._rng.uniform(*rot_ranges[2]))
-                )
-            else:
-                r_val = r0 + (
-                    0.0
-                    if rot_ranges[0] is None
-                    else float(self._rng.uniform(*rot_ranges[0]))
-                )
-                p_val = p0 + (
-                    0.0
-                    if rot_ranges[1] is None
-                    else float(self._rng.uniform(*rot_ranges[1]))
-                )
-                y_val = y0 + (
-                    0.0
-                    if rot_ranges[2] is None
-                    else float(self._rng.uniform(*rot_ranges[2]))
-                )
+        if (
+            all(rand_range.axis_range(axis_name) is None for axis_name in rotation_axes)
+            and len(set(rotation_references)) == 1
+        ):
             orientation = np.asarray(
-                euler_to_quaternion((r_val, p_val, y_val)),
+                _baseline(rotation_references[0]).orientation[env_index],
                 dtype=np.float64,
-            )
+            ).copy()
+            return PoseState(position=position, orientation=orientation)
+
+        rotation = np.empty(3, dtype=np.float64)
+        for axis_index, axis_name in enumerate(rotation_axes):
+            reference = rand_range.axis_reference(axis_name)
+            baseline = _baseline(reference)
+            baseline_rpy = quaternion_to_rpy(baseline.orientation[env_index])
+            value = float(baseline_rpy[axis_index])
+            rng_pair = rand_range.axis_range(axis_name)
+            if rng_pair is not None:
+                sampled = float(self._rng.uniform(*rng_pair))
+                if reference in (
+                    RandomizationReference.ABSOLUTE_WORLD,
+                    RandomizationReference.ABSOLUTE_BASE,
+                ):
+                    value = sampled
+                else:
+                    value += sampled
+            rotation[axis_index] = value
+        orientation = np.asarray(
+            euler_to_quaternion(tuple(rotation)),
+            dtype=np.float64,
+        )
         return PoseState(position=position, orientation=orientation)
 
     # ------------------------------------------------------------------
@@ -2568,18 +2620,21 @@ class MujocoTaskBackend(SceneBackend):
     def _apply_camera_randomization(self, env_mask: np.ndarray) -> None:
         """Sample and apply pose randomization for configured cameras."""
         for cam_name, rand_range in self.camera_randomization.items():
-            ref = rand_range.reference
-            if ref == RandomizationReference.ABSOLUTE_BASE:
-                raise ValueError(
-                    f"Camera '{cam_name}' randomization cannot use "
-                    "'absolute_base' — cameras have no operator base frame."
-                )
-            if isinstance(ref, str) and not isinstance(ref, RandomizationReference):
-                raise ValueError(
-                    f"Camera '{cam_name}' randomization cannot use entity "
-                    f"reference '{ref}' — cameras do not participate in "
-                    "entity dependency ordering."
-                )
+            for reference in rand_range.references():
+                if reference == RandomizationReference.ABSOLUTE_BASE:
+                    raise ValueError(
+                        f"Camera '{cam_name}' randomization cannot use "
+                        "'absolute_base' — cameras have no operator base frame."
+                    )
+                if isinstance(reference, str) and not isinstance(
+                    reference,
+                    RandomizationReference,
+                ):
+                    raise ValueError(
+                        f"Camera '{cam_name}' randomization cannot use entity "
+                        f"reference '{reference}' — cameras do not participate in "
+                        "entity dependency ordering."
+                    )
             default_pose = self._default_camera_poses.get(cam_name)
             if default_pose is None:
                 logging.getLogger(MujocoTaskBackend.__name__).warning(

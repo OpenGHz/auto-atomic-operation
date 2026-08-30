@@ -899,7 +899,8 @@ def test_demo_final_approach_targets_the_explicit_grasp_site() -> None:
     assert base_randomization.reference == "relative"
     assert list(base_randomization.x) == pytest.approx([-0.01, 0.01])
     assert list(base_randomization.y) == pytest.approx([-0.01, 0.01])
-    assert list(base_randomization.z) == pytest.approx([-0.005, 0.005])
+    assert list(base_randomization.z.range) == pytest.approx([-0.305, -0.295])
+    assert base_randomization.z.reference == "absolute_world"
     assert list(base_randomization.roll) == pytest.approx([-0.02, 0.02])
     assert list(base_randomization.pitch) == pytest.approx([-0.02, 0.02])
     assert list(base_randomization.yaw) == pytest.approx([-0.03, 0.03])

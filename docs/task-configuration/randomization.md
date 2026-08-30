@@ -395,10 +395,35 @@ the delta is zero and this entry keeps its own default pose before applying the
 per-axis offsets. `.base` / `.eef` suffixes only apply to operator names; using
 them on an object (e.g. `vase.base`) raises a `ValueError`.
 
+Each axis may override the entry-level reference without an additional
+container. The compact ``[min, max]`` form inherits the entry-level reference;
+the expanded form owns a higher-priority reference:
+
+```yaml
+task:
+  randomization:
+    arm:
+      base:
+        reference: relative       # fallback for x/y/roll/pitch/yaw
+        x: [-0.01, 0.01]
+        y: [-0.01, 0.01]
+        z:
+          range: [-0.305, -0.295]
+          reference: absolute_world
+```
+
+Here `x` and `y` remain offsets from the base's effective initial pose, while
+`z` is sampled directly in world coordinates. Omitting `reference` inside the
+expanded axis object also inherits the entry-level reference. Named entity or
+operator-attribute axis references participate in the same dependency ordering
+as entry-level references.
+
 Restrictions on `absolute_base`:
 
 - Object entries reject `absolute_base` (no base frame is defined for an object).
 - The nested `base:` sub-entry rejects `absolute_base` (the base IS the frame).
+- An EEF entry may use `absolute_base`, but it cannot mix `absolute_base` with
+  axis references in other frames within the same pose.
 - Per-waypoint `randomization` rejects `absolute_base`; use the waypoint's own
   `reference: base` field together with `relative` or `absolute_world` instead.
 

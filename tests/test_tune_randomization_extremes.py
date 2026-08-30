@@ -175,6 +175,51 @@ def test_summary_reports_each_region_reference() -> None:
     assert "object block [region 1]: reference=absolute_world" in summary
 
 
+def test_inspector_applies_axis_level_reference_baselines() -> None:
+    inspector, handler = _make_inspector()
+    original_target = inspector.targets[0]
+    default_pose = PoseState(
+        position=np.asarray([[10.0, 20.0, 0.0]], dtype=np.float64),
+        orientation=np.asarray([[0.0, 0.0, 0.0, 1.0]], dtype=np.float64),
+    )
+    handler.pose = default_pose
+    inspector.backend._default_object_poses["block"] = default_pose
+    inspector.backend._resolve_reference_base_pose = (
+        lambda reference, _sampled, default: PoseState(
+            position=np.asarray(
+                [[11.0, 20.0, 0.0]] if reference == "anchor_a" else [[10.0, 22.0, 0.0]],
+                dtype=np.float64,
+            ),
+            orientation=default.orientation,
+        )
+    )
+    inspector.targets = [
+        RandomizationTarget(
+            key=original_target.key,
+            label=original_target.label,
+            rand_range=PoseRandomRange.model_validate(
+                {
+                    "reference": "anchor_a",
+                    "y": {"range": [0.0, 0.0], "reference": "anchor_b"},
+                }
+            ),
+            get_default_pose=lambda: default_pose,
+            apply_pose=handler.set_pose,
+            get_current_pose=handler.get_pose,
+        )
+    ]
+
+    inspector._apply_case(
+        ExtremeCase(
+            name="mixed-reference",
+            description="mixed axis references",
+            offsets_by_target={"object:block": {"y": 0.0}},
+        )
+    )
+
+    assert np.allclose(handler.get_pose().position[0], [11.0, 22.0, 0.0])
+
+
 def test_collect_targets_reuses_backend_validation() -> None:
     inspector, _handler = _make_inspector()
     inspector.operator_initial_states = {}

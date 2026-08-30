@@ -50,10 +50,15 @@ task:
       base:
         # Small independent perturbations around the handle-anchored base pose.
         # Translation is in metres; rotation is in RPY radians.
+        # Axis-level references override this fallback when present.
         reference: relative
         x: [-0.01, 0.01]
         y: [-0.01, 0.01]
-        z: [-0.005, 0.005]
+        z:
+          # Hold the robot near the original world height instead of carrying
+          # the handle frame's Z displacement across door assets.
+          range: [-0.305, -0.295]
+          reference: absolute_world
         roll: [-0.02, 0.02]
         pitch: [-0.02, 0.02]
         yaw: [-0.03, 0.03]

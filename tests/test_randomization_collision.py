@@ -5,7 +5,6 @@ from dataclasses import dataclass
 from typing import Dict, Iterable, Optional
 
 import numpy as np
-
 import pytest
 
 import auto_atom.backend.mjc.mujoco_backend as mujoco_backend_module
@@ -19,6 +18,7 @@ from auto_atom.framework import (
     PoseControlConfig,
     PoseRandomizationConfig,
     PoseRandomRange,
+    RandomizationAxisConfig,
     RandomizationReference,
 )
 from auto_atom.utils.pose import PoseState
@@ -421,6 +421,117 @@ def test_operator_nested_randomization_strips_hydra_null_switches() -> None:
     assert arm.eef.regions[0].x == (0.3, 0.4)
 
 
+def test_axis_reference_overrides_global_reference_with_legacy_fallback() -> None:
+    rand_range = PoseRandomRange.model_validate(
+        {
+            "reference": "relative",
+            "x": [-0.1, 0.1],
+            "z": {
+                "range": [-0.305, -0.295],
+                "reference": "absolute_world",
+            },
+        }
+    )
+
+    assert rand_range.x == (-0.1, 0.1)
+    assert isinstance(rand_range.z, RandomizationAxisConfig)
+    assert rand_range.axis_range("z") == (-0.305, -0.295)
+    assert rand_range.axis_reference("x") == RandomizationReference.RELATIVE
+    assert rand_range.axis_reference("z") == RandomizationReference.ABSOLUTE_WORLD
+
+
+def test_mixed_axis_references_sample_independently() -> None:
+    backend = _make_backend(
+        randomization={
+            "block": PoseRandomRange.model_validate(
+                {
+                    "reference": "relative",
+                    "x": [0.1, 0.1],
+                    "z": {"range": [-0.3, -0.3], "reference": "absolute_world"},
+                    "yaw": {"range": [0.25, 0.25], "reference": "absolute_world"},
+                }
+            )
+        },
+        object_positions={"block": (1.0, 2.0, 3.0)},
+    )
+    backend._rng = SequenceRNG([0.1, -0.3, 0.25])
+
+    backend._apply_randomization(np.asarray([True], dtype=bool))
+
+    pose = backend.object_handlers["block"].get_pose().select(0)
+    assert np.allclose(pose.position[0], [1.1, 2.0, -0.3])
+    assert np.allclose(
+        pose.orientation[0],
+        [0.0, 0.0, np.sin(0.125), np.cos(0.125)],
+    )
+
+
+def test_axis_entity_reference_carries_only_that_axis() -> None:
+    backend = _make_backend(
+        randomization={
+            "anchor": PoseRandomRange(
+                reference=RandomizationReference.ABSOLUTE_WORLD,
+                x=(2.0, 2.0),
+                y=(3.0, 3.0),
+                collision_radius=0.0,
+            ),
+            "block": PoseRandomRange.model_validate(
+                {
+                    "reference": "relative",
+                    "x": [0.0, 0.0],
+                    "y": {"range": [0.0, 0.0], "reference": "anchor"},
+                    "collision_radius": 0.0,
+                }
+            ),
+        },
+        object_positions={
+            "anchor": (1.0, 1.0, 0.0),
+            "block": (10.0, 20.0, 0.0),
+        },
+    )
+    backend._rng = SequenceRNG([2.0, 3.0, 0.0, 0.0])
+
+    backend._apply_randomization(np.asarray([True], dtype=bool))
+
+    block = backend.object_handlers["block"].get_pose().position[0]
+    assert np.allclose(block, [10.0, 22.0, 0.0])
+
+
+def test_axis_entity_reference_keeps_global_baseline_for_unconfigured_axes() -> None:
+    backend = _make_backend(
+        randomization={
+            "anchor_a": PoseRandomRange(
+                reference=RandomizationReference.ABSOLUTE_WORLD,
+                x=(2.0, 2.0),
+                collision_radius=0.0,
+            ),
+            "anchor_b": PoseRandomRange(
+                reference=RandomizationReference.ABSOLUTE_WORLD,
+                y=(4.0, 4.0),
+                collision_radius=0.0,
+            ),
+            "block": PoseRandomRange.model_validate(
+                {
+                    "reference": "anchor_a",
+                    "y": {"range": [0.0, 0.0], "reference": "anchor_b"},
+                    "collision_radius": 0.0,
+                }
+            ),
+        },
+        object_positions={
+            "anchor_a": (1.0, 1.0, 0.0),
+            "anchor_b": (0.0, 2.0, 0.0),
+            "block": (10.0, 20.0, 0.0),
+        },
+    )
+    backend._rng = SequenceRNG([2.0, 4.0, 0.0])
+
+    backend._apply_randomization(np.asarray([True], dtype=bool))
+
+    block = backend.object_handlers["block"].get_pose().position[0]
+    assert np.allclose(block, [11.0, 22.0, 0.0])
+
+
 def test_camera_and_waypoint_randomization_reject_regions() -> None:
     with pytest.raises(ValueError):
         AutoAtomConfig.model_validate(
@@ -435,6 +546,56 @@ def test_camera_and_waypoint_randomization_reject_regions() -> None:
         PoseControlConfig.model_validate(
             {"randomization": {"regions": [{"x": [0.0, 1.0]}]}}
         )
+
+
+def test_camera_rejects_illegal_axis_level_reference() -> None:
+    backend = MujocoTaskBackend(
+        env=DummyEnv(batch_size=1),
+        operator_handlers={},
+        object_handlers={},
+        camera_randomization={
+            "camera": PoseRandomRange.model_validate(
+                {"z": {"range": [0.0, 0.0], "reference": "anchor"}}
+            )
+        },
+    )
+
+    with pytest.raises(ValueError, match="entity reference 'anchor'"):
+        backend._apply_camera_randomization(np.asarray([True], dtype=bool))
+
+
+def test_eef_rejects_mixed_absolute_base_axis_references() -> None:
+    pose = PoseState(
+        position=np.zeros((1, 3), dtype=np.float64),
+        orientation=np.asarray([[0.0, 0.0, 0.0, 1.0]], dtype=np.float64),
+    )
+    backend = MujocoTaskBackend(
+        env=DummyEnv(batch_size=1),
+        operator_handlers={
+            "arm": DummyOperatorHandler(
+                operator_name="arm",
+                base_pose=pose,
+                eef_pose=pose,
+            )
+        },
+        object_handlers={},
+        randomization={
+            "arm": OperatorRandomizationConfig(
+                eef=PoseRandomRange.model_validate(
+                    {
+                        "reference": "absolute_base",
+                        "z": {
+                            "range": [0.0, 0.0],
+                            "reference": "absolute_world",
+                        },
+                    }
+                )
+            )
+        },
+    )
+
+    with pytest.raises(ValueError, match="cannot mix 'absolute_base'"):
+        backend._validate_randomization_configuration()
 
 
 def test_disjoint_object_regions_use_each_region_configuration() -> None:
@@ -600,6 +761,36 @@ def test_multi_region_references_are_all_dependencies() -> None:
                     PoseRandomRange(reference="anchor_a"),
                     PoseRandomRange(reference="anchor_b"),
                 ]
+            ),
+        },
+    )
+
+    dependencies = backend._randomization_dependencies()
+
+    assert dependencies["block"] == {"anchor_a", "anchor_b"}
+
+
+def test_axis_level_references_are_dependencies() -> None:
+    pose = PoseState(
+        position=np.zeros((1, 3), dtype=np.float64),
+        orientation=np.asarray([[0.0, 0.0, 0.0, 1.0]], dtype=np.float64),
+    )
+    handlers = {
+        name: DummyObjectHandler(name=name, pose=pose)
+        for name in ("anchor_a", "anchor_b", "block")
+    }
+    backend = MujocoTaskBackend(
+        env=DummyEnv(batch_size=1),
+        operator_handlers={},
+        object_handlers=handlers,
+        randomization={
+            "anchor_a": PoseRandomRange(),
+            "anchor_b": PoseRandomRange(),
+            "block": PoseRandomRange.model_validate(
+                {
+                    "reference": "anchor_a",
+                    "z": {"range": [0.0, 0.0], "reference": "anchor_b"},
+                }
             ),
         },
     )

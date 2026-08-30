@@ -418,11 +418,40 @@ class PlacedToleranceConfig(BaseModel):
     valid for axis-alignment goals."""
 
 
-class PoseRandomRange(BaseModel):
+class RandomizationAxisConfig(BaseModel, frozen=True):
+    """Randomization bounds and an optional reference for one pose axis."""
+
+    model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid")
+
+    range: Tuple[float, float]
+    """Inclusive ``[min, max]`` sampling range for this axis."""
+
+    reference: Optional[Union[RandomizationReference, str]] = None
+    """Axis-specific reference. ``None`` inherits the pose-level reference."""
+
+    @field_validator("reference", mode="before")
+    @classmethod
+    def _coerce_reference(cls, v: object) -> object:
+        if isinstance(v, str) and not isinstance(v, RandomizationReference):
+            try:
+                return RandomizationReference(v)
+            except ValueError:
+                return v
+        return v
+
+
+RandomizationAxisSpec = Union[Tuple[float, float], RandomizationAxisConfig]
+"""Compact range or expanded per-axis randomization configuration."""
+
+
+class PoseRandomRange(BaseModel, frozen=True):
     """Per-entity pose randomization bounds.
 
-    The ``reference`` field selects one of three modes, **or** names
-    another entity to track:
+    Each axis accepts either a compact ``[min, max]`` range or an expanded
+    ``{range: [min, max], reference: ...}`` object. An expanded axis reference
+    takes precedence over the pose-level ``reference``; an omitted axis
+    reference inherits the pose-level value. The pose-level ``reference``
+    selects one of three modes, **or** names another entity to track:
 
     - ``"relative"`` (default): each per-axis ``[min, max]`` range is an
       additive offset applied to the entity's default/initial pose.
@@ -460,7 +489,9 @@ class PoseRandomRange(BaseModel):
         randomization:
           source_block:
             x: [-0.03, 0.03]
-            y: [-0.03, 0.03]
+            y:
+              range: [-0.20, 0.20]
+              reference: absolute_world
             collision_radius: 0.04
 
         # Absolute world-frame: sampled as world-frame coordinates
@@ -493,26 +524,20 @@ class PoseRandomRange(BaseModel):
             y: [-0.005, 0.005]
     """
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid")
 
-    x: Optional[Tuple[float, float]] = None
-    """[min, max] range along the world X axis (metres), or ``None`` to
-    leave this axis at the default-pose value."""
-    y: Optional[Tuple[float, float]] = None
-    """[min, max] range along the world Y axis (metres), or ``None`` to
-    leave this axis at the default-pose value."""
-    z: Optional[Tuple[float, float]] = None
-    """[min, max] range along the world Z axis (metres), or ``None`` to
-    leave this axis at the default-pose value."""
-    roll: Optional[Tuple[float, float]] = None
-    """[min, max] range for the roll Euler angle (radians), or ``None`` to
-    leave this axis at the default-pose value."""
-    pitch: Optional[Tuple[float, float]] = None
-    """[min, max] range for the pitch Euler angle (radians), or ``None`` to
-    leave this axis at the default-pose value."""
-    yaw: Optional[Tuple[float, float]] = None
-    """[min, max] range for the yaw Euler angle (radians), or ``None`` to
-    leave this axis at the default-pose value."""
+    x: Optional[RandomizationAxisSpec] = None
+    """X range in metres, optionally with its own reference."""
+    y: Optional[RandomizationAxisSpec] = None
+    """Y range in metres, optionally with its own reference."""
+    z: Optional[RandomizationAxisSpec] = None
+    """Z range in metres, optionally with its own reference."""
+    roll: Optional[RandomizationAxisSpec] = None
+    """Roll range in radians, optionally with its own reference."""
+    pitch: Optional[RandomizationAxisSpec] = None
+    """Pitch range in radians, optionally with its own reference."""
+    yaw: Optional[RandomizationAxisSpec] = None
+    """Yaw range in radians, optionally with its own reference."""
     reference: Union[RandomizationReference, str] = RandomizationReference.RELATIVE
     """One of the :class:`RandomizationReference` modes (``"relative"``,
     ``"absolute_world"``, ``"absolute_base"``), the **name of another
@@ -533,6 +558,31 @@ class PoseRandomRange(BaseModel):
             except ValueError:
                 return v  # entity name — validated at sample time
         return v
+
+    def axis_range(self, axis: str) -> Optional[Tuple[float, float]]:
+        """Return one axis's concrete sampling range."""
+        value = getattr(self, axis)
+        if isinstance(value, RandomizationAxisConfig):
+            return value.range
+        return value
+
+    def axis_reference(
+        self,
+        axis: str,
+    ) -> Union[RandomizationReference, str]:
+        """Return one axis's effective reference after fallback resolution."""
+        value = getattr(self, axis)
+        if isinstance(value, RandomizationAxisConfig) and value.reference is not None:
+            return value.reference
+        return self.reference
+
+    def references(self) -> Tuple[Union[RandomizationReference, str], ...]:
+        """Return every effective reference declared by this pose range."""
+        references = [
+            self.axis_reference(axis)
+            for axis in ("x", "y", "z", "roll", "pitch", "yaw")
+        ]
+        return tuple(dict.fromkeys(references))
 
 
 class PoseRandomizationConfig(BaseModel, frozen=True):

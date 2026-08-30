@@ -54,6 +54,7 @@ from auto_atom.utils.pose import (
 
 AXES = ("x", "y", "z", "roll", "pitch", "yaw")
 POSITION_AXES = ("x", "y", "z")
+ROTATION_AXES = ("roll", "pitch", "yaw")
 
 
 def _enable_high_dpi_awareness() -> None:
@@ -206,7 +207,7 @@ def _fmt(values, precision: int = 6) -> str:
 
 
 def _axis_range(rand_range: PoseRandomRange, axis: str) -> tuple[float, float]:
-    raw = getattr(rand_range, axis, None)
+    raw = rand_range.axis_range(axis)
     if raw is None:
         return (0.0, 0.0)
     if isinstance(raw, (list, tuple)) and len(raw) == 2:
@@ -257,32 +258,58 @@ def _with_offsets(
     base_pose: PoseState,
     offsets: Dict[str, float],
     rand_range: PoseRandomRange,
+    reference_poses: Optional[Dict[RandomizationReference | str, PoseState]] = None,
 ) -> PoseState:
     pose = base_pose.broadcast_to(base_pose.batch_size)
-    position = pose.position.copy()
-    orientation = pose.orientation.copy()
-    is_absolute = rand_range.reference in (
-        RandomizationReference.ABSOLUTE_WORLD,
-        RandomizationReference.ABSOLUTE_BASE,
-    )
+    pose_by_reference = {
+        reference: reference_pose.broadcast_to(pose.batch_size)
+        for reference, reference_pose in (reference_poses or {}).items()
+    }
+
+    def _baseline(reference: RandomizationReference | str) -> PoseState:
+        return pose_by_reference.get(reference, pose)
+
+    position = np.empty_like(pose.position)
+    orientation = np.empty_like(pose.orientation)
     for env_index in range(pose.batch_size):
         for axis_index, axis in enumerate(POSITION_AXES):
-            if axis not in offsets:
-                continue
-            if is_absolute:
-                position[env_index, axis_index] = float(offsets[axis])
-            else:
-                position[env_index, axis_index] += float(offsets[axis])
-        roll, pitch, yaw = quaternion_to_rpy(orientation[env_index])
-        if is_absolute:
-            roll = roll if "roll" not in offsets else float(offsets["roll"])
-            pitch = pitch if "pitch" not in offsets else float(offsets["pitch"])
-            yaw = yaw if "yaw" not in offsets else float(offsets["yaw"])
-        else:
-            roll += float(offsets.get("roll", 0.0))
-            pitch += float(offsets.get("pitch", 0.0))
-            yaw += float(offsets.get("yaw", 0.0))
-        orientation[env_index] = euler_to_quaternion((roll, pitch, yaw))
+            reference = rand_range.axis_reference(axis)
+            value = float(_baseline(reference).position[env_index, axis_index])
+            if axis in offsets and reference in (
+                RandomizationReference.ABSOLUTE_WORLD,
+                RandomizationReference.ABSOLUTE_BASE,
+            ):
+                value = float(offsets[axis])
+            elif axis in offsets:
+                value += float(offsets[axis])
+            position[env_index, axis_index] = value
+        rotation_references = tuple(
+            rand_range.axis_reference(axis) for axis in ROTATION_AXES
+        )
+        if (
+            not any(axis in offsets for axis in ROTATION_AXES)
+            and len(set(rotation_references)) == 1
+        ):
+            orientation[env_index] = _baseline(rotation_references[0]).orientation[
+                env_index
+            ]
+            continue
+        rotation = []
+        for axis_index, axis in enumerate(ROTATION_AXES):
+            reference = rand_range.axis_reference(axis)
+            baseline_rpy = quaternion_to_rpy(
+                _baseline(reference).orientation[env_index]
+            )
+            value = float(baseline_rpy[axis_index])
+            if axis in offsets and reference in (
+                RandomizationReference.ABSOLUTE_WORLD,
+                RandomizationReference.ABSOLUTE_BASE,
+            ):
+                value = float(offsets[axis])
+            elif axis in offsets:
+                value += float(offsets[axis])
+            rotation.append(value)
+        orientation[env_index] = euler_to_quaternion(tuple(rotation))
     return PoseState(position=position, orientation=orientation)
 
 
@@ -767,7 +794,18 @@ class RandomizationInspector:
                 parts = [f"reference={reference_label}"]
                 for axis in _active_region_axes(rand_range):
                     lo, hi = _axis_range(rand_range, axis)
-                    parts.append(f"{axis}=[{lo:.6f}, {hi:.6f}]")
+                    axis_reference = rand_range.axis_reference(axis)
+                    if axis_reference == reference:
+                        parts.append(f"{axis}=[{lo:.6f}, {hi:.6f}]")
+                    else:
+                        axis_reference_label = (
+                            axis_reference.value
+                            if isinstance(axis_reference, RandomizationReference)
+                            else axis_reference
+                        )
+                        parts.append(
+                            f"{axis}=[{lo:.6f}, {hi:.6f}]@{axis_reference_label}"
+                        )
                 if rand_range.collision_radius != 0.05:
                     parts.append(
                         f"collision_radius={float(rand_range.collision_radius):.6f}"
@@ -869,9 +907,9 @@ class RandomizationInspector:
                     f"for target '{target.key}' (expected 0..{len(target.regions) - 1})"
                 )
             rand_range = target.regions[region_index]
-            reference = rand_range.reference
+            references = rand_range.references()
             if (
-                reference == RandomizationReference.ABSOLUTE_BASE
+                references == (RandomizationReference.ABSOLUTE_BASE,)
                 and target.get_base_pose is not None
             ):
                 base_world = target.get_base_pose()
@@ -885,22 +923,26 @@ class RandomizationInspector:
                     rand_range,
                 )
                 sampled_pose = compose_pose(base_world, sampled_in_base)
-            elif isinstance(reference, RandomizationReference):
+            else:
+                default_pose = target.get_default_pose()
+                reference_poses = {
+                    reference: (
+                        default_pose
+                        if isinstance(reference, RandomizationReference)
+                        else self.backend._resolve_reference_base_pose(
+                            reference,
+                            sampled_poses,
+                            default_pose,
+                        )
+                    )
+                    for reference in references
+                }
                 sampled_pose = _with_offsets(
-                    target.get_default_pose(),
+                    default_pose,
                     offsets,
                     rand_range,
+                    reference_poses,
                 )
-            else:
-                # Entity-name reference: carry the referenced entity's delta
-                # onto this target's default pose so the entry follows its
-                # referent even when it has no offsets of its own.
-                base_pose = self.backend._resolve_reference_base_pose(
-                    reference,
-                    sampled_poses,
-                    target.get_default_pose(),
-                )
-                sampled_pose = _with_offsets(base_pose, offsets, rand_range)
             target.apply_pose(sampled_pose)
             sample_key = self._sampled_pose_key(target)
             if sample_key is not None:
