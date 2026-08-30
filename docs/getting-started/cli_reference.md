@@ -231,7 +231,17 @@ aao-unidoor-sweep
 aao-unidoor-sweep \
   --doors D001,D002 \
   --handles H001,H004,HL001
+
+# Start from all catalog assets and exclude selected IDs
+aao-unidoor-sweep \
+  --exclude-doors D003,D007 \
+  --exclude-handles H002,HL016
 ```
+
+`--exclude-doors` and `--exclude-handles` are applied after the positive
+`--doors`/`--handles` selection. Therefore they can either subtract from the
+whole catalog or from an explicit subset. Unknown or duplicate excluded IDs,
+and exclusions that leave no door or no handle, are rejected before launch.
 
 By default, the wrapper stops at the first failed combination. Strict stopping
 requires one combination per Hydra process, so `--launcher-batch-size` remains

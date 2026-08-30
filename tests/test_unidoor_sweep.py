@@ -118,6 +118,10 @@ def test_parse_config_accepts_kebab_case_and_comma_lists() -> None:
             "D002,D001",
             "--handles",
             "H001",
+            "--exclude-doors",
+            "D001",
+            "--exclude-handles",
+            "H002",
             "--max-updates",
             "0",
             "--rounds",
@@ -130,6 +134,8 @@ def test_parse_config_accepts_kebab_case_and_comma_lists() -> None:
 
     assert config.doors == ["D002", "D001"]
     assert config.handles == ["H001"]
+    assert config.exclude_doors == ["D001"]
+    assert config.exclude_handles == ["H002"]
     assert config.max_updates == 0
     assert config.rounds == 2
     assert config.launcher_batch_size == 3
@@ -158,17 +164,33 @@ def test_load_catalog_follows_asset_package_component_index(tmp_path: Path) -> N
 
 
 @pytest.mark.parametrize(
-    ("doors", "handles", "error"),
+    ("doors", "handles", "exclude_doors", "exclude_handles", "error"),
     [
-        (["D001", "D001"], ["H001"], "Duplicate requested door"),
-        (["D999"], ["H001"], "Unknown door"),
-        (["D001"], ["H999"], "Unknown handle"),
+        (
+            ["D001", "D001"],
+            ["H001"],
+            [],
+            [],
+            "Duplicate requested door",
+        ),
+        (["D999"], ["H001"], [], [], "Unknown door"),
+        (["D001"], ["H999"], [], [], "Unknown handle"),
+        (["D001"], ["H001"], ["D999"], [], "Unknown excluded door"),
+        (
+            ["D001"],
+            ["H001"],
+            [],
+            ["H002", "H002"],
+            "Duplicate excluded handle",
+        ),
     ],
 )
 def test_manifest_rejects_duplicate_and_unknown_selections(
     tmp_path: Path,
     doors: list[str],
     handles: list[str],
+    exclude_doors: list[str],
+    exclude_handles: list[str],
     error: str,
 ) -> None:
     package_path = _asset_package(tmp_path)
@@ -176,6 +198,61 @@ def test_manifest_rejects_duplicate_and_unknown_selections(
         asset_package=package_path,
         doors=doors,
         handles=handles,
+        exclude_doors=exclude_doors,
+        exclude_handles=exclude_handles,
+    )
+
+    with pytest.raises(ValueError, match=error):
+        _build_manifest(config, load_catalog(config), tmp_path / "sweep")
+
+
+def test_manifest_applies_exclusions_after_positive_selection(tmp_path: Path) -> None:
+    package_path = _asset_package(
+        tmp_path,
+        doors=("D001", "D002"),
+        handles=("H001", "H002", "H003"),
+    )
+    config = UniDoorSweepConfig(
+        asset_package=package_path,
+        doors=["D002", "D001"],
+        handles=["H003", "H001", "H002"],
+        exclude_doors=["D001"],
+        exclude_handles=["H001"],
+    )
+
+    manifest = _build_manifest(config, load_catalog(config), tmp_path / "sweep")
+
+    assert manifest["selection"] == {
+        "doors": ["D002"],
+        "handles": ["H003", "H002"],
+        "excluded_doors": ["D001"],
+        "excluded_handles": ["H001"],
+        "combination_count": 2,
+    }
+    assert [(job["door_id"], job["handle_id"]) for job in manifest["jobs"]] == [
+        ("D002", "H003"),
+        ("D002", "H002"),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("exclude_doors", "exclude_handles", "error"),
+    [
+        (["D001", "D002"], [], "Door selection is empty"),
+        ([], ["H001", "H002"], "Handle selection is empty"),
+    ],
+)
+def test_manifest_rejects_exclusions_that_empty_a_dimension(
+    tmp_path: Path,
+    exclude_doors: list[str],
+    exclude_handles: list[str],
+    error: str,
+) -> None:
+    package_path = _asset_package(tmp_path)
+    config = UniDoorSweepConfig(
+        asset_package=package_path,
+        exclude_doors=exclude_doors,
+        exclude_handles=exclude_handles,
     )
 
     with pytest.raises(ValueError, match=error):

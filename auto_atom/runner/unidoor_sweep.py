@@ -76,6 +76,12 @@ class UniDoorSweepConfig(BaseModel, frozen=True):
     handles: list[str] = []
     """Handle IDs to test; repeat the option or use a comma list; empty means all."""
 
+    exclude_doors: list[str] = []
+    """Door IDs removed after applying ``doors``; repeat or use a comma list."""
+
+    exclude_handles: list[str] = []
+    """Handle IDs removed after applying ``handles``; repeat or use a comma list."""
+
     output_dir: Path | None = None
     """Exact result directory; otherwise a timestamped directory is created."""
 
@@ -258,21 +264,28 @@ def load_catalog(config: UniDoorSweepConfig) -> _Catalog:
 
 def _select_ids(
     requested: Sequence[str],
+    excluded: Sequence[str],
     available: Sequence[str],
     *,
     role: str,
 ) -> tuple[str, ...]:
-    if not requested:
-        return tuple(available)
-    duplicates = sorted(
-        value for value, count in Counter(requested).items() if count > 1
-    )
-    if duplicates:
-        raise ValueError(f"Duplicate requested {role} IDs: {', '.join(duplicates)}")
-    unknown = [value for value in requested if value not in available]
-    if unknown:
-        raise ValueError(f"Unknown {role} IDs: {', '.join(unknown)}")
-    return tuple(requested)
+    for label, values in (("requested", requested), ("excluded", excluded)):
+        duplicates = sorted(
+            value for value, count in Counter(values).items() if count > 1
+        )
+        if duplicates:
+            raise ValueError(f"Duplicate {label} {role} IDs: {', '.join(duplicates)}")
+        unknown = [value for value in values if value not in available]
+        if unknown:
+            qualifier = "" if label == "requested" else f"{label} "
+            raise ValueError(f"Unknown {qualifier}{role} IDs: {', '.join(unknown)}")
+
+    selected = tuple(requested) if requested else tuple(available)
+    excluded_set = set(excluded)
+    selected = tuple(value for value in selected if value not in excluded_set)
+    if not selected:
+        raise ValueError(f"{role.capitalize()} selection is empty after exclusions.")
+    return selected
 
 
 def _hydra_command(
@@ -319,8 +332,18 @@ def _build_manifest(
     catalog: _Catalog,
     sweep_dir: Path,
 ) -> dict[str, Any]:
-    doors = _select_ids(config.doors, catalog.doors, role="door")
-    handles = _select_ids(config.handles, catalog.handles, role="handle")
+    doors = _select_ids(
+        config.doors,
+        config.exclude_doors,
+        catalog.doors,
+        role="door",
+    )
+    handles = _select_ids(
+        config.handles,
+        config.exclude_handles,
+        catalog.handles,
+        role="handle",
+    )
     effective_batch_size = 1 if config.stop_on_failure else config.launcher_batch_size
     jobs: list[dict[str, Any]] = []
     batches: list[dict[str, Any]] = []
@@ -428,6 +451,8 @@ def _build_manifest(
         "selection": {
             "doors": list(doors),
             "handles": list(handles),
+            "excluded_doors": list(config.exclude_doors),
+            "excluded_handles": list(config.exclude_handles),
             "combination_count": len(jobs),
         },
         "git": git_state,
