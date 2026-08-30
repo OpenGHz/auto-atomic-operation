@@ -218,10 +218,10 @@ Timing covers only update execution, not interactive waits or console output.
 
 ## aao-unidoor-sweep
 
-Run the UniDoor door/handle product space as a strictly serial Hydra matrix and
-write a machine-readable result for every expected combination. IDs come from
-the component index declared by the scene asset package, so the tested matrix
-and the assets loaded by the task have one source of truth.
+Run the UniDoor door/handle product space as a bounded Hydra matrix and write a
+machine-readable result for every expected combination. IDs come from the
+component index declared by the scene asset package, so the tested matrix and
+the assets loaded by the task have one source of truth.
 
 ```bash
 # All 55 doors x 47 handles (2,585 jobs)
@@ -243,12 +243,16 @@ aao-unidoor-sweep \
 whole catalog or from an explicit subset. Unknown or duplicate excluded IDs,
 and exclusions that leave no door or no handle, are rejected before launch.
 
-By default, the wrapper stops at the first failed combination. Strict stopping
-requires one combination per Hydra process, so `--launcher-batch-size` remains
-the requested size in the manifest while the effective size is `1`. Disable
-strict stopping with `--no-stop-on-failure` to use bounded multiruns (six jobs
-per process by default); in that mode the wrapper can only observe failures
-after the whole batch finishes.
+By default, Hydra's Joblib launcher runs up to four combinations concurrently.
+Change the bound with `--max-concurrency`; set it to `1` to use Hydra's basic
+serial launcher. `--launcher-batch-size` separately caps the combinations held
+by one Hydra process (six by default).
+
+Failure stopping operates between parallel waves: all combinations already
+launched in the current wave finish, their summaries are recorded, and no next
+wave starts if any result failed. Disable this behavior with
+`--no-stop-on-failure` to continue through later batches. Resume skips the
+successful peers from a failed wave and retries only failed or unstarted jobs.
 
 Every job uses `env.batch_size=1`, the configured task seed (42 by default),
 and a disabled viewer. It preserves the task's cameras, sensors, timeouts,

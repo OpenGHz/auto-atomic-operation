@@ -1,4 +1,4 @@
-"""Serial Hydra sweeps for UniDoor door and handle combinations."""
+"""Bounded Hydra sweeps for UniDoor door and handle combinations."""
 
 from __future__ import annotations
 
@@ -56,7 +56,7 @@ class _TerminationSignal(BaseException):
 
 
 class UniDoorSweepConfig(BaseModel, frozen=True):
-    """Configuration for a serial UniDoor asset-matrix sweep."""
+    """Configuration for a bounded UniDoor asset-matrix sweep."""
 
     model_config = ConfigDict(
         use_attribute_docstrings=True,
@@ -104,7 +104,10 @@ class UniDoorSweepConfig(BaseModel, frozen=True):
     """Task seed applied identically to every combination for reproducibility."""
 
     launcher_batch_size: PositiveInt = 6
-    """Requested Hydra jobs per process when failure stopping is disabled."""
+    """Maximum combinations assigned to one bounded Hydra process."""
+
+    max_concurrency: PositiveInt = 4
+    """Maximum combinations run concurrently by Hydra's Joblib launcher."""
 
     stop_on_failure: bool = True
     """Stop at the first failed combination and make it the resume cursor."""
@@ -315,7 +318,10 @@ def _hydra_command(
     max_updates: int,
     seed: int,
     headless: bool,
+    max_concurrency: int,
 ) -> list[str]:
+    concurrency = min(max_concurrency, len(handle_ids))
+    launcher = "joblib" if concurrency > 1 else "basic"
     command = [
         sys.executable,
         "-u",
@@ -324,7 +330,7 @@ def _hydra_command(
         "--multirun",
         "--config-name",
         config_name,
-        "hydra/launcher=basic",
+        f"hydra/launcher={launcher}",
         "hydra/sweeper=basic",
         f"door_id={door_id}",
         f"handle_id={','.join(handle_ids)}",
@@ -339,6 +345,14 @@ def _hydra_command(
         f"hydra.sweep.dir={json.dumps(str(batch_dir), ensure_ascii=False)}",
         "hydra.sweep.subdir=${hydra.job.num}__${door_id}__${handle_id}",
     ]
+    if launcher == "joblib":
+        command.extend(
+            [
+                f"hydra.launcher.n_jobs={concurrency}",
+                f"hydra.launcher.pre_dispatch={concurrency}",
+                "hydra.launcher.batch_size=1",
+            ]
+        )
     if headless:
         command.append("env.viewer=null")
     return command
@@ -361,7 +375,11 @@ def _build_manifest(
         catalog.handles,
         role="handle",
     )
-    effective_batch_size = 1 if config.stop_on_failure else config.launcher_batch_size
+    effective_batch_size = (
+        min(config.launcher_batch_size, config.max_concurrency)
+        if config.stop_on_failure
+        else config.launcher_batch_size
+    )
     jobs: list[dict[str, Any]] = []
     batches: list[dict[str, Any]] = []
     job_num = 0
@@ -380,6 +398,7 @@ def _build_manifest(
                 max_updates=config.max_updates,
                 seed=config.seed,
                 headless=config.headless,
+                max_concurrency=config.max_concurrency,
             )
             batch_job_numbers: list[int] = []
             for local_num, handle_id in enumerate(batch_handles):
@@ -415,6 +434,7 @@ def _build_manifest(
                     "batch_num": batch_num,
                     "door_id": door_id,
                     "handle_ids": list(batch_handles),
+                    "launcher": "joblib" if len(batch_handles) > 1 else "basic",
                     "relative_dir": batch_relative_dir.as_posix(),
                     "job_numbers": batch_job_numbers,
                     "argv": command,
@@ -437,12 +457,15 @@ def _build_manifest(
             "max_updates": config.max_updates,
             "seed": config.seed,
             "launcher_batch_size": config.launcher_batch_size,
+            "max_concurrency": config.max_concurrency,
             "stop_on_failure": config.stop_on_failure,
             "headless": config.headless,
         },
         "execution": {
             "requested_launcher_batch_size": config.launcher_batch_size,
             "effective_launcher_batch_size": effective_batch_size,
+            "max_concurrency": config.max_concurrency,
+            "launcher_policy": "joblib_when_parallel",
             "stop_on_failure": config.stop_on_failure,
         },
         "progress": {
@@ -938,8 +961,26 @@ def _contact_pairs(result: dict[str, Any]) -> str:
 def _report_exit_code(report: dict[str, Any]) -> int:
     counts = report["counts"]
     if report.get("run_status") == "STOPPED_ON_FAILURE":
-        progress = report.get("progress", {})
-        return 1 if progress.get("stop_status") == "TASK_FAILURE" else 2
+        stopped_job_num = report.get("progress", {}).get("stopped_job_num")
+        stopped_result = next(
+            (
+                result
+                for result in report["results"]
+                if result["job_num"] == stopped_job_num
+            ),
+            None,
+        )
+        stopped_batch_num = (
+            stopped_result["batch_num"] if stopped_result is not None else None
+        )
+        stopped_wave_statuses = {
+            result["status"]
+            for result in report["results"]
+            if result["batch_num"] == stopped_batch_num
+        }
+        if stopped_wave_statuses & _INFRASTRUCTURE_STATUSES:
+            return 2
+        return 1
     if any(counts.get(status, 0) for status in _INFRASTRUCTURE_STATUSES):
         return 2
     if any(code != 0 for code in report.get("launcher_returncodes", [])):
@@ -963,11 +1004,24 @@ def _print_report(report: dict[str, Any]) -> None:
     print(f"Report: {Path(report['sweep_dir']) / REPORT_NAME}")
     print(f"Failures: {Path(report['sweep_dir']) / FAILURES_NAME}")
     stopped_on_failure = report.get("run_status") == "STOPPED_ON_FAILURE"
-    stopped_job_num = report.get("progress", {}).get("stopped_job_num")
+    stopped_batch_num = None
+    if stopped_on_failure:
+        stopped_job_num = report.get("progress", {}).get("stopped_job_num")
+        stopped_result = next(
+            (
+                result
+                for result in report["results"]
+                if result["job_num"] == stopped_job_num
+            ),
+            None,
+        )
+        stopped_batch_num = (
+            stopped_result["batch_num"] if stopped_result is not None else None
+        )
     for result in report["results"]:
         if result["status"] == "SUCCESS":
             continue
-        if stopped_on_failure and result["job_num"] != stopped_job_num:
+        if stopped_on_failure and result["batch_num"] != stopped_batch_num:
             continue
         reason = " | ".join(result["failure_reasons"])
         print(
@@ -1034,11 +1088,21 @@ def _append_resume_batches(
         execution.get("stop_on_failure", config.get("stop_on_failure", True))
     )
     requested_batch_size = int(config["launcher_batch_size"])
-    batch_size = 1 if stop_on_failure else requested_batch_size
+    max_concurrency = int(
+        config.get("max_concurrency", execution.get("max_concurrency", 1))
+    )
+    config.setdefault("max_concurrency", max_concurrency)
+    batch_size = (
+        min(requested_batch_size, max_concurrency)
+        if stop_on_failure
+        else requested_batch_size
+    )
     execution.update(
         {
             "requested_launcher_batch_size": requested_batch_size,
             "effective_launcher_batch_size": batch_size,
+            "max_concurrency": max_concurrency,
+            "launcher_policy": "joblib_when_parallel",
             "stop_on_failure": stop_on_failure,
         }
     )
@@ -1068,6 +1132,7 @@ def _append_resume_batches(
                 max_updates=int(config["max_updates"]),
                 seed=int(config["seed"]),
                 headless=bool(config["headless"]),
+                max_concurrency=max_concurrency,
             )
             for local_num, job in enumerate(batch_jobs):
                 relative_dir = relative_batch_dir / (
@@ -1102,6 +1167,7 @@ def _append_resume_batches(
                     "batch_num": next_batch_num,
                     "door_id": door_id,
                     "handle_ids": handle_ids,
+                    "launcher": "joblib" if len(handle_ids) > 1 else "basic",
                     "relative_dir": relative_batch_dir.as_posix(),
                     "job_numbers": [int(job["job_num"]) for job in batch_jobs],
                     "argv": command,
@@ -1323,7 +1389,7 @@ def run_unidoor_sweep(config: UniDoorSweepConfig) -> int:
         sweep_dir, manifest = _prepare_new_sweep(config)
         print(
             f"Planned {manifest['selection']['combination_count']} combinations in "
-            f"{len(manifest['batches'])} bounded serial Hydra batches."
+            f"{len(manifest['batches'])} bounded Hydra waves."
         )
         print(f"Output: {sweep_dir}")
         if config.dry_run:

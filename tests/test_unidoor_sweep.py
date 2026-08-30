@@ -130,6 +130,8 @@ def test_parse_config_accepts_kebab_case_and_comma_lists() -> None:
             "2",
             "--launcher-batch-size",
             "3",
+            "--max-concurrency",
+            "2",
             "--dry-run",
         ]
     )
@@ -141,6 +143,7 @@ def test_parse_config_accepts_kebab_case_and_comma_lists() -> None:
     assert config.max_updates == 0
     assert config.rounds == 2
     assert config.launcher_batch_size == 3
+    assert config.max_concurrency == 2
     assert config.stop_on_failure is True
     assert config.dry_run is True
 
@@ -268,7 +271,7 @@ def test_manifest_rejects_exclusions_that_empty_a_dimension(
         _build_manifest(config, load_catalog(config), tmp_path / "sweep")
 
 
-def test_manifest_uses_bounded_serial_hydra_batches(tmp_path: Path) -> None:
+def test_manifest_uses_bounded_joblib_batches(tmp_path: Path) -> None:
     package_path = _asset_package(
         tmp_path,
         doors=("D001", "D002"),
@@ -277,6 +280,7 @@ def test_manifest_uses_bounded_serial_hydra_batches(tmp_path: Path) -> None:
     config = UniDoorSweepConfig(
         asset_package=package_path,
         launcher_batch_size=2,
+        max_concurrency=2,
         stop_on_failure=False,
     )
 
@@ -302,13 +306,17 @@ def test_manifest_uses_bounded_serial_hydra_batches(tmp_path: Path) -> None:
         "--multirun",
     ]
     assert "handle_id=H001,H002" in first_command
+    assert "hydra/launcher=joblib" in first_command
+    assert "hydra.launcher.n_jobs=2" in first_command
+    assert "hydra.launcher.pre_dispatch=2" in first_command
+    assert "hydra.launcher.batch_size=1" in first_command
     assert "env.batch_size=1" in first_command
     assert "env.viewer=null" in first_command
     assert "hydra.sweeper.max_batch_size=null" in first_command
     assert "hydra.sweeper.max_batch_size=1" not in first_command
 
 
-def test_manifest_uses_single_job_batches_when_stopping_on_failure(
+def test_manifest_uses_bounded_parallel_waves_when_stopping_on_failure(
     tmp_path: Path,
 ) -> None:
     package_path = _asset_package(
@@ -319,21 +327,27 @@ def test_manifest_uses_single_job_batches_when_stopping_on_failure(
     config = UniDoorSweepConfig(
         asset_package=package_path,
         launcher_batch_size=6,
+        max_concurrency=2,
     )
 
     manifest = _build_manifest(config, load_catalog(config), tmp_path / "sweep")
 
-    assert len(manifest["batches"]) == 3
+    assert len(manifest["batches"]) == 2
     assert manifest["execution"] == {
         "requested_launcher_batch_size": 6,
-        "effective_launcher_batch_size": 1,
+        "effective_launcher_batch_size": 2,
+        "max_concurrency": 2,
+        "launcher_policy": "joblib_when_parallel",
         "stop_on_failure": True,
     }
     assert [batch["handle_ids"] for batch in manifest["batches"]] == [
-        ["H001"],
-        ["H002"],
+        ["H001", "H002"],
         ["H003"],
     ]
+    assert "hydra/launcher=joblib" in manifest["batches"][0]["argv"]
+    assert manifest["batches"][0]["launcher"] == "joblib"
+    assert "hydra/launcher=basic" in manifest["batches"][1]["argv"]
+    assert manifest["batches"][1]["launcher"] == "basic"
     assert manifest["progress"]["next_job_num"] == 0
     assert {job["status"] for job in manifest["jobs"]} == {"PENDING"}
 
@@ -609,48 +623,51 @@ def test_run_stops_on_task_failure_and_persists_resume_cursor(
     package_path = _asset_package(
         tmp_path,
         doors=("D001",),
-        handles=("H001", "H002", "H003"),
+        handles=("H001", "H002", "H003", "H004", "H005"),
     )
     sweep_dir = tmp_path / "sweep"
     config = UniDoorSweepConfig(asset_package=package_path)
     manifest = _build_manifest(config, load_catalog(config), sweep_dir)
     sweep_dir.mkdir()
     _write_json(sweep_dir / MANIFEST_NAME, manifest)
-    launched: list[str] = []
+    launched: list[list[str]] = []
 
     def fake_stream(command: list[str], **_kwargs: object) -> int:
-        handle_id = next(
+        handle_ids = next(
             argument.removeprefix("handle_id=")
             for argument in command
             if argument.startswith("handle_id=")
-        )
-        launched.append(handle_id)
-        job = next(job for job in manifest["jobs"] if job["handle_id"] == handle_id)
-        job_dir = sweep_dir / job["relative_dir"]
-        job_dir.mkdir(parents=True)
-        status = "OK" if handle_id == "H001" else "FAIL"
-        _write_json(
-            job_dir / "summary.json",
-            _summary(
-                status=status,
-                success=status == "OK",
-                reason="grasp failed" if status == "FAIL" else None,
-            ),
-        )
+        ).split(",")
+        launched.append(handle_ids)
+        for handle_id in handle_ids:
+            job = next(job for job in manifest["jobs"] if job["handle_id"] == handle_id)
+            job_dir = sweep_dir / job["relative_dir"]
+            job_dir.mkdir(parents=True)
+            status = "FAIL" if handle_id == "H002" else "OK"
+            _write_json(
+                job_dir / "summary.json",
+                _summary(
+                    status=status,
+                    success=status == "OK",
+                    reason="grasp failed" if status == "FAIL" else None,
+                ),
+            )
         return 0
 
     monkeypatch.setattr("auto_atom.runner.unidoor_sweep._stream_command", fake_stream)
 
     returncodes, interrupted = _run_batches(manifest, sweep_dir)
 
-    assert returncodes == [0, 0]
+    assert returncodes == [0]
     assert interrupted is False
-    assert launched == ["H001", "H002"]
+    assert launched == [["H001", "H002", "H003", "H004"]]
     stored = json.loads((sweep_dir / MANIFEST_NAME).read_text(encoding="utf-8"))
     assert stored["status"] == "STOPPED_ON_FAILURE"
     assert [job["status"] for job in stored["jobs"]] == [
         "SUCCESS",
         "TASK_FAILURE",
+        "SUCCESS",
+        "SUCCESS",
         "PENDING",
     ]
     assert stored["progress"]["next_job_num"] == 1
@@ -671,7 +688,7 @@ def test_run_records_launcher_failure_when_no_valid_summary_exists(
     package_path = _asset_package(
         tmp_path,
         doors=("D001",),
-        handles=("H001", "H002"),
+        handles=("H001", "H002", "H003", "H004", "H005"),
     )
     sweep_dir = tmp_path / "sweep"
     config = UniDoorSweepConfig(asset_package=package_path)
@@ -687,10 +704,53 @@ def test_run_records_launcher_failure_when_no_valid_summary_exists(
     _run_batches(manifest, sweep_dir)
 
     stored = json.loads((sweep_dir / MANIFEST_NAME).read_text(encoding="utf-8"))
-    assert stored["jobs"][0]["status"] == "LAUNCHER_FAILURE"
-    assert stored["jobs"][1]["status"] == "PENDING"
+    assert [job["status"] for job in stored["jobs"]] == [
+        "LAUNCHER_FAILURE",
+        "LAUNCHER_FAILURE",
+        "LAUNCHER_FAILURE",
+        "LAUNCHER_FAILURE",
+        "PENDING",
+    ]
     assert stored["progress"]["stop_status"] == "LAUNCHER_FAILURE"
     report = aggregate_sweep(sweep_dir)
+    assert report["counts"]["LAUNCHER_FAILURE"] == 4
+    assert _report_exit_code(report) == 2
+
+
+def test_parallel_wave_exit_code_prefers_infrastructure_failure(
+    tmp_path: Path,
+) -> None:
+    package_path = _asset_package(
+        tmp_path,
+        doors=("D001",),
+        handles=("H001", "H002"),
+    )
+    sweep_dir = tmp_path / "sweep"
+    manifest = _build_manifest(
+        UniDoorSweepConfig(asset_package=package_path),
+        load_catalog(UniDoorSweepConfig(asset_package=package_path)),
+        sweep_dir,
+    )
+    sweep_dir.mkdir()
+    task_job, launcher_job = manifest["jobs"]
+    task_dir = sweep_dir / task_job["relative_dir"]
+    task_dir.mkdir(parents=True)
+    _write_json(
+        task_dir / "summary.json",
+        _summary(status="FAIL", success=False, reason="grasp failed"),
+    )
+    task_job["status"] = "TASK_FAILURE"
+    launcher_job["status"] = "LAUNCHER_FAILURE"
+    launcher_job["attempts"][-1]["status"] = "LAUNCHER_FAILURE"
+    launcher_job["attempts"][-1]["failure_reasons"] = ["worker crashed"]
+    manifest["status"] = "STOPPED_ON_FAILURE"
+    manifest["progress"]["stopped_job_num"] = task_job["job_num"]
+    manifest["progress"]["stop_status"] = "TASK_FAILURE"
+    _write_json(sweep_dir / MANIFEST_NAME, manifest)
+
+    report = aggregate_sweep(sweep_dir)
+
+    assert report["counts"]["TASK_FAILURE"] == 1
     assert report["counts"]["LAUNCHER_FAILURE"] == 1
     assert _report_exit_code(report) == 2
 
@@ -732,11 +792,13 @@ def test_resume_retries_failure_and_suffix_without_repeating_success(
     assert failed_job["relative_dir"] != old_failure_path
     assert len(failed_job["attempts"]) == 2
     assert len(pending_job["attempts"]) == 2
-    assert len(batch_numbers) == 2
+    assert len(batch_numbers) == 1
     new_batches = [
         batch for batch in manifest["batches"] if batch["batch_num"] in batch_numbers
     ]
-    assert [batch["handle_ids"] for batch in new_batches] == [["H002"], ["H003"]]
+    assert [batch["handle_ids"] for batch in new_batches] == [["H002", "H003"]]
+    assert "hydra/launcher=joblib" in new_batches[0]["argv"]
+    assert "hydra.launcher.n_jobs=2" in new_batches[0]["argv"]
     assert all(batch["resume_attempt"] == 1 for batch in new_batches)
 
 

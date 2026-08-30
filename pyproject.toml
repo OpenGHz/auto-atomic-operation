@@ -10,7 +10,13 @@ readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
 authors = [{ name = "OpenGHz" }]
-dependencies = ["hydra-core", "numpy", "pydantic>=2", "pydantic-settings>=2"]
+dependencies = [
+  "hydra-core",
+  "hydra-joblib-launcher>=1.2",
+  "numpy",
+  "pydantic>=2",
+  "pydantic-settings>=2",
+]
 urls = { "repository" = "https://github.com/OpenGHz/auto-atomic-operation.git" }
 
 [project.scripts]
