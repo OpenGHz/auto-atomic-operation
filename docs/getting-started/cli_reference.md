@@ -233,13 +233,12 @@ aao-unidoor-sweep \
   --handles H001,H004,HL001
 ```
 
-Hydra's basic launcher is serial, but it retains each job in the same Python
-process. The wrapper therefore starts bounded multiruns (six jobs per process
-by default) and waits for each one before starting the next. This keeps the
-combination order serial while releasing simulator resources between batches.
-Change the bound with `--launcher-batch-size`; do not use Hydra's
-`hydra.sweeper.max_batch_size=1`, because an exceptional job can then prevent
-later batches from running.
+By default, the wrapper stops at the first failed combination. Strict stopping
+requires one combination per Hydra process, so `--launcher-batch-size` remains
+the requested size in the manifest while the effective size is `1`. Disable
+strict stopping with `--no-stop-on-failure` to use bounded multiruns (six jobs
+per process by default); in that mode the wrapper can only observe failures
+after the whole batch finishes.
 
 Every job uses `env.batch_size=1`, the configured task seed (42 by default),
 and a disabled viewer. It preserves the task's cameras, sensors, timeouts,
@@ -251,14 +250,14 @@ subset first when validating a new task configuration.
 The default root is `outputs/unidoor-sweeps/<timestamp>/`:
 
 ```text
-sweep_manifest.json   # expected jobs, exact argv, catalog hashes, Git state
+sweep_manifest.json   # expected jobs, attempts, cursor, exact argv, catalog/Git state
 sweep.log             # combined stdout/stderr from every Hydra batch
 report.json           # one structured result per expected combination
 failures.csv          # only non-success combinations, with reproduction commands
 batches/...           # Hydra configs, demo.log, and per-job summary.json files
 ```
 
-`report.json` and `failures.csv` distinguish five states:
+`report.json` and `failures.csv` distinguish these states:
 
 | State | Meaning |
 |---|---|
@@ -267,24 +266,32 @@ batches/...           # Hydra configs, demo.log, and per-job summary.json files
 | `NO_SUMMARY` | Hydra created the job directory but no `summary.json` was written |
 | `NOT_STARTED` | The manifest expected the job, but Hydra never created its directory |
 | `INVALID_SUMMARY` | `summary.json` exists but cannot be parsed or has no valid rounds |
+| `LAUNCHER_FAILURE` | Hydra itself exited nonzero before a valid combination result was accepted |
 
 A task-level failure does not make `aao-demo` itself return nonzero, so the
 sweep always classifies the summaries rather than relying on Hydra's return
 code. Each failed row includes a standalone `reproduce_command` with the exact
 door, handle, seed, rounds, and update limit.
 
-Rebuild the reports without starting simulations, or resume only combinations
-with missing/invalid results in versioned attempt directories:
+On failure, `sweep_manifest.json.progress` records the failed `job_num`, door,
+handle, status, reason, and next resume cursor. Jobs after the cursor stay
+`PENDING`. After fixing the task, resume the same directory; the failed
+combination is retried first, successful earlier combinations are not repeated,
+and each retry is preserved below a versioned `resume/<attempt>/` directory:
 
 ```bash
 aao-unidoor-sweep --report outputs/unidoor-sweeps/20260827-180000
 aao-unidoor-sweep --resume outputs/unidoor-sweeps/20260827-180000
 ```
 
-Exit code `0` means every combination succeeded, `1` means only task-level
-failures occurred, `2` means at least one job was not started or produced no
-valid summary, and `130` means the sweep was interrupted. Reports are written
-before returning any of these nonzero codes.
+Use `--report` when only rebuilding `report.json` and `failures.csv`. A resume
+also retries task-level failures, missing/invalid summaries, launcher failures,
+and combinations that never started.
+
+Exit code `0` means every combination succeeded. A strict stop returns `1` for
+a task-level failure or `2` for an infrastructure/launcher failure; later
+`PENDING` combinations do not change that diagnosis. Exit code `130` means the
+sweep was interrupted. Reports are written before returning any nonzero code.
 
 ## aao-eval
 

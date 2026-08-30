@@ -42,6 +42,11 @@ _INFRASTRUCTURE_STATUSES = {
     "NO_SUMMARY",
     "NOT_STARTED",
     "INVALID_SUMMARY",
+    "LAUNCHER_FAILURE",
+}
+_RESUMABLE_STATUSES = {
+    *_INFRASTRUCTURE_STATUSES,
+    "TASK_FAILURE",
 }
 
 
@@ -90,7 +95,10 @@ class UniDoorSweepConfig(BaseModel, frozen=True):
     """Task seed applied identically to every combination for reproducibility."""
 
     launcher_batch_size: PositiveInt = 6
-    """Maximum Hydra jobs per Python process; jobs remain strictly serial."""
+    """Requested Hydra jobs per process when failure stopping is disabled."""
+
+    stop_on_failure: bool = True
+    """Stop at the first failed combination and make it the resume cursor."""
 
     headless: bool = True
     """Disable the interactive viewer during the sweep."""
@@ -313,13 +321,14 @@ def _build_manifest(
 ) -> dict[str, Any]:
     doors = _select_ids(config.doors, catalog.doors, role="door")
     handles = _select_ids(config.handles, catalog.handles, role="handle")
+    effective_batch_size = 1 if config.stop_on_failure else config.launcher_batch_size
     jobs: list[dict[str, Any]] = []
     batches: list[dict[str, Any]] = []
     job_num = 0
     batch_num = 0
     for door_id in doors:
-        for offset in range(0, len(handles), config.launcher_batch_size):
-            batch_handles = handles[offset : offset + config.launcher_batch_size]
+        for offset in range(0, len(handles), effective_batch_size):
+            batch_handles = handles[offset : offset + effective_batch_size]
             batch_relative_dir = Path("batches") / f"{batch_num:04d}__{door_id}"
             batch_dir = sweep_dir / batch_relative_dir
             command = _hydra_command(
@@ -344,11 +353,17 @@ def _build_manifest(
                         "door_id": door_id,
                         "handle_id": handle_id,
                         "relative_dir": relative_dir.as_posix(),
+                        "status": "PENDING",
                         "attempts": [
                             {
                                 "attempt": 0,
                                 "batch_num": batch_num,
                                 "relative_dir": relative_dir.as_posix(),
+                                "status": "PENDING",
+                                "started_at": None,
+                                "finished_at": None,
+                                "launcher_returncode": None,
+                                "failure_reasons": [],
                             }
                         ],
                     }
@@ -382,8 +397,26 @@ def _build_manifest(
             "max_updates": config.max_updates,
             "seed": config.seed,
             "launcher_batch_size": config.launcher_batch_size,
+            "stop_on_failure": config.stop_on_failure,
             "headless": config.headless,
         },
+        "execution": {
+            "requested_launcher_batch_size": config.launcher_batch_size,
+            "effective_launcher_batch_size": effective_batch_size,
+            "stop_on_failure": config.stop_on_failure,
+        },
+        "progress": {
+            "next_job_num": 0 if jobs else None,
+            "last_started_job_num": None,
+            "last_completed_job_num": None,
+            "stopped_job_num": None,
+            "stopped_door_id": None,
+            "stopped_handle_id": None,
+            "stopped_at": None,
+            "stop_status": None,
+            "stop_reason": None,
+        },
+        "progress_history": [],
         "catalog": {
             "asset_package": str(catalog.asset_package),
             "asset_package_sha256": catalog.asset_package_sha256,
@@ -652,6 +685,25 @@ def _summary_result(
     return result
 
 
+def _recorded_result(
+    job: dict[str, Any],
+    sweep_dir: Path,
+    *,
+    expected_rounds: int | None,
+) -> dict[str, Any]:
+    """Combine the task summary with launcher-level state from the manifest."""
+    result = _summary_result(job, sweep_dir, expected_rounds=expected_rounds)
+    if job.get("status") != "LAUNCHER_FAILURE":
+        return result
+    attempts = job.get("attempts", [])
+    latest = attempts[-1] if attempts else {}
+    result["status"] = "LAUNCHER_FAILURE"
+    result["failure_reasons"] = list(
+        latest.get("failure_reasons") or ["Hydra launcher failed."]
+    )
+    return result
+
+
 def _discover_jobs(sweep_dir: Path) -> list[dict[str, Any]]:
     jobs: list[dict[str, Any]] = []
     for config_path in sorted(sweep_dir.rglob(".hydra/config.yaml")):
@@ -729,9 +781,11 @@ def aggregate_sweep(sweep_dir: Path) -> dict[str, Any]:
         launcher_returncodes = []
         expected_rounds = None
 
-    results = [
-        _summary_result(job, sweep_dir, expected_rounds=expected_rounds) for job in jobs
-    ]
+    results = []
+    for job in jobs:
+        results.append(
+            _recorded_result(job, sweep_dir, expected_rounds=expected_rounds)
+        )
     for result in results:
         result["reproduce_command"] = _reproduction_command(manifest, result)
     counts = Counter(result["status"] for result in results)
@@ -741,6 +795,7 @@ def aggregate_sweep(sweep_dir: Path) -> dict[str, Any]:
         "NO_SUMMARY",
         "NOT_STARTED",
         "INVALID_SUMMARY",
+        "LAUNCHER_FAILURE",
     ):
         counts.setdefault(status, 0)
     report = {
@@ -748,6 +803,7 @@ def aggregate_sweep(sweep_dir: Path) -> dict[str, Any]:
         "generated_at": _now_iso(),
         "sweep_dir": str(sweep_dir),
         "run_status": run_status,
+        "progress": manifest.get("progress", {}) if manifest is not None else {},
         "launcher_returncodes": launcher_returncodes,
         "expected_jobs": len(jobs),
         "completed_jobs": counts["SUCCESS"] + counts["TASK_FAILURE"],
@@ -819,6 +875,9 @@ def _contact_pairs(result: dict[str, Any]) -> str:
 
 def _report_exit_code(report: dict[str, Any]) -> int:
     counts = report["counts"]
+    if report.get("run_status") == "STOPPED_ON_FAILURE":
+        progress = report.get("progress", {})
+        return 1 if progress.get("stop_status") == "TASK_FAILURE" else 2
     if any(counts.get(status, 0) for status in _INFRASTRUCTURE_STATUSES):
         return 2
     if any(code != 0 for code in report.get("launcher_returncodes", [])):
@@ -836,17 +895,27 @@ def _print_report(report: dict[str, Any]) -> None:
         f"{counts['TASK_FAILURE']} task failures, "
         f"{counts['NO_SUMMARY']} without summary, "
         f"{counts['NOT_STARTED']} not started, "
-        f"{counts['INVALID_SUMMARY']} invalid summaries."
+        f"{counts['INVALID_SUMMARY']} invalid summaries, "
+        f"{counts['LAUNCHER_FAILURE']} launcher failures."
     )
     print(f"Report: {Path(report['sweep_dir']) / REPORT_NAME}")
     print(f"Failures: {Path(report['sweep_dir']) / FAILURES_NAME}")
+    stopped_on_failure = report.get("run_status") == "STOPPED_ON_FAILURE"
+    stopped_job_num = report.get("progress", {}).get("stopped_job_num")
     for result in report["results"]:
         if result["status"] == "SUCCESS":
+            continue
+        if stopped_on_failure and result["job_num"] != stopped_job_num:
             continue
         reason = " | ".join(result["failure_reasons"])
         print(
             f"  {result['status']} {result['door_id']} + {result['handle_id']}: "
             f"{reason}"
+        )
+    if stopped_on_failure:
+        print(
+            f"Stopped at job {stopped_job_num}; rerun with --resume "
+            f"{report['sweep_dir']} after applying a fix."
         )
 
 
@@ -856,13 +925,13 @@ def _unresolved_jobs(
 ) -> list[dict[str, Any]]:
     expected_rounds = int(manifest.get("config", {}).get("rounds", 1))
     unresolved: list[dict[str, Any]] = []
-    for job in manifest["jobs"]:
-        result = _summary_result(
+    for job in sorted(manifest["jobs"], key=lambda item: int(item["job_num"])):
+        result = _recorded_result(
             job,
             sweep_dir,
             expected_rounds=expected_rounds,
         )
-        if result["status"] in _INFRASTRUCTURE_STATUSES:
+        if result["status"] in _RESUMABLE_STATUSES:
             unresolved.append(job)
     return unresolved
 
@@ -898,13 +967,26 @@ def _append_resume_batches(
         )
         + 1
     )
+    execution = manifest.setdefault("execution", {})
+    stop_on_failure = bool(
+        execution.get("stop_on_failure", config.get("stop_on_failure", True))
+    )
+    requested_batch_size = int(config["launcher_batch_size"])
+    batch_size = 1 if stop_on_failure else requested_batch_size
+    execution.update(
+        {
+            "requested_launcher_batch_size": requested_batch_size,
+            "effective_launcher_batch_size": batch_size,
+            "stop_on_failure": stop_on_failure,
+        }
+    )
+
     jobs_by_door: dict[str, list[dict[str, Any]]] = {}
     for job in unresolved_jobs:
         jobs_by_door.setdefault(str(job["door_id"]), []).append(job)
 
     new_batches: list[dict[str, Any]] = []
     new_batch_numbers: set[int] = set()
-    batch_size = int(config["launcher_batch_size"])
     for door_id, door_jobs in jobs_by_door.items():
         for offset in range(0, len(door_jobs), batch_size):
             batch_jobs = door_jobs[offset : offset + batch_size]
@@ -943,10 +1025,16 @@ def _append_resume_batches(
                         "attempt": resume_number,
                         "batch_num": next_batch_num,
                         "relative_dir": relative_dir.as_posix(),
+                        "status": "PENDING",
+                        "started_at": None,
+                        "finished_at": None,
+                        "launcher_returncode": None,
+                        "failure_reasons": [],
                     }
                 )
                 job["batch_num"] = next_batch_num
                 job["relative_dir"] = relative_dir.as_posix()
+                job["status"] = "PENDING"
             new_batches.append(
                 {
                     "batch_num": next_batch_num,
@@ -980,10 +1068,50 @@ def _run_batches(
     environment = {
         key: str(value) for key, value in manifest.get("environment", {}).items()
     }
+    config = manifest.get("config", {})
+    expected_rounds = int(config.get("rounds", 1))
+    execution = manifest.get("execution", {})
+    stop_on_failure = bool(
+        execution.get("stop_on_failure", config.get("stop_on_failure", True))
+    )
+    jobs_by_number = {int(job["job_num"]): job for job in manifest.get("jobs", [])}
+    progress = manifest.setdefault("progress", {})
+    selected_job_numbers = [
+        int(job_num) for batch in selected for job_num in batch.get("job_numbers", [])
+    ]
     returncodes: list[int] = []
     interrupted = False
     log_path = sweep_dir / LOG_NAME
     for position, batch in enumerate(selected, start=1):
+        batch_jobs = [
+            jobs_by_number[int(job_num)] for job_num in batch.get("job_numbers", [])
+        ]
+        started_at = _now_iso()
+        for job in batch_jobs:
+            job["status"] = "RUNNING"
+            attempts = job.setdefault("attempts", [])
+            if not attempts:
+                attempts.append(
+                    {
+                        "attempt": int(manifest.get("resume_count", 0)),
+                        "batch_num": batch["batch_num"],
+                        "relative_dir": job["relative_dir"],
+                    }
+                )
+            attempts[-1].update(
+                {
+                    "status": "RUNNING",
+                    "started_at": started_at,
+                    "finished_at": None,
+                    "launcher_returncode": None,
+                    "failure_reasons": [],
+                }
+            )
+        if batch_jobs:
+            progress["next_job_num"] = int(batch_jobs[0]["job_num"])
+            progress["last_started_job_num"] = int(batch_jobs[0]["job_num"])
+        _write_json(sweep_dir / MANIFEST_NAME, manifest)
+
         heading = (
             f"\n=== Hydra batch {position}/{len(selected)} "
             f"(catalog batch {batch['batch_num']}, door {batch['door_id']}) ===\n"
@@ -1009,11 +1137,66 @@ def _run_batches(
                 log.write(message + "\n")
             returncode = 127
         returncodes.append(returncode)
-        if returncode != 0:
-            print(
-                f"Hydra batch {batch['batch_num']} exited {returncode}; "
-                "continuing with the next bounded batch."
+        finished_at = _now_iso()
+        failed_results: list[tuple[dict[str, Any], dict[str, Any]]] = []
+        for job in batch_jobs:
+            result = _summary_result(
+                job,
+                sweep_dir,
+                expected_rounds=expected_rounds,
             )
+            if returncode != 0 and result["status"] in _INFRASTRUCTURE_STATUSES:
+                result["status"] = "LAUNCHER_FAILURE"
+                result["failure_reasons"] = [
+                    f"Hydra launcher exited with return code {returncode}."
+                ]
+            job["status"] = result["status"]
+            attempt = job["attempts"][-1]
+            attempt.update(
+                {
+                    "status": result["status"],
+                    "finished_at": finished_at,
+                    "launcher_returncode": returncode,
+                    "failure_reasons": result["failure_reasons"],
+                }
+            )
+            if result["status"] != "SUCCESS":
+                failed_results.append((job, result))
+
+        if batch_jobs:
+            last_job_num = int(batch_jobs[-1]["job_num"])
+            progress["last_completed_job_num"] = last_job_num
+            following = [
+                number for number in selected_job_numbers if number > last_job_num
+            ]
+            progress["next_job_num"] = following[0] if following else None
+
+        if failed_results and stop_on_failure:
+            failed_job, failed_result = failed_results[0]
+            reason = " | ".join(failed_result["failure_reasons"])
+            progress.update(
+                {
+                    "next_job_num": int(failed_job["job_num"]),
+                    "stopped_job_num": int(failed_job["job_num"]),
+                    "stopped_door_id": failed_job["door_id"],
+                    "stopped_handle_id": failed_job["handle_id"],
+                    "stopped_at": finished_at,
+                    "stop_status": failed_result["status"],
+                    "stop_reason": reason,
+                }
+            )
+            manifest["status"] = "STOPPED_ON_FAILURE"
+            _write_json(sweep_dir / MANIFEST_NAME, manifest)
+            print(
+                f"Stopped at job {failed_job['job_num']} "
+                f"({failed_job['door_id']} + {failed_job['handle_id']}): "
+                f"{failed_result['status']}: {reason}"
+            )
+            break
+
+        _write_json(sweep_dir / MANIFEST_NAME, manifest)
+        if returncode != 0:
+            print(f"Hydra batch {batch['batch_num']} exited {returncode}.")
     return returncodes, interrupted
 
 
@@ -1039,6 +1222,26 @@ def run_unidoor_sweep(config: UniDoorSweepConfig) -> int:
                 previous_returncodes
             )
         manifest["launcher_returncodes"] = []
+        previous_progress = manifest.get("progress")
+        if isinstance(previous_progress, dict):
+            manifest.setdefault("progress_history", []).append(
+                {
+                    "resume_attempt": manifest["resume_count"] - 1,
+                    "run_status": manifest.get("status"),
+                    **previous_progress,
+                }
+            )
+        manifest["progress"] = {
+            "next_job_num": int(unresolved[0]["job_num"]),
+            "last_started_job_num": None,
+            "last_completed_job_num": None,
+            "stopped_job_num": None,
+            "stopped_door_id": None,
+            "stopped_handle_id": None,
+            "stopped_at": None,
+            "stop_status": None,
+            "stop_reason": None,
+        }
         batch_numbers = _append_resume_batches(manifest, sweep_dir, unresolved)
         manifest["status"] = "RUNNING"
         manifest["finished_at"] = None
@@ -1065,7 +1268,10 @@ def run_unidoor_sweep(config: UniDoorSweepConfig) -> int:
         returncodes, interrupted = _run_batches(manifest, sweep_dir)
 
     manifest["launcher_returncodes"].extend(returncodes)
-    manifest["status"] = "INTERRUPTED" if interrupted else "FINISHED"
+    if interrupted:
+        manifest["status"] = "INTERRUPTED"
+    elif manifest.get("status") != "STOPPED_ON_FAILURE":
+        manifest["status"] = "FINISHED"
     manifest["finished_at"] = _now_iso()
     _write_json(sweep_dir / MANIFEST_NAME, manifest)
     report = aggregate_sweep(sweep_dir)
