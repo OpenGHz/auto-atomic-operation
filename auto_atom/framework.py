@@ -1263,9 +1263,41 @@ class AutoAtomConfig(BaseModel):
 
 
 class OperatorInitialState(BaseModel, frozen=True):
-    """Optional override for an operator's home control state applied at reset."""
+    """Optional override for an operator's home control state applied at reset.
+
+    ``joint_positions`` is the raw-qpos representation for operator-owned arm
+    joints. The gripper remains controlled by the separate ``eef`` field.
+    """
 
     model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid")
+
+    joint_positions: Dict[str, Union[float, List[float]]] = Field(default_factory=dict)
+    """Raw qpos values for the operator's arm joints, keyed by joint name.
+
+    Values are applied through the operator home seam after the low-level
+    environment reset. Operator actuator bindings currently expose one-DOF
+    arm joints, so use scalars (a one-value list is also accepted). These
+    values bypass any EEF user-space mapper.
+    """
+
+    @field_validator("joint_positions", mode="after")
+    @classmethod
+    def _validate_joint_positions(
+        cls, value: Dict[str, Union[float, List[float]]]
+    ) -> Dict[str, Union[float, List[float]]]:
+        for name, position in value.items():
+            if not str(name).strip():
+                raise ValueError("joint_positions keys must be non-empty names")
+            values = position if isinstance(position, list) else [position]
+            if not values:
+                raise ValueError(
+                    f"joint_positions['{name}'] must contain at least one value"
+                )
+            if not all(math.isfinite(float(component)) for component in values):
+                raise ValueError(
+                    f"joint_positions['{name}'] must contain only finite values"
+                )
+        return value
 
     eef_pose: Optional[
         Union[Tuple[float, float, float, float, float, float], PoseOverrideConfig]
@@ -1335,6 +1367,15 @@ class OperatorInitialState(BaseModel, frozen=True):
     site/body/geom/joint expresses the base pose relative to that scene frame;
     the resolved world pose is sampled at setup/reset and then held fixed.
     """
+
+    @model_validator(mode="after")
+    def _validate_home_pose_sources(self) -> Self:
+        if self.joint_positions and self.eef_pose is not None:
+            raise ValueError(
+                "joint_positions cannot be combined with eef_pose; configure "
+                "one canonical arm home representation"
+            )
+        return self
 
 
 class OperatorConfig(BaseModel):

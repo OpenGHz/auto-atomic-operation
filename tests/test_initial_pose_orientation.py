@@ -429,6 +429,81 @@ def test_empty_operator_initial_state_does_not_trigger_an_extra_home() -> None:
     assert handler.home_calls == 0
 
 
+def test_operator_initial_joint_positions_are_staged_before_home() -> None:
+    class Handler:
+        name = "arm"
+
+        def __init__(self) -> None:
+            self.calls: list[tuple[dict[str, object], bool]] = []
+            self.home_calls = 0
+
+        def set_home_joint_positions(
+            self,
+            joint_positions: dict[str, object],
+            env_mask=None,
+            *,
+            apply_home: bool = True,
+        ) -> None:
+            self.calls.append((joint_positions, apply_home))
+
+        def home(self, _mask=None) -> None:
+            self.home_calls += 1
+
+    handler = Handler()
+    backend = MujocoTaskBackend(
+        env=DummyEnv(batch_size=1),
+        operator_handlers={"arm": handler},  # type: ignore[arg-type]
+        object_handlers={},
+        operator_initial_states={
+            "arm": OperatorInitialState(joint_positions={"joint1": -1.5, "joint2": 0.2})
+        },
+    )
+
+    backend.apply_operator_initial_states(home=True)
+
+    assert handler.calls == [
+        ({"joint1": -1.5, "joint2": 0.2}, False),
+    ]
+    assert handler.home_calls == 1
+
+
+def test_operator_initial_joint_positions_reject_env_duplicates() -> None:
+    model = mujoco.MjModel.from_xml_string(
+        """
+        <mujoco>
+          <worldbody>
+            <body name="arm_root">
+              <joint name="joint1" type="hinge" range="-3 3"/>
+              <geom type="sphere" size="0.01"/>
+            </body>
+          </worldbody>
+          <actuator>
+            <position name="joint1_actuator" joint="joint1"/>
+          </actuator>
+        </mujoco>
+        """
+    )
+    env = SimpleNamespace(
+        config=SimpleNamespace(initial_joint_positions={"joint1": 0.0}),
+        envs=[
+            SimpleNamespace(
+                model=model,
+                _op_arm_aidx={"arm": np.asarray([0], dtype=np.int32)},
+            )
+        ],
+    )
+
+    with pytest.raises(ValueError, match="both env.initial_joint_positions"):
+        MujocoTaskBackend(
+            env=env,
+            operator_handlers={},
+            object_handlers={},
+            operator_initial_states={
+                "arm": OperatorInitialState(joint_positions={"joint1": 1.0})
+            },
+        )
+
+
 def test_pose_override_and_legacy_eef_shapes_are_validated_at_config_boundary() -> None:
     with pytest.raises(ValueError, match="position"):
         PoseOverrideConfig(position=[0.0, 1.0])
@@ -436,3 +511,10 @@ def test_pose_override_and_legacy_eef_shapes_are_validated_at_config_boundary() 
         PoseOverrideConfig(orientation=[0.0, 1.0, 2.0, 3.0, 4.0])
     with pytest.raises(ValueError, match="eef_pose"):
         OperatorInitialState(eef_pose=[0.0, 1.0, 2.0, 3.0, 4.0])
+    with pytest.raises(ValueError, match="finite"):
+        OperatorInitialState(joint_positions={"joint1": float("nan")})
+    with pytest.raises(ValueError, match="cannot be combined"):
+        OperatorInitialState(
+            joint_positions={"joint1": 0.0},
+            eef_pose=[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        )

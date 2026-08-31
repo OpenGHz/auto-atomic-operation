@@ -956,6 +956,22 @@ class MujocoOperatorHandler(OperatorHandler):
                     env_index
                 ].data.ctrl[self.eef_ctrl_index]
 
+    def set_home_joint_positions(
+        self,
+        joint_positions: Mapping[str, object],
+        env_mask: Optional[np.ndarray] = None,
+        *,
+        apply_home: bool = True,
+    ) -> None:
+        """Stage raw qpos values for this operator's home joint state."""
+        self.env.set_operator_home_joint_positions(
+            self.operator_name,
+            joint_positions,
+            env_mask=env_mask,
+        )
+        if apply_home:
+            self.home(env_mask)
+
     def set_pose(self, pose: PoseState, env_mask: Optional[np.ndarray] = None) -> None:
         self.reset_state(env_mask)
         pose = pose.broadcast_to(self.env.batch_size)
@@ -1105,6 +1121,55 @@ class MujocoTaskBackend(SceneBackend):
             "MujocoTaskBackend random_seed=%s", self.random_seed
         )
         self._rng = np.random.default_rng(self.random_seed)
+        self._validate_initial_joint_position_ownership()
+
+    def _validate_initial_joint_position_ownership(self) -> None:
+        """Reject duplicate env/operator definitions for arm home joints.
+
+        The low-level environment map remains the scene-level default, while
+        ``task_operators.<name>.initial_state.joint_positions`` is the task
+        override. A joint appearing in both maps would make reset order the
+        hidden source of truth, so fail at backend construction with a clear
+        migration hint instead.
+        """
+        env_config = getattr(self.env, "config", None)
+        env_initial = getattr(env_config, "initial_joint_positions", None)
+        if not env_initial or not self.operator_initial_states:
+            return
+        envs = getattr(self.env, "envs", ())
+        if not envs:
+            return
+        single_env = envs[0]
+        model = getattr(single_env, "model", None)
+        if model is None:
+            return
+        arm_names_by_operator: dict[str, set[str]] = {}
+        for operator_name, initial_state in self.operator_initial_states.items():
+            if not initial_state.joint_positions:
+                continue
+            actuator_indices = getattr(single_env, "_op_arm_aidx", {}).get(
+                operator_name, ()
+            )
+            names: set[str] = set()
+            for actuator_index in actuator_indices:
+                joint_id = int(model.actuator_trnid[int(actuator_index), 0])
+                if joint_id < 0:
+                    continue
+                joint_name = mujoco.mj_id2name(
+                    model, mujoco.mjtObj.mjOBJ_JOINT, joint_id
+                )
+                if joint_name:
+                    names.add(joint_name)
+            arm_names_by_operator[operator_name] = names
+        for operator_name, arm_names in arm_names_by_operator.items():
+            duplicated = sorted(set(env_initial).intersection(arm_names))
+            if duplicated:
+                raise ValueError(
+                    f"Initial joint(s) {duplicated} for operator "
+                    f"'{operator_name}' are defined in both env.initial_joint_positions "
+                    "and task_operators.<name>.initial_state.joint_positions; "
+                    "remove the env entries or set env.initial_joint_positions: null."
+                )
 
     def get_env(self) -> BatchedUnifiedMujocoEnv:
         return self.env
@@ -1383,10 +1448,17 @@ class MujocoTaskBackend(SceneBackend):
             has_override = (
                 initial_state.base_pose is not None
                 or initial_state.eef_pose is not None
+                or bool(initial_state.joint_positions)
                 or initial_state.eef is not None
             )
             if not has_override:
                 continue
+            if initial_state.joint_positions:
+                handler.set_home_joint_positions(
+                    initial_state.joint_positions,
+                    env_mask=mask,
+                    apply_home=False,
+                )
             if initial_state.eef_pose is not None:
                 resolved = self._resolve_initial_pose_batch(
                     initial_state.eef_pose,

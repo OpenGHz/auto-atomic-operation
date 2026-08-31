@@ -104,24 +104,50 @@ the physical binding, while `task_operators.<name>` supplies task control and
 initial-state values.
 
 The optional `initial_state` is applied after the scene keyframe reset and
-before operator randomization baselines are recorded.  It can set the base
-pose, home EEF pose, and gripper control independently:
+before operator randomization baselines are recorded. It can set the base
+pose, a home EEF pose, or raw qpos values for the operator's declared arm
+joints:
 
 ```yaml
 task_operators:
   arm_a:
     initial_state:
+      joint_positions:
+        joint1: 0.0
+        joint2: -1.5
+        joint3: 0.0
+        joint4: -0.8
+        joint5: 0.0
+        joint6: 0.0
+        joint7: 0.0
+      eef: 0.0                               # gripper control value
       base_pose:
         # A named site/body/geom/joint is resolved in the composed scene.
         reference: door__handle_grasp_center
         position: [0.25, -0.47, -0.10]       # local x/y/z in that frame
         orientation: [0.0, 0.0, 0.7071, 0.7071]  # local xyzw quaternion
+```
+
+`joint_positions` is the canonical raw-qpos home representation for an
+operator's arm. It is mutually exclusive with `eef_pose`; use `eef` separately
+when configuring the gripper control value. Joint names are resolved against
+`env.operators.<name>` and may not target passive scene joints. The lower-level
+`env.initial_joint_positions` mapping remains available for scene joints and
+for basis defaults; a task can set it to `null` to clear inherited entries.
+For gripper-only control without raw joint qpos, use `eef` instead of
+`joint_positions`.
+
+When an EEF pose is the desired arm-home source instead, omit
+`joint_positions` and use the existing structured form:
+
+```yaml
+task_operators:
+  arm_a:
+    initial_state:
       eef_pose:
-        # EEF poses may additionally use the operator's current base frame.
         reference: base
         position: [0.32, 0.0, 0.18]
-        orientation: [0.0, 1.5708, 0.0]      # local RPY (roll,pitch,yaw)
-      eef: 0.0                               # gripper control value
+        orientation: [0.0, 1.5708, 0.0]
 ```
 
 `base_pose` and `eef_pose` both use the shared `PoseOverrideConfig` model.  A

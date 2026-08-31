@@ -249,12 +249,21 @@ class EnvConfig(BaseModel, frozen=True):
     initial_joint_positions: Dict[str, float | List[float]] = Field(
         default_factory=dict
     )
-    """Joint name → qpos value overrides applied after every reset (after the
-    keyframe). Use a scalar for 1-DOF joints (slide/hinge); use a list for
-    multi-DOF joints — 4 values for ball joints (quat wxyz), 7 values for free
-    joints (pos xyz + quat wxyz). Multi-DOF entries are written *after* the
-    parallel-linkage settle loop so the weld/equality drift does not
-    override them."""
+    """Scene-level joint qpos overrides applied after every reset.
+
+    Use ``null`` in a task override to clear inherited defaults when all
+    operator-owned joints are declared under ``task_operators``. A scalar is
+    used for a 1-DOF joint; a list supplies all qpos slots for a ball or
+    freejoint. Operator-scoped values are applied later through each
+    operator's ``initial_state.joint_positions``.
+    """
+
+    @field_validator("initial_joint_positions", mode="before")
+    @classmethod
+    def _normalize_initial_joint_positions(cls, value: object) -> object:
+        """Treat Hydra ``null`` as an intentional clear of inherited defaults."""
+        return {} if value is None else value
+
     viewer: ViewerConfig | None = None
     """Viewer configuration. If None, the passive viewer is not launched."""
     structured: bool = False

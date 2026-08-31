@@ -1376,7 +1376,10 @@ def preprocess_replay_dictconfig(
         eef_names = set(op_cfg.eef_actuators)
         init_jpos = {k: v for k, v in init_jpos.items() if k not in eef_names}
     with open_dict(cfg):
-        if "initial_joint_positions" not in cfg.env:
+        if (
+            "initial_joint_positions" not in cfg.env
+            or cfg.env.initial_joint_positions is None
+        ):
             cfg.env.initial_joint_positions = {}
         cfg.env.initial_joint_positions.update(init_jpos)
     logger.info("Injected initial_joint_positions: %s", init_jpos)

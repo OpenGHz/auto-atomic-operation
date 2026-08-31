@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Dict, Iterator, Optional, Sequence
@@ -1148,6 +1149,77 @@ class UnifiedMujocoEnv(MujocoBasis):
             qx, qy, qz, qw_ = base_body_quat_xyzw
             s.home_mocap_quat = np.array([qw_, qx, qy, qz], dtype=np.float64)
 
+    def set_operator_home_joint_positions(
+        self,
+        op_name: str,
+        joint_positions: Mapping[str, object],
+    ) -> None:
+        """Stage raw qpos values for an operator's home joint state.
+
+        The mapping is intentionally resolved against the operator's declared
+        arm actuators, rather than every joint in the model. This keeps
+        task-level ownership explicit and prevents a task from silently
+        changing a passive scene joint. Values are staged in the registered
+        home cache; :meth:`home_operator` applies them atomically with the
+        normal controller-state reset.
+        """
+        state = self._get_op(op_name)
+        if not state.joint_mode:
+            raise ValueError(
+                f"Operator '{op_name}' does not expose arm joints; "
+                "joint_positions requires joint-mode control."
+            )
+        arm_by_name: dict[str, int] = {}
+        for actuator_index in self._op_arm_aidx[op_name]:
+            actuator_id = int(actuator_index)
+            joint_id = int(self.model.actuator_trnid[actuator_id, 0])
+            if joint_id < 0:
+                continue
+            joint_name = mujoco.mj_id2name(
+                self.model, mujoco.mjtObj.mjOBJ_JOINT, joint_id
+            )
+            if joint_name:
+                arm_by_name[joint_name] = actuator_id
+
+        unknown = sorted(set(joint_positions) - set(arm_by_name))
+        if unknown:
+            known = sorted(arm_by_name)
+            raise ValueError(
+                f"Operator '{op_name}' joint_positions contains unknown or "
+                f"unowned joints: {unknown}. Arm joints: {known}"
+            )
+
+        def _scalar_value(joint_name: str, value: object) -> float:
+            values = value if isinstance(value, (list, tuple)) else [value]
+            if len(values) != 1:
+                raise ValueError(
+                    f"Operator '{op_name}' joint_positions['{joint_name}'] "
+                    "must contain exactly one value for an actuated operator joint"
+                )
+            result = float(values[0])
+            if not np.isfinite(result):
+                raise ValueError(
+                    f"Operator '{op_name}' joint_positions['{joint_name}'] "
+                    "must be finite"
+                )
+            return result
+
+        arm_home = state.home_arm_qpos.copy()
+        arm_index_by_actuator = {
+            int(actuator_index): index
+            for index, actuator_index in enumerate(self._op_arm_aidx[op_name])
+        }
+        for joint_name, value in joint_positions.items():
+            actuator_id = arm_by_name[joint_name]
+            arm_home[arm_index_by_actuator[actuator_id]] = _scalar_value(
+                joint_name, value
+            )
+        state.home_arm_qpos = arm_home
+        state.planned_joint_start_qpos = arm_home.copy()
+        state.planned_joint_target_qpos = arm_home.copy()
+        state.planned_joint_progress = 1
+        state.planned_joint_steps_total = 1
+
     def _eef_in_base_to_base_body_world(
         self, state: _OperatorState, eef_pos_b: np.ndarray, eef_quat_b: np.ndarray
     ) -> tuple[np.ndarray, np.ndarray]:
@@ -2120,6 +2192,20 @@ class BatchedUnifiedMujocoEnv:
                 orientation,
             ),
             (positions, orientations),
+            env_mask,
+        )
+
+    def set_operator_home_joint_positions(
+        self,
+        op_name: str,
+        joint_positions: Mapping[str, object],
+        env_mask: np.ndarray | None = None,
+    ) -> None:
+        """Stage raw qpos values for an operator home state across envs."""
+        self._batch_adapter().dispatch(
+            lambda env, _index: env.set_operator_home_joint_positions(
+                op_name, joint_positions
+            ),
             env_mask,
         )
 

@@ -8,17 +8,10 @@ door_id: D001
 handle_id: H001
 
 env:
-  # Match Praxis embodied mode's neutral P7 home posture.  The gripper entry
-  # remains explicitly open in AAO's UMI-v3 control convention.
-  initial_joint_positions:
-    joint1: 0.0
-    joint2: -1.5
-    joint3: 0.0
-    joint4: -0.8
-    joint5: 0.0
-    joint6: 0.0
-    joint7: 0.0
-    eef_claw_joint: 0.0
+  # All operator-owned home joints are declared under
+  # task_operators.arm.initial_state below.  Clear the basis-level joint map
+  # so this task has one source of truth for the arm home configuration.
+  initial_joint_positions: null
   scene:
     base: ${assets_dir}/xmls/scenes/open_door_unidoor/demo.xml
     layers:
@@ -65,7 +58,7 @@ task:
         reference: relative
         x: [-0.01, 0.01]
         y: [-0.01, 0.01]
-        # Randomize ±5 mm around the Praxis-aligned initial base height.
+        # Randomize ±5 mm around the housework_mode_2 initial base height.
         z: [-0.005, 0.005]
         roll: [-0.02, 0.02]
         pitch: [-0.02, 0.02]
@@ -134,21 +127,37 @@ task:
 task_operators:
   arm:
     initial_state:
+      # Match Praxis housework_mode_2's neutral P7 home posture. Values are
+      # raw MuJoCo qpos and are applied after the low-level environment reset.
+      joint_positions:
+        joint1: 0.0
+        joint2: -0.8
+        joint3: 0.0
+        joint4: -1.2
+        joint5: 0.0
+        joint6: 0.0
+        joint7: 0.0
+      # Gripper control remains separate from the arm's raw joint home.
+      eef: 0.0
       base_pose:
         # Keep the horizontal placement relative to the selected handle while
-        # matching Praxis' embodied robot installation height and pitch.
+        # matching Praxis housework_mode_2's installation height and
+        # straight-ahead mounting orientation.
         position:
           x: 0.2474
           y: -0.4666
           z:
-            value: 0.32
+            # AAO floor is z=-1.0; housework_mode_2 base is
+            # 0.980763327839126 m above it.
+            value: -0.019236672160874
             reference: world
           reference: door__handle_grasp_center
         orientation:
-          # Praxis: source-model pitch = 90 deg - embodied physical pitch
-          # 55.78 deg = 34.22 deg; AAO orientation fields use world RPY.
+          # Housework mode physical mounting pitch is 0 deg. Since the P7
+          # source model grows along local +Z, AAO uses the equivalent +90 deg
+          # source-model pitch in world RPY.
           roll: 0.0
-          pitch: 0.5972516700324596
+          pitch: 1.5707963267948966
           yaw: 0.0
     control:
       tolerance:

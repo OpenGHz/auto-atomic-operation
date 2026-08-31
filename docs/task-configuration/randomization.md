@@ -8,26 +8,23 @@ files.
 
 ## Initial Joint Positions
 
-`initial_joint_positions` under `env` lets you override individual joint
-positions (qpos) after the keyframe reset.  This is useful for setting a
-specific arm configuration or gripper opening at startup.
+`initial_joint_positions` under `env` lets you override scene-level joint
+positions (qpos) after the keyframe reset. For task-owned arm joints,
+prefer `task_operators.<name>.initial_state.joint_positions` so the values stay
+with the operator that owns those actuators.
 
 ```yaml
 env:
   initial_joint_positions:
-    joint1: 0.276
-    joint2: -1.651
-    joint3: 0.775
-    joint4: 1.981
-    joint5: 1.110
-    joint6: 0.408
-    eef_claw_joint: 0.01        # gripper partially closed
+    hinge_joint: 0.276          # passive scene joint
 ```
 
 ### Semantics
 
 - Values are written directly to `data.qpos` after keyframe reset, before
   `mj_forward`.
+- Set `env.initial_joint_positions: null` in a task override to clear a
+  basis-level mapping that is being replaced by operator-scoped joints.
 - Joint names must match the names defined in the MuJoCo XML (including any
   prefix added by `<attach … prefix="…"/>`).
 - For **parallel-linkage grippers** (e.g. xf9600, robotiq): the driven joint
@@ -45,6 +42,16 @@ env:
   become the baseline for randomization in the current rollout.  Every later
   `reset()` restores the composed XML/model baseline first and reapplies the
   override; sampled poses are never fed back as the next episode's baseline.
+
+Operator-scoped initial joints use the same raw-qpos semantics, but are applied
+after the low-level environment reset through the operator's home seam. The
+joint names must belong to that operator's declared arm actuators;
+unknown/unowned names are rejected. If the same arm joint is present in both
+`env.initial_joint_positions` and the operator mapping, backend construction
+fails rather than relying on reset order; clear the inherited env mapping with
+`env.initial_joint_positions: null`. `joint_positions` cannot be combined with
+`eef_pose`, since those are competing arm-home representations; `eef` remains
+an independent gripper-control override.
 
 ### Interaction with eef_mapper
 

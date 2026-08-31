@@ -7,6 +7,7 @@ import logging
 import operator
 import weakref
 from abc import ABC, abstractmethod
+from collections.abc import Mapping
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -224,6 +225,23 @@ class OperatorHandler(ABC):
         env_mask: Optional[np.ndarray] = None,  # noqa: ARG002
     ) -> None:
         raise NotImplementedError
+
+    def set_home_joint_positions(
+        self,
+        joint_positions: Mapping[str, object],
+        env_mask: Optional[np.ndarray] = None,  # noqa: ARG002
+        *,
+        apply_home: bool = True,  # noqa: ARG002
+    ) -> None:
+        """Set raw arm-joint qpos values restored by :meth:`home`.
+
+        This optional capability keeps operator-scoped initial joints out of
+        the generic environment config. Backends that do not expose joint-mode
+        operators may leave the default implementation unchanged.
+        """
+        raise NotImplementedError(
+            f"Operator '{self.name}' does not support home joint positions"
+        )
 
 
 @runtime_checkable

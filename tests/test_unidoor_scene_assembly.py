@@ -889,16 +889,17 @@ def test_demo_final_approach_targets_the_explicit_grasp_site() -> None:
         pick_stage.param.pre_move[-1].tolerance.position
         < config.task_operators.arm.control.tolerance.position
     )
-    assert dict(config.env.initial_joint_positions) == {
+    assert config.env.initial_joint_positions is None
+    assert dict(config.task_operators.arm.initial_state.joint_positions) == {
         "joint1": 0.0,
-        "joint2": -1.5,
+        "joint2": -0.8,
         "joint3": 0.0,
-        "joint4": -0.8,
+        "joint4": -1.2,
         "joint5": 0.0,
         "joint6": 0.0,
         "joint7": 0.0,
-        "eef_claw_joint": 0.0,
     }
+    assert config.task_operators.arm.initial_state.eef == pytest.approx(0.0)
     base_pose = config.task_operators.arm.initial_state.base_pose
     # The pose defaults to world; only the position component is anchored to
     # the selected handle, with its z axis explicitly overridden to world.
@@ -906,11 +907,11 @@ def test_demo_final_approach_targets_the_explicit_grasp_site() -> None:
     assert base_pose.position.reference == "door__handle_grasp_center"
     assert base_pose.position.x == pytest.approx(0.2474)
     assert base_pose.position.y == pytest.approx(-0.4666)
-    assert base_pose.position.z.value == pytest.approx(0.32)
+    assert base_pose.position.z.value == pytest.approx(-0.019236672160874)
     assert base_pose.position.z.reference == "world"
     assert base_pose.orientation.get("reference", "world") == "world"
     assert base_pose.orientation.roll == pytest.approx(0.0)
-    assert base_pose.orientation.pitch == pytest.approx(0.5972516700324596)
+    assert base_pose.orientation.pitch == pytest.approx(1.5707963267948966)
     assert base_pose.orientation.yaw == pytest.approx(0.0)
     base_randomization = config.task.randomization.arm.base
     assert base_randomization.reference == "relative"
@@ -1040,6 +1041,20 @@ def test_demo_grasps_before_unlatching_and_unlocks_before_opening() -> None:
         saw_pull_effect = False
         saw_push_effect = False
         update = runner.reset()
+        for (
+            joint_name,
+            expected,
+        ) in config.task_operators.arm.initial_state.joint_positions.items():
+            joint_id = mujoco.mj_name2id(
+                single_env.model,
+                mujoco.mjtObj.mjOBJ_JOINT,
+                joint_name,
+            )
+            assert joint_id >= 0
+            qpos_address = int(single_env.model.jnt_qposadr[joint_id])
+            assert float(single_env.data.qpos[qpos_address]) == pytest.approx(
+                float(expected)
+            )
         for _ in range(500):
             update = runner.update()
             active = runner._env_states[0].active
