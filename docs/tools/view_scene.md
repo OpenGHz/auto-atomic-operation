@@ -50,7 +50,7 @@ For the chosen config, the script reads these override surfaces and applies them
 | `env.sim_freq`                                   | Physics frequency, overriding the host XML timestep exactly as the runtime does |
 | `env.initial_joint_positions`                     | Per-joint home pose (mirrors `MujocoBasis.reset()`)                           |
 | `task.initial_pose`                               | Per-body `PoseOverrideConfig` overrides (freejoint qpos for movable bodies, or `body_pos/quat` for static bodies); `world` or a named site/body/geom/joint reference |
-| `task_operators.<name>.initial_state.base_pose`   | `PoseOverrideConfig` for each operator base; `world` or a named scene frame, converted to the configured `root_body`'s parent-local pose |
+| `task_operators.<name>.initial_state.base_pose`   | `PoseOverrideConfig` for each operator base; `world` or a named scene frame, with optional per-axis references, converted to the configured `root_body`'s parent-local pose |
 
 Equality-constrained passive joints (e.g. parallel-linkage gripper followers) are settled by stepping under zero gravity while pinning the configured scalar joints, matching the runtime backend reset.
 

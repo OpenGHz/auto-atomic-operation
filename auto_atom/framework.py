@@ -897,6 +897,60 @@ class OperatorRandomizationConfig(BaseModel):
     """Optional single- or multi-region randomization for the end effector."""
 
 
+class PoseAxisConfig(BaseModel, frozen=True):
+    """One absolute pose component with an optional reference override."""
+
+    model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid")
+
+    value: float
+    """Component value in the selected reference frame."""
+    reference: Optional[Union[PoseReference, str]] = None
+    """Component-specific reference; ``None`` inherits the pose reference."""
+
+    @field_validator("reference", mode="before")
+    @classmethod
+    def _coerce_reference(cls, value: object) -> object:
+        if isinstance(value, str) and not isinstance(value, PoseReference):
+            try:
+                return PoseReference(value)
+            except ValueError:
+                return value
+        return value
+
+    @field_validator("value", mode="after")
+    @classmethod
+    def _validate_value(cls, value: float) -> float:
+        if not math.isfinite(value):
+            raise ValueError("value must be finite")
+        return value
+
+
+class PosePositionConfig(BaseModel, frozen=True):
+    """Optional x/y/z initial-pose components with independent references."""
+
+    model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid")
+
+    x: Optional[Union[float, PoseAxisConfig]] = None
+    """X component, optionally with an axis-specific reference."""
+    y: Optional[Union[float, PoseAxisConfig]] = None
+    """Y component, optionally with an axis-specific reference."""
+    z: Optional[Union[float, PoseAxisConfig]] = None
+    """Z component, optionally with an axis-specific reference."""
+
+
+class PoseOrientationConfig(BaseModel, frozen=True):
+    """Optional roll/pitch/yaw initial-pose components with independent references."""
+
+    model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid")
+
+    roll: Optional[Union[float, PoseAxisConfig]] = None
+    """Roll angle in radians, optionally with an axis-specific reference."""
+    pitch: Optional[Union[float, PoseAxisConfig]] = None
+    """Pitch angle in radians, optionally with an axis-specific reference."""
+    yaw: Optional[Union[float, PoseAxisConfig]] = None
+    """Yaw angle in radians, optionally with an axis-specific reference."""
+
+
 class PoseOverrideConfig(BaseModel, frozen=True):
     """A partial pose override expressed in a named reference frame.
 
@@ -907,7 +961,9 @@ class PoseOverrideConfig(BaseModel, frozen=True):
     ``position`` and ``orientation`` are optional.  An omitted component keeps
     the current pose component after transforming the fallback pose into the
     selected reference frame.  ``orientation`` accepts either an ``xyzw``
-    quaternion (four values) or roll/pitch/yaw Euler angles (three values).
+    quaternion (four values), roll/pitch/yaw Euler angles (three values), or an
+    expanded ``{roll, pitch, yaw}`` mapping whose components may override the
+    pose-level reference.
 
     ``reference`` accepts the built-in :class:`PoseReference` values and a
     named MuJoCo site/body/geom/joint.  Which references are legal is checked
@@ -931,14 +987,26 @@ class PoseOverrideConfig(BaseModel, frozen=True):
                 reference: door__handle_grasp_center
                 position: [0.0, 0.45, 0.30]
                 orientation: [0, 0, 0, 1]
+
+        # Axis-level reference overrides; compact scalar values inherit the
+        # pose-level reference.
+        task_operators:
+          arm:
+            initial_state:
+              base_pose:
+                reference: door__handle_grasp_center
+                position:
+                  x: 0.2474
+                  y: -0.4666
+                  z: {value: -0.10, reference: world}
     """
 
     model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid")
 
-    position: Optional[Position] = None
-    """Three-dimensional position in the selected reference frame."""
-    orientation: Optional[Union[Rotation, Orientation]] = None
-    """Quaternion ``[x, y, z, w]`` or RPY Euler ``[roll, pitch, yaw]``."""
+    position: Optional[Union[Position, PosePositionConfig]] = None
+    """Position tuple or expanded x/y/z components in the selected frames."""
+    orientation: Optional[Union[Rotation, Orientation, PoseOrientationConfig]] = None
+    """Quaternion, RPY tuple, or expanded roll/pitch/yaw components."""
     reference: Union[PoseReference, str] = PoseReference.WORLD
     """Built-in pose reference or a named scene element."""
 
@@ -952,7 +1020,7 @@ class PoseOverrideConfig(BaseModel, frozen=True):
         union-branch error from Pydantic.  Non-sequence values are left to the
         type validator so callers still receive the normal type diagnostic.
         """
-        if value is None or isinstance(value, (str, bytes)):
+        if value is None or isinstance(value, (str, bytes, Mapping)):
             return value
         try:
             length = len(value)  # type: ignore[arg-type]
@@ -964,9 +1032,12 @@ class PoseOverrideConfig(BaseModel, frozen=True):
 
     @field_validator("position", mode="after")
     @classmethod
-    def _validate_position_values(cls, value: Optional[Position]) -> Optional[Position]:
+    def _validate_position_values(
+        cls,
+        value: Optional[Union[Position, PosePositionConfig]],
+    ) -> Optional[Union[Position, PosePositionConfig]]:
         """Reject non-finite position coordinates."""
-        if value is not None and not all(
+        if isinstance(value, tuple) and not all(
             math.isfinite(component) for component in value
         ):
             raise ValueError("position must contain only finite values")
@@ -976,7 +1047,10 @@ class PoseOverrideConfig(BaseModel, frozen=True):
     @classmethod
     def _validate_orientation_shape(cls, value: object) -> object:
         """Reject orientation vectors other than RPY or quaternion forms."""
-        if value is None or isinstance(value, (str, bytes)):
+        if value is None or isinstance(
+            value,
+            (str, bytes, Mapping, PoseOrientationConfig),
+        ):
             return value
         try:
             length = len(value)  # type: ignore[arg-type]
@@ -993,10 +1067,10 @@ class PoseOverrideConfig(BaseModel, frozen=True):
     @classmethod
     def _validate_orientation_values(
         cls,
-        value: Optional[Union[Rotation, Orientation]],
-    ) -> Optional[Union[Rotation, Orientation]]:
+        value: Optional[Union[Rotation, Orientation, PoseOrientationConfig]],
+    ) -> Optional[Union[Rotation, Orientation, PoseOrientationConfig]]:
         """Reject non-finite angles and zero quaternions at the config seam."""
-        if value is None:
+        if value is None or isinstance(value, PoseOrientationConfig):
             return value
         if not all(math.isfinite(component) for component in value):
             raise ValueError("orientation must contain only finite values")
@@ -1032,6 +1106,18 @@ class PoseOverrideConfig(BaseModel, frozen=True):
         ):
             raise ValueError("reference must be a non-empty frame name")
         return value
+
+    def axis_references(self) -> Tuple[Union[PoseReference, str], ...]:
+        """Return the global and explicitly configured axis references."""
+        references: list[Union[PoseReference, str]] = [self.reference]
+        for component in (self.position, self.orientation):
+            if not isinstance(component, BaseModel):
+                continue
+            for axis in type(component).model_fields:
+                value = getattr(component, axis)
+                if isinstance(value, PoseAxisConfig) and value.reference is not None:
+                    references.append(value.reference)
+        return tuple(dict.fromkeys(references))
 
 
 class AutoAtomConfig(BaseModel):

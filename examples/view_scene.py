@@ -224,13 +224,13 @@ def _initial_pose_order(
     declaration_index = {name: index for index, name in enumerate(names)}
     dependencies: dict[str, set[str]] = {name: set() for name in names}
     for name, config in overrides.items():
-        reference = getattr(config, "reference", None)
-        if (
-            isinstance(reference, str)
-            and not isinstance(reference, PoseReference)
-            and reference in dependencies
-        ):
-            dependencies[name].add(reference)
+        for reference in config.axis_references():
+            if (
+                isinstance(reference, str)
+                and not isinstance(reference, PoseReference)
+                and reference in dependencies
+            ):
+                dependencies[name].add(reference)
 
     order: list[str] = []
     visited: set[str] = set()
@@ -321,22 +321,23 @@ def _resolve_viewer_override(
     else:
         config = PoseOverrideConfig.model_validate(raw_config)
     reference = PoseReference.WORLD if isinstance(config, list) else config.reference
-    if isinstance(reference, PoseReference):
-        if reference != PoseReference.WORLD:
-            raise ValueError(
-                f"{context} reference {reference.value!r} is not supported by "
-                "the standalone viewer; use 'world' or a named scene element"
-            )
-        reference_pose = PoseState()
-    else:
+
+    def resolve_reference(reference_value: PoseReference | str) -> PoseState:
+        if isinstance(reference_value, PoseReference):
+            if reference_value != PoseReference.WORLD:
+                raise ValueError(
+                    f"{context} reference {reference_value.value!r} is not supported by "
+                    "the standalone viewer; use 'world' or a named scene element"
+                )
+            return PoseState()
         try:
             operator_reference = None
             if (
                 allow_operator_aliases
                 and operator_frames is not None
-                and "." in reference
+                and "." in reference_value
             ):
-                operator_name, attribute = reference.rsplit(".", 1)
+                operator_name, attribute = reference_value.rsplit(".", 1)
                 frame = operator_frames.get(operator_name)
                 if frame is not None and attribute in {"base", "eef"}:
                     element_name = frame.get(attribute)
@@ -346,18 +347,32 @@ def _resolve_viewer_override(
                 reference_pose = operator_reference
             else:
                 try:
-                    reference_pose = _element_pose(model, data, reference)
+                    reference_pose = _element_pose(model, data, reference_value)
                 except KeyError:
                     # Match the runtime object's logical-name resolution for
                     # Gaussian scenes, where ``name_gs`` is the physical
                     # visual body backing a logical ``name`` key.
-                    resolved_reference = _resolve_body_name(model, reference)
+                    resolved_reference = _resolve_body_name(model, reference_value)
                     reference_pose = _element_pose(model, data, resolved_reference)
         except KeyError as exc:
             raise ValueError(
-                f"{context} reference {reference!r} is not a scene element"
+                f"{context} reference {reference_value!r} is not a scene element"
             ) from exc
-    return resolve_pose_override(config, fallback, reference_pose)
+        return reference_pose
+
+    if isinstance(config, list):
+        reference_poses = {PoseReference.WORLD: PoseState()}
+    else:
+        reference_poses = {
+            reference_value: resolve_reference(reference_value)
+            for reference_value in config.axis_references()
+        }
+    return resolve_pose_override(
+        config,
+        fallback,
+        reference_poses.get(reference),
+        reference_poses,
+    )
 
 
 def _apply_home_pose(
@@ -601,7 +616,8 @@ def _build(overrides: dict) -> tuple[mujoco.MjModel, mujoco.MjData]:
             m,
             d,
             context=f"operator root body {root_body!r} base_pose",
-            operator_frames=None,
+            operator_frames=overrides.get("operator_frames"),
+            allow_operator_aliases=True,
         )
         _set_body_pose(
             m,

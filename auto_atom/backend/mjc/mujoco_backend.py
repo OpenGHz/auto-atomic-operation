@@ -1308,17 +1308,31 @@ class MujocoTaskBackend(SceneBackend):
         for env_index, enabled in enumerate(env_mask):
             if not enabled:
                 continue
-            reference_pose = self._resolve_initial_reference_pose(
-                reference,
-                env_index,
-                operator_name=operator_name,
-                allow_operator_base=allow_operator_base,
-                context=context,
-            )
+            reference_poses: Dict[PoseReference | str, PoseState] = {}
+            if isinstance(config, PoseOverrideConfig):
+                for axis_reference in config.axis_references():
+                    reference_poses[axis_reference] = (
+                        self._resolve_initial_reference_pose(
+                            axis_reference,
+                            env_index,
+                            operator_name=operator_name,
+                            allow_operator_base=allow_operator_base,
+                            context=context,
+                        )
+                    )
+            else:
+                reference_poses[reference] = self._resolve_initial_reference_pose(
+                    reference,
+                    env_index,
+                    operator_name=operator_name,
+                    allow_operator_base=allow_operator_base,
+                    context=context,
+                )
             resolved = resolve_pose_override(
                 config,
                 fallback_pose.select(env_index),
-                reference_pose,
+                reference_poses.get(reference),
+                reference_poses,
             )
             positions[env_index] = resolved.position[0]
             orientations[env_index] = resolved.orientation[0]
@@ -1471,13 +1485,18 @@ class MujocoTaskBackend(SceneBackend):
         dependencies: dict[str, set[str]] = {name: set() for name in names}
         for name in names:
             config = self.initial_poses[name]
-            reference = getattr(config, "reference", None)
-            if (
-                isinstance(reference, str)
-                and not isinstance(reference, PoseReference)
-                and reference in dependencies
-            ):
-                dependencies[name].add(reference)
+            references = (
+                config.axis_references()
+                if isinstance(config, PoseOverrideConfig)
+                else ()
+            )
+            for reference in references:
+                if (
+                    isinstance(reference, str)
+                    and not isinstance(reference, PoseReference)
+                    and reference in dependencies
+                ):
+                    dependencies[name].add(reference)
 
         order: list[str] = []
         visited: set[str] = set()

@@ -5,8 +5,8 @@ import numpy as np
 import pytest
 from omegaconf import OmegaConf
 
-from examples import view_scene
 from auto_atom.framework import PoseOverrideConfig
+from examples import view_scene
 
 
 def test_build_applies_sim_freq_and_holds_position_actuators(monkeypatch) -> None:
@@ -171,6 +171,53 @@ def test_build_applies_initial_pose_dependencies_in_topological_order(
     second = view_scene._element_pose(built_model, data, "second")
     np.testing.assert_allclose(second.position[0], [2.0, 0.0, 0.0])
     np.testing.assert_allclose(first.position[0], [3.0, 0.0, 0.0])
+
+
+def test_build_applies_axis_reference_dependencies_in_topological_order(
+    monkeypatch,
+) -> None:
+    model = mujoco.MjModel.from_xml_string(
+        """
+        <mujoco>
+          <worldbody>
+            <body name="first" pos="0 0 0">
+              <geom type="sphere" size="0.01"/>
+            </body>
+            <body name="second" pos="0 0 0">
+              <geom type="sphere" size="0.01"/>
+            </body>
+          </worldbody>
+        </mujoco>
+        """
+    )
+    monkeypatch.setattr(view_scene, "load_composed_scene", lambda _config: model)
+
+    overrides = {
+        "scene": {"base": "unused.xml"},
+        "sim_freq": None,
+        "actuator_names": [],
+        "ijp": {},
+        "initial_pose": {
+            "first": PoseOverrideConfig.model_validate(
+                {
+                    "reference": "world",
+                    "position": {
+                        "x": 1.0,
+                        "y": {"value": 0.0, "reference": "second"},
+                    },
+                }
+            ),
+            "second": PoseOverrideConfig(position=[2.0, 3.0, 0.0]),
+        },
+        "op_bases": [],
+        "operator_frames": {},
+    }
+
+    built_model, data = view_scene._build(overrides)
+    first = view_scene._element_pose(built_model, data, "first")
+    second = view_scene._element_pose(built_model, data, "second")
+    np.testing.assert_allclose(second.position[0], [2.0, 3.0, 0.0])
+    np.testing.assert_allclose(first.position[0], [1.0, 3.0, 0.0])
 
 
 def test_build_applies_mounted_camera_initial_pose(monkeypatch) -> None:

@@ -329,7 +329,18 @@ task_operators:
 世界位姿，不是 EEF 初始位姿。`base_pose` 与 `eef_pose` 共用
 `PoseOverrideConfig`：`position` 和 `orientation` 可以分别省略，省略的分量
 从当前 keyframe/注册位姿继承；姿态三元组统一为 RPY 顺序
-`[roll, pitch, yaw]`，四元组为 XYZW quaternion。
+`[roll, pitch, yaw]`，四元组为 XYZW quaternion。需要混合坐标系时，
+`position` 可展开为 `x/y/z`，RPY 姿态可展开为 `roll/pitch/yaw`；每个轴支持
+标量（继承全局 `reference`）或 `{value, reference}`（轴级优先）。例如：
+
+```yaml
+base_pose:
+  reference: door__handle_grasp_center
+  position:
+    x: 0.2474
+    y: -0.4666
+    z: {value: -0.1, reference: world}
+```
 
 底座可以直接写在世界坐标系，也可以锚定到组合场景里的 site、body、geom 或
 joint。命名 frame 的变换约定为：

@@ -145,8 +145,8 @@ inspect the YAML-defined default state and the randomization ranges around it.
 
 | Field          | Format                                  | Default |
 |----------------|-----------------------------------------|---------|
-| `position`     | `[x, y, z]` in the selected reference frame | `null` (preserve fallback) |
-| `orientation`  | 4 floats: quaternion `[x, y, z, w]` **or** 3 floats: Euler `[roll, pitch, yaw]` in radians | `null` (preserve fallback) |
+| `position`     | `[x, y, z]`, or `{x, y, z}` where each value is a scalar or `{value, reference}` | `null` (preserve fallback) |
+| `orientation`  | 4 floats: quaternion `[x, y, z, w]`, 3 floats: Euler `[roll, pitch, yaw]`, or `{roll, pitch, yaw}` where each value is a scalar or `{value, reference}` | `null` (preserve fallback) |
 | `reference`    | `world`, `base` (EEF only), or a named scene element | `world` |
 
 Both pose fields are optional.  For a named reference, omitted components keep
@@ -155,12 +155,37 @@ replace only that local component.  The six-value operator EEF shorthand
 `[x, y, z, yaw, pitch, roll]` is accepted as a complete world-frame pose; use
 the structured form for partial values or a non-world reference.
 
+Position and RPY orientation can also use per-axis references. A scalar axis
+inherits the pose-level `reference`; the expanded `{value, reference}` form has
+higher priority. Axis overrides replace the corresponding world coordinate after
+the global reference is resolved, so a base anchored to a handle can keep its
+local `x/y` while fixing `z` in world coordinates:
+
+```yaml
+task_operators:
+  arm:
+    initial_state:
+      base_pose:
+        reference: door__handle_grasp_center
+        position:
+          x: 0.2474
+          y: -0.4666
+          z:
+            value: -0.1
+            reference: world
+```
+
+The quaternion form remains an atomic four-component orientation. Use the
+expanded `roll/pitch/yaw` form when individual orientation axes need different
+references.
+
 The configuration boundary validates these shapes before a simulator is
-created: `position` must contain exactly three finite values, `orientation`
-must contain either three finite RPY values or four finite quaternion values,
-and a four-value quaternion must be non-zero.  The flat EEF shorthand must
-contain exactly six finite values.  Pose overrides are frozen models with tuple
-components, so a loaded configuration cannot be mutated in place.
+created: compact `position` must contain exactly three finite values, compact
+`orientation` must contain either three finite RPY values or four finite
+quaternion values, and a four-value quaternion must be non-zero. Expanded
+position/RPY mappings validate each configured component as a finite scalar.
+The flat EEF shorthand must contain exactly six finite values. Pose overrides
+are frozen models, so a loaded configuration cannot be mutated in place.
 
 ### Interaction with randomization
 

@@ -1,15 +1,22 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
 from types import SimpleNamespace
+from typing import Optional
 
 import mujoco
 import numpy as np
 import pytest
 
 from auto_atom.backend.mjc.mujoco_backend import MujocoTaskBackend
-from auto_atom.framework import OperatorInitialState, PoseOverrideConfig, PoseReference
+from auto_atom.framework import (
+    OperatorInitialState,
+    PoseAxisConfig,
+    PoseOrientationConfig,
+    PoseOverrideConfig,
+    PosePositionConfig,
+    PoseReference,
+)
 from auto_atom.utils.pose import (
     PoseState,
     compose_pose,
@@ -126,6 +133,97 @@ def test_pose_override_accepts_named_reference_and_composes_partial_pose() -> No
 def test_pose_override_builtin_reference_is_typed() -> None:
     config = PoseOverrideConfig(reference="world")
     assert config.reference == PoseReference.WORLD
+
+
+def test_pose_override_supports_axis_level_references_with_global_fallback() -> None:
+    config = PoseOverrideConfig.model_validate(
+        {
+            "reference": "anchor",
+            "position": {
+                "x": 0.2,
+                "y": {"value": 0.3, "reference": "world"},
+                "z": {"value": 0.4},
+            },
+            "orientation": {
+                "roll": 0.1,
+                "yaw": {"value": 0.2, "reference": "world"},
+            },
+        }
+    )
+
+    assert isinstance(config.position, PosePositionConfig)
+    assert isinstance(config.orientation, PoseOrientationConfig)
+    assert config.axis_references() == ("anchor", PoseReference.WORLD)
+    assert config.position.x == 0.2
+    assert isinstance(config.position.y, PoseAxisConfig)
+    assert config.position.y.reference == PoseReference.WORLD
+    assert config.position.z.reference is None
+
+
+def test_pose_override_axis_world_reference_overrides_only_selected_components() -> (
+    None
+):
+    config = PoseOverrideConfig.model_validate(
+        {
+            "reference": "anchor",
+            "position": {
+                "x": 0.2,
+                "y": {"value": 3.0, "reference": "world"},
+            },
+        }
+    )
+    anchor = PoseState(
+        position=[10.0, 20.0, 30.0],
+        orientation=euler_to_quaternion((0.0, 0.0, 0.0)),
+    )
+    world = PoseState()
+    fallback = PoseState(position=[9.0, 9.0, 9.0], orientation=[0.0, 0.0, 0.0, 1.0])
+    resolved = resolve_pose_override(
+        config,
+        fallback,
+        anchor,
+        {"anchor": anchor, PoseReference.WORLD: world},
+    )
+
+    np.testing.assert_allclose(resolved.position[0], [10.2, 3.0, 9.0])
+
+
+def test_backend_initial_pose_resolves_axis_references_independently() -> None:
+    handler = DummyObjectHandler(
+        name="door",
+        pose=PoseState(
+            position=np.asarray([[9.0, 9.0, 9.0]], dtype=np.float64),
+            orientation=np.asarray([[0.0, 0.0, 0.0, 1.0]], dtype=np.float64),
+        ),
+    )
+    backend = MujocoTaskBackend(
+        env=DummyEnv(batch_size=1),
+        operator_handlers={},
+        object_handlers={"door": handler},
+        initial_poses={
+            "door": PoseOverrideConfig.model_validate(
+                {
+                    "reference": "anchor",
+                    "position": {
+                        "x": 0.2,
+                        "y": -0.3,
+                        "z": {"value": -0.1, "reference": "world"},
+                    },
+                }
+            )
+        },
+    )
+    reference_poses = {
+        "anchor": PoseState(position=[10.0, 20.0, 30.0]),
+        PoseReference.WORLD: PoseState(),
+    }
+    backend._resolve_initial_reference_pose = (  # type: ignore[method-assign]
+        lambda reference, _env_index, **_kwargs: reference_poses[reference]
+    )
+
+    backend._apply_initial_poses()
+
+    np.testing.assert_allclose(handler.get_pose().position[0], [10.2, 19.7, -0.1])
 
 
 def test_legacy_eef_tuple_keeps_historical_yaw_pitch_roll_order() -> None:

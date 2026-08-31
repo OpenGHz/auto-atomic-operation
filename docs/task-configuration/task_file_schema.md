@@ -128,8 +128,10 @@ task_operators:
 pose may provide only `position`, only `orientation`, or both; an omitted
 component keeps the current fallback pose after it is expressed in the chosen
 reference frame.  Use `orientation: [x, y, z, w]` for an XYZW quaternion or
-three values in RPY order (`[roll, pitch, yaw]`) for Euler angles.  The accepted
-reference forms are:
+three values in RPY order (`[roll, pitch, yaw]`) for Euler angles.  Position and
+RPY orientation also accept expanded axis mappings whose scalar values inherit
+the pose-level `reference`, while `{value: ..., reference: ...}` overrides one
+axis. The accepted reference forms are:
 
 | Owner | Built-in references | Named references |
 | --- | --- | --- |
@@ -151,11 +153,12 @@ home pose, the six-value form `[x, y, z, yaw, pitch, roll]` is also accepted and
 is interpreted as a complete world-frame pose; use the structured form when a
 reference frame or partial override is needed.
 
-`PoseOverrideConfig` validates `position` as exactly three finite values and
-`orientation` as either three finite RPY values or four finite, non-zero
-quaternion values.  The flat EEF form is exactly six finite values.  These
-models are frozen and store pose vectors as tuples, preventing accidental
-in-place mutation after task-file loading.
+`PoseOverrideConfig` validates compact `position` as exactly three finite values
+and compact `orientation` as either three finite RPY values or four finite,
+non-zero quaternion values. Expanded position/RPY mappings validate each
+configured component as a finite scalar. The flat EEF form is exactly six finite
+values. These models are frozen, preventing accidental in-place mutation after
+task-file loading.
 
 #### Python API migration (intentional breaking change)
 
@@ -188,6 +191,17 @@ body so the physical arm and its base-frame IK agree. A pure mocap operator
 keeps its registered physical mocap home and changes only the virtual base
 frame used for world/base conversion; use the operator's EEF pose or mocap home
 configuration when the physical mocap body itself must move.
+
+Example of a mixed-reference base pose:
+
+```yaml
+base_pose:
+  reference: door__handle_grasp_center
+  position:
+    x: 0.2474
+    y: -0.4666
+    z: {value: -0.1, reference: world}
+```
 
 The `eef` scalar controls only the gripper command and does not alter either
 pose baseline.  If an `initial_state` field is omitted, the corresponding

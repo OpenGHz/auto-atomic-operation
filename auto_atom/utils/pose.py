@@ -3,14 +3,18 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Iterable, List, Optional, Tuple, Union
+from typing import Iterable, List, Mapping, Optional, Tuple, Union
 
 import numpy as np
 
 from ..framework import (
     Orientation,
+    PoseAxisConfig,
     PoseControlConfig,
+    PoseOrientationConfig,
     PoseOverrideConfig,
+    PosePositionConfig,
+    PoseReference,
     Position,
     Rotation,
 )
@@ -159,6 +163,7 @@ def resolve_pose_override(
     config: PoseOverrideConfig | list[float] | tuple[float, ...],
     fallback_pose_world: PoseState,
     reference_pose_world: PoseState | None = None,
+    reference_poses: Mapping[PoseReference | str, PoseState] | None = None,
 ) -> PoseState:
     """Resolve one initial-pose override into a world-frame pose.
 
@@ -192,21 +197,82 @@ def resolve_pose_override(
             "[x, y, z, yaw, pitch, roll] sequence"
         )
 
-    reference = (
-        reference_pose_world if reference_pose_world is not None else PoseState()
-    )
+    global_reference = config.reference
+    resolved_references = dict(reference_poses or {})
+    if reference_pose_world is not None:
+        resolved_references.setdefault(global_reference, reference_pose_world)
+    reference = resolved_references.get(global_reference, PoseState())
     fallback_local = compose_pose(inverse_pose(reference), fallback_pose_world)
     position = fallback_local.position[0].copy()
     orientation = fallback_local.orientation[0].copy()
 
+    def _reference_pose(axis_reference: PoseReference | str) -> PoseState:
+        if axis_reference in resolved_references:
+            return resolved_references[axis_reference]
+        if axis_reference == global_reference:
+            return reference
+        raise ValueError(
+            f"No resolved pose was provided for axis reference {axis_reference!r}"
+        )
+
+    position_world_overrides: dict[int, np.ndarray] = {}
+    orientation_world_overrides: dict[int, float] = {}
+
     if config.position is not None:
-        if len(config.position) < 3:
-            raise ValueError(
-                "pose override position must contain at least three values"
-            )
-        position = np.asarray(config.position[:3], dtype=np.float64)
+        if isinstance(config.position, PosePositionConfig):
+            for axis_index, axis_name in enumerate(("x", "y", "z")):
+                axis_value = getattr(config.position, axis_name)
+                if axis_value is None:
+                    continue
+                if isinstance(axis_value, PoseAxisConfig):
+                    value = axis_value.value
+                    axis_reference = axis_value.reference or global_reference
+                else:
+                    value = axis_value
+                    axis_reference = global_reference
+                if axis_reference == global_reference:
+                    position[axis_index] = float(value)
+                else:
+                    local_point = np.zeros(3, dtype=np.float64)
+                    local_point[axis_index] = float(value)
+                    transformed = compose_pose(
+                        _reference_pose(axis_reference),
+                        PoseState(position=local_point),
+                    )
+                    position_world_overrides[axis_index] = transformed.position[0]
+        else:
+            if len(config.position) < 3:
+                raise ValueError(
+                    "pose override position must contain at least three values"
+                )
+            position = np.asarray(config.position[:3], dtype=np.float64)
     if config.orientation is not None:
-        if len(config.orientation) == 3:
+        if isinstance(config.orientation, PoseOrientationConfig):
+            local_rpy = list(quaternion_to_rpy(orientation))
+            for axis_index, axis_name in enumerate(("roll", "pitch", "yaw")):
+                axis_value = getattr(config.orientation, axis_name)
+                if axis_value is None:
+                    continue
+                if isinstance(axis_value, PoseAxisConfig):
+                    value = axis_value.value
+                    axis_reference = axis_value.reference or global_reference
+                else:
+                    value = axis_value
+                    axis_reference = global_reference
+                if axis_reference == global_reference:
+                    local_rpy[axis_index] = float(value)
+                else:
+                    axis_rpy = [0.0, 0.0, 0.0]
+                    axis_rpy[axis_index] = float(value)
+                    transformed = compose_pose(
+                        _reference_pose(axis_reference),
+                        PoseState(orientation=euler_to_quaternion(tuple(axis_rpy))),
+                    )
+                    orientation_world_overrides[axis_index] = quaternion_to_rpy(
+                        transformed.orientation[0]
+                    )[axis_index]
+            orientation = np.asarray(euler_to_quaternion(tuple(local_rpy)))
+        elif len(config.orientation) == 3:
             orientation = np.asarray(
                 euler_to_quaternion(
                     tuple(float(value) for value in config.orientation)
@@ -226,10 +292,22 @@ def resolve_pose_override(
                 "four quaternion values"
             )
 
-    return compose_pose(
+    resolved = compose_pose(
         reference,
         PoseState(position=position, orientation=orientation),
     )
+    if position_world_overrides or orientation_world_overrides:
+        world_position = resolved.position[0].copy()
+        world_rpy = list(quaternion_to_rpy(resolved.orientation[0]))
+        for axis_index, transformed in position_world_overrides.items():
+            world_position[axis_index] = transformed[axis_index]
+        for axis_index, value in orientation_world_overrides.items():
+            world_rpy[axis_index] = value
+        resolved = PoseState(
+            position=world_position,
+            orientation=euler_to_quaternion(tuple(world_rpy)),
+        )
+    return resolved
 
 
 def euler_to_quaternion(rotation: Rotation) -> Orientation:
