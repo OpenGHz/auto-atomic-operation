@@ -889,18 +889,34 @@ def test_demo_final_approach_targets_the_explicit_grasp_site() -> None:
         pick_stage.param.pre_move[-1].tolerance.position
         < config.task_operators.arm.control.tolerance.position
     )
+    assert dict(config.env.initial_joint_positions) == {
+        "joint1": 0.0,
+        "joint2": -1.5,
+        "joint3": 0.0,
+        "joint4": -0.8,
+        "joint5": 0.0,
+        "joint6": 0.0,
+        "joint7": 0.0,
+        "eef_claw_joint": 0.0,
+    }
     base_pose = config.task_operators.arm.initial_state.base_pose
-    assert base_pose.reference == "door__handle_grasp_center"
-    assert list(base_pose.position) == pytest.approx([0.2474, -0.4666, -0.1])
-    assert list(base_pose.orientation) == pytest.approx(
-        [0.0, 0.0, 0.70710678, 0.70710678]
-    )
+    # The pose defaults to world; only the position component is anchored to
+    # the selected handle, with its z axis explicitly overridden to world.
+    assert base_pose.get("reference", "world") == "world"
+    assert base_pose.position.reference == "door__handle_grasp_center"
+    assert base_pose.position.x == pytest.approx(0.2474)
+    assert base_pose.position.y == pytest.approx(-0.4666)
+    assert base_pose.position.z.value == pytest.approx(0.32)
+    assert base_pose.position.z.reference == "world"
+    assert base_pose.orientation.get("reference", "world") == "world"
+    assert base_pose.orientation.roll == pytest.approx(0.0)
+    assert base_pose.orientation.pitch == pytest.approx(0.5972516700324596)
+    assert base_pose.orientation.yaw == pytest.approx(0.0)
     base_randomization = config.task.randomization.arm.base
     assert base_randomization.reference == "relative"
     assert list(base_randomization.x) == pytest.approx([-0.01, 0.01])
     assert list(base_randomization.y) == pytest.approx([-0.01, 0.01])
-    assert list(base_randomization.z.range) == pytest.approx([-0.305, -0.295])
-    assert base_randomization.z.reference == "absolute_world"
+    assert list(base_randomization.z) == pytest.approx([-0.005, 0.005])
     assert list(base_randomization.roll) == pytest.approx([-0.02, 0.02])
     assert list(base_randomization.pitch) == pytest.approx([-0.02, 0.02])
     assert list(base_randomization.yaw) == pytest.approx([-0.03, 0.03])

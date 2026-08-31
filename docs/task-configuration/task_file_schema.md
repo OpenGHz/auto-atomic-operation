@@ -129,9 +129,10 @@ pose may provide only `position`, only `orientation`, or both; an omitted
 component keeps the current fallback pose after it is expressed in the chosen
 reference frame.  Use `orientation: [x, y, z, w]` for an XYZW quaternion or
 three values in RPY order (`[roll, pitch, yaw]`) for Euler angles.  Position and
-RPY orientation also accept expanded axis mappings whose scalar values inherit
-the pose-level `reference`, while `{value: ..., reference: ...}` overrides one
-axis. The accepted reference forms are:
+RPY orientation also accept expanded mappings. Their optional component-level
+`reference` becomes the default for all contained axes, while
+`{value: ..., reference: ...}` overrides one axis. The precedence is
+axis-level > component-level > pose-level. The accepted reference forms are:
 
 | Owner | Built-in references | Named references |
 | --- | --- | --- |

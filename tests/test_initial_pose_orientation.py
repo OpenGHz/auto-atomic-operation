@@ -160,6 +160,141 @@ def test_pose_override_supports_axis_level_references_with_global_fallback() -> 
     assert config.position.z.reference is None
 
 
+def test_pose_override_supports_component_level_references_before_axis_overrides() -> (
+    None
+):
+    config = PoseOverrideConfig.model_validate(
+        {
+            "reference": "anchor",
+            "position": {
+                "reference": "world",
+                "x": 0.2,
+                "y": {"value": 0.3, "reference": "other"},
+            },
+            "orientation": {
+                "reference": "world",
+                "roll": 0.1,
+                "pitch": {"value": 0.2, "reference": "anchor"},
+            },
+        }
+    )
+
+    assert config.position.reference == "world"
+    assert config.orientation.reference == "world"
+    assert config.axis_references() == (
+        "anchor",
+        PoseReference.WORLD,
+        "other",
+    )
+
+
+def test_pose_override_component_reference_resolves_all_scalar_axes() -> None:
+    config = PoseOverrideConfig.model_validate(
+        {
+            "reference": "anchor",
+            "position": {
+                "reference": "world",
+                "x": 0.2,
+                "y": 0.3,
+                "z": 0.4,
+            },
+            "orientation": {
+                "reference": "world",
+                "roll": 0.1,
+                "pitch": -0.2,
+                "yaw": 0.3,
+            },
+        }
+    )
+    anchor = PoseState(
+        position=[10.0, 20.0, 30.0],
+        orientation=euler_to_quaternion((0.0, 0.0, 0.5)),
+    )
+    world = PoseState()
+    fallback = PoseState(position=[9.0, 9.0, 9.0])
+
+    resolved = resolve_pose_override(
+        config,
+        fallback,
+        anchor,
+        {"anchor": anchor, PoseReference.WORLD: world},
+    )
+
+    np.testing.assert_allclose(resolved.position[0], [0.2, 0.3, 0.4])
+    np.testing.assert_allclose(
+        resolved.orientation[0],
+        euler_to_quaternion((0.1, -0.2, 0.3)),
+        atol=1e-12,
+    )
+
+
+def test_pose_override_component_reference_applies_one_rigid_transform() -> None:
+    config = PoseOverrideConfig.model_validate(
+        {
+            "reference": "world",
+            "position": {
+                "reference": "anchor",
+                "x": 1.0,
+                "y": 0.0,
+                "z": 0.0,
+            },
+            "orientation": {
+                "reference": "anchor",
+                "roll": 0.0,
+                "pitch": 0.0,
+                "yaw": 0.0,
+            },
+        }
+    )
+    anchor = PoseState(
+        position=[1.0, 2.0, 3.0],
+        orientation=euler_to_quaternion((0.0, 0.0, np.pi / 2.0)),
+    )
+
+    resolved = resolve_pose_override(
+        config,
+        PoseState(),
+        PoseState(),
+        {PoseReference.WORLD: PoseState(), "anchor": anchor},
+    )
+
+    np.testing.assert_allclose(resolved.position[0], [1.0, 3.0, 3.0], atol=1e-12)
+    np.testing.assert_allclose(
+        resolved.orientation[0],
+        anchor.orientation[0],
+        atol=1e-12,
+    )
+
+
+def test_pose_override_axis_reference_overrides_component_reference() -> None:
+    config = PoseOverrideConfig.model_validate(
+        {
+            "reference": "anchor",
+            "position": {
+                "reference": "world",
+                "x": 0.2,
+                "y": {"value": 0.3, "reference": "other"},
+                "z": 0.4,
+            },
+        }
+    )
+    world = PoseState()
+    other = PoseState(position=[0.0, 10.0, 0.0])
+
+    resolved = resolve_pose_override(
+        config,
+        PoseState(),
+        PoseState(),
+        {
+            "anchor": PoseState(),
+            PoseReference.WORLD: world,
+            "other": other,
+        },
+    )
+
+    np.testing.assert_allclose(resolved.position[0], [0.2, 10.3, 0.4], atol=1e-12)
+
+
 def test_pose_override_axis_world_reference_overrides_only_selected_components() -> (
     None
 ):

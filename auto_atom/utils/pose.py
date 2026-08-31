@@ -168,11 +168,11 @@ def resolve_pose_override(
     """Resolve one initial-pose override into a world-frame pose.
 
     ``config`` is deliberately independent of the thing being moved.  The
-    caller resolves ``config.reference`` to ``reference_pose_world`` through
+    caller resolves the pose-, component-, and axis-level references through
     its backend seam, then this function applies the optional local position
     and orientation fields.  Missing fields preserve the fallback pose after
-    it is transformed into the reference frame.  This gives objects, cameras,
-    and operators one consistent partial-override rule.
+    it is transformed into the relevant reference frame.  This gives objects,
+    cameras, and operators one consistent partial-override rule.
 
     The compact six-value operator form is ``[x, y, z, yaw, pitch, roll]`` (or
     the equivalent tuple) and is interpreted as a complete world-frame pose;
@@ -206,32 +206,43 @@ def resolve_pose_override(
     position = fallback_local.position[0].copy()
     orientation = fallback_local.orientation[0].copy()
 
-    def _reference_pose(axis_reference: PoseReference | str) -> PoseState:
-        if axis_reference in resolved_references:
-            return resolved_references[axis_reference]
-        if axis_reference == global_reference:
+    def _reference_pose(pose_reference: PoseReference | str) -> PoseState:
+        if pose_reference in resolved_references:
+            return resolved_references[pose_reference]
+        if pose_reference == PoseReference.WORLD:
+            return PoseState()
+        if pose_reference == global_reference:
             return reference
         raise ValueError(
-            f"No resolved pose was provided for axis reference {axis_reference!r}"
+            f"No resolved pose was provided for reference {pose_reference!r}"
         )
 
+    component_position_world: np.ndarray | None = None
+    component_orientation_world: np.ndarray | None = None
     position_world_overrides: dict[int, np.ndarray] = {}
     orientation_world_overrides: dict[int, float] = {}
 
     if config.position is not None:
         if isinstance(config.position, PosePositionConfig):
+            component_reference = config.position.reference or global_reference
+            component_pose = _reference_pose(component_reference)
+            component_fallback = compose_pose(
+                inverse_pose(component_pose),
+                fallback_pose_world,
+            )
+            component_position = component_fallback.position[0].copy()
             for axis_index, axis_name in enumerate(("x", "y", "z")):
                 axis_value = getattr(config.position, axis_name)
                 if axis_value is None:
                     continue
                 if isinstance(axis_value, PoseAxisConfig):
                     value = axis_value.value
-                    axis_reference = axis_value.reference or global_reference
+                    axis_reference = axis_value.reference or component_reference
                 else:
                     value = axis_value
-                    axis_reference = global_reference
-                if axis_reference == global_reference:
-                    position[axis_index] = float(value)
+                    axis_reference = component_reference
+                if axis_reference == component_reference:
+                    component_position[axis_index] = float(value)
                 else:
                     local_point = np.zeros(3, dtype=np.float64)
                     local_point[axis_index] = float(value)
@@ -240,6 +251,12 @@ def resolve_pose_override(
                         PoseState(position=local_point),
                     )
                     position_world_overrides[axis_index] = transformed.position[0]
+            component_position_world = compose_pose(
+                component_pose,
+                PoseState(position=component_position),
+            ).position[0]
+            for axis_index, transformed in position_world_overrides.items():
+                component_position_world[axis_index] = transformed[axis_index]
         else:
             if len(config.position) < 3:
                 raise ValueError(
@@ -248,18 +265,24 @@ def resolve_pose_override(
             position = np.asarray(config.position[:3], dtype=np.float64)
     if config.orientation is not None:
         if isinstance(config.orientation, PoseOrientationConfig):
-            local_rpy = list(quaternion_to_rpy(orientation))
+            component_reference = config.orientation.reference or global_reference
+            component_pose = _reference_pose(component_reference)
+            component_fallback = compose_pose(
+                inverse_pose(component_pose),
+                fallback_pose_world,
+            )
+            local_rpy = list(quaternion_to_rpy(component_fallback.orientation[0]))
             for axis_index, axis_name in enumerate(("roll", "pitch", "yaw")):
                 axis_value = getattr(config.orientation, axis_name)
                 if axis_value is None:
                     continue
                 if isinstance(axis_value, PoseAxisConfig):
                     value = axis_value.value
-                    axis_reference = axis_value.reference or global_reference
+                    axis_reference = axis_value.reference or component_reference
                 else:
                     value = axis_value
-                    axis_reference = global_reference
-                if axis_reference == global_reference:
+                    axis_reference = component_reference
+                if axis_reference == component_reference:
                     local_rpy[axis_index] = float(value)
                 else:
                     axis_rpy = [0.0, 0.0, 0.0]
@@ -271,7 +294,10 @@ def resolve_pose_override(
                     orientation_world_overrides[axis_index] = quaternion_to_rpy(
                         transformed.orientation[0]
                     )[axis_index]
-            orientation = np.asarray(euler_to_quaternion(tuple(local_rpy)))
+            component_orientation_world = compose_pose(
+                component_pose,
+                PoseState(orientation=euler_to_quaternion(tuple(local_rpy))),
+            ).orientation[0]
         elif len(config.orientation) == 3:
             orientation = np.asarray(
                 euler_to_quaternion(
@@ -296,9 +322,23 @@ def resolve_pose_override(
         reference,
         PoseState(position=position, orientation=orientation),
     )
-    if position_world_overrides or orientation_world_overrides:
-        world_position = resolved.position[0].copy()
-        world_rpy = list(quaternion_to_rpy(resolved.orientation[0]))
+    if (
+        component_position_world is not None
+        or component_orientation_world is not None
+        or position_world_overrides
+        or orientation_world_overrides
+    ):
+        world_position = (
+            resolved.position[0].copy()
+            if component_position_world is None
+            else component_position_world
+        )
+        world_orientation = (
+            resolved.orientation[0]
+            if component_orientation_world is None
+            else component_orientation_world
+        )
+        world_rpy = list(quaternion_to_rpy(world_orientation))
         for axis_index, transformed in position_world_overrides.items():
             world_position[axis_index] = transformed[axis_index]
         for axis_index, value in orientation_world_overrides.items():

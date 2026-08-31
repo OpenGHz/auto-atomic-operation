@@ -143,7 +143,30 @@ class PoseReference(str, Enum):
     EEF_WORLD = "eef_world"
     """The reference is equivalent to moving the origin of the world system to the operator's end-effector position at the moment the action starts, while keeping the coordinate system direction unchanged. The target pose is snapshotted once at action start and does not track subsequent EEF movement."""
     AUTO = "auto"
-    """The pose reference is automatically determined based on the context of the operation. For example, if an object is specified in the stage configuration, the reference will be set to OBJECT_WORLD; if no object is specified, the reference will be set to BASE."""
+    """The pose reference is automatically determined based on the context of the operation."""
+
+
+def _coerce_pose_reference(value: object) -> object:
+    """Keep built-in pose references typed while allowing named scene frames."""
+    if isinstance(value, str) and not isinstance(value, PoseReference):
+        try:
+            return PoseReference(value)
+        except ValueError:
+            return value
+    return value
+
+
+def _validate_pose_reference(
+    value: Optional[Union[PoseReference, str]],
+) -> Optional[Union[PoseReference, str]]:
+    """Reject empty names while allowing the optional component reference."""
+    if (
+        isinstance(value, str)
+        and not isinstance(value, PoseReference)
+        and not value.strip()
+    ):
+        raise ValueError("reference must be a non-empty frame name")
+    return value
 
 
 class ControlledFrameKind(str, Enum):
@@ -905,17 +928,12 @@ class PoseAxisConfig(BaseModel, frozen=True):
     value: float
     """Component value in the selected reference frame."""
     reference: Optional[Union[PoseReference, str]] = None
-    """Component-specific reference; ``None`` inherits the pose reference."""
+    """Axis-specific reference; ``None`` inherits the component or pose reference."""
 
     @field_validator("reference", mode="before")
     @classmethod
     def _coerce_reference(cls, value: object) -> object:
-        if isinstance(value, str) and not isinstance(value, PoseReference):
-            try:
-                return PoseReference(value)
-            except ValueError:
-                return value
-        return value
+        return _coerce_pose_reference(value)
 
     @field_validator("value", mode="after")
     @classmethod
@@ -926,9 +944,20 @@ class PoseAxisConfig(BaseModel, frozen=True):
 
 
 class PosePositionConfig(BaseModel, frozen=True):
-    """Optional x/y/z initial-pose components with independent references."""
+    """Optional x/y/z initial-pose components with a component-level reference."""
 
     model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid")
+
+    reference: Optional[Union[PoseReference, str]] = None
+    """Reference for all position components; axis references take precedence."""
+
+    _coerce_reference = field_validator("reference", mode="before")(
+        _coerce_pose_reference
+    )
+
+    _validate_reference = field_validator("reference", mode="after")(
+        _validate_pose_reference
+    )
 
     x: Optional[Union[float, PoseAxisConfig]] = None
     """X component, optionally with an axis-specific reference."""
@@ -939,9 +968,20 @@ class PosePositionConfig(BaseModel, frozen=True):
 
 
 class PoseOrientationConfig(BaseModel, frozen=True):
-    """Optional roll/pitch/yaw initial-pose components with independent references."""
+    """Optional roll/pitch/yaw components with a component-level reference."""
 
     model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid")
+
+    reference: Optional[Union[PoseReference, str]] = None
+    """Reference for all orientation components; axis references take precedence."""
+
+    _coerce_reference = field_validator("reference", mode="before")(
+        _coerce_pose_reference
+    )
+
+    _validate_reference = field_validator("reference", mode="after")(
+        _validate_pose_reference
+    )
 
     roll: Optional[Union[float, PoseAxisConfig]] = None
     """Roll angle in radians, optionally with an axis-specific reference."""
@@ -963,7 +1003,9 @@ class PoseOverrideConfig(BaseModel, frozen=True):
     selected reference frame.  ``orientation`` accepts either an ``xyzw``
     quaternion (four values), roll/pitch/yaw Euler angles (three values), or an
     expanded ``{roll, pitch, yaw}`` mapping whose components may override the
-    pose-level reference.
+    orientation-level or pose-level reference.  Structured ``position`` and
+    ``orientation`` mappings may set their own ``reference``; the precedence is
+    axis-level, component-level, then pose-level.
 
     ``reference`` accepts the built-in :class:`PoseReference` values and a
     named MuJoCo site/body/geom/joint.  Which references are legal is checked
@@ -988,8 +1030,7 @@ class PoseOverrideConfig(BaseModel, frozen=True):
                 position: [0.0, 0.45, 0.30]
                 orientation: [0, 0, 0, 1]
 
-        # Axis-level reference overrides; compact scalar values inherit the
-        # pose-level reference.
+        # Component-level reference; axis-level reference overrides it.
         task_operators:
           arm:
             initial_state:
@@ -999,6 +1040,11 @@ class PoseOverrideConfig(BaseModel, frozen=True):
                   x: 0.2474
                   y: -0.4666
                   z: {value: -0.10, reference: world}
+                orientation:
+                  reference: world
+                  roll: 0.0
+                  pitch: 0.2
+                  yaw: 0.0
     """
 
     model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid")
@@ -1084,14 +1130,7 @@ class PoseOverrideConfig(BaseModel, frozen=True):
     @classmethod
     def _coerce_reference(cls, value: object) -> object:
         """Keep built-in references typed while allowing named scene frames."""
-        if isinstance(value, str) and not isinstance(value, PoseReference):
-            try:
-                return PoseReference(value)
-            except ValueError:
-                # A non-built-in string is a scene element name.  The backend
-                # resolves and validates it once the composed model exists.
-                return value
-        return value
+        return _coerce_pose_reference(value)
 
     @field_validator("reference", mode="after")
     @classmethod
@@ -1099,20 +1138,17 @@ class PoseOverrideConfig(BaseModel, frozen=True):
         cls, value: Union[PoseReference, str]
     ) -> Union[PoseReference, str]:
         """Reject an empty named frame before backend resolution."""
-        if (
-            isinstance(value, str)
-            and not isinstance(value, PoseReference)
-            and not value.strip()
-        ):
-            raise ValueError("reference must be a non-empty frame name")
-        return value
+        return _validate_pose_reference(value)  # type: ignore[return-value]
 
     def axis_references(self) -> Tuple[Union[PoseReference, str], ...]:
-        """Return the global and explicitly configured axis references."""
+        """Return global, component-level, and axis-level references."""
         references: list[Union[PoseReference, str]] = [self.reference]
         for component in (self.position, self.orientation):
             if not isinstance(component, BaseModel):
                 continue
+            component_reference = getattr(component, "reference", None)
+            if component_reference is not None:
+                references.append(component_reference)
             for axis in type(component).model_fields:
                 value = getattr(component, axis)
                 if isinstance(value, PoseAxisConfig) and value.reference is not None:

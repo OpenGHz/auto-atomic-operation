@@ -8,6 +8,17 @@ door_id: D001
 handle_id: H001
 
 env:
+  # Match Praxis embodied mode's neutral P7 home posture.  The gripper entry
+  # remains explicitly open in AAO's UMI-v3 control convention.
+  initial_joint_positions:
+    joint1: 0.0
+    joint2: -1.5
+    joint3: 0.0
+    joint4: -0.8
+    joint5: 0.0
+    joint6: 0.0
+    joint7: 0.0
+    eef_claw_joint: 0.0
   scene:
     base: ${assets_dir}/xmls/scenes/open_door_unidoor/demo.xml
     layers:
@@ -54,11 +65,8 @@ task:
         reference: relative
         x: [-0.01, 0.01]
         y: [-0.01, 0.01]
-        z:
-          # Hold the robot near the original world height instead of carrying
-          # the handle frame's Z displacement across door assets.
-          range: [-0.305, -0.295]
-          reference: absolute_world
+        # Randomize ±5 mm around the Praxis-aligned initial base height.
+        z: [-0.005, 0.005]
         roll: [-0.02, 0.02]
         pitch: [-0.02, 0.02]
         yaw: [-0.03, 0.03]
@@ -127,13 +135,21 @@ task_operators:
   arm:
     initial_state:
       base_pose:
-        # Keep the robot base at a stable offset from the selected handle.
-        # The offset reproduces the existing D001/H001 world placement while
-        # allowing every catalog handle to bring the arm to the same relative
-        # interaction pose.
-        reference: door__handle_grasp_center
-        position: [0.2474, -0.4666, -0.1]
-        orientation: [0.0, 0.0, 0.70710678, 0.70710678]
+        # Keep the horizontal placement relative to the selected handle while
+        # matching Praxis' embodied robot installation height and pitch.
+        position:
+          x: 0.2474
+          y: -0.4666
+          z:
+            value: 0.32
+            reference: world
+          reference: door__handle_grasp_center
+        orientation:
+          # Praxis: source-model pitch = 90 deg - embodied physical pitch
+          # 55.78 deg = 34.22 deg; AAO orientation fields use world RPY.
+          roll: 0.0
+          pitch: 0.5972516700324596
+          yaw: 0.0
     control:
       tolerance:
         # The UMI v3 closing span is only 0.0165.  The inherited 0.012
