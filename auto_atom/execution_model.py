@@ -29,11 +29,19 @@ from .utils.pose import PoseState
 
 @dataclass
 class ArcExecutionSnapshot:
-    """Mutable per-action state captured when an arc primitive starts."""
+    """Mutable per-action state captured when an arc primitive starts.
+
+    Length-targeted arcs additionally retain their measured radius and angular
+    progress so a dynamic target remains stable across controller updates.
+    """
 
     start_eef_pose: Optional[PoseState] = None
     pivot_world_pos: Optional[Position] = None
     control_ticks: int = 0
+    arc_length_radius: Optional[float] = None
+    arc_length_total_angle: Optional[float] = None
+    arc_length_completed_angle: float = 0.0
+    arc_length_segment_angle: Optional[float] = None
 
 
 class StageExecutionStatus(str, Enum):

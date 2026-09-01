@@ -362,14 +362,19 @@ class ArcControlConfig(BaseModel):
     site, body, or joint in the scene XML whose world position is used automatically."""
     axis: Position
     """Unit-direction of the rotation axis (x, y, z)."""
-    angle: float
-    """Rotation angle in radians.  Positive follows the right-hand rule around ``axis``.
-    When ``absolute`` is False (default), this is a relative rotation from the current
-    EEF position.  When ``absolute`` is True and ``pivot`` is a joint name, this is
-    the target joint angle and the runtime computes the relative rotation automatically."""
+    angle: Optional[float] = None
+    """Rotation angle in radians. Positive follows the right-hand rule around
+    ``axis``. When ``absolute`` is False (default), this is a relative rotation
+    from the current EEF position. When ``absolute`` is True and ``pivot`` is a
+    joint name, this is the target joint angle and the runtime computes the
+    relative rotation automatically. Mutually exclusive with ``arc_length``."""
+    arc_length: Optional[float] = None
+    """Signed target arc length in metres. Exactly one of ``angle`` and
+    ``arc_length`` must be configured. The runtime converts this length to an
+    angle using the measured pivot-to-EEF radius for each environment."""
     absolute: bool = False
     """When True, ``angle`` is treated as an absolute target joint angle (radians)
-    instead of a relative rotation.  Requires ``pivot`` to be a joint name so the
+    instead of a relative rotation. Requires ``pivot`` to be a joint name so the
     runtime can read the current joint angle and compute the delta."""
     max_step: float = 0.2
     """Maximum arc sub-step in radians (~11.5 deg).  Smaller values produce smoother
@@ -400,6 +405,17 @@ class ArcControlConfig(BaseModel):
         """If reverse is True, negate the axis to reverse the rotation direction."""
         if self.reverse:
             self.axis = tuple(-v for v in self.axis)
+        return self
+
+    @model_validator(mode="after")
+    def validate_target(self) -> Self:
+        """Require one unambiguous arc target and keep absolute arcs joint-based."""
+        if (self.angle is None) == (self.arc_length is None):
+            raise ValueError("arc requires exactly one of angle or arc_length")
+        if self.absolute and self.arc_length is not None:
+            raise ValueError("arc_length does not support absolute=true")
+        if self.absolute and self.angle is None:
+            raise ValueError("absolute arc requires an angle target")
         return self
 
 

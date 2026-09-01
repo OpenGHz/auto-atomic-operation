@@ -335,6 +335,10 @@ select an EEF or held-object `controlled_frame`. It may also set `relative`,
 [Stages & Waypoints](stages_and_waypoints.md) and
 [Arc Motion Tuning](../ik-motion-control/arc_motion_tuning.md).
 
+An `arc` waypoint must set exactly one of `angle` (radians) or `arc_length`
+(metres). `arc_length` is converted at runtime from the measured pivot-to-EEF
+radius and cannot be combined with `absolute: true`.
+
 ### Controlled frame and orientation goal
 
 A pose waypoint answers two independent questions:

@@ -1849,12 +1849,96 @@ class TaskRunner:
             reference_site=plan.stage.site,
             grasp_binding=grasp_binding,
         )
+        return TaskRunner._refine_arc_result(
+            env_index=env_index,
+            action=action,
+            backend=backend,
+            result=result,
+        )
+
+    @staticmethod
+    def _refine_arc_result(
+        env_index: int,
+        action: PrimitiveAction,
+        backend: SceneBackend,
+        result: ControlResult,
+    ) -> ControlResult:
+        """Apply mechanism-specific completion gates for arc primitives."""
+        pose = action.pose
+        arc = None if pose is None else pose.arc
+        if arc is not None and arc.arc_length is not None:
+            return TaskRunner._refine_arc_length_result(
+                env_index=env_index,
+                action=action,
+                backend=backend,
+                result=result,
+            )
         return TaskRunner._refine_absolute_arc_result(
             env_index=env_index,
             action=action,
             backend=backend,
             result=result,
         )
+
+    @staticmethod
+    def _refine_arc_length_result(
+        env_index: int,
+        action: PrimitiveAction,
+        backend: SceneBackend,
+        result: ControlResult,
+    ) -> ControlResult:
+        """Advance a length-targeted arc only after each local segment reaches."""
+        pose = action.pose
+        arc = None if pose is None else pose.arc
+        if (
+            action.kind != "pose"
+            or arc is None
+            or arc.arc_length is None
+            or action.arc_snapshot is None
+        ):
+            return result
+        raw_signal = result.signals[env_index]
+        if raw_signal in {ControlSignal.FAILED, ControlSignal.TIMED_OUT}:
+            return result
+
+        snapshot = action.arc_snapshot
+        snapshot.control_ticks += 1
+        segment_angle = float(snapshot.arc_length_segment_angle or 0.0)
+        if raw_signal == ControlSignal.REACHED:
+            snapshot.arc_length_completed_angle += segment_angle
+
+        total_angle = float(snapshot.arc_length_total_angle or 0.0)
+        remaining = total_angle - snapshot.arc_length_completed_angle
+        reached = abs(remaining) <= 1e-9
+        signals = result.signals.copy()
+        details = [dict(item) for item in result.details]
+        env_details = details[env_index]
+        env_details.update(
+            {
+                "arc_length": float(arc.arc_length),
+                "arc_length_radius": snapshot.arc_length_radius,
+                "arc_length_target_angle": total_angle,
+                "arc_length_completed_angle": snapshot.arc_length_completed_angle,
+                "arc_length_remaining": remaining,
+                "arc_length_control_ticks": snapshot.control_ticks,
+            }
+        )
+        if raw_signal == ControlSignal.REACHED and not reached:
+            signals[env_index] = ControlSignal.RUNNING
+            env_details["event"] = "arc_length_segment_reached"
+        if not reached and snapshot.control_ticks >= int(arc.timeout_steps):
+            signals[env_index] = ControlSignal.TIMED_OUT
+            env_details.update(
+                {
+                    "event": "arc_length_timeout",
+                    "failure_category": "controller_timeout",
+                    "failure_reason": (
+                        "arc length did not reach its target within "
+                        f"{arc.timeout_steps} aggregate control updates"
+                    ),
+                }
+            )
+        return ControlResult(signals=signals, details=details)
 
     @staticmethod
     def _run_object_only_action(
@@ -2307,7 +2391,11 @@ class TaskRunner:
         """
         if pose.static or pose.relative:
             return True
-        if pose.arc is not None and not pose.arc.absolute:
+        if (
+            pose.arc is not None
+            and not pose.arc.absolute
+            and pose.arc.arc_length is None
+        ):
             return True
         if pose.reference not in {PoseReference.EEF, PoseReference.EEF_WORLD}:
             return False
@@ -2522,6 +2610,7 @@ class TaskRunner:
         if arc.absolute:
             if not isinstance(arc.pivot, str):
                 raise ValueError("Arc absolute mode requires pivot to be a joint name.")
+            assert angle is not None
             current_joint = backend.get_joint_angle(arc.pivot, env_index)
             delta = arc.angle - current_joint
             sign = 1.0 if delta >= 0 else -1.0
@@ -2545,7 +2634,36 @@ class TaskRunner:
                 )
             pivot_world_pos = snapshot.pivot_world_pos
             current_eef = snapshot.start_eef_pose
-            if action.arc_cumulative_angle is not None:
+            if arc.arc_length is not None:
+                radius = float(
+                    np.linalg.norm(
+                        np.asarray(current_eef.position[0], dtype=np.float64)
+                        - np.asarray(pivot_world_pos, dtype=np.float64)
+                    )
+                )
+                if radius <= 1e-9 and abs(float(arc.arc_length)) > 1e-12:
+                    raise ValueError(
+                        "arc_length requires a non-zero pivot-to-EEF radius"
+                    )
+                if snapshot.arc_length_radius is None:
+                    snapshot.arc_length_radius = radius
+                    snapshot.arc_length_total_angle = (
+                        0.0
+                        if abs(float(arc.arc_length)) <= 1e-12
+                        else float(arc.arc_length) / radius
+                    )
+                total_angle = float(snapshot.arc_length_total_angle)
+                completed = float(snapshot.arc_length_completed_angle)
+                remaining = total_angle - completed
+                if abs(remaining) > 1e-9:
+                    segment = np.sign(remaining) * min(
+                        abs(remaining), float(arc.max_step)
+                    )
+                else:
+                    segment = 0.0
+                snapshot.arc_length_segment_angle = float(segment)
+                angle = completed + float(segment)
+            elif action.arc_cumulative_angle is not None:
                 angle = action.arc_cumulative_angle
         else:
             pivot_world_pos = TaskRunner._resolve_arc_pivot_world_pos(
@@ -2557,6 +2675,24 @@ class TaskRunner:
                 reference_site=reference_site,
             )
             current_eef = operator.get_end_effector_pose().select(env_index)
+            if arc.arc_length is not None:
+                radius = float(
+                    np.linalg.norm(
+                        np.asarray(current_eef.position[0], dtype=np.float64)
+                        - np.asarray(pivot_world_pos, dtype=np.float64)
+                    )
+                )
+                if radius <= 1e-9 and abs(float(arc.arc_length)) > 1e-12:
+                    raise ValueError(
+                        "arc_length requires a non-zero pivot-to-EEF radius"
+                    )
+                angle = (
+                    0.0
+                    if abs(float(arc.arc_length)) <= 1e-12
+                    else float(arc.arc_length) / radius
+                )
+            else:
+                assert angle is not None
         rotated = rotate_pose_around_axis(current_eef, pivot_world_pos, arc.axis, angle)
         return PoseControlConfig(
             position=tuple(float(v) for v in rotated.position[0]),

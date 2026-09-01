@@ -765,6 +765,97 @@ def test_absolute_arc_completion_limits_must_be_positive(
         )
 
 
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"angle": 0.5, "arc_length": 0.1},
+        {"angle": None, "arc_length": None},
+        {"angle": None, "arc_length": 0.1, "absolute": True},
+    ],
+)
+def test_arc_requires_one_relative_target(payload: dict[str, Any]) -> None:
+    with pytest.raises(ValueError, match="arc"):
+        ArcControlConfig(
+            pivot="door_hinge",
+            axis=(0.0, 0.0, 1.0),
+            **payload,
+        )
+
+
+def _arc_length_task_file(env_name: str) -> TaskFileConfig:
+    ComponentRegistry.register_env(env_name, {"kind": "mock_env", "batch_size": 1})
+    return TaskFileConfig.model_validate(
+        {
+            "backend": "auto_atom.mock.build_mock_backend",
+            "task": {
+                "env_name": env_name,
+                "stages": [
+                    {
+                        "name": "travel_length",
+                        "object": "",
+                        "operation": "move",
+                        "operator": "arm",
+                        "param": {
+                            "pre_move": [
+                                {
+                                    "reference": "world",
+                                    "arc": {
+                                        "pivot": "door_hinge",
+                                        "axis": [0.0, 0.0, 1.0],
+                                        "arc_length": 0.1,
+                                        "max_step": 0.2,
+                                    },
+                                }
+                            ]
+                        },
+                    }
+                ],
+            },
+            "task_operators": {"arm": {}},
+        }
+    )
+
+
+@pytest.mark.parametrize("execution_path", ["demo", "policy"])
+def test_arc_length_uses_measured_radius_and_preserves_keypoint_boundary(
+    execution_path: str,
+) -> None:
+    config = _arc_length_task_file(f"arc_length_runtime_{execution_path}")
+    executor, policy, update = _reset_arc_executor(execution_path, config)
+    try:
+        backend = executor._require_context().backend
+        # The mock EEF starts at (0.2, 0, 0.3); this pivot makes the radius
+        # exactly 0.2m, so 0.1m of travel requires 0.5rad.
+        _immediate_reached_motion(
+            backend,
+            initial_angles=(0.0,),
+            angles_after_reach=((0.0,),),
+        )
+        backend.get_element_pose = lambda name, env_index=0: (
+            PoseState(
+                position=(0.0, 0.0, 0.3),
+                orientation=(0.0, 0.0, 0.0, 1.0),
+            )
+            if name == "door_hinge"
+            else (_ for _ in ()).throw(KeyError(name))
+        )
+        assert len(executor._timeline.clone_stage_actions(0)) == 1
+        updates = 0
+        while not bool(update.done[0]):
+            update = _arc_executor_update(execution_path, executor, policy, update)
+            updates += 1
+        assert updates == 3
+        assert update.success.tolist() == [True]
+        if execution_path == "demo":
+            details = executor.records[-1].details
+            assert details["arc_length_radius"] == pytest.approx(0.2)
+            assert details["arc_length_target_angle"] == pytest.approx(0.5)
+            assert details["arc_length_completed_angle"] == pytest.approx(0.5)
+    finally:
+        executor.close()
+        ComponentRegistry.clear()
+
+
 def _immediate_reached_motion(
     backend: Any,
     *,

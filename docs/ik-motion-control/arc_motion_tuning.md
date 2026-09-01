@@ -35,7 +35,34 @@ The door frame has `quat="0.707 0 0 0.707"` (90° around X), so:
 
 **Common mistake**: Using the local axis directly → EEF rotates around the wrong axis, handle doesn't move.
 
-## Absolute-arc completion and `max_step`
+## Arc targets, arc length, and `max_step`
+
+An arc declares exactly one target:
+
+- `angle`: a relative rotation in radians (the existing behavior), or an
+  absolute named-joint target when `absolute: true`.
+- `arc_length`: a signed travel distance in metres. Positive follows the
+  configured right-hand-rule `axis`; negative reverses it.
+
+`arc_length` is converted at runtime using the measured distance from the
+configured pivot to the EEF at the start of the arc. This keeps the traveled
+distance consistent when door/handle dimensions differ. The radius is sampled
+per environment, so no door width or asset-specific constant is embedded in the
+task configuration. `arc_length` cannot be combined with `absolute: true`.
+
+```yaml
+arc:
+  pivot: door_hinge
+  axis: [0, 0, -1]
+  arc_length: 0.16  # metres along the door edge
+  max_step: 0.01   # angular sub-step in radians
+```
+
+The runtime keeps the arc as one configured keypoint, but advances it through
+length-derived angular segments. It records the measured radius, target angle,
+completed angle, remaining angle, and control-update count in execution details.
+
+### Absolute-arc completion and `max_step`
 
 An arc with `absolute: true` remains one primitive. On each control update the
 runtime reads the named pivot joint and limits the next local EEF target to
@@ -73,8 +100,9 @@ arc:
   timeout_steps: 1000    # aggregate control updates; default
 ```
 
-Relative arcs keep their static, compile-time sub-primitive expansion; the
-joint completion gate and aggregate absolute-arc timeout do not apply to them.
+Relative angle arcs keep their static, compile-time sub-primitive expansion.
+Length-targeted arcs are dynamic because their angle depends on the measured
+radius; they use the same aggregate `timeout_steps` budget as absolute arcs.
 
 ## Arc absolute mode and handle spring-back
 

@@ -1443,7 +1443,8 @@ class StageExecution:
                 else [float(value) for value in arc.pivot]
             ),
             "axis": [float(value) for value in arc.axis],
-            "angle": float(arc.angle),
+            "angle": None if arc.angle is None else float(arc.angle),
+            "arc_length": (None if arc.arc_length is None else float(arc.arc_length)),
             "absolute": bool(arc.absolute),
         }
         if arc.absolute and isinstance(arc.pivot, str):

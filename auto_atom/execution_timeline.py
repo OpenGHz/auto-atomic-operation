@@ -215,7 +215,10 @@ class TaskFlowBuilder:
 
             if effective_pose.arc is not None:
                 sub_poses = TaskFlowBuilder._split_arc(effective_pose)
-                if effective_pose.arc.absolute:
+                if (
+                    effective_pose.arc.absolute
+                    or effective_pose.arc.arc_length is not None
+                ):
                     for sub_index, sp in enumerate(sub_poses):
                         actions.append(
                             PrimitiveAction(
@@ -224,6 +227,11 @@ class TaskFlowBuilder:
                                 phase=phase,
                                 waypoint=waypoint,
                                 completes_keypoint=sub_index == len(sub_poses) - 1,
+                                arc_snapshot=(
+                                    ArcExecutionSnapshot()
+                                    if effective_pose.arc.arc_length is not None
+                                    else None
+                                ),
                             )
                         )
                 else:
@@ -258,8 +266,9 @@ class TaskFlowBuilder:
     def _split_arc(pose: PoseControlConfig) -> List[PoseControlConfig]:
         arc = pose.arc
         assert arc is not None
-        if arc.absolute:
+        if arc.absolute or arc.arc_length is not None:
             return [pose]
+        assert arc.angle is not None
         total = abs(arc.angle)
         n_steps = max(1, math.ceil(total / arc.max_step))
         step_angle = arc.angle / n_steps
@@ -269,6 +278,7 @@ class TaskFlowBuilder:
                     pivot=arc.pivot,
                     axis=arc.axis,
                     angle=step_angle,
+                    max_step=arc.max_step,
                 ),
                 reference=pose.reference,
             )
