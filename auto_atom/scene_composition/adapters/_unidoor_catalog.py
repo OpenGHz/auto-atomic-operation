@@ -58,6 +58,19 @@ class _UniDoorFragmentCompilation:
     metadata: Mapping[str, Mapping[str, Any]]
 
 
+@dataclass(frozen=True)
+class _VisualAsset:
+    """One visual mesh and its optional runtime material resources."""
+
+    mesh_path: Path
+    texture_path: Path | None = None
+    material_name: str | None = None
+    texture_name: str | None = None
+    rgba: tuple[float, float, float, float] | None = None
+    texrepeat: tuple[float, float] = (1.0, 1.0)
+    texuniform: bool = False
+
+
 def _build_unidoor_fragment(
     config: _UniDoorCatalogConfig,
 ) -> _UniDoorFragmentCompilation:
@@ -105,12 +118,12 @@ def _build_unidoor_fragment(
 
     door_outputs = _mapping(door.get("outputs"), "outputs")
     handle_outputs = _mapping(handle.get("outputs"), "outputs")
-    frame_path = _output_path(root, door_outputs, "frame", config.verify_hashes)
-    panel_path = _output_path(root, door_outputs, "panel", config.verify_hashes)
-    handle_path = _output_path(root, handle_outputs, "handle", config.verify_hashes)
-    lock_path = None
+    frame_visual = _visual_asset(root, door_outputs, "frame", config.verify_hashes)
+    panel_visual = _visual_asset(root, door_outputs, "panel", config.verify_hashes)
+    handle_visual = _visual_asset(root, handle_outputs, "handle", config.verify_hashes)
+    lock_visual = None
     if "lock" in handle_outputs:
-        lock_path = _output_path(root, handle_outputs, "lock", config.verify_hashes)
+        lock_visual = _visual_asset(root, handle_outputs, "lock", config.verify_hashes)
     elif bool(handle.get("has_lock_mesh", False)):
         raise ValueError(
             f"{config.handle_id} declares has_lock_mesh but has no lock output"
@@ -124,27 +137,14 @@ def _build_unidoor_fragment(
     model_root = ET.Element("mujoco", {"model": f"aao_unidoor_{combination_id}"})
     ET.SubElement(model_root, "compiler", {"angle": "radian"})
     asset = ET.SubElement(model_root, "asset")
-    ET.SubElement(
-        asset,
-        "mesh",
-        {"name": _MESH_NAMES["frame"], "file": _absolute_posix(frame_path)},
-    )
-    ET.SubElement(
-        asset,
-        "mesh",
-        {"name": _MESH_NAMES["panel"], "file": _absolute_posix(panel_path)},
-    )
-    ET.SubElement(
-        asset,
-        "mesh",
-        {"name": _MESH_NAMES["handle"], "file": _absolute_posix(handle_path)},
-    )
-    if lock_path is not None:
-        ET.SubElement(
-            asset,
-            "mesh",
-            {"name": _MESH_NAMES["lock"], "file": _absolute_posix(lock_path)},
-        )
+    for role, visual in (
+        ("frame", frame_visual),
+        ("panel", panel_visual),
+        ("handle", handle_visual),
+    ):
+        _append_visual_asset(asset, role, visual)
+    if lock_visual is not None:
+        _append_visual_asset(asset, "lock", lock_visual)
     if handle_collision is not None:
         _append_handle_collision_mesh_assets(asset, handle_collision)
 
@@ -180,6 +180,7 @@ def _build_unidoor_fragment(
             "name": "door_frame_visual",
             "type": "mesh",
             "mesh": _MESH_NAMES["frame"],
+            **_material_attribute(frame_visual),
             "pos": _fmt(root_translation),
             "group": "2",
             "contype": "0",
@@ -235,6 +236,7 @@ def _build_unidoor_fragment(
             "name": "door_panel_visual",
             "type": "mesh",
             "mesh": _MESH_NAMES["panel"],
+            **_material_attribute(panel_visual),
             "pos": _fmt(root_translation),
             "group": "2",
             "contype": "0",
@@ -290,6 +292,7 @@ def _build_unidoor_fragment(
             "name": "door_handle_visual",
             "type": "mesh",
             "mesh": _MESH_NAMES["handle"],
+            **_material_attribute(handle_visual),
             "group": "2",
             "contype": "0",
             "conaffinity": "0",
@@ -307,7 +310,7 @@ def _build_unidoor_fragment(
             "rgba": "0.9 0.1 0.1 0.35",
         },
     )
-    if lock_path is not None:
+    if lock_visual is not None:
         lock_body = ET.SubElement(
             panel, "body", {"name": "door_lock", "pos": _fmt(handle_position)}
         )
@@ -318,6 +321,7 @@ def _build_unidoor_fragment(
                 "name": "door_lock_visual",
                 "type": "mesh",
                 "mesh": _MESH_NAMES["lock"],
+                **_material_attribute(lock_visual),
                 "group": "2",
                 "contype": "0",
                 "conaffinity": "0",
@@ -686,6 +690,145 @@ def _output_path(
     if verify_hashes:
         _verify_hash(path, output.get("sha256"), f"{role} output")
     return path
+
+
+def _visual_asset(
+    root: Path,
+    outputs: Mapping[str, Any],
+    role: str,
+    verify_hashes: bool,
+) -> _VisualAsset:
+    """Resolve a visual output and its optional runtime texture bundle.
+
+    Older catalog revisions expose only ``outputs.<role>.path``.  Newer
+    texture-complete revisions retain that geometry output as the physics
+    identity anchor and add ``outputs.<role>.visual.runtime`` for a UV mesh,
+    texture atlas and material parameters.  The latter is preferred whenever
+    present; the former remains the explicit no-material fallback.
+    """
+
+    output = _mapping(outputs.get(role), f"outputs.{role}")
+    legacy_path = _output_path(root, outputs, role, verify_hashes)
+    visual = output.get("visual")
+    if visual is None:
+        return _VisualAsset(mesh_path=legacy_path)
+    visual = _mapping(visual, f"outputs.{role}.visual")
+
+    runtime = _mapping(visual.get("runtime"), f"outputs.{role}.visual.runtime")
+    mesh = _mapping(runtime.get("mesh"), f"outputs.{role}.visual.runtime.mesh")
+    mesh_path = _safe_path(
+        root,
+        str(mesh.get("path", "")),
+        f"{role} runtime visual mesh",
+    )
+    if verify_hashes:
+        _verify_hash(
+            mesh_path,
+            mesh.get("sha256"),
+            f"{role} runtime visual mesh",
+        )
+
+    texture_path: Path | None = None
+    texture = runtime.get("texture")
+    if texture is not None:
+        texture = _mapping(texture, f"outputs.{role}.visual.runtime.texture")
+        texture_path = _safe_path(
+            root,
+            str(texture.get("path", "")),
+            f"{role} runtime texture",
+        )
+        if verify_hashes:
+            _verify_hash(
+                texture_path,
+                texture.get("sha256"),
+                f"{role} runtime texture",
+            )
+
+    rgba = _optional_float_tuple(runtime.get("rgba"), 4, f"{role} runtime rgba")
+    texrepeat = _optional_float_tuple(
+        runtime.get("texrepeat"), 2, f"{role} runtime texrepeat"
+    )
+    texuniform = runtime.get("texuniform", False)
+    if not isinstance(texuniform, bool):
+        raise ValueError(f"{role} runtime texuniform must be a boolean")
+    has_material = texture_path is not None or rgba is not None
+    return _VisualAsset(
+        mesh_path=mesh_path,
+        texture_path=texture_path,
+        material_name=(f"unidoor_{role}_material" if has_material else None),
+        texture_name=(f"unidoor_{role}_texture" if texture_path is not None else None),
+        rgba=rgba,
+        texrepeat=texrepeat or (1.0, 1.0),
+        texuniform=texuniform,
+    )
+
+
+def _append_visual_asset(
+    asset: ET.Element,
+    role: str,
+    visual: _VisualAsset | None,
+) -> None:
+    """Emit one visual mesh and any material resources declared by its bundle."""
+
+    if visual is None:
+        raise ValueError(f"missing visual asset for {role}")
+    if visual.texture_path is not None:
+        if visual.texture_name is None or visual.material_name is None:
+            raise ValueError(f"{role} texture is missing material names")
+        ET.SubElement(
+            asset,
+            "texture",
+            {
+                "name": visual.texture_name,
+                "type": "2d",
+                "file": _absolute_posix(visual.texture_path),
+            },
+        )
+    if visual.material_name is not None:
+        attributes = {"name": visual.material_name}
+        if visual.texture_name is not None:
+            attributes.update(
+                {
+                    "texture": visual.texture_name,
+                    "texrepeat": _fmt(visual.texrepeat),
+                    "texuniform": str(visual.texuniform).lower(),
+                }
+            )
+        if visual.rgba is not None:
+            attributes["rgba"] = _fmt(visual.rgba)
+        ET.SubElement(asset, "material", attributes)
+    ET.SubElement(
+        asset,
+        "mesh",
+        {"name": _MESH_NAMES[role], "file": _absolute_posix(visual.mesh_path)},
+    )
+
+
+def _material_attribute(visual: _VisualAsset | None) -> dict[str, str]:
+    """Return the optional geom material binding for a visual asset."""
+
+    if visual is None or visual.material_name is None:
+        return {}
+    return {"material": visual.material_name}
+
+
+def _optional_float_tuple(
+    value: Any,
+    size: int,
+    label: str,
+) -> tuple[float, ...] | None:
+    if value is None:
+        return None
+    if (
+        not isinstance(value, Sequence)
+        or isinstance(value, (str, bytes))
+        or len(value) != size
+    ):
+        raise ValueError(f"{label} must contain {size} values")
+    result = tuple(float(item) for item in value)
+    if not all(math.isfinite(item) for item in result):
+        raise ValueError(f"{label} must contain finite values")
+    return result
 
 
 def _verify_hash(path: Path, expected: Any, label: str) -> None:

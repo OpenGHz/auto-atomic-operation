@@ -5,7 +5,7 @@
   "entries": [
     {
       "uri": "components/doors/D001/component.json",
-      "sha256": "a4525e19fb5cd357b9f5a6b4606b7e25648ddefc78473c96b465f66966a8a7e0"
+      "sha256": "90e8bb03a0be1b84e53b57ef9257d689601d3f751de340dd8a82d2b1ea208ee8"
     },
     {
       "uri": "components/doors/D001/frame.obj",
@@ -21,7 +21,7 @@
     },
     {
       "uri": "components/handles/H003/component.json",
-      "sha256": "329e081c27932acfc748e88935e7de82d09c6b93e878cdcc633296ce846d52c2"
+      "sha256": "a21b56652445960c17b956d46410be66b1b7fcfac7ad4c6d31352f5a1eb3a952"
     },
     {
       "uri": "components/handles/H003/handle.obj",

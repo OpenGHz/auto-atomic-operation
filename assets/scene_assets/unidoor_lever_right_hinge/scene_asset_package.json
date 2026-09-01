@@ -1,7 +1,7 @@
 {
   "schema": "aao.scene-asset-package/v1",
   "package_id": "unidoor_lever_right_hinge",
-  "revision": "catalog-1.3",
+  "revision": "catalog-1.6",
   "payload_root": {
     "uri": "../../../third_party/unidoor_lever_catalog_pipeline_right_hinge"
   },
@@ -67,11 +67,11 @@
   },
   "provenance": {
     "legacy_product_space": "../../../third_party/unidoor_lever_catalog_pipeline_right_hinge/product_space.json",
-    "note": "OBJ and collision sidecars remain in the external payload; no bytes are copied or rewritten."
+    "note": "Visual meshes, texture atlases, source-material evidence, and collision sidecars remain in the external payload; no bytes are copied or rewritten."
   },
   "extensions": {
     "unidoor": {
-      "compiler_version": "unidoor-lever-catalog-1.3",
+      "compiler_version": "unidoor-lever-catalog-1.6",
       "handedness_transform_id": "door-hinge-x-reflection-v1"
     }
   }

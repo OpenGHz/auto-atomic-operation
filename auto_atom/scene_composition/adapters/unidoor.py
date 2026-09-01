@@ -22,6 +22,8 @@ from ._unidoor_catalog import _build_unidoor_fragment, _UniDoorCatalogConfig
 
 _REFERENCE_ATTRIBUTES = {
     "mesh",
+    "material",
+    "texture",
     "joint",
     "site",
     "objname",

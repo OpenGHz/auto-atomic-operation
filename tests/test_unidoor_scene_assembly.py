@@ -675,6 +675,47 @@ def test_real_h004_uses_all_declared_acd_parts_if_assets_are_available() -> None
     assert sidecar_path.resolve() in artifact.dependencies
 
 
+def test_real_catalog_binds_visual_materials_if_assets_are_available() -> None:
+    mujoco = pytest.importorskip("mujoco")
+    root = Path(__file__).resolve().parents[1]
+    catalog = root / "third_party" / "unidoor_lever_catalog_pipeline_right_hinge"
+    package = (
+        root
+        / "assets"
+        / "scene_assets"
+        / "unidoor_lever_right_hinge"
+        / "scene_asset_package.json"
+    )
+    host = root / "assets" / "xmls" / "scenes" / "open_door_unidoor" / "demo.xml"
+    component_path = catalog / "components" / "doors" / "D001" / "component.json"
+    if not package.is_file() or not host.is_file() or not component_path.is_file():
+        pytest.skip("local UniDoor visual assets are unavailable")
+    component = json.loads(component_path.read_text(encoding="utf-8"))
+    if not component.get("outputs", {}).get("frame", {}).get("visual"):
+        pytest.skip("catalog revision has no visual material bundle")
+
+    artifact = compile_scene(
+        _config(catalog, package=package, host=host, handle="H001")
+    )
+    assert "/visual/frame/frame.obj" in artifact.xml
+    assert "/visual/panel/panel.obj" in artifact.xml
+    assert "/visual/handle/handle.obj" in artifact.xml
+    for role in ("frame", "panel", "handle"):
+        assert f'name="door__unidoor_{role}_texture"' in artifact.xml
+        assert f'name="door__unidoor_{role}_material"' in artifact.xml
+        assert f'material="door__unidoor_{role}_material"' in artifact.xml
+
+    model = mujoco.MjModel.from_xml_string(artifact.xml)
+    for role in ("frame", "panel", "handle"):
+        material_id = mujoco.mj_name2id(
+            model,
+            mujoco.mjtObj.mjOBJ_MATERIAL,
+            f"door__unidoor_{role}_material",
+        )
+        assert material_id >= 0
+        assert np.any(model.mat_texid[material_id] >= 0)
+
+
 def test_xyzw_orientation_is_emitted_as_mjcf_wxyz(tiny_catalog: Path) -> None:
     mujoco = pytest.importorskip("mujoco")
     config = _config(
