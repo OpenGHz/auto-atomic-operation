@@ -24,7 +24,7 @@ from auto_atom.scene_composition import (
     compile_scene,
     load_composed_scene,
 )
-from auto_atom.utils.pose import PoseState, compose_pose
+from auto_atom.utils.pose import PoseState, compose_pose, quaternion_angular_distance
 
 
 def _sha256(path: Path) -> str:
@@ -1021,16 +1021,20 @@ def test_demo_final_approach_targets_the_explicit_grasp_site() -> None:
         < config.task_operators.arm.control.tolerance.position
     )
     assert config.env.initial_joint_positions is None
-    assert dict(config.task_operators.arm.initial_state.joint_positions) == {
-        "joint1": 0.0,
-        "joint2": -0.8,
-        "joint3": 0.0,
-        "joint4": -1.2,
-        "joint5": 0.0,
-        "joint6": 0.0,
-        "joint7": 0.0,
-    }
+    # This task uses the structured EEF home pose as the arm-home source;
+    # raw operator joint positions remain intentionally unset.
+    assert config.task_operators.arm.initial_state.get("joint_positions") is None
     assert config.task_operators.arm.initial_state.eef == pytest.approx(0.0)
+    eef_pose = config.task_operators.arm.initial_state.eef_pose
+    assert eef_pose.reference == "world"
+    assert eef_pose.position.reference == "door__handle_grasp_center"
+    assert eef_pose.position.x == pytest.approx(0.0)
+    assert eef_pose.position.y == pytest.approx(-0.10)
+    assert eef_pose.position.z == pytest.approx(0.0)
+    assert eef_pose.orientation.reference == "world"
+    assert eef_pose.orientation.roll == pytest.approx(0.0)
+    assert eef_pose.orientation.pitch == pytest.approx(0.0)
+    assert eef_pose.orientation.yaw == pytest.approx(0.0)
     base_pose = config.task_operators.arm.initial_state.base_pose
     # The pose defaults to world; only the position component is anchored to
     # the selected handle, with its z axis explicitly overridden to world.
@@ -1268,7 +1272,9 @@ def test_demo_grasps_before_unlatching_and_unlocks_before_opening() -> None:
         for (
             joint_name,
             expected,
-        ) in config.task_operators.arm.initial_state.joint_positions.items():
+        ) in (
+            config.task_operators.arm.initial_state.get("joint_positions") or {}
+        ).items():
             joint_id = mujoco.mj_name2id(
                 single_env.model,
                 mujoco.mjtObj.mjOBJ_JOINT,
@@ -1282,6 +1288,11 @@ def test_demo_grasps_before_unlatching_and_unlocks_before_opening() -> None:
                 float(expected),
                 abs=5e-4,
             )
+        eef_home = backend.get_operator_handler("arm").get_end_effector_pose().select(0)
+        eef_target = [0.0, 0.0, 0.0, 1.0]
+        assert quaternion_angular_distance(
+            eef_home.orientation[0], eef_target
+        ) == pytest.approx(0.0, abs=0.01)
         # The complete staged rollout reaches the final 0.2 rad door arc after
         # roughly 520 control ticks with the collision-free home placement.
         for _ in range(700):

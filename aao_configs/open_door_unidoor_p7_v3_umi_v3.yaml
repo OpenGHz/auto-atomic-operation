@@ -176,16 +176,6 @@ task:
 task_operators:
   arm:
     initial_state:
-      # Match Praxis housework_mode_2's neutral P7 home posture. Values are
-      # raw MuJoCo qpos and are applied after the low-level environment reset.
-      joint_positions:
-        joint1: 0.0
-        joint2: -0.8
-        joint3: 0.0
-        joint4: -1.2
-        joint5: 0.0
-        joint6: 0.0
-        joint7: 0.0
       # Gripper control remains separate from the arm's raw joint home.
       eef: 0.0
       base_pose:
@@ -209,6 +199,23 @@ task_operators:
           # source-model pitch in world RPY.
           roll: 0.0
           pitch: 1.5707963267948966
+          yaw: 0.0
+      eef_pose:
+        # Start the TCP at the approach waypoint and point the gripper through
+        # the door panel normal.  The handle frame's local -Y is world -X for
+        # this right-hinge placement, so this is 10 cm in front of the handle
+        # on the robot side.  Identity world orientation makes UMI +X point
+        # along world +X, perpendicular to the door plane.
+        reference: world
+        position:
+          x: 0.0
+          y: -0.10
+          z: 0.0
+          reference: door__handle_grasp_center
+        orientation:
+          reference: world
+          roll: 0.0
+          pitch: 0.0
           yaw: 0.0
     control:
       tolerance:
