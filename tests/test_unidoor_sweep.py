@@ -151,6 +151,11 @@ def test_parse_config_accepts_kebab_case_and_comma_lists() -> None:
     assert config.stop_on_failure is True
     assert config.verbose is False
     assert config.dry_run is True
+    assert parse_config([]).config_name == "open_door_unidoor_p7_v4_umi_v3"
+    assert (
+        parse_config(["--config-name", "open_door_unidoor_p7_v3_umi_v3"]).config_name
+        == "open_door_unidoor_p7_v3_umi_v3"
+    )
 
     assert parse_config(["--no-stop-on-failure"]).stop_on_failure is False
     assert parse_config(["--verbose"]).verbose is True

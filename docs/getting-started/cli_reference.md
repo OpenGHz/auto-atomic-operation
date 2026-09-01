@@ -224,8 +224,11 @@ component index declared by the scene asset package, so the tested matrix and
 the assets loaded by the task have one source of truth.
 
 ```bash
-# All 55 doors x 47 handles (2,585 jobs)
+# All 55 doors x 47 handles (2,585 jobs), using the default P7 V4 task config
 aao-unidoor-sweep
+
+# Select the legacy P7 V3 task config explicitly
+aao-unidoor-sweep --config-name open_door_unidoor_p7_v3_umi_v3
 
 # A smaller Cartesian product, in the specified order
 aao-unidoor-sweep \

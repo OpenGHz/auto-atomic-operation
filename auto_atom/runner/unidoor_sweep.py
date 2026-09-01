@@ -31,7 +31,9 @@ from typing_extensions import Self
 DEFAULT_ASSET_PACKAGE = Path(
     "assets/scene_assets/unidoor_lever_right_hinge/scene_asset_package.json"
 )
-DEFAULT_CONFIG_NAME = "open_door_unidoor_p7_v3_umi_v3"
+# V4 is the current UniDoor sweep baseline.  V3 remains selectable with the
+# explicit ``--config-name open_door_unidoor_p7_v3_umi_v3`` override.
+DEFAULT_CONFIG_NAME = "open_door_unidoor_p7_v4_umi_v3"
 DEFAULT_OUTPUT_ROOT = Path("outputs/unidoor-sweeps")
 MANIFEST_NAME = "sweep_manifest.json"
 REPORT_NAME = "report.json"
