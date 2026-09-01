@@ -25,6 +25,7 @@ from auto_atom.scene_composition import (
     load_composed_scene,
 )
 from auto_atom.utils.pose import PoseState, compose_pose
+from examples import view_scene
 
 
 def _sha256(path: Path) -> str:
@@ -1013,6 +1014,7 @@ def test_demo_final_approach_targets_the_explicit_grasp_site() -> None:
     assert pick_stage.name == "pick_handle"
     assert pick_stage.operation == "pick"
     assert pick_stage.site == "door__handle_grasp_center"
+    assert list(pick_stage.param.pre_move[0].position) == [-0.10, 0.0, 0.0]
     assert list(pick_stage.param.pre_move[-1].position) == [0.02, 0.0, 0.0]
     assert pick_stage.param.pre_move[-1].tolerance.position == pytest.approx(0.004)
     assert (
@@ -1036,21 +1038,15 @@ def test_demo_final_approach_targets_the_explicit_grasp_site() -> None:
     assert base_pose.get("reference", "world") == "world"
     assert base_pose.position.reference == "door__handle_grasp_center"
     assert base_pose.position.x == pytest.approx(0.2474)
-    assert base_pose.position.y == pytest.approx(-0.4666)
+    assert base_pose.position.y == pytest.approx(-0.56)
     assert base_pose.position.z.value == pytest.approx(-0.019236672160874)
     assert base_pose.position.z.reference == "world"
     assert base_pose.orientation.get("reference", "world") == "world"
     assert base_pose.orientation.roll == pytest.approx(0.0)
     assert base_pose.orientation.pitch == pytest.approx(1.5707963267948966)
     assert base_pose.orientation.yaw == pytest.approx(0.0)
-    base_randomization = config.task.randomization.arm.base
-    assert base_randomization.reference == "relative"
-    assert list(base_randomization.x) == pytest.approx([-0.01, 0.01])
-    assert list(base_randomization.y) == pytest.approx([-0.01, 0.01])
-    assert list(base_randomization.z) == pytest.approx([-0.005, 0.005])
-    assert list(base_randomization.roll) == pytest.approx([-0.02, 0.02])
-    assert list(base_randomization.pitch) == pytest.approx([-0.02, 0.02])
-    assert list(base_randomization.yaw) == pytest.approx([-0.03, 0.03])
+    assert config.task.randomization.arm.get("base") is None
+    assert config.task.randomization.arm.eef is not None
     assert "eef" not in pick_stage.param
     assert pull_stage.name == "pull_handle"
     assert pull_stage.operation == "pull"
@@ -1092,7 +1088,6 @@ def test_operator_base_pose_can_be_anchored_to_a_named_scene_frame() -> None:
                 "env.cameras=[]",
                 "env.enabled_sensors=[]",
                 "env.viewer=null",
-                "task.randomization.arm.base=null",
             ],
         )
     with open_dict(config):
@@ -1131,6 +1126,101 @@ def test_operator_base_pose_can_be_anchored_to_a_named_scene_frame() -> None:
         mujoco.mj_forward(env.model, env.data)
         after = backend.get_operator_handler("arm").get_base_pose().select(0)
         np.testing.assert_allclose(after.position, before, atol=1e-6)
+    finally:
+        runner.close()
+
+
+def test_view_scene_and_runtime_share_collision_free_unidoor_home() -> None:
+    mujoco = pytest.importorskip("mujoco")
+    root = Path(__file__).resolve().parents[1]
+    if not (
+        root
+        / "third_party"
+        / "unidoor_lever_catalog_pipeline_right_hinge"
+        / "product_space.json"
+    ).is_file():
+        pytest.skip("local UniDoor catalog is unavailable")
+
+    with initialize_config_dir(
+        version_base=None,
+        config_dir=str(root / "aao_configs"),
+    ):
+        config = compose(
+            config_name="open_door_unidoor_p7_v3_umi_v3",
+            overrides=[
+                "env.batch_size=1",
+                "env.cameras=[]",
+                "env.enabled_sensors=[]",
+                "env.viewer=null",
+            ],
+        )
+    viewer_model, viewer_data = view_scene._build(view_scene._extract_overrides(config))
+    runner = TaskRunner().from_config(prepare_task_file(config))
+    try:
+        runner.reset()
+        runtime_env = runner._context.backend.get_env().envs[0]
+
+        def arm_qpos(model, data) -> np.ndarray:
+            return np.asarray(
+                [
+                    data.qpos[
+                        model.jnt_qposadr[
+                            mujoco.mj_name2id(
+                                model,
+                                mujoco.mjtObj.mjOBJ_JOINT,
+                                f"joint{index}",
+                            )
+                        ]
+                    ]
+                    for index in range(1, 8)
+                ]
+            )
+
+        np.testing.assert_allclose(
+            arm_qpos(viewer_model, viewer_data),
+            arm_qpos(runtime_env.model, runtime_env.data),
+            atol=5e-4,
+        )
+        for element_type, name, viewer_positions, runtime_positions in (
+            (
+                mujoco.mjtObj.mjOBJ_BODY,
+                "p7_mount",
+                viewer_data.xpos,
+                runtime_env.data.xpos,
+            ),
+            (
+                mujoco.mjtObj.mjOBJ_SITE,
+                "eef_pose",
+                viewer_data.site_xpos,
+                runtime_env.data.site_xpos,
+            ),
+        ):
+            viewer_id = mujoco.mj_name2id(viewer_model, element_type, name)
+            runtime_id = mujoco.mj_name2id(runtime_env.model, element_type, name)
+            np.testing.assert_allclose(
+                viewer_positions[viewer_id],
+                runtime_positions[runtime_id],
+                atol=1e-4,
+            )
+
+        for model, data in (
+            (viewer_model, viewer_data),
+            (runtime_env.model, runtime_env.data),
+        ):
+            for contact_index in range(data.ncon):
+                contact = data.contact[contact_index]
+                geom_names = {
+                    mujoco.mj_id2name(
+                        model, mujoco.mjtObj.mjOBJ_GEOM, int(contact.geom1)
+                    ),
+                    mujoco.mj_id2name(
+                        model, mujoco.mjtObj.mjOBJ_GEOM, int(contact.geom2)
+                    ),
+                }
+                assert not any(
+                    geom_name is not None and geom_name.startswith("door__")
+                    for geom_name in geom_names
+                )
     finally:
         runner.close()
 
@@ -1183,9 +1273,14 @@ def test_demo_grasps_before_unlatching_and_unlocks_before_opening() -> None:
             assert joint_id >= 0
             qpos_address = int(single_env.model.jnt_qposadr[joint_id])
             assert float(single_env.data.qpos[qpos_address]) == pytest.approx(
-                float(expected)
+                # reset performs the configured physics settle, so gravity and
+                # solver integration can move a free arm joint by a few µrad.
+                float(expected),
+                abs=5e-4,
             )
-        for _ in range(500):
+        # The complete staged rollout reaches the final 0.2 rad door arc after
+        # roughly 520 control ticks with the collision-free home placement.
+        for _ in range(700):
             update = runner.update()
             active = runner._env_states[0].active
             if active is None:

@@ -304,6 +304,91 @@ def test_build_applies_operator_base_after_freejoint_home(monkeypatch) -> None:
     assert root_pose.position[0].tolist() == pytest.approx([4.0, 5.0, 6.0])
 
 
+def test_build_applies_operator_joint_home_after_base_pose(monkeypatch) -> None:
+    model = mujoco.MjModel.from_xml_string(
+        """
+        <mujoco>
+          <worldbody>
+            <body name="arm_root">
+              <joint name="arm_joint" type="hinge"/>
+              <geom type="capsule" size="0.01 0.1"/>
+              <body>
+                <joint name="claw_joint" type="slide"/>
+                <geom type="sphere" size="0.01"/>
+              </body>
+            </body>
+          </worldbody>
+          <actuator>
+            <position name="arm_actuator" joint="arm_joint" kp="100"/>
+            <position name="claw_actuator" joint="claw_joint" kp="100"/>
+          </actuator>
+        </mujoco>
+        """
+    )
+    monkeypatch.setattr(view_scene, "load_composed_scene", lambda _config: model)
+
+    overrides = {
+        "scene": {"base": "unused.xml"},
+        "sim_freq": None,
+        "actuator_names": [],
+        "ijp": {},
+        "initial_pose": {},
+        "op_bases": [
+            (
+                "arm_root",
+                PoseOverrideConfig(position=[1.0, 2.0, 3.0]),
+            )
+        ],
+        "op_joint_homes": [
+            ("arm", {"arm_joint": 0.7}, ["arm_actuator"]),
+        ],
+        "op_eef_homes": [("arm", "claw_actuator", 0.02)],
+        "operator_frames": {},
+    }
+
+    built_model, data = view_scene._build(overrides)
+    root_pose = view_scene._element_pose(built_model, data, "arm_root")
+
+    assert root_pose.position[0].tolist() == pytest.approx([1.0, 2.0, 3.0])
+    assert data.qpos[0] == pytest.approx(0.7)
+    assert data.ctrl[0] == pytest.approx(0.7)
+    assert data.qpos[1] == pytest.approx(0.02)
+    assert data.ctrl[1] == pytest.approx(0.02)
+
+
+def test_extract_overrides_collects_operator_joint_and_eef_home() -> None:
+    cfg = OmegaConf.create(
+        {
+            "env": {
+                "scene": {"base": "unused.xml"},
+                "operators": {
+                    "arm": {
+                        "root_body": "arm_root",
+                        "arm_actuators": ["arm_actuator"],
+                        "eef_actuators": ["claw_actuator"],
+                    }
+                },
+            },
+            "task": {},
+            "task_operators": {
+                "arm": {
+                    "initial_state": {
+                        "joint_positions": {"arm_joint": 0.7},
+                        "eef": 0.02,
+                    }
+                }
+            },
+        }
+    )
+
+    overrides = view_scene._extract_overrides(cfg)
+
+    assert overrides["op_joint_homes"] == [
+        ("arm", {"arm_joint": 0.7}, ["arm_actuator"])
+    ]
+    assert overrides["op_eef_homes"] == [("arm", "claw_actuator", 0.02)]
+
+
 def test_extract_overrides_warns_when_eef_pose_cannot_be_applied(capsys) -> None:
     cfg = OmegaConf.create(
         {

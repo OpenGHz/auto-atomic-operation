@@ -3,7 +3,7 @@
 Since scene XMLs no longer embed their robot include or keyframe, opening
 ``demo.xml`` directly in the MuJoCo simulator shows just the empty scene.
 This script reads a Hydra task config, compiles the ordered layers declared
-under ``env.scene``, applies ``env.initial_joint_positions`` as the home pose,
+under ``env.scene``, applies scene- and operator-owned initial joint positions,
 and hands the model to ``mujoco.viewer.launch``.
 
 When the config carries a ``gaussian_render`` section, the script switches
@@ -427,6 +427,41 @@ def _sync_mocap_bodies(model: mujoco.MjModel, data: mujoco.MjData) -> None:
         data.mocap_quat[mocap_id] = data.xquat[phys_id].copy()
 
 
+def _eef_joint_home(
+    model: mujoco.MjModel,
+    operator_name: str,
+    actuator_name: str,
+    value: float,
+) -> tuple[str, float] | None:
+    """Resolve one scalar EEF home command to its joint qpos target."""
+
+    actuator_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_ACTUATOR, actuator_name)
+    if actuator_id < 0:
+        print(
+            f"[warn] task_operators.{operator_name}.initial_state.eef actuator "
+            f"{actuator_name!r} is not present in the model; skipping",
+            flush=True,
+        )
+        return None
+    transmission = int(model.actuator_trntype[actuator_id])
+    if transmission not in {
+        int(mujoco.mjtTrn.mjTRN_JOINT),
+        int(mujoco.mjtTrn.mjTRN_JOINTINPARENT),
+    }:
+        print(
+            f"[warn] task_operators.{operator_name}.initial_state.eef uses "
+            f"non-joint actuator {actuator_name!r}; view_scene cannot apply it "
+            "without the runtime operator mapper",
+            flush=True,
+        )
+        return None
+    joint_id = int(model.actuator_trnid[actuator_id, 0])
+    joint_name = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_JOINT, joint_id)
+    if joint_name is None:
+        return None
+    return joint_name, float(value)
+
+
 def _extract_overrides(cfg: DictConfig) -> dict:
     """Extract viewer-relevant overrides from a freshly composed Hydra cfg.
 
@@ -496,14 +531,49 @@ def _extract_overrides(cfg: DictConfig) -> dict:
         "initial_pose": initial_poses,
         "camera_initial_pose": camera_initial_poses,
         "op_bases": [],
+        "op_joint_homes": [],
+        "op_eef_homes": [],
         "op_eef_poses": [],
         "operator_frames": operator_frames,
     }
 
     task_operators_cfg = cfg.get("task_operators") or {}
-    items = task_operators_cfg.items() if task_operators_cfg else []
+    items = list(task_operators_cfg.items()) if task_operators_cfg else []
     for op_name, op_node in items:
         initial_state = op_node.get("initial_state") or {}
+        joint_positions = _to_container(initial_state.get("joint_positions")) or {}
+        if joint_positions:
+            duplicates = set(out["ijp"]) & set(joint_positions)
+            if duplicates:
+                raise ValueError(
+                    "Initial joint positions are declared in both "
+                    "env.initial_joint_positions and "
+                    f"task_operators.{op_name}.initial_state.joint_positions: "
+                    f"{sorted(duplicates)}"
+                )
+            operator_cfg = operators_cfg.get(op_name) or {}
+            arm_actuators = [
+                str(name) for name in operator_cfg.get("arm_actuators") or ()
+            ]
+            out["op_joint_homes"].append(
+                (str(op_name), dict(joint_positions), arm_actuators)
+            )
+        eef_value = initial_state.get("eef")
+        if eef_value is not None:
+            operator_cfg = operators_cfg.get(op_name) or {}
+            eef_actuators = [
+                str(name) for name in operator_cfg.get("eef_actuators") or ()
+            ]
+            if not eef_actuators:
+                print(
+                    f"[warn] task_operators.{op_name}.initial_state.eef is set "
+                    "but the operator has no eef_actuators; skipping",
+                    flush=True,
+                )
+            else:
+                out["op_eef_homes"].append(
+                    (str(op_name), eef_actuators[0], float(eef_value))
+                )
         bp_raw = _to_container(initial_state.get("base_pose"))
         if bp_raw is not None:
             bp_cfg = PoseOverrideConfig.model_validate(bp_raw)
@@ -627,13 +697,38 @@ def _build(overrides: dict) -> tuple[mujoco.MjModel, mujoco.MjData]:
             resolved.orientation[0],
         )
 
+    # 4) task_operators.*.initial_state.joint_positions — mirror the backend's
+    # operator-owned home pass after base-pose resolution.  Keeping this
+    # separate from env.initial_joint_positions preserves the same ownership
+    # and reset order used by MujocoTaskBackend.
+    operator_joint_positions: dict[str, object] = {}
+    operator_actuator_names: list[str] = []
+    for _op_name, joint_positions, actuator_names in overrides.get(
+        "op_joint_homes", []
+    ):
+        operator_joint_positions.update(joint_positions)
+        operator_actuator_names.extend(actuator_names)
+    for op_name, actuator_name, value in overrides.get("op_eef_homes", []):
+        resolved = _eef_joint_home(m, op_name, actuator_name, value)
+        if resolved is not None:
+            joint_name, joint_value = resolved
+            operator_joint_positions[joint_name] = joint_value
+            operator_actuator_names.append(actuator_name)
+    if operator_joint_positions:
+        _apply_home_pose(
+            m,
+            d,
+            operator_joint_positions,
+            operator_actuator_names,
+        )
+
     # A base override may have moved a physical body that is welded to a
     # mocap target.  Re-sync after the relocation so the first viewer step
     # preserves the configured base rather than applying a corrective weld
     # impulse toward the pre-override home pose.
     _sync_mocap_bodies(m, d)
 
-    # 4) task.camera_initial_pose — cameras are model-level extrinsics, so the
+    # 5) task.camera_initial_pose — cameras are model-level extrinsics, so the
     # standalone viewer can apply the same world-frame contract directly.
     # Resolve after object/base overrides so named scene references observe the
     # final composed placement.
@@ -696,6 +791,8 @@ def _print_model_summary(model: mujoco.MjModel, overrides: dict) -> None:
         f"(mjcf={overrides['mjcf_paths']}, ijp={len(overrides['ijp'])}, "
         f"body_pose={len(overrides['initial_pose'])}, "
         f"op_base={len(overrides['op_bases'])}, "
+        f"op_joint_home={len(overrides.get('op_joint_homes', []))}, "
+        f"op_eef_home={len(overrides.get('op_eef_homes', []))}, "
         f"camera_pose={len(overrides.get('camera_initial_pose', {}))})"
     )
 
@@ -1123,6 +1220,8 @@ def main(cfg: DictConfig) -> None:
         f"[info] home   : {len(overrides['ijp'])} joint override(s), "
         f"{len(overrides['initial_pose'])} body pose(s), "
         f"{len(overrides['op_bases'])} operator base(s), "
+        f"{len(overrides.get('op_joint_homes', []))} operator joint home(s), "
+        f"{len(overrides.get('op_eef_homes', []))} operator EEF home(s), "
         f"{len(overrides.get('camera_initial_pose', {}))} camera pose(s)"
     )
 

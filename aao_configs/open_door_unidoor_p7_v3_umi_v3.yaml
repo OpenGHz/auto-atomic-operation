@@ -94,20 +94,20 @@ env:
         relock_zone: 0.02
 
 task:
-  randomization:
-    arm:
-      base:
-        # Small independent perturbations around the handle-anchored base pose.
-        # Translation is in metres; rotation is in RPY radians.
-        # Axis-level references override this fallback when present.
-        reference: relative
-        x: [-0.01, 0.01]
-        y: [-0.01, 0.01]
-        # Randomize ±5 mm around the housework_mode_2 initial base height.
-        z: [-0.005, 0.005]
-        roll: [-0.02, 0.02]
-        pitch: [-0.02, 0.02]
-        yaw: [-0.03, 0.03]
+  # randomization:
+  #   arm:
+  #     base:
+  #       # Small independent perturbations around the handle-anchored base pose.
+  #       # Translation is in metres; rotation is in RPY radians.
+  #       # Axis-level references override this fallback when present.
+  #       reference: relative
+  #       x: [-0.01, 0.01]
+  #       y: [-0.01, 0.01]
+  #       # Randomize ±5 mm around the housework_mode_2 initial base height.
+  #       z: [-0.005, 0.005]
+  #       roll: [-0.02, 0.02]
+  #       pitch: [-0.02, 0.02]
+  #       yaw: [-0.03, 0.03]
   stages:
     - name: pick_handle
       object: door__door_handle
@@ -116,7 +116,11 @@ task:
       operator: arm
       param:
         pre_move:
-          - position: [-0.14, 0.0, 0.0]
+          # With the collision-free base placement, a 14 cm retreat leaves the
+          # first Cartesian waypoint at the edge of the P7's reachable set.
+          # Keep a 10 cm approach retreat so the initial waypoint has a stable
+          # IK solution before advancing through the grasp centre.
+          - position: [-0.10, 0.0, 0.0]
             reference: object_world
             orientation: [0.68997457, 0.19902274, -0.20541703, 0.66492774]
             max_linear_step: 0.04
@@ -190,7 +194,9 @@ task_operators:
         # straight-ahead mounting orientation.
         position:
           x: 0.2474
-          y: -0.4666
+          # Move the Praxis home posture outward along the door normal so the
+          # UMI gripper starts on the handle side without intersecting the panel.
+          y: -0.56
           z:
             # AAO floor is z=-1.0; housework_mode_2 base is
             # 0.980763327839126 m above it.
