@@ -19,7 +19,7 @@ env:
       - kind: asset_assembly
         package: assets/scene_assets/unidoor_lever_right_hinge/scene_asset_package.json
         adapter: unidoor.lever_door@1
-        selection: {door: D001, handle: H003}
+        selection: {door: D001, handle: H001}
         namespace: door
         placement:
           # Rotate around the panel centre so the handle faces the robot
@@ -27,6 +27,23 @@ env:
           position: [1.54, 0.13939759036, -1.0]
           orientation_xyzw: [0.0, 0.0, -0.707106781, 0.707106781]
         verify_hashes: true
+        # Optional generic cold-path geometry transforms. Rules select
+        # compiled bodies/meshes and derive a uniform factor from component
+        # metadata; they are not applied in a control tick.
+        scaling:
+          - bodies: [door_frame, door_panel]
+            preserve_bodies: [door_handle, door_lock]
+            meshes: [unidoor_frame_mesh, unidoor_panel_mesh]
+            source_bounds: door.geometry.panel_bounds_m
+            axis: z
+            target_extent_m: 2.0
+        anchors:
+          - bodies: [door_handle]
+            source_bounds: door.geometry.panel_bounds_m
+            coordinates:
+              x: {edge: min, offset_m: 0.08}
+              y: {edge: max, multiplier: -1.0}
+              z: {value_m: 1.0}
 ```
 
 `SceneConfig` 是纯数据模型：不在 YAML 中放 adapter 实例、Python callable 或
@@ -68,6 +85,168 @@ env:
 这种合并规则让第二个 adapter 复用同一 seam，也避免旧 `_merge_fragment` 只认识
 少数 sections 而静默丢失物理约束。
 
+## 编译期几何缩放与锚点
+
+这一节的配置可以先用下面的流程来理解：
+
+```text
+组件 manifest 的原始 bounds
+        │
+        ├─ scaling：计算统一缩放倍数，并缩放生成的 MJCF 几何
+        │
+        ├─ anchors：按缩放后的 bounds 重新确定部件的局部安装位置
+        │
+        ├─ namespace：将 door_handle 等局部名称改成 door__door_handle
+        │
+        └─ placement：把整套已经装好的资产放入 host 世界坐标
+```
+
+`scaling` 和 `anchors` 都是 `AssetAssemblyLayerConfig` 的通用、编译期（cold
+path）变换配置。它们不属于控制器，也不会在仿真每个 control tick 中重新计算。
+原始 OBJ、manifest 和资产包不会被改写；变换只作用于 adapter 生成、随后合并进
+`SceneArtifact` 的 MJCF fragment。
+
+### `scaling`：把不同来源的资产统一到目标尺寸
+
+例如任务配置中的门规则是：
+
+```yaml
+scaling:
+  - bodies: [door_frame, door_panel]
+    meshes: [unidoor_frame_mesh, unidoor_panel_mesh]
+    source_bounds: door.geometry.panel_bounds_m
+    axis: z
+    target_extent_m: 2.0
+```
+
+字段含义如下：
+
+| 字段 | 含义 |
+| --- | --- |
+| `bodies` | 要缩放其局部几何的 MJCF body 名称；会覆盖 body 拥有的 geom、site、joint、inertial 等尺寸或位置属性。 |
+| `preserve_bodies` | 当 `bodies` 包含父 body 时，列出的子 body 及其子树保持原始尺寸、位置和惯量；用于父资产缩放但某个附属部件暂不缩放的情况。 |
+| `meshes` | 要设置 `mesh scale` 的 MJCF mesh 名称。 |
+| `mesh_prefixes` | 按名称前缀选择一组 mesh，适合数量不固定的凸分解碰撞块。 |
+| `source_bounds` | adapter metadata 中 bounds 的点路径，不是文件路径；例如 `door.geometry.panel_bounds_m` 表示 `door → geometry → panel_bounds_m`。 |
+| `axis` | 从 bounds 的哪个轴计算原始尺寸。它不是“只缩放这个轴”，当前规则始终做 XYZ 等比例缩放。 |
+| `target_extent_m` | 该轴缩放后的目标尺寸，单位为米。 |
+| `required` | 默认是 `true`，目标 body/mesh 缺失时编译失败；可选变体（例如没有锁体）才设为 `false`。 |
+
+缩放倍数的公式是：
+
+```text
+source_extent = bounds[1][axis] - bounds[0][axis]
+scale = target_extent_m / source_extent
+```
+
+以 D001 为例，`panel_bounds_m` 的 z 向高度约为 `1.73494 m`，因此门规则得到：
+
+```text
+scale = 2.0 / 1.73494 ≈ 1.15278
+```
+
+这个比例会同时用于门框和门板的指定 mesh，以及它们局部的碰撞几何、site、
+joint 位置等，从而避免“视觉门变大了、碰撞门仍是旧尺寸”的不一致。多个规则如果
+引用同一个 `source_bounds`，必须导出相同的比例；冲突会在编译期报错，而不是静默
+采用其中一条。
+
+如果被缩放的 body 包含暂时不希望缩放的子 body，可以用 `preserve_bodies` 明确
+保留它。例如当前开门配置让门框和门板按 2 m 归一化，同时保留门板子树中的
+`door_handle` 和 `door_lock`，避免门的比例变化连带改变把手的碰撞体、抓取 site
+和惯量。该字段只影响 body 子树；显式列在 `meshes` 或 `mesh_prefixes` 中的 mesh
+仍会按规则缩放。
+
+把手规则的含义相同，只是目标尺寸是 `0.15 m`：
+
+```yaml
+- bodies: [door_handle]
+  meshes: [unidoor_handle_mesh]
+  source_bounds: handle.geometry.handle_bounds_m
+  axis: x
+  target_extent_m: 0.15
+```
+
+H001 的 x 向 bounds 长度约为 `0.15 m`，所以如果启用该规则，它的比例约为 `1.0`；
+更长或更短的把手会按各自 manifest 的长度计算不同的比例。当前任务暂时不启用把手
+尺寸归一化：配置文件保留了三条原始规则，但全部以 YAML 注释形式保存；把手和锁体
+由门规则的 `preserve_bodies` 保持原始尺寸。以后需要统一把手长度时，可恢复这些
+注释，并相应移除 `preserve_bodies` 中的部件。锁体规则和凸分解碰撞 mesh 规则复用
+同一个把手比例；锁体使用 `required: false`，因为并不是每个把手变体都有锁体。
+
+### `anchors`：缩放之后重新确定安装位置
+
+缩放会改变部件的尺寸，也会改变“门边在哪里”。`anchors` 用来在缩放后重新设置
+body 的局部 `pos`：
+
+```yaml
+anchors:
+  - bodies: [door_handle]
+    source_bounds: door.geometry.panel_bounds_m
+    coordinates:
+      x: {edge: min, offset_m: 0.08}
+      y: {edge: max, multiplier: -1.0}
+      z: {value_m: 1.0}
+```
+
+`coordinates` 只修改列出的轴，未列出的轴保留 adapter 生成的原值。每个轴的坐标
+有且只能有两种来源：
+
+| 写法 | 计算方式 |
+| --- | --- |
+| `value_m: 1.0` | 使用固定的局部坐标 `1.0 m`。 |
+| `edge: min` 或 `edge: max` | 从 `source_bounds` 取该轴的最小值或最大值，再应用 `multiplier` 和 `offset_m`。 |
+
+也就是说，投影坐标的公式是：
+
+```text
+coordinate = transformed_bounds[edge][axis] * multiplier + offset_m
+```
+
+使用 `edge` 时必须提供 `source_bounds`；只使用固定 `value_m` 的 anchor 可以不提供
+它。`source_bounds` 会使用对应 `scaling` 规则的比例先变换，再做 `min`/`max`
+投影。
+
+对于当前右铰链门：
+
+- `x: {edge: min, offset_m: 0.08}`：从门板自由边（`min.x`）向内偏移 8 cm；
+- `y: {edge: max, multiplier: -1.0}`：取门板的另一侧表面并翻到负 y 侧；
+- `z: {value_m: 1.0}`：把手中心固定在装配局部高度 1 m。
+
+用 D001 的门板 bounds 和 `1.15278` 比例计算，得到的把手局部位置约为：
+
+```text
+[-0.6506024 × 1.15278 + 0.08,
+  0.0208359 × 1.15278 × (-1),
+  1.0]
+≈ [-0.6700, -0.0240, 1.0000]
+```
+
+这里的数值仍然是资产装配局部坐标，不是世界坐标。之后还会应用 layer 的
+`placement`；当前配置的 `placement.z = -1.0`，所以把手的世界 z 高度约为
+`-1.0 + 1.0 = 0`（绕 z 轴的整体旋转不会改变 z）。
+
+### `anchors`、`placement` 与运行时 reference 的区别
+
+- `anchors`：编译时调整“把手相对于门”的局部安装位置；
+- `placement`：编译时调整“整套门相对于 host 世界”的平移和旋转；
+- Stage waypoint 的 `reference`：执行阶段解析目标位姿的参考坐标系；
+- randomization 的 `reference`：reset 时生成随机扰动所依据的参考位姿。
+
+因此 `anchors` 不是运行时跟踪把手的 reference，也不会让机械臂随着门的运动持续
+跟随。它只负责把生成资产在初始装配时放到正确位置。
+
+### 为什么这套配置是通用的
+
+通用变换模块只认识两类信息：adapter 传入的 metadata bounds，以及 fragment 中
+声明的 body/mesh 名称。它不认识 UniDoor、Praxis 或某一种门的专有分支；门、把手、
+工具、夹具等其他资产族都可以复用同样的 `scaling`/`anchors` 字段，只需让自己的
+adapter 提供对应的 bounds 和稳定的 MJCF 名称。
+
+UniDoor 的 2 m 门高、1 m 把手安装高度和 0.15 m 把手长度都在
+`aao_configs/open_door_unidoor_p7_v3_umi_v3.yaml` 的 asset assembly layer 中声明。
+替换其他门或把手时，通常只需修改 `selection`；如果新资产的原始尺寸不同，再按
+其 manifest bounds 调整 `target_extent_m` 或 anchor 规则。
+
 ## Scene asset package v1
 
 通用 package descriptor 的根 schema 是 `aao.scene-asset-package/v1`，至少包含：
@@ -107,7 +286,7 @@ MJCF mesh geom。不同凸块不会合并，因为 MuJoCo 对单个 mesh 使用�
 ## UniDoor 示例
 
 完整任务见 `aao_configs/open_door_unidoor_p7_v3_umi_v3.yaml`。该任务使用
-`asset_assembly` layer 选择 `D001/H003`，并将门的 semantic names 映射到
+`asset_assembly` layer 默认选择 `D001/H001`，并将门的 semantic names 映射到
 `door__door_handle`、`door__handle_grasp_center`、`door__handle_hinge` 和
 `door__door_hinge`。替换门或把手只需改 `selection`；替换另一类资产则实现一个
 新的 adapter，不需要修改 `EnvConfig`、Basis 或 viewer。

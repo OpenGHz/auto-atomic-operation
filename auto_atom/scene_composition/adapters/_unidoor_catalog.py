@@ -50,7 +50,17 @@ class _UniDoorCatalogConfig:
     joint_specs: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
 
 
-def _build_unidoor_fragment(config: _UniDoorCatalogConfig) -> ET.Element:
+@dataclass(frozen=True)
+class _UniDoorFragmentCompilation:
+    """Compiled MJCF plus the selected component metadata that produced it."""
+
+    fragment: ET.Element
+    metadata: Mapping[str, Mapping[str, Any]]
+
+
+def _build_unidoor_fragment(
+    config: _UniDoorCatalogConfig,
+) -> _UniDoorFragmentCompilation:
     root = config.catalog_root.expanduser().resolve()
     if not root.is_dir():
         raise FileNotFoundError(f"UniDoor catalog root not found: {root}")
@@ -374,6 +384,14 @@ def _build_unidoor_fragment(config: _UniDoorCatalogConfig) -> ET.Element:
     ET.SubElement(
         custom,
         "numeric",
+        {
+            "name": "unidoor_lever_length",
+            "data": _fmt((handle_bounds[1][0] - handle_bounds[0][0],)),
+        },
+    )
+    ET.SubElement(
+        custom,
+        "numeric",
         {"name": "unidoor_handle_position", "data": _fmt(handle_position)},
     )
     ET.SubElement(
@@ -416,7 +434,10 @@ def _build_unidoor_fragment(config: _UniDoorCatalogConfig) -> ET.Element:
         "text",
         {"name": "unidoor_handle_manifest", "data": _absolute_posix(handle_ref)},
     )
-    return model_root
+    return _UniDoorFragmentCompilation(
+        fragment=model_root,
+        metadata={"door": door, "handle": handle},
+    )
 
 
 def _load_component(

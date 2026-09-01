@@ -16,6 +16,7 @@ from typing import Any
 
 from ..config import AssetAssemblyLayerConfig
 from ..contracts import SceneAssembler, SceneContribution
+from ..normalization import apply_asset_normalization, resolve_bounds
 from ..package import load_package_descriptor, validate_package_payload
 from ._unidoor_catalog import _build_unidoor_fragment, _UniDoorCatalogConfig
 
@@ -71,7 +72,19 @@ def compile_unidoor_layer(layer: AssetAssemblyLayerConfig) -> SceneContribution:
         verify_hashes=layer.verify_hashes,
         joint_specs=_joint_specs(layer, descriptor),
     )
-    fragment = _build_unidoor_fragment(catalog_config)
+    compilation = _build_unidoor_fragment(catalog_config)
+    fragment = compilation.fragment
+    normalization_diagnostics = apply_asset_normalization(
+        fragment,
+        layer.scaling,
+        layer.anchors,
+        compilation.metadata,
+    )
+    _update_unidoor_custom_metrics(
+        fragment,
+        layer.scaling,
+        compilation.metadata,
+    )
     _remove_source_only_sections(fragment)
     _sanitize_provenance_metadata(fragment, catalog_root)
     _apply_joint_axes(fragment, explicit_axes)
@@ -90,7 +103,7 @@ def compile_unidoor_layer(layer: AssetAssemblyLayerConfig) -> SceneContribution:
         lock_path = (descriptor_path.parent / lock_uri).resolve()
         if lock_path.is_file():
             dependencies.add(lock_path)
-    diagnostics: list[str] = list(package_warnings)
+    diagnostics: list[str] = [*package_warnings, *normalization_diagnostics]
     return SceneContribution(
         fragment=fragment,
         semantic_refs=semantic_refs,
@@ -98,6 +111,67 @@ def compile_unidoor_layer(layer: AssetAssemblyLayerConfig) -> SceneContribution:
         adapter=layer.adapter,
         diagnostics=tuple(diagnostics),
     )
+
+
+def _update_unidoor_custom_metrics(
+    fragment: ET.Element,
+    scaling: Sequence[Any],
+    metadata: Mapping[str, Any],
+) -> None:
+    """Keep UniDoor inspection metadata aligned with compiled geometry."""
+
+    custom = fragment.find("custom")
+    if custom is None:
+        return
+
+    def set_numeric(name: str, values: Sequence[float]) -> None:
+        element = next(
+            (
+                item
+                for item in custom
+                if item.tag == "numeric" and item.get("name") == name
+            ),
+            None,
+        )
+        if element is not None:
+            element.set(
+                "data", " ".join(format(float(value), ".15g") for value in values)
+            )
+
+    for rule in scaling:
+        if rule.source_bounds == "door.geometry.panel_bounds_m":
+            bounds = resolve_bounds(metadata, rule.source_bounds)
+            source_extent = (
+                bounds[1]["xyz".index(rule.axis)] - bounds[0]["xyz".index(rule.axis)]
+            )
+            factor = float(rule.target_extent_m) / source_extent
+            set_numeric("unidoor_width", ((bounds[1][0] - bounds[0][0]) * factor,))
+            set_numeric("unidoor_height", (float(rule.target_extent_m),))
+        elif rule.source_bounds == "handle.geometry.handle_bounds_m":
+            set_numeric("unidoor_lever_length", (float(rule.target_extent_m),))
+
+    handle = next(
+        (item for item in fragment.iter("body") if item.get("name") == "door_handle"),
+        None,
+    )
+    if handle is not None and handle.get("pos") is not None:
+        set_numeric(
+            "unidoor_handle_position",
+            tuple(float(value) for value in handle.get("pos").split()),
+        )
+    grasp = next(
+        (
+            item
+            for item in fragment.iter("site")
+            if item.get("name") == "handle_grasp_center"
+        ),
+        None,
+    )
+    if grasp is not None and grasp.get("pos") is not None:
+        set_numeric(
+            "unidoor_grasp_offset",
+            tuple(float(value) for value in grasp.get("pos").split()),
+        )
 
 
 def _resolve_catalog_root(

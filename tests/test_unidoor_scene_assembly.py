@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import numpy as np
@@ -14,7 +15,9 @@ from omegaconf import OmegaConf, open_dict
 from auto_atom.runner.common import prepare_task_file
 from auto_atom.runtime import TaskRunner
 from auto_atom.scene_composition import (
+    AssetAnchorConfig,
     AssetAssemblyLayerConfig,
+    AssetScaleRuleConfig,
     MjcfLayerConfig,
     SceneConfig,
     TransformConfig,
@@ -416,6 +419,8 @@ def _config(
     position: tuple[float, float, float] = (0.0, 0.0, 0.0),
     orientation: tuple[float, float, float, float] = (0.0, 0.0, 0.0, 1.0),
     verify_hashes: bool = True,
+    scaling: tuple[AssetScaleRuleConfig, ...] = (),
+    anchors: tuple[AssetAnchorConfig, ...] = (),
 ) -> SceneConfig:
     host = host or root / "host.xml"
     if not host.exists():
@@ -431,6 +436,8 @@ def _config(
                 orientation_xyzw=orientation,
             ),
             verify_hashes=verify_hashes,
+            scaling=scaling,
+            anchors=anchors,
         )
     ]
     if robot is not None:
@@ -775,6 +782,63 @@ def test_lock_handle_is_visual_only(tiny_catalog: Path) -> None:
     assert int(model.geom_conaffinity[lock_geom]) == 0
 
 
+def test_normalization_scales_optional_lock_with_handle(tiny_catalog: Path) -> None:
+    mujoco = pytest.importorskip("mujoco")
+    config = _config(
+        tiny_catalog,
+        handle="HL001",
+        scaling=(
+            AssetScaleRuleConfig(
+                bodies=("door_frame", "door_panel"),
+                meshes=("unidoor_frame_mesh", "unidoor_panel_mesh"),
+                source_bounds="door.geometry.panel_bounds_m",
+                axis="z",
+                target_extent_m=2.0,
+            ),
+            AssetScaleRuleConfig(
+                bodies=("door_handle", "door_lock"),
+                meshes=("unidoor_handle_mesh", "unidoor_lock_mesh"),
+                source_bounds="handle.geometry.handle_bounds_m",
+                axis="x",
+                target_extent_m=0.1,
+                required=False,
+            ),
+        ),
+        anchors=(
+            AssetAnchorConfig(
+                bodies=("door_handle", "door_lock"),
+                source_bounds="door.geometry.panel_bounds_m",
+                coordinates={
+                    "x": {"edge": "max", "offset_m": 0.08},
+                    "y": {"edge": "max", "multiplier": -1.0},
+                    "z": {"value_m": 1.0},
+                },
+                required=False,
+            ),
+        ),
+    )
+    model = mujoco.MjModel.from_xml_string(compile_scene(config).xml)
+    handle_body = mujoco.mj_name2id(
+        model, mujoco.mjtObj.mjOBJ_BODY, "door__door_handle"
+    )
+    lock_body = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "door__door_lock")
+    handle_mesh = mujoco.mj_name2id(
+        model, mujoco.mjtObj.mjOBJ_MESH, "door__unidoor_handle_mesh"
+    )
+    lock_mesh = mujoco.mj_name2id(
+        model, mujoco.mjtObj.mjOBJ_MESH, "door__unidoor_lock_mesh"
+    )
+    grasp_site = mujoco.mj_name2id(
+        model, mujoco.mjtObj.mjOBJ_SITE, "door__handle_grasp_center"
+    )
+    assert model.body_pos[handle_body].tolist() == pytest.approx([2.08, -0.06, 1.0])
+    assert model.body_parentid[lock_body] != handle_body
+    assert model.body_pos[lock_body].tolist() == pytest.approx([2.08, -0.06, 1.0])
+    assert model.mesh_scale[handle_mesh].tolist() == pytest.approx([0.5, 0.5, 0.5])
+    assert model.mesh_scale[lock_mesh].tolist() == pytest.approx([0.5, 0.5, 0.5])
+    assert model.site_pos[grasp_site].tolist() == pytest.approx([0.05, 0.0, 0.0])
+
+
 def test_real_catalog_host_and_robot_compile_if_assets_are_available() -> None:
     mujoco = pytest.importorskip("mujoco")
     root = Path(__file__).resolve().parents[1]
@@ -872,6 +936,72 @@ def test_demo_places_handle_and_robot_on_the_same_door_side() -> None:
     assert grasp_side < 0.0
     assert data.xaxis[handle_joint_id].tolist() == pytest.approx([1.0, 0.0, 0.0])
     assert list(config.task.stages[1].param.post_move[0].arc.axis) == [1, 0, 0]
+
+
+def test_demo_compiles_praxis_metric_normalization() -> None:
+    root = Path(__file__).resolve().parents[1]
+    package = (
+        root
+        / "assets"
+        / "scene_assets"
+        / "unidoor_lever_right_hinge"
+        / "scene_asset_package.json"
+    )
+    catalog = (
+        root
+        / "third_party"
+        / "unidoor_lever_catalog_pipeline_right_hinge"
+        / "product_space.json"
+    )
+    host = root / "assets" / "xmls" / "scenes" / "open_door_unidoor" / "demo.xml"
+    if not package.is_file() or not catalog.is_file() or not host.is_file():
+        pytest.skip("local UniDoor scene assets are unavailable")
+    with initialize_config_dir(version_base=None, config_dir=str(root / "aao_configs")):
+        config = compose(config_name="open_door_unidoor_p7_v3_umi_v3")
+    scene = SceneConfig.model_validate(
+        OmegaConf.to_container(config.env.scene, resolve=True)
+    )
+    artifact = compile_scene(scene)
+    xml = ET.fromstring(artifact.xml)
+
+    def named(tag: str, name: str) -> ET.Element:
+        return next(item for item in xml.iter(tag) if item.get("name") == name)
+
+    panel_mesh = named("mesh", "door__unidoor_panel_mesh")
+    handle_mesh = named("mesh", "door__unidoor_handle_mesh")
+    panel_collision = named("geom", "door__door_panel_collision")
+    handle = named("body", "door__door_handle")
+    height = next(
+        item
+        for item in xml.iter("numeric")
+        if item.get("name") == "door__unidoor_height"
+    )
+    handle_length = next(
+        item
+        for item in xml.iter("numeric")
+        if item.get("name") == "door__unidoor_lever_length"
+    )
+    handle_position = next(
+        item
+        for item in xml.iter("numeric")
+        if item.get("name") == "door__unidoor_handle_position"
+    )
+
+    assert tuple(
+        float(value) for value in panel_mesh.get("scale").split()
+    ) == pytest.approx((1.1527777778,) * 3)
+    # Handle-size normalization is disabled in the demo config; the source
+    # mesh therefore has no generated scale attribute.
+    assert handle_mesh.get("scale") is None
+    assert float(height.get("data")) == pytest.approx(2.0)
+    assert float(handle_length.get("data")) == pytest.approx(0.15)
+    assert tuple(float(value) for value in handle.get("pos").split()) == pytest.approx(
+        (-0.67, -0.0240191204, 1.0)
+    )
+    assert tuple(
+        float(value) for value in handle_position.get("data").split()
+    ) == pytest.approx(tuple(float(value) for value in handle.get("pos").split()))
+    assert float(panel_collision.get("size").split()[2]) == pytest.approx(0.9965416667)
 
 
 def test_demo_final_approach_targets_the_explicit_grasp_site() -> None:

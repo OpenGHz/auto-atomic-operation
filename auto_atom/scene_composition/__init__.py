@@ -23,13 +23,17 @@ from .composer import (
     materialize_scene,
 )
 from .config import (
+    AssetAnchorConfig,
+    AssetAnchorCoordinateConfig,
     AssetAssemblyLayerConfig,
+    AssetScaleRuleConfig,
     MjcfLayerConfig,
     SceneConfig,
     SceneLayerConfig,
     TransformConfig,
 )
 from .contracts import SceneArtifact, SceneAssembler, SceneContribution
+from .normalization import apply_asset_normalization, resolve_bounds
 from .package import (
     PackageFrameConfig,
     PackagePayloadConfig,
@@ -44,6 +48,9 @@ from .package import (
 
 __all__ = [
     "AssetAssemblyLayerConfig",
+    "AssetAnchorConfig",
+    "AssetAnchorCoordinateConfig",
+    "AssetScaleRuleConfig",
     "MjcfLayerConfig",
     "SceneConfig",
     "SceneLayerConfig",
@@ -67,4 +74,6 @@ __all__ = [
     "load_component_manifest",
     "load_package_descriptor",
     "validate_package_payload",
+    "apply_asset_normalization",
+    "resolve_bounds",
 ]

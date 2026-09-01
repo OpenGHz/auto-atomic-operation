@@ -13,7 +13,15 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Annotated, Any, Literal, Mapping
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    PositiveFloat,
+    field_validator,
+    model_validator,
+)
+from typing_extensions import Self
 
 
 def _finite_vector(value: Any, size: int, label: str) -> tuple[float, ...]:
@@ -59,6 +67,156 @@ class TransformConfig(BaseModel, frozen=True):
         if math.isclose(sum(item * item for item in result), 0.0):
             raise ValueError("orientation_xyzw cannot be the zero quaternion")
         return result  # type: ignore[return-value]
+
+
+class AssetScaleRuleConfig(BaseModel, frozen=True):
+    """One declarative, uniform scale applied during asset compilation."""
+
+    model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid")
+
+    bodies: tuple[str, ...] = ()
+    """MJCF body names whose owned geometry receives this scale."""
+
+    preserve_bodies: tuple[str, ...] = ()
+    """Child body names whose subtrees stay unchanged during parent scaling."""
+
+    meshes: tuple[str, ...] = ()
+    """MJCF mesh names that receive this scale."""
+
+    mesh_prefixes: tuple[str, ...] = ()
+    """Prefixes selecting generated mesh names, such as collision-part meshes."""
+
+    source_bounds: str
+    """Dotted path to the source bounds in the selected component metadata."""
+
+    axis: Literal["x", "y", "z"]
+    """Extent axis used to derive the uniform scale factor."""
+
+    target_extent_m: PositiveFloat
+    """Desired extent in metres for the selected source bounds."""
+
+    required: bool = True
+    """Whether every named target must be present in the compiled contribution."""
+
+    @field_validator(
+        "bodies", "preserve_bodies", "meshes", "mesh_prefixes", mode="before"
+    )
+    @classmethod
+    def _names(cls, value: Any) -> tuple[str, ...]:
+        if value is None:
+            return ()
+        if isinstance(value, str) or not isinstance(value, Sequence):
+            raise ValueError("asset scale targets must be a sequence of names")
+        result = tuple(str(item).strip() for item in value)
+        if any(not item for item in result):
+            raise ValueError("asset scale target names cannot be empty")
+        return result
+
+    @field_validator("source_bounds")
+    @classmethod
+    def _source_bounds(cls, value: str) -> str:
+        value = str(value).strip()
+        if not value or any(not part for part in value.split(".")):
+            raise ValueError("source_bounds must be a non-empty dotted path")
+        return value
+
+    @model_validator(mode="after")
+    def _has_target(self) -> Self:
+        if not self.bodies and not self.meshes and not self.mesh_prefixes:
+            raise ValueError("asset scale rule must select a body or mesh")
+        if set(self.bodies) & set(self.preserve_bodies):
+            raise ValueError("asset scale body cannot also be preserved")
+        return self
+
+
+class AssetAnchorCoordinateConfig(BaseModel, frozen=True):
+    """One coordinate projection used to reposition an asset anchor."""
+
+    model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid")
+
+    value_m: float | None = None
+    """Fixed coordinate value in metres, when no bounds projection is used."""
+
+    edge: Literal["min", "max"] | None = None
+    """Bounds edge to project when deriving a coordinate from geometry."""
+
+    multiplier: float = 1.0
+    """Multiplier applied to the selected bounds edge."""
+
+    offset_m: float = 0.0
+    """Additive offset applied after the bounds projection."""
+
+    @model_validator(mode="after")
+    def _one_source(self) -> Self:
+        if (self.value_m is None) == (self.edge is None):
+            raise ValueError(
+                "anchor coordinate requires exactly one of value_m or edge"
+            )
+        for value, label in (
+            (self.value_m, "value_m"),
+            (self.multiplier, "multiplier"),
+            (self.offset_m, "offset_m"),
+        ):
+            if value is not None and not math.isfinite(float(value)):
+                raise ValueError(f"anchor coordinate {label} must be finite")
+        return self
+
+
+class AssetAnchorConfig(BaseModel, frozen=True):
+    """Declarative placement of one or more compiled asset bodies."""
+
+    model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid")
+
+    bodies: tuple[str, ...]
+    """MJCF body names sharing the resolved anchor position."""
+
+    source_bounds: str | None = None
+    """Dotted path to bounds used by projected coordinates, when needed."""
+
+    coordinates: Mapping[str, AssetAnchorCoordinateConfig]
+    """Coordinates to set; omitted axes retain the compiled position."""
+
+    required: bool = True
+    """Whether every named body must be present in the compiled contribution."""
+
+    @field_validator("bodies", mode="before")
+    @classmethod
+    def _bodies(cls, value: Any) -> tuple[str, ...]:
+        if isinstance(value, str) or not isinstance(value, Sequence):
+            raise ValueError("asset anchor bodies must be a sequence")
+        result = tuple(str(item).strip() for item in value)
+        if not result or any(not item for item in result):
+            raise ValueError("asset anchor bodies cannot be empty")
+        return result
+
+    @field_validator("source_bounds")
+    @classmethod
+    def _source_bounds(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        value = str(value).strip()
+        if not value or any(not part for part in value.split(".")):
+            raise ValueError("anchor source_bounds must be a dotted path")
+        return value
+
+    @field_validator("coordinates", mode="before")
+    @classmethod
+    def _coordinates(cls, value: Any) -> Mapping[str, Any]:
+        if not isinstance(value, Mapping) or not value:
+            raise ValueError("asset anchor coordinates must be a non-empty mapping")
+        if any(str(key) not in {"x", "y", "z"} for key in value):
+            raise ValueError("asset anchor coordinates may only contain x, y and z")
+        return value
+
+    @model_validator(mode="after")
+    def _projected_coordinates_need_bounds(self) -> Self:
+        if self.source_bounds is None and any(
+            coordinate.edge is not None for coordinate in self.coordinates.values()
+        ):
+            raise ValueError(
+                "asset anchor source_bounds is required for projected coordinates"
+            )
+        return self
 
 
 class MjcfLayerConfig(BaseModel, frozen=True):
@@ -126,6 +284,12 @@ class AssetAssemblyLayerConfig(BaseModel, frozen=True):
     options: Mapping[str, Any] = Field(default_factory=dict)
     """Adapter-specific options kept as data and validated by the adapter."""
 
+    scaling: tuple[AssetScaleRuleConfig, ...] = ()
+    """Generic cold-path geometry scaling rules for the assembled contribution."""
+
+    anchors: tuple[AssetAnchorConfig, ...] = ()
+    """Generic cold-path anchor projections applied after geometry scaling."""
+
     @field_validator("adapter")
     @classmethod
     def _adapter(cls, value: str) -> str:
@@ -185,7 +349,10 @@ class SceneConfig(BaseModel, frozen=True):
 
 
 __all__ = [
+    "AssetAnchorConfig",
+    "AssetAnchorCoordinateConfig",
     "AssetAssemblyLayerConfig",
+    "AssetScaleRuleConfig",
     "MjcfLayerConfig",
     "SceneConfig",
     "SceneLayerConfig",

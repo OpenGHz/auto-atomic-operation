@@ -8,7 +8,9 @@ import xml.etree.ElementTree as ET
 import pytest
 
 from auto_atom.scene_composition import (
+    AssetAnchorConfig,
     AssetAssemblyLayerConfig,
+    AssetScaleRuleConfig,
     MjcfLayerConfig,
     SceneConfig,
     SceneContribution,
@@ -21,6 +23,7 @@ from auto_atom.scene_composition import (
     load_package_descriptor,
     load_component_manifest,
     validate_package_payload,
+    apply_asset_normalization,
 )
 from auto_atom.scene_composition.migrate import migrate_legacy_catalog
 
@@ -77,6 +80,82 @@ def test_scene_config_is_discriminated_and_round_trips() -> None:
     assert isinstance(restored.layers[0], MjcfLayerConfig)
     assert isinstance(restored.layers[1], AssetAssemblyLayerConfig)
     assert TransformConfig(position=[1, 2, 3]).position == (1.0, 2.0, 3.0)
+
+
+def test_generic_asset_normalization_scales_meshes_geometry_and_anchor() -> None:
+    fragment = ET.fromstring(
+        """<mujoco>
+          <asset><mesh name="panel_mesh" scale="1 1 1"/></asset>
+          <worldbody>
+            <body name="panel" pos="0 0 0">
+              <geom name="panel_collision" type="box" pos="0.5 0 0.5" size="0.5 0.02 0.5"/>
+              <body name="handle" pos="0.8 0 0.5">
+                <site name="grasp" pos="0.1 0 0" size="0.01"/>
+              </body>
+            </body>
+          </worldbody>
+        </mujoco>"""
+    )
+    diagnostics = apply_asset_normalization(
+        fragment,
+        scaling=(
+            AssetScaleRuleConfig(
+                bodies=("panel",),
+                preserve_bodies=("handle",),
+                meshes=("panel_mesh",),
+                source_bounds="panel.bounds",
+                axis="z",
+                target_extent_m=2.0,
+            ),
+        ),
+        anchors=(
+            AssetAnchorConfig(
+                bodies=("handle",),
+                source_bounds="panel.bounds",
+                coordinates={
+                    "x": {"edge": "max", "offset_m": 0.08},
+                    "z": {"value_m": 1.0},
+                },
+            ),
+        ),
+        metadata={"panel": {"bounds": [[0.0, -0.02, 0.0], [1.0, 0.02, 1.0]]}},
+    )
+    mesh = fragment.find("asset/mesh")
+    assert mesh is not None
+    assert mesh.get("scale") == "2 2 2"
+    collision = fragment.find(".//geom")
+    assert collision is not None
+    assert collision.get("pos") == "1 0 1"
+    assert collision.get("size") == "1 0.04 1"
+    handle = next(
+        body for body in fragment.iter("body") if body.get("name") == "handle"
+    )
+    assert handle.get("pos") == "2.08 0 1"
+    site = fragment.find(".//site")
+    assert site is not None
+    assert site.get("pos") == "0.1 0 0"
+    assert diagnostics == (
+        "scaled panel.bounds to 2m (factor=2)",
+        "positioned anchor bodies: handle",
+    )
+
+
+def test_fixed_asset_anchor_does_not_require_source_bounds() -> None:
+    anchor = AssetAnchorConfig(
+        bodies=("tool",),
+        coordinates={
+            "x": {"value_m": 0.1},
+            "y": {"value_m": -0.2},
+            "z": {"value_m": 0.3},
+        },
+    )
+    assert anchor.source_bounds is None
+
+    with pytest.raises(ValueError, match="source_bounds is required"):
+        AssetAnchorConfig(
+            bodies=("tool",),
+            coordinates={"x": {"edge": "max"}},
+        )
 
 
 def test_mjcf_layer_preserves_nontrivial_top_level_sections(tmp_path: Path) -> None:
