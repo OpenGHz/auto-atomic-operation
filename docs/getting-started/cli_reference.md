@@ -127,7 +127,7 @@ To discover which configs are runnable tasks, use [`aao-info`](#aao-info).
 | `[+]use_input=true` | bool | false | Pause before every step, including warmup (press Enter to continue) |
 | `[+]max_updates=N` | int | 600 | Maximum public `TaskRunner.update()` calls per round; macro-boundary internal controller updates are limited separately |
 | `[+]perf_count=true` | bool | false | Capture observations each step for performance analysis |
-| `[+]print_updates=false` | bool | true | Disable reset/step `TaskUpdate` dumps while retaining summaries |
+| `[+]print_updates=false` | bool | false | Disable reset/step `TaskUpdate` dumps while retaining summaries |
 | `env.batch_size=N` | int | (from config) | Override the number of parallel environments |
 | `task.seed=N` | int | (from config) | Override the randomization seed |
 | `+env.viewer.disable=true` | bool | false | Run headless (no viewer window) |

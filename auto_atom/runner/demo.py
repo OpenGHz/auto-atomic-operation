@@ -40,7 +40,7 @@ def main(cfg: DictConfig) -> None:
     use_input = bool(cfg.get("use_input", False))
     max_updates = int(cfg.get("max_updates", 600))
     perf_count = bool(cfg.get("perf_count", False))
-    print_updates = bool(cfg.get("print_updates", True))
+    print_updates = bool(cfg.get("print_updates", False))
     _last_obs = [None]  # mutable container to hold observation across steps
 
     def _step_fn(_step, _update):
