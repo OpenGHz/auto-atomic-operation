@@ -1,9 +1,45 @@
 # https://www.sciencedirect.com/science/article/pii/S1524070300905289
 # https://www.sciencedirect.com/science/article/pii/S0094114X24002519
+from collections.abc import Mapping
+from typing import Any, List, Optional
+
 import numpy as np
-from typing import List
 
 np.set_printoptions(precision=4, suppress=True)
+
+
+_DEFAULT_A = (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, -0.062)
+_DEFAULT_ALPHA = (
+    0.0,
+    np.pi / 2,
+    np.pi / 2,
+    np.pi / 2,
+    np.pi / 2,
+    np.pi / 2,
+    np.pi / 2,
+    np.pi / 2,
+)
+_DEFAULT_D = (0.0, 0.16452, 0.0, 0.249, 0.0, 0.329, 0.0, 0.0, 0.0)
+_DEFAULT_THETA = (
+    0.0,
+    0.0,
+    -13 * np.pi / 18,
+    0.0,
+    -2 * np.pi / 9,
+    -np.pi / 2,
+    np.pi / 2,
+    np.pi,
+    np.pi,
+)
+_DEFAULT_JOINT_LIMITS = (
+    (-170 * np.pi / 180, 170 * np.pi / 180),
+    (-150 * np.pi / 180, 50 * np.pi / 180),
+    (-170 * np.pi / 180, 170 * np.pi / 180),
+    (-140 * np.pi / 180, 10 * np.pi / 180),
+    (-170 * np.pi / 180, 170 * np.pi / 180),
+    (-45 * np.pi / 180, 45 * np.pi / 180),
+    (-90 * np.pi / 180, 70 * np.pi / 180),
+)
 
 
 class KDL_7DOF:
@@ -28,48 +64,35 @@ class KDL_7DOF:
                 return normalized
         return angle
 
-    def __init__(self):
-        # DH Parameters
-        # index:       0,1      ,2              ,3      ,4          ,5          ,6      ,7      ,8
-        self.a = [0, 0, 0, 0, 0, 0, 0, -0.062]
-        self.alpha = [
-            0,
-            np.pi / 2,
-            np.pi / 2,
-            np.pi / 2,
-            np.pi / 2,
-            np.pi / 2,
-            np.pi / 2,
-            np.pi / 2,
-        ]
-        self.d = [0, 0.16452, 0, 0.249, 0, 0.329, 0, 0, 0]
-        self.theta = [
-            0,
-            0,
-            -13 * np.pi / 18,
-            0,
-            -2 * np.pi / 9,
-            -np.pi / 2,
-            np.pi / 2,
-            np.pi,
-            np.pi,
-        ]
+    def __init__(self, kinematics: Optional[Mapping[str, Any]] = None):
+        """Create the analytical solver with optional robot-specific parameters.
 
-        # Joint limits [min, max] in radians for each of the 7 joints
-        # Modify these values according to your robot's actual limits
-        self.JOINT_LIMITS = np.array(
-            [
-                [-170 * np.pi / 180, 170 * np.pi / 180],
-                [-150 * np.pi / 180, 50 * np.pi / 180],
-                [-170 * np.pi / 180, 170 * np.pi / 180],
-                [-140 * np.pi / 180, 10 * np.pi / 180],
-                [-170 * np.pi / 180, 170 * np.pi / 180],
-                [-45 * np.pi / 180, 45 * np.pi / 180],
-                [-90 * np.pi / 180, 70 * np.pi / 180],
-            ]
+        ``kinematics`` may override any of the DH arrays (``a``, ``alpha``,
+        ``d`` and ``theta``), the seven-joint ``joint_limits`` matrix, or
+        ``max_retry``.  The defaults are the original P7 V3 parameters, so a
+        caller can reuse this solver for a kinematically compatible arm while
+        declaring only the values that differ in its Hydra configuration.
+        """
+        params = dict(kinematics or {})
+        self.a = self._vector_param("a", params.get("a", _DEFAULT_A), 8)
+        self.alpha = self._vector_param("alpha", params.get("alpha", _DEFAULT_ALPHA), 8)
+        self.d = self._vector_param("d", params.get("d", _DEFAULT_D), 9)
+        self.theta = self._vector_param("theta", params.get("theta", _DEFAULT_THETA), 9)
+
+        joint_limits = np.asarray(
+            params.get("joint_limits", _DEFAULT_JOINT_LIMITS), dtype=np.float64
         )
+        if joint_limits.shape != (7, 2) or not np.all(np.isfinite(joint_limits)):
+            raise ValueError("joint_limits must be a finite 7x2 array")
+        if np.any(joint_limits[:, 0] >= joint_limits[:, 1]):
+            raise ValueError(
+                "joint_limits lower bounds must be smaller than upper bounds"
+            )
+        self.JOINT_LIMITS = joint_limits
 
-        self.max_retry = 15  # Minimum for ≥99.5% success rate
+        self.max_retry = int(params.get("max_retry", 15))
+        if self.max_retry < 1:
+            raise ValueError("max_retry must be at least 1")
 
         self.R_a = np.eye(3)
         self.t_a = np.array([0, 0, self.d[3]])
@@ -116,6 +139,13 @@ class KDL_7DOF:
 
         # Gravity vector in base frame
         self.gravity = np.array([0.0, 0.0, -9.81])
+
+    @staticmethod
+    def _vector_param(name: str, value: Any, size: int) -> np.ndarray:
+        result = np.asarray(value, dtype=np.float64)
+        if result.shape != (size,) or not np.all(np.isfinite(result)):
+            raise ValueError(f"{name} must be a finite vector with {size} values")
+        return result.copy()
 
     def load_config_from_urdf(self, config_path: str):
         """

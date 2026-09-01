@@ -22,9 +22,10 @@ class P7V3AnalyticalIKSolver:
         arm_joint_names: List[str],
         flange_site_name: str = "tool_site",
         tcp_site_name: str = "eef_pose",
+        kinematics: Optional[Dict[str, Any]] = None,
     ) -> None:
         self._arm_joint_names = arm_joint_names
-        self._solver = KDL_7DOF()
+        self._solver = KDL_7DOF(kinematics=kinematics)
         self._configure_tcp_from_model(model, flange_site_name, tcp_site_name)
 
     def solve(
@@ -149,11 +150,17 @@ def build_p7_v3_umi_v3_backend(
             ik_params = ik_block
             break
 
+    # The environment binding is the canonical owner of solver construction
+    # parameters.  Reuse the same values for the backend handler's solver so
+    # a variant (for example P7 V4) cannot silently fall back to V3 DH data.
+    binding = first_env.config.operators.get("arm")
+    solver_params = dict(binding.ik_params) if binding is not None else {}
+    solver_params.setdefault("flange_site_name", _P7V3_FLANGE_SITE)
+    solver_params.setdefault("tcp_site_name", _P7V3_TCP_SITE)
     ik_solver = P7V3AnalyticalIKSolver(
         model=first_env.model,
         arm_joint_names=_P7V3_ARM_JOINTS,
-        flange_site_name=_P7V3_FLANGE_SITE,
-        tcp_site_name=_P7V3_TCP_SITE,
+        **solver_params,
     )
 
     print("fk_result:", ik_solver._solver.fk([0.0] * 7))

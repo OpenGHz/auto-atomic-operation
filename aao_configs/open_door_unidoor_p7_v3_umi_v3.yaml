@@ -6,6 +6,9 @@ scene_name: open_door_unidoor
 task_name: open_door_unidoor_p7_v3_umi_v3
 door_id: D001
 handle_id: H001
+# The operator MJCF is a single override seam so robot variants can inherit
+# this complete UniDoor task without copying the scene assembly layer list.
+operator_robot_xml: ${assets_dir}/xmls/robots/p7_arm_v3_with_umi_gripper_v3.xml
 
 env:
   # All operator-owned home joints are declared under
@@ -75,7 +78,7 @@ env:
               z: {value_m: 1.0}
             required: false
       - kind: mjcf
-        path: ${assets_dir}/xmls/robots/p7_arm_v3_with_umi_gripper_v3.xml
+        path: ${operator_robot_xml}
         role: operator
   mask_objects: [door__door_handle]
   # Heat-map focus for the manipulated mask object; task.stages below is the

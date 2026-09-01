@@ -1,0 +1,28 @@
+defaults:
+  - open_door_unidoor_p7_v3_umi_v3
+  - _self_
+
+task_name: open_door_unidoor_p7_v4_umi_v3
+
+# Reuse the complete UniDoor scene, asset selection, staged PICK -> PULL ->
+# PUSH workflow, and operator home pose.  Only the operator asset and the
+# kinematic values that differ from P7 V3 are overridden here.
+operator_robot_xml: ${assets_dir}/xmls/robots/p7_arm_v4_with_umi_gripper_v3.xml
+
+env:
+  operators:
+    arm:
+      ik_params:
+        kinematics:
+          # The V4 arm keeps the V3 DH angular convention.  Its shoulder
+          # offset and upper-arm spacing are the geometry changes in the V4
+          # asset; all other DH entries inherit the solver defaults.
+          d: [0.0, 0.0662, 0.0, 0.249, 0.0, 0.32905, 0.0, 0.0, 0.0]
+          joint_limits:
+            - [-2.9669, 2.9669]
+            - [-2.8798, 0.83775]
+            - [-2.9669, 2.9669]
+            - [-2.5307, 0.08726]
+            - [-2.9669, 2.9669]
+            - [-0.78539, 0.78539]
+            - [-1.5708, 1.2217]
