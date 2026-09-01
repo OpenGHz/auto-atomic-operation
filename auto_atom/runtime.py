@@ -780,6 +780,40 @@ def _teardown_backend_after_initialization_failure(backend: SceneBackend) -> Non
         logger.exception("Backend teardown failed after initialization error.")
 
 
+def construct_scene_backend(
+    config: TaskFileConfig,
+    *,
+    feature: str,
+) -> SceneBackend:
+    """Construct and validate the backend declared by one task file.
+
+    This is the common lifecycle entry point for runners and simulator tools.
+    It intentionally does not call :meth:`SceneBackend.setup`: task runners
+    compile and attach their execution timeline first, while scene-only
+    clients (for example ``view_scene``) can set up immediately.  The backend
+    remains the owner of the simulator environment and its lifecycle; this
+    helper only centralizes construction and contract validation.
+    """
+
+    backend = config.backend(config.task, config.task_operators)
+    if not isinstance(backend, SceneBackend):
+        raise TypeError(
+            "Task file backend must be an instantiated SceneBackend. "
+            f"Got {type(backend).__name__}."
+        )
+    try:
+        require_env_capability(
+            backend.get_env(),
+            EnvProtocol,
+            feature=feature,
+            expected_batch_size=backend.batch_size,
+        )
+    except BaseException:
+        _teardown_backend_after_initialization_failure(backend)
+        raise
+    return backend
+
+
 @dataclass
 class ExecutionContext:
     config: AutoAtomConfig
@@ -1050,19 +1084,11 @@ class TaskRunner:
     def from_config(self, config: TaskFileConfig) -> "TaskRunner":
         from .stage_execution import StageExecution
 
-        backend = config.backend(config.task, config.task_operators)
-        if not isinstance(backend, SceneBackend):
-            raise TypeError(
-                "Task file backend must be an instantiated SceneBackend. "
-                f"Got {type(backend).__name__}."
-            )
+        backend = construct_scene_backend(
+            config,
+            feature="TaskRunner initialization",
+        )
         try:
-            require_env_capability(
-                backend.get_env(),
-                EnvProtocol,
-                feature="TaskRunner initialization",
-                expected_batch_size=backend.batch_size,
-            )
             context = ExecutionContext(
                 config=config.task,
                 backend=backend,

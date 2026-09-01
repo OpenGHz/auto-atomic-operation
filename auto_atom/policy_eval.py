@@ -45,6 +45,7 @@ from .runtime import (
     _collect_reset_details,
     _EnvRuntimeState,
     _teardown_backend_after_initialization_failure,
+    construct_scene_backend,
     require_env_capability,
 )
 from .stage_execution import PolicyStageFeedback, StageExecution
@@ -303,19 +304,12 @@ class PolicyEvaluator:
                 "execution.render_internal_updates=false is supported by "
                 "TaskRunner/aao-demo only."
             )
-        backend = config.backend(config.task, config.task_operators)
-        if not isinstance(backend, SceneBackend):
-            raise TypeError(
-                "Task file backend must be an instantiated SceneBackend. "
-                f"Got {type(backend).__name__}."
-            )
+        backend = construct_scene_backend(
+            config,
+            feature="PolicyEvaluator initialization",
+        )
         try:
-            env = require_env_capability(
-                backend.get_env(),
-                EnvProtocol,
-                feature="PolicyEvaluator initialization",
-                expected_batch_size=backend.batch_size,
-            )
+            env = backend.get_env()
             if requested_sim_loop_frequency > 0:
                 require_env_capability(
                     env,

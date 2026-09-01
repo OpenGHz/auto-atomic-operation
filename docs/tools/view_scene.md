@@ -1,26 +1,30 @@
 # View Scene
 
-Launch the interactive MuJoCo viewer on a composed scene + robot, applying the
-viewer-supported YAML home-pose and pose overrides before the first frame is
-shown.  The viewer is a geometry/placement diagnostic; it does not run the
-operator's EEF home-pose IK.
+Launch the interactive MuJoCo viewer on a composed scene + robot through the
+canonical `MujocoTaskBackend` interface. The viewer is a geometry/placement
+diagnostic; it does not own simulation state or duplicate task reset semantics.
 
-Since scene XMLs no longer have to embed a robot include or `<key name="home">`, opening a host XML directly can show only the host. This script reads `env.scene`, compiles its ordered MJCF and asset-assembly layers, applies `env.initial_joint_positions` plus `task.initial_pose` and `task_operators.<name>.initial_state.base_pose`, and hands the model to `mujoco.viewer.launch`.
+Since scene XMLs no longer have to embed a robot include or `<key name="home">`, opening a host XML directly can show only the host. This script composes the
+task file, constructs a `MujocoTaskBackend`, and calls its public
+`setup()`/`reset()` lifecycle before handing the backend-owned model and
+data to the viewer.  Initial joints, object/base poses, randomization, mocap
+sync, and settle behavior therefore have one implementation in the backend,
+shared with ``aao-demo`` and policy evaluation.
 
-The application order mirrors the simulator setup contract:
+The application order is owned by the simulator backend:
 
-1. reset the composed model to its keyframe (or the model default);
-2. apply `env.initial_joint_positions`, settle equality-constrained passive
-   joints, and synchronize mocap welds;
-3. resolve and apply each `task.initial_pose` entry through the shared
-   `PoseOverrideConfig` model;
-4. run `mj_forward`, then resolve operator base references against the updated
-   scene and relocate each configured `root_body`.
+1. construct the backend from the composed task file;
+2. call `backend.setup()` once to establish the configured home state;
+3. call `backend.reset()` so the viewer starts from the same reset state as
+   the runtime task loop;
+4. pass the selected backend environment to the native or GS viewer.
 
-Named pose references are setup-time anchors.  A site/body/geom/joint that
-later moves during a task does not drag the viewer's robot base along with it.
-Operator base overrides use the world or a named scene frame; operator-frame
-aliases are reserved for EEF overrides in the runtime contract.
+`view_scene.py` intentionally contains no second pose resolver, joint-home
+application path, or simulator session wrapper.  It is a thin visualization
+client over the backend seam.
+
+Named pose references and reset ordering follow the backend contract.  The
+viewer does not reinterpret them or create a second source of truth.
 
 **Script:** [examples/view_scene.py](../../examples/view_scene.py)
 
@@ -48,26 +52,19 @@ For the chosen config, the script reads these override surfaces and applies them
 | `env.scene.base`                                  | Host scene XML                                                                 |
 | `env.scene.layers`                                | Ordered MJCF and namespaced asset-assembly layers                              |
 | `env.sim_freq`                                   | Physics frequency, overriding the host XML timestep exactly as the runtime does |
-| `env.initial_joint_positions`                     | Per-joint home pose (mirrors `MujocoBasis.reset()`)                           |
-| `task.initial_pose`                               | Per-body `PoseOverrideConfig` overrides (freejoint qpos for movable bodies, or `body_pos/quat` for static bodies); `world` or a named site/body/geom/joint reference |
-| `task_operators.<name>.initial_state.base_pose`   | `PoseOverrideConfig` for each operator base; `world` or a named scene frame, with optional per-axis references, converted to the configured `root_body`'s parent-local pose |
+| `env.initial_joint_positions`                     | Per-joint home pose consumed by the backend environment reset |
+| `task.initial_pose`                               | Per-body `PoseOverrideConfig` consumed by `MujocoTaskBackend.setup/reset` |
+| `task_operators.<name>.initial_state.base_pose`   | Operator base `PoseOverrideConfig` consumed by the backend, including named-frame and per-axis reference resolution |
 
-Equality-constrained passive joints (e.g. parallel-linkage gripper followers) are settled by stepping under zero gravity while pinning the configured scalar joints, matching the runtime backend reset.
+Equality-constrained passive joints, configured joint-position actuators, and
+mocap synchronization are all handled by the backend's normal setup/reset
+implementation, exactly as they are for runtime execution.
 
-Configured joint-position actuators are initialized to hold the applied home
-pose. Motor, velocity, tendon, and site actuators keep their existing controls.
-
-Mocap bodies welded to a freejoint are synced onto their target pose so the arm doesn't snap on the first viewer step.
-
-`task_operators.<name>.initial_state.eef_pose` and the `eef` gripper-control
-scalar are intentionally not executed by this standalone viewer:
-`eef_pose` requires the backend's operator-specific home-EEF/IK path, while a
-gripper command has no unambiguous static-MJCF equivalent.  The viewer reports
-a warning for configured `eef_pose` entries so a missing EEF relocation is
-visible rather than silently ignored.  Use `aao-demo` (or the backend directly)
-to validate and apply an EEF home pose or gripper state.  Camera
-`task.camera_initial_pose` overrides are applied directly to the composed model
-using the same world-frame resolver as the runtime backend.
+`task_operators.<name>.initial_state.eef_pose`, the `eef` gripper scalar, and
+camera initial poses are consumed by the backend setup/reset contract as
+supported by the selected backend. The standalone viewer does not duplicate
+those operations or reinterpret their references; use `aao-demo` when you
+need to validate task execution after the static scene inspection.
 
 ## Gaussian Splatting mode
 
@@ -114,29 +111,25 @@ Reload re-reads:
   seconds while gaussian PLYs upload to GPU.
 
 In GS mode the MuJoCo viewer window is closed and reopened around each
-reload (because the underlying `MjModel` is replaced); this is normal.
+reload (because a replacement backend owns a new `MjModel`); this is normal.
+The old backend is torn down only after the replacement has been successfully
+constructed, and failed replacement loads are torn down immediately.
 
 This makes `view_scene.py` the fastest way to iterate on home pose, scene
 composition, geometry, and Gaussian alignment side by side.
 
 ## Console output
 
-On startup and on every reload the script prints:
+On startup and after a successful reload the script prints the compiled model
+dimensions, for example:
 
 ```
-[info] scene  : .../scenes/open_door/demo.xml
-[info] robots : ['.../robots/p7_arm_with_xf9600.xml']
-[info] home   : 9 joint override(s), 0 body pose(s), 1 operator base(s), 0 camera pose(s)
-[info] model  : nq=23 nv=22 nu=8 nbody=14 ngeom=37  (robots=[...], ijp=9, body_pose=0, op_base=1, camera_pose=0)
+[info] model  : nq=23 nv=22 nu=8 nbody=14 ngeom=37
 ```
 
-Use these counters to confirm that the expected robot and viewer-supported
-overrides were loaded.  Warning-only entries (`initial_state.eef_pose` and the
-`eef` scalar) are intentionally not applied by the standalone viewer.
-
-Pass `--debug` before Hydra arguments to preflight-build the model and print
-full loader tracebacks to the terminal. This is useful for errors that MuJoCo's
-viewer would otherwise show only inside the GUI.
+Pass `--debug` before Hydra arguments to print full tracebacks for Gaussian
+render and reload errors.  Backend construction/setup failures are propagated
+normally, so the original exception and its traceback remain visible.
 
 ## Related
 

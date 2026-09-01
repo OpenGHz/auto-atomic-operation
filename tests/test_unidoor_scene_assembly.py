@@ -25,7 +25,6 @@ from auto_atom.scene_composition import (
     load_composed_scene,
 )
 from auto_atom.utils.pose import PoseState, compose_pose
-from examples import view_scene
 
 
 def _sha256(path: Path) -> str:
@@ -1154,7 +1153,11 @@ def test_view_scene_and_runtime_share_collision_free_unidoor_home() -> None:
                 "env.viewer=null",
             ],
         )
-    viewer_model, viewer_data = view_scene._build(view_scene._extract_overrides(config))
+    from examples.view_scene import _load_backend
+
+    viewer_backend = _load_backend(config)
+    viewer_env = viewer_backend.get_env().envs[0]
+    viewer_model, viewer_data = viewer_env.model, viewer_env.data
     runner = TaskRunner().from_config(prepare_task_file(config))
     try:
         runner.reset()
@@ -1223,6 +1226,7 @@ def test_view_scene_and_runtime_share_collision_free_unidoor_home() -> None:
                 )
     finally:
         runner.close()
+        viewer_backend.teardown()
 
 
 def test_demo_grasps_before_unlatching_and_unlocks_before_opening() -> None:
