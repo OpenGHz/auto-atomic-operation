@@ -1,6 +1,7 @@
 - **Getting Started**
   - [Home](/README.md)
   - [CLI Reference](/getting-started/cli_reference.md)
+  - [UniDoor Open Door Demo](/getting-started/unidoor_open_door_demo.md)
 
 - **Task Configuration**
   - [Reusing & Creating Tasks](/task-configuration/reusing_and_creating_tasks.md)
