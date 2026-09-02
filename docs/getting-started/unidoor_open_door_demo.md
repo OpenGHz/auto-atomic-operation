@@ -100,7 +100,7 @@ package: ${oc.env:AAO_UNIDOOR_ASSET_PACKAGE,assets/scene_assets/unidoor_lever_ri
 
 ```bash
 AAO_UNIDOOR_ASSET_PACKAGE=/data/unidoor/scene_asset_package.json \
-aao-demo --config-name open_door_unidoor_p7_v3_umi_v3
+aao-demo --config-name open_door_unidoor_p7_v4_umi_v3
 ```
 
 自定义 descriptor 的 `payload_root.uri` 必须能解析到同一部署中的
@@ -114,7 +114,7 @@ python -m auto_atom.scene_composition.migrate \
   --overwrite
 
 AAO_UNIDOOR_ASSET_PACKAGE=/data/unidoor/canonical_package/scene_asset_package.json \
-aao-demo --config-name open_door_unidoor_p7_v3_umi_v3
+aao-demo --config-name open_door_unidoor_p7_v4_umi_v3
 ```
 
 运行时会根据 descriptor 读取 `product_space.json`，再加载选中门和把手的
@@ -134,7 +134,7 @@ aao-info
 
 ```bash
 aao-demo \
-  --config-name open_door_unidoor_p7_v3_umi_v3 \
+  --config-name open_door_unidoor_p7_v4_umi_v3 \
   door_id=D001 \
   handle_id=H001 \
   env.batch_size=1 \
@@ -146,14 +146,14 @@ aao-demo \
 
 ```bash
 python examples/view_scene.py \
-  --config-name open_door_unidoor_p7_v3_umi_v3
+  --config-name open_door_unidoor_p7_v4_umi_v3
 ```
 
 无桌面环境但需要离屏渲染时，可尝试 EGL：
 
 ```bash
 MUJOCO_GL=egl aao-demo \
-  --config-name open_door_unidoor_p7_v3_umi_v3 \
+  --config-name open_door_unidoor_p7_v4_umi_v3 \
   +env.viewer.disable=true
 ```
 
@@ -163,7 +163,7 @@ MUJOCO_GL=egl aao-demo \
 
 ```bash
 aao-demo \
-  --config-name open_door_unidoor_p7_v3_umi_v3 \
+  --config-name open_door_unidoor_p7_v4_umi_v3 \
   door_id=D002 \
   handle_id=HL016 \
   +env.viewer.disable=true
@@ -173,7 +173,7 @@ aao-demo \
 
 ```bash
 aao-unidoor-sweep \
-  --config-name open_door_unidoor_p7_v3_umi_v3 \
+  --config-name open_door_unidoor_p7_v4_umi_v3 \
   --doors D001,D002 \
   --handles H001,H004,HL001 \
   --max-concurrency=1
