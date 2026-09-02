@@ -171,8 +171,8 @@ task:
           - arc:
               pivot: door__door_hinge
               axis: [0, 0, -1]
-              angle: 0.20
-              absolute: true
+              arc_length: 0.16
+              # absolute: true
               max_step: 0.01
             reference: world
 
