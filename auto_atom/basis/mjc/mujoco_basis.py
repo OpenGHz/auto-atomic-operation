@@ -9,6 +9,7 @@ stepping.  It deliberately does **not** provide ``step(action)`` or
 
 import copy
 import logging
+import threading
 import time
 from contextlib import contextmanager
 from enum import Enum
@@ -593,6 +594,7 @@ class MujocoBasis:
         self._viewer_update_defer_depth = 0
         self._viewer_update_pending = False
         self._viewer = None
+        self._viewer_thread: threading.Thread | None = None
         if config.viewer is not None:
             self._launch_viewer()
 
@@ -603,7 +605,19 @@ class MujocoBasis:
     def _launch_viewer(self) -> None:
         import mujoco.viewer as _mj_viewer
 
+        existing_threads = set(threading.enumerate())
         self._viewer = _mj_viewer.launch_passive(self.model, self.data)
+        new_threads = [
+            thread
+            for thread in threading.enumerate()
+            if thread not in existing_threads
+            and (
+                "_launch_internal" in thread.name
+                or getattr(getattr(thread, "_target", None), "__name__", "")
+                == "_launch_internal"
+            )
+        ]
+        self._viewer_thread = new_threads[-1] if new_threads else None
         cfg = self.config.viewer
         if cfg.lookat is not None:
             self._viewer.cam.lookat[:] = cfg.lookat
@@ -650,8 +664,10 @@ class MujocoBasis:
                     self._sync_viewer()
 
     def _shutdown_viewer(self) -> None:
+        viewer = self._viewer
         try:
-            self._viewer.close()
+            if viewer is not None:
+                viewer.close()
         except Exception:
             pass
         deadline = time.time() + 1.0
@@ -659,8 +675,15 @@ class MujocoBasis:
             if not self._viewer_running():
                 break
             time.sleep(0.01)
-        time.sleep(0.05)
+        viewer_thread = self._viewer_thread
+        if (
+            viewer_thread is not None
+            and viewer_thread is not threading.current_thread()
+            and viewer_thread.is_alive()
+        ):
+            viewer_thread.join(timeout=2.0)
         self._viewer = None
+        self._viewer_thread = None
 
     def refresh_viewer(self) -> None:
         """Redraw the passive viewer without advancing physics."""

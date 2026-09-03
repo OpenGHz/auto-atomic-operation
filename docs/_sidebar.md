@@ -71,6 +71,7 @@
 - **Migration Notes**
   - [XML / Mesh / GS Migration](/migration-notes/xml_mesh_gs_migration_notes.md)
   - [Dishwasher031 and plate2 assets](/migration-notes/dishwasher_plate_assets.md)
+  - [PlaceGen rack-plate assets](/migration-notes/rack_plate_assets.md)
 
 - **Docs Site**
   - [GitHub Pages Media Notes](/docs-site/github_pages_media_notes.md)

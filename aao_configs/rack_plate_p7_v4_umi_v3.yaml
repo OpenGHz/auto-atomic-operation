@@ -1,0 +1,197 @@
+defaults:
+  - basis_p7_v3_umi_v3
+  - _self_
+
+scene_name: rack_plate
+task_name: rack_plate_p7_v4_umi_v3
+
+# The P7 V4 MJCF keeps the V3 analytical-IK interface.  Only the arm link
+# dimensions and limits differ, so the V4 values are supplied at the binding
+# seam instead of duplicating a second backend.
+operator_robot_xml: ${assets_dir}/xmls/robots/p7_arm_v4_with_umi_gripper_v3.xml
+
+env:
+  batch_size: 1
+  sim_freq: 1200
+  update_freq: 30
+  initial_joint_positions: null
+  scene:
+    base: ${assets_dir}/xmls/scenes/rack_plate/demo.xml
+    layers:
+      - kind: mjcf
+        path: ${operator_robot_xml}
+        role: operator
+  cameras:
+    - name: eef_wrist_cam
+      role: operator
+      width: ${cam_width}
+      height: ${cam_height}
+      enable_color: ${enable_color}
+      enable_depth: ${enable_depth}
+      enable_mask: ${enable_mask}
+      enable_heat_map: ${enable_heat_map}
+      parent_frame: eef_pose
+      is_static: false
+    - name: rack_camera_front
+      width: ${cam_width}
+      height: ${cam_height}
+      enable_color: ${enable_color}
+      enable_depth: ${enable_depth}
+      enable_mask: ${enable_mask}
+      enable_heat_map: ${enable_heat_map}
+      is_static: true
+  mask_objects: [object, rack_target]
+  operations: [pick, place]
+  viewer:
+    lookat: [-0.12, 0.0, 0.12]
+    distance: 0.75
+    azimuth: 135
+    elevation: -25
+    step_delay: 0.02
+    hold_seconds: 1.0
+  operators:
+    arm:
+      ik_params:
+        kinematics:
+          d: [0.0, 0.0662, 0.0, 0.249, 0.0, 0.32905, 0.0, 0.0, 0.0]
+          joint_limits:
+            - [-2.9669, 2.9669]
+            - [-2.8798, 0.83775]
+            - [-2.9669, 2.9669]
+            - [-2.5307, 0.08726]
+            - [-2.9669, 2.9669]
+            - [-0.78539, 0.78539]
+            - [-1.5708, 1.2217]
+
+task:
+  seed: 7
+  randomization:
+    arm: null
+  stages:
+    - name: pick_plate
+      object: object
+      site: object_site
+      operation: pick
+      operator: arm
+      param:
+        pre_move:
+          # The plate is vertical (its collision-cylinder axis is world X).
+          # First rise above the plate, then move laterally before descending
+          # between the two faces.  This prevents the open fingers from
+          # sweeping through the plate while the arm changes X.
+          - position: [0.0, 0.0, 0.17]
+            reference: eef_world
+            max_linear_step: 0.02
+            max_angular_step: 0.20
+          - position: [0.0, 0.105, 0.17]
+            orientation: [0.0, 0.0, 0.70710678, 0.70710678]
+            reference: object_world
+            static: true
+            max_linear_step: 0.025
+            max_angular_step: 0.20
+          - position: [0.0, 0.022, 0.17]
+            orientation: [0.0, 0.0, 0.70710678, 0.70710678]
+            reference: object_world
+            static: true
+            max_linear_step: 0.01
+            max_angular_step: 0.10
+          - position: [0.0, 0.022, 0.0]
+            orientation: [0.0, 0.0, 0.70710678, 0.70710678]
+            reference: object_world
+            static: true
+            max_linear_step: 0.01
+            max_angular_step: 0.10
+        eef:
+          close: true
+        post_move:
+          - position: [0.0, 0.0, 0.15]
+            reference: eef_world
+            max_linear_step: 0.02
+            max_angular_step: 0.15
+
+    - name: place_plate
+      object: rack_target
+      site: rack_target_site
+      operation: place
+      operator: arm
+      param:
+        pre_move:
+          # Lift first so the plate clears the stand and rack rim.
+          - position: [0.0, 0.0, 0.12]
+            reference: eef_world
+            max_linear_step: 0.02
+            max_angular_step: 0.15
+          # Move above the slot before lowering.  This waypoint is expressed
+          # in the rack target frame, so the object remains the controlled
+          # frame while the EEF-to-plate grasp transform is measured at run
+          # time.
+          - controlled_frame:
+              kind: held_object
+              frame: object_site
+            position: [0.0, 0.0, 0.18]
+            reference: object
+            static: true
+            orientation_goal:
+              kind: axis_alignment
+              controlled_axis: [1.0, 0.0, 0.0]
+              target_axis:
+                vector: [1.0, 0.0, 0.0]
+                reference: world
+              direction: same
+            tolerance:
+              position: 0.012
+              orientation: 0.10
+          # The target frame is the centre of the first rack slot.  The
+          # migrated plate's local +X is its physical normal after the
+          # authored mesh rotation, so constrain that axis to the slot normal
+          # while leaving the in-plane twist unconstrained.
+          - controlled_frame:
+              kind: held_object
+              frame: object_site
+            position: [0.0, 0.0, 0.0]
+            reference: object
+            static: true
+            orientation_goal:
+              kind: axis_alignment
+              controlled_axis: [1.0, 0.0, 0.0]
+              target_axis:
+                vector: [1.0, 0.0, 0.0]
+                reference: world
+              direction: same
+            tolerance:
+              position: 0.015
+              orientation: 0.10
+        eef:
+          close: false
+        placed_reference: pre_move
+        placed_tolerance:
+          position: 0.02
+          orientation: 0.10
+
+task_operators:
+  arm:
+    initial_state:
+      # Mount the V4 arm beside the source stand.  The home TCP is the first
+      # approach point; the stage then advances to the measured grasp pose.
+      base_pose:
+        position: [-0.4, -0.5, 0.075]
+        orientation: [0.0, 0.0, 1.0, 0.0]
+      eef_pose:
+        position: [-0.080, 0.105, 0.130165074]
+        orientation: [0.0, 0.0, 0.70710678, 0.70710678]
+        reference: world
+      eef: 0.0
+    control:
+      timeout_steps: 900
+      cartesian_max_linear_step: 0.02
+      cartesian_max_angular_step: 0.20
+      tolerance:
+        position: 0.012
+        orientation: 0.10
+        eef: 0.002
+        placed:
+          position: 0.02
+          orientation: 0.10
+    ik:
+      joint_control_mode: per_step_ik
+      max_joint_delta: 0.25

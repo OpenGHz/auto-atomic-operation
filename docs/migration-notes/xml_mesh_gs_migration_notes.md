@@ -211,3 +211,8 @@ See [Dishwasher031 and plate2 asset migration](dishwasher_plate_assets.md) for a
 robot-less host-scene migration with byte-level provenance, baked articulation state,
 shared horizontal/vertical payloads, generated wire collision geometry, and final
 host-plus-robot load validation.
+
+See [PlaceGen rack-plate asset migration](rack_plate_assets.md) for the corresponding
+static draining-rack host migration: the rack visual mesh, explicit rib collision
+proxies, fixed observation cameras, shared plate payload, and ordered robot-layer
+composition boundary.

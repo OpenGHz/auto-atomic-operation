@@ -1,0 +1,117 @@
+<mujoco model="aao_rack_plate">
+  <compiler angle="radian" meshdir="../../../meshes"/>
+  <option timestep="0.002" gravity="0 0 -9.81" integrator="implicitfast"/>
+  <visual>
+    <global azimuth="135" elevation="-22"/>
+  </visual>
+  <default>
+    <geom friction="1.0 0.02 0.002" solref="0.01 1"/>
+  </default>
+
+  <asset>
+    <mesh name="rack_plate_mesh" file="rack_plate/rack-plate-0.obj"/>
+    <mesh name="plate2_mesh" file="dishwasher_plate/plate2/plate2.obj"/>
+    <material name="rack_plate_floor" rgba="0.22 0.24 0.28 1"/>
+    <material name="rack_plate_rack" rgba="0.34 0.34 0.38 1"/>
+    <material name="rack_plate_target" rgba="0.15 0.75 0.25 1"/>
+    <material name="rack_plate_object" rgba="0.88 0.74 0.42 1"/>
+    <material name="rack_plate_stand" rgba="0.42 0.30 0.20 1"/>
+  </asset>
+
+  <worldbody>
+    <light name="rack_plate_light" pos="0 -0.2 1.5" dir="0 0 -1" diffuse="0.9 0.9 0.9"/>
+    <camera name="rack_camera_front" pos="0 -0.85 0.52"
+            xyaxes="1 0 0 0 0.459707 0.888071" fovy="52"/>
+    <camera name="rack_camera_back" pos="0 0.85 0.52"
+            xyaxes="-1 0 0 0 -0.459707 0.888071" fovy="52"/>
+    <camera name="rack_camera_left" pos="-0.75 -0.35 0.45"
+            xyaxes="0.422885 -0.906183 0 0.369835 0.172590 0.912926" fovy="52"/>
+    <camera name="rack_camera_right" pos="0.75 0.35 0.45"
+            xyaxes="-0.422885 0.906183 0 -0.369835 -0.172590 0.912926" fovy="52"/>
+    <camera name="rack_camera_top" pos="0 0 1.20"
+            xyaxes="1 0 0 0 1 0" fovy="42"/>
+    <geom name="rack_plate_floor" type="plane" size="0.8 0.8 0.05"
+          material="rack_plate_floor"/>
+
+    <body name="rack" pos="0 0 0.0475">
+      <geom name="rack_visual" type="mesh" mesh="rack_plate_mesh"
+            pos="0.000032100 0.000394750 -0.000947240"
+            material="rack_plate_rack" contype="0" conaffinity="0"/>
+      <geom name="rack_rib_0" type="box"
+            pos="-0.145007385 0 0" size="0.002592615 0.045100000 0.047600000"
+            rgba="0 0 0 0"/>
+      <geom name="rack_rib_1" type="box"
+            pos="-0.106943880 0 0" size="0.003286060 0.045100000 0.047600000"
+            rgba="0 0 0 0"/>
+      <geom name="rack_rib_2" type="box"
+            pos="-0.068195420 0 0" size="0.003458940 0.045100000 0.047600000"
+            rgba="0 0 0 0"/>
+      <geom name="rack_rib_3" type="box"
+            pos="-0.031663965 0 0" size="0.003363405 0.045100000 0.047600000"
+            rgba="0 0 0 0"/>
+      <geom name="rack_rib_4" type="box"
+            pos="0.002242640 0 0" size="0.002213390 0.045100000 0.047600000"
+            rgba="0 0 0 0"/>
+      <geom name="rack_rib_5" type="box"
+            pos="0.035542345 0 0" size="0.002652245 0.045100000 0.047600000"
+            rgba="0 0 0 0"/>
+      <geom name="rack_rib_6" type="box"
+            pos="0.072398735 0 0" size="0.002994795 0.045100000 0.047600000"
+            rgba="0 0 0 0"/>
+      <geom name="rack_rib_7" type="box"
+            pos="0.108120195 0 0" size="0.002461295 0.045100000 0.047600000"
+            rgba="0 0 0 0"/>
+      <geom name="rack_rib_8" type="box"
+            pos="0.144524425 0 0" size="0.003075575 0.045100000 0.047600000"
+            rgba="0 0 0 0"/>
+    </body>
+
+    <!-- Semantic target frame is at the centre of the first open slot.  The
+         pad remains below the plate's centre so the green marker is visible
+         without becoming a second collision obstacle. -->
+    <body name="rack_target" pos="-0.126322355 0 0.121165074">
+      <site name="rack_target_site" pos="0 0 0" size="0.006"
+            material="rack_plate_target"/>
+      <geom name="rack_target_pad" type="box" pos="0 0 -0.120665074"
+            size="0.015 0.020 0.0005" material="rack_plate_target"
+            contype="0" conaffinity="0"/>
+    </body>
+    <geom name="rack_plate_guard" type="box" pos="0 0 -0.026"
+          size="0.70 0.70 0.014" rgba="0 0 0 0"
+          contype="0" conaffinity="0"/>
+
+    <!-- A small geometric stand keeps the vertical plate upright before the
+         P7 approaches.  The base is the physical support.  The rear stop and
+         low side rails retain a clearance gap at the authored initial pose,
+         so they remain useful collision geometry without preloading the
+         plate.  The front guide is render-only because the transfer path
+         leaves the source stand toward +X. -->
+    <body name="plate_stand" pos="0 0 0">
+      <geom name="plate_stand_base" type="box" pos="-0.400 0 0.005"
+            size="0.080 0.160 0.005" material="rack_plate_stand"/>
+      <geom name="plate_stand_back" type="box" pos="-0.432 0 0.060"
+            size="0.006 0.020 0.050" material="rack_plate_stand"/>
+      <geom name="plate_stand_front" type="box" pos="-0.340 0 0.030"
+            size="0.006 0.120 0.030" material="rack_plate_stand"
+            contype="0" conaffinity="0"/>
+      <geom name="plate_stand_left_rail" type="box" pos="-0.400 -0.065 0.014"
+            size="0.040 0.001 0.014" material="rack_plate_stand"/>
+      <geom name="plate_stand_right_rail" type="box" pos="-0.400 0.065 0.014"
+            size="0.040 0.001 0.014" material="rack_plate_stand"/>
+    </body>
+
+    <body name="object" pos="-0.400 0 0.130165074">
+      <freejoint name="object_free"/>
+      <site name="object_site" size="0.006" rgba="1 0.75 0.2 1"/>
+      <geom name="object_visual" type="mesh" mesh="plate2_mesh"
+            pos="0.000636195 0.000103035 -0.000074340"
+            quat="0.707106781 0 0.707106781 0"
+            material="rack_plate_object" mass="0"
+            contype="0" conaffinity="0"/>
+      <geom name="object_collision" type="cylinder"
+            size="0.120165074 0.013110085"
+            quat="0.707106781 0 0.707106781 0"
+            mass="0.35" rgba="0 0 0 0"/>
+    </body>
+  </worldbody>
+</mujoco>
