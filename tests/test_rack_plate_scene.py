@@ -22,7 +22,7 @@ from auto_atom.scene_composition import (  # noqa: E402
 _ROOT = Path(__file__).resolve().parents[1]
 _SCENE = _ROOT / "assets/xmls/scenes/rack_plate/demo.xml"
 _RACK_MESH = _ROOT / "assets/meshes/rack_plate/rack-plate-0.obj"
-_PLATE_MESH = _ROOT / "assets/meshes/dishwasher_plate/plate2/plate2.obj"
+_PLATE_MESH = _ROOT / "assets/meshes/rack_plate/plate.obj"
 _ROBOT_XML = _ROOT / "assets/xmls/robots/xf9600_mocap.xml"
 
 
@@ -36,12 +36,12 @@ def _id(model: mujoco.MjModel, object_type: mujoco.mjtObj, name: str) -> int:
     return int(object_id)
 
 
-def test_migrated_mesh_payloads_are_exact_and_plate_is_shared() -> None:
+def test_migrated_mesh_payloads_are_exact_and_plate_is_rack_local() -> None:
     assert _sha256(_RACK_MESH) == (
-        "863892cdc8116e632d02b37860c354817aa59bb136d0dc81d2d991fe0ef0fda4"
+        "246f635a77aa42b724186150f736205a908c6fae85768cf06d5e91ccad4bf74d"
     )
     assert _sha256(_PLATE_MESH) == (
-        "960f4113d5a9e6b123b836026f04889c45e30429ae4dda6bfc564f68e5757f93"
+        "c55bb971d452b633f21f44fc32911e2cfe87c3d8a06cf4dc19e559a1164fc0d0"
     )
     assert _RACK_MESH.is_file()
     assert _PLATE_MESH.is_file()
@@ -61,8 +61,8 @@ def test_robotless_scene_loads_and_preserves_source_geometry_contract() -> None:
     assert root.find("asset/mesh[@name='rack_plate_mesh']").get("file") == (
         "rack_plate/rack-plate-0.obj"
     )
-    assert root.find("asset/mesh[@name='plate2_mesh']").get("file") == (
-        "dishwasher_plate/plate2/plate2.obj"
+    assert root.find("asset/mesh[@name='plate_mesh']").get("file") == (
+        "rack_plate/plate.obj"
     )
 
     rack = _id(model, mujoco.mjtObj.mjOBJ_BODY, "rack")
@@ -96,16 +96,20 @@ def test_robotless_scene_loads_and_preserves_source_geometry_contract() -> None:
         model.geom_size[stand_back], [0.006, 0.020, 0.050], atol=1.0e-6
     )
     np.testing.assert_allclose(
-        model.geom_pos[stand_left], [-0.400, -0.065, 0.014], atol=1.0e-6
+        model.geom_pos[stand_left], [-0.400, -0.065, 0.0465], atol=1.0e-6
     )
     np.testing.assert_allclose(
-        model.geom_pos[stand_right], [-0.400, 0.065, 0.014], atol=1.0e-6
+        model.geom_pos[stand_right], [-0.400, 0.065, 0.0465], atol=1.0e-6
     )
     np.testing.assert_allclose(
         model.geom_size[stand_left], [0.040, 0.001, 0.014], atol=1.0e-6
     )
     np.testing.assert_array_equal(model.geom_contype[stand_front], 0)
     np.testing.assert_array_equal(model.geom_conaffinity[stand_front], 0)
+    target_body = _id(model, mujoco.mjtObj.mjOBJ_BODY, "rack_target")
+    np.testing.assert_allclose(
+        model.body_pos[target_body], [-0.126322355, 0.0, 0.088], atol=1.0e-6
+    )
     freejoint = _id(model, mujoco.mjtObj.mjOBJ_JOINT, "object_free")
     address = int(model.jnt_qposadr[freejoint])
     np.testing.assert_allclose(

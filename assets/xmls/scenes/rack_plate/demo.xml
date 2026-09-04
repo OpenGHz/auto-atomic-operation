@@ -10,7 +10,7 @@
 
   <asset>
     <mesh name="rack_plate_mesh" file="rack_plate/rack-plate-0.obj"/>
-    <mesh name="plate2_mesh" file="dishwasher_plate/plate2/plate2.obj"/>
+    <mesh name="plate_mesh" file="rack_plate/plate.obj"/>
     <material name="rack_plate_floor" rgba="0.22 0.24 0.28 1"/>
     <material name="rack_plate_rack" rgba="0.34 0.34 0.38 1"/>
     <material name="rack_plate_target" rgba="0.15 0.75 0.25 1"/>
@@ -69,10 +69,10 @@
     <!-- Semantic target frame is at the centre of the first open slot.  The
          pad remains below the plate's centre so the green marker is visible
          without becoming a second collision obstacle. -->
-    <body name="rack_target" pos="-0.126322355 0 0.121165074">
+    <body name="rack_target" pos="-0.126322355 0 0.088000000">
       <site name="rack_target_site" pos="0 0 0" size="0.006"
             material="rack_plate_target"/>
-      <geom name="rack_target_pad" type="box" pos="0 0 -0.120665074"
+      <geom name="rack_target_pad" type="box" pos="0 0 -0.087500000"
             size="0.015 0.020 0.0005" material="rack_plate_target"
             contype="0" conaffinity="0"/>
     </body>
@@ -81,35 +81,36 @@
           contype="0" conaffinity="0"/>
 
     <!-- A small geometric stand keeps the vertical plate upright before the
-         P7 approaches.  The base is the physical support.  The rear stop and
-         low side rails retain a clearance gap at the authored initial pose,
-         so they remain useful collision geometry without preloading the
-         plate.  The front guide is render-only because the transfer path
-         leaves the source stand toward +X. -->
+         P7 approaches.  The raised base and low side rails support the smaller
+         plate at its authored initial pose.  The rear stop and front guide are
+         render-only so the finger sweep and +X transfer path remain clear. -->
     <body name="plate_stand" pos="0 0 0">
-      <geom name="plate_stand_base" type="box" pos="-0.400 0 0.005"
+      <geom name="plate_stand_base" type="box" pos="-0.400 0 0.0375"
             size="0.080 0.160 0.005" material="rack_plate_stand"/>
       <geom name="plate_stand_back" type="box" pos="-0.432 0 0.060"
-            size="0.006 0.020 0.050" material="rack_plate_stand"/>
+            size="0.006 0.020 0.050" material="rack_plate_stand"
+            contype="0" conaffinity="0"/>
       <geom name="plate_stand_front" type="box" pos="-0.340 0 0.030"
             size="0.006 0.120 0.030" material="rack_plate_stand"
             contype="0" conaffinity="0"/>
-      <geom name="plate_stand_left_rail" type="box" pos="-0.400 -0.065 0.014"
+      <geom name="plate_stand_left_rail" type="box" pos="-0.400 -0.065 0.0465"
             size="0.040 0.001 0.014" material="rack_plate_stand"/>
-      <geom name="plate_stand_right_rail" type="box" pos="-0.400 0.065 0.014"
+      <geom name="plate_stand_right_rail" type="box" pos="-0.400 0.065 0.0465"
             size="0.040 0.001 0.014" material="rack_plate_stand"/>
     </body>
 
+    <!-- The smaller 175 mm plate rests on the stand with its collision
+         cylinder bottom at the 10 mm-high support base. -->
     <body name="object" pos="-0.400 0 0.130165074">
       <freejoint name="object_free"/>
       <site name="object_site" size="0.006" rgba="1 0.75 0.2 1"/>
-      <geom name="object_visual" type="mesh" mesh="plate2_mesh"
-            pos="0.000636195 0.000103035 -0.000074340"
+      <geom name="object_visual" type="mesh" mesh="plate_mesh"
+            pos="-0.00245486 -0.00016954 -0.00011210"
             quat="0.707106781 0 0.707106781 0"
             material="rack_plate_object" mass="0"
             contype="0" conaffinity="0"/>
       <geom name="object_collision" type="cylinder"
-            size="0.120165074 0.013110085"
+            size="0.088000000 0.010500000"
             quat="0.707106781 0 0.707106781 0"
             mass="0.35" rgba="0 0 0 0"/>
     </body>

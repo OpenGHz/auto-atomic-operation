@@ -141,14 +141,16 @@ task:
             tolerance:
               position: 0.012
               orientation: 0.10
-          # The target frame is the centre of the first rack slot.  The
-          # migrated plate's local +X is its physical normal after the
+          # The target frame is the settled centre of the first rack slot.  The
+          # smaller plate is released 17 mm above that centre so it can fall
+          # onto the rack floor without driving the gripper into the ribs.
+          # The migrated plate's local +X is its physical normal after the
           # authored mesh rotation, so constrain that axis to the slot normal
           # while leaving the in-plane twist unconstrained.
           - controlled_frame:
               kind: held_object
               frame: object_site
-            position: [0.0, 0.0, 0.0]
+            position: [0.0, 0.0, 0.017]
             reference: object
             static: true
             orientation_goal:
@@ -165,7 +167,7 @@ task:
           close: false
         placed_reference: pre_move
         placed_tolerance:
-          position: 0.02
+          position: 0.025
           orientation: 0.10
 
 task_operators:

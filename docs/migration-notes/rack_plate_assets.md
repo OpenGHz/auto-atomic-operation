@@ -5,14 +5,14 @@ supplements the [XML / Mesh / GS migration rules](xml_mesh_gs_migration_notes.md
 
 ## Outcome
 
-The migrated host scene is robot-less and self-contained apart from the already
-canonical `plate2` mesh shared with the dishwasher task:
+The migrated host scene is robot-less and self-contained with the rack-local
+`plate.obj` payload:
 
 ```text
 assets/
 ├── meshes/
 │   ├── rack_plate/rack-plate-0.obj
-│   └── dishwasher_plate/plate2/plate2.obj  # shared canonical object mesh
+│   └── rack_plate/plate.obj                 # rack-plate object mesh
 └── xmls/scenes/rack_plate/
     └── demo.xml
 ```
@@ -41,20 +41,21 @@ aao-demo --config-name rack_plate_p7_v4_umi_v3
 ```
 
 The scene places the draining rack on the table plane and keeps the plate upright
-in a small geometric stand outside the rack. The stand's base, rear stop, and two
-low side rails are physical support geometry; its low front guide is visual-only so
-the gripper can leave the stand toward the rack. The source stand is deliberately
-separated from the first rack rib, preventing the free plate from rolling into the
-rack before the pick stage starts.
+in a small geometric stand outside the rack. The stand's base and two low side
+rails are physical support geometry. The rear stop and low front guide are
+visual-only: the rear stop would block the wider P7 finger sweep for this thinner
+plate, while the front guide must leave the transfer path open. The base and
+rails are raised to the smaller plate's 175 mm diameter. The source stand is
+deliberately separated from the first rack rib, preventing the free plate from
+rolling into the rack before the pick stage starts.
 
 The task's pick stage raises the open gripper above the plate, translates to the
 plate centre, and then descends between its faces. After a verified two-sided grasp,
-the place stage first moves the held-object frame above the selected slot and then
-lowers it into `rack_target_site`. Its `axis_alignment` goal constrains the plate's
-physical normal while leaving its in-plane twist free. The final opening lets the
-plate settle on the rack floor; the regression checks that no plate--rib or
-robot--stand contact occurs while allowing the intentional base/floor support
-contacts.
+the place stage moves the held-object frame above the selected slot and releases
+17 mm above the settled centre. Its `axis_alignment` goal constrains the plate's
+physical normal while leaving its in-plane twist free. The smaller plate then
+settles on the rack floor; the regression checks that no plate--rib or robot--stand
+contact occurs while allowing the intentional base/floor support contacts.
 
 The focused end-to-end check is:
 
@@ -88,11 +89,11 @@ not robot assets. The canonical AAO files have these SHA-256 digests:
 
 | Canonical file | SHA-256 |
 |---|---|
-| `assets/meshes/rack_plate/rack-plate-0.obj` | `863892cdc8116e632d02b37860c354817aa59bb136d0dc81d2d991fe0ef0fda4` |
-| `assets/meshes/dishwasher_plate/plate2/plate2.obj` | `960f4113d5a9e6b123b836026f04889c45e30429ae4dda6bfc564f68e5757f93` |
+| `assets/meshes/rack_plate/rack-plate-0.obj` | `246f635a77aa42b724186150f736205a908c6fae85768cf06d5e91ccad4bf74d` |
+| `assets/meshes/rack_plate/plate.obj` | `c55bb971d452b633f21f44fc32911e2cfe87c3d8a06cf4dc19e559a1164fc0d0` |
 
-`plate2.obj` is not duplicated: it is the existing canonical AAO payload from the
-Dishwasher031 migration and is referenced by the new host scene. The source asset
+`plate.obj` is kept alongside the rack mesh because this task uses a smaller
+175 mm diameter plate than the Dishwasher031 `plate2` asset. The source asset
 bundle did not include redistribution terms; verify upstream terms before publishing
 a release containing these third-party mesh bytes.
 
