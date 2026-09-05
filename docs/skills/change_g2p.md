@@ -1,1 +1,0 @@
-参考assets/xmls/robots/xf9600_gripper.xml给g2p加上相机和tactile sensor
