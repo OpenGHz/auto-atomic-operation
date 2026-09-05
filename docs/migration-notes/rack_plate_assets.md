@@ -41,13 +41,12 @@ aao-demo --config-name rack_plate_p7_v4_umi_v3
 ```
 
 The scene places the draining rack on the table plane and keeps the plate upright
-in a small geometric stand outside the rack. The stand's base and two low side
-rails are physical support geometry. The rear stop and low front guide are
-visual-only: the rear stop would block the wider P7 finger sweep for this thinner
-plate, while the front guide must leave the transfer path open. The base and
-rails are raised to the smaller plate's 175 mm diameter. The source stand is
-deliberately separated from the first rack rib, preventing the free plate from
-rolling into the rack before the pick stage starts.
+in a small geometric stand outside the rack. The stand is intentionally minimal:
+one compact raised base (about 60 × 210 mm) and four vertical box posts around
+the plate rim. The posts leave the centre and transfer direction open, while the
+base supports the smaller 175 mm plate at its authored initial pose. The source stand is deliberately
+separated from the first rack rib, preventing the free plate from rolling into
+the rack before the pick stage starts.
 
 The task's pick stage raises the open gripper above the plate, translates to the
 plate centre, and then descends between its faces. After a verified two-sided grasp,
@@ -83,14 +82,15 @@ The rack mesh was copied byte-for-byte from
 The source path was last changed in PlaceGen commit
 `93ed05dc04e8632939ca0b7123846f4b22dc0a18` (the later collision-proxy scene change
 is tracked separately in commit `6711c836ab5dbd21b9d2a647d3b4739d10c812ef`). The
-five-camera layout follows the fixed RGB-D variant
-`gantry_rack_plate_rgbd_esdf.xml`; those cameras are scene observation metadata,
-not robot assets. The canonical AAO files have these SHA-256 digests:
+The single static front camera follows the fixed RGB-D variant
+`gantry_rack_plate_rgbd_esdf.xml`; it is scene observation metadata, not a robot
+asset. The robot-mounted wrist camera remains supplied by the P7 layer. The
+canonical AAO files have these SHA-256 digests:
 
 | Canonical file | SHA-256 |
 |---|---|
 | `assets/meshes/rack_plate/rack-plate-0.obj` | `246f635a77aa42b724186150f736205a908c6fae85768cf06d5e91ccad4bf74d` |
-| `assets/meshes/rack_plate/plate.obj` | `c55bb971d452b633f21f44fc32911e2cfe87c3d8a06cf4dc19e559a1164fc0d0` |
+| `assets/meshes/rack_plate/plate.obj` | `1152b76cfc6d3dd8b876b05dd77e6ee9c98dff1dad77f9b08b850534062a1a4f` |
 
 `plate.obj` is kept alongside the rack mesh because this task uses a smaller
 175 mm diameter plate than the Dishwasher031 `plate2` asset. The source asset

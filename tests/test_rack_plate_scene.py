@@ -41,7 +41,7 @@ def test_migrated_mesh_payloads_are_exact_and_plate_is_rack_local() -> None:
         "246f635a77aa42b724186150f736205a908c6fae85768cf06d5e91ccad4bf74d"
     )
     assert _sha256(_PLATE_MESH) == (
-        "c55bb971d452b633f21f44fc32911e2cfe87c3d8a06cf4dc19e559a1164fc0d0"
+        "1152b76cfc6d3dd8b876b05dd77e6ee9c98dff1dad77f9b08b850534062a1a4f"
     )
     assert _RACK_MESH.is_file()
     assert _PLATE_MESH.is_file()
@@ -52,7 +52,7 @@ def test_robotless_scene_loads_and_preserves_source_geometry_contract() -> None:
     assert model.nu == 0
     assert model.nq == 7
     assert model.nmesh == 2
-    assert model.ncam == 5
+    assert model.ncam == 1
 
     root = ET.parse(_SCENE).getroot()
     compiler = root.find("compiler")
@@ -64,6 +64,7 @@ def test_robotless_scene_loads_and_preserves_source_geometry_contract() -> None:
     assert root.find("asset/mesh[@name='plate_mesh']").get("file") == (
         "rack_plate/plate.obj"
     )
+    assert len(root.findall("worldbody/camera")) == 1
 
     rack = _id(model, mujoco.mjtObj.mjOBJ_BODY, "rack")
     visual = _id(model, mujoco.mjtObj.mjOBJ_GEOM, "rack_visual")
@@ -85,27 +86,34 @@ def test_robotless_scene_loads_and_preserves_source_geometry_contract() -> None:
     assert model.geom_contype[object_visual] == 0
     assert model.geom_conaffinity[object_visual] == 0
     assert model.geom_contype[object_collision] != 0
-    stand_back = _id(model, mujoco.mjtObj.mjOBJ_GEOM, "plate_stand_back")
-    stand_front = _id(model, mujoco.mjtObj.mjOBJ_GEOM, "plate_stand_front")
-    stand_left = _id(model, mujoco.mjtObj.mjOBJ_GEOM, "plate_stand_left_rail")
-    stand_right = _id(model, mujoco.mjtObj.mjOBJ_GEOM, "plate_stand_right_rail")
+    stand_base = _id(model, mujoco.mjtObj.mjOBJ_GEOM, "plate_stand_base")
     np.testing.assert_allclose(
-        model.geom_pos[stand_back], [-0.432, 0.0, 0.060], atol=1.0e-6
+        model.geom_size[stand_base], [0.030, 0.105, 0.005], atol=1.0e-6
     )
-    np.testing.assert_allclose(
-        model.geom_size[stand_back], [0.006, 0.020, 0.050], atol=1.0e-6
+    stand_posts = [
+        _id(model, mujoco.mjtObj.mjOBJ_GEOM, name)
+        for name in (
+            "plate_stand_post_front_left",
+            "plate_stand_post_front_right",
+            "plate_stand_post_back_left",
+            "plate_stand_post_back_right",
+        )
+    ]
+    for post in stand_posts:
+        np.testing.assert_allclose(
+            model.geom_size[post], [0.004, 0.004, 0.045], atol=1.0e-6
+        )
+        assert model.geom_contype[post] != 0
+        assert model.geom_conaffinity[post] != 0
+    post_positions = sorted(
+        tuple(np.round(model.geom_pos[post], 6)) for post in stand_posts
     )
-    np.testing.assert_allclose(
-        model.geom_pos[stand_left], [-0.400, -0.065, 0.0465], atol=1.0e-6
-    )
-    np.testing.assert_allclose(
-        model.geom_pos[stand_right], [-0.400, 0.065, 0.0465], atol=1.0e-6
-    )
-    np.testing.assert_allclose(
-        model.geom_size[stand_left], [0.040, 0.001, 0.014], atol=1.0e-6
-    )
-    np.testing.assert_array_equal(model.geom_contype[stand_front], 0)
-    np.testing.assert_array_equal(model.geom_conaffinity[stand_front], 0)
+    assert post_positions == [
+        (-0.42, -0.095, 0.0875),
+        (-0.42, 0.095, 0.0875),
+        (-0.38, -0.095, 0.0875),
+        (-0.38, 0.095, 0.0875),
+    ]
     target_body = _id(model, mujoco.mjtObj.mjOBJ_BODY, "rack_target")
     np.testing.assert_allclose(
         model.body_pos[target_body], [-0.126322355, 0.0, 0.088], atol=1.0e-6
@@ -119,20 +127,13 @@ def test_robotless_scene_loads_and_preserves_source_geometry_contract() -> None:
     )
     data = mujoco.MjData(model)
     mujoco.mj_forward(model, data)
-    for guide in (stand_back, stand_left, stand_right):
+    for guide in stand_posts:
         assert (
             mujoco.mj_geomDistance(model, data, object_collision, guide, 10.0, None)
             > 1.0e-4
         )
 
-    for camera_name in (
-        "rack_camera_front",
-        "rack_camera_back",
-        "rack_camera_left",
-        "rack_camera_right",
-        "rack_camera_top",
-    ):
-        _id(model, mujoco.mjtObj.mjOBJ_CAMERA, camera_name)
+    _id(model, mujoco.mjtObj.mjOBJ_CAMERA, "rack_camera_front")
 
 
 def test_host_can_be_compiled_with_an_ordered_robot_layer() -> None:

@@ -18,10 +18,10 @@ _MAX_UPDATES = 600
 _SETTLE_SECONDS = 0.5
 _RACK_RIB_PREFIX = "rack_rib_"
 _STAND_GUIDES = {
-    "plate_stand_back",
-    "plate_stand_front",
-    "plate_stand_left_rail",
-    "plate_stand_right_rail",
+    "plate_stand_post_front_left",
+    "plate_stand_post_front_right",
+    "plate_stand_post_back_left",
+    "plate_stand_post_back_right",
 }
 
 

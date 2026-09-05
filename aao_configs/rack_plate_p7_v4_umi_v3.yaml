@@ -22,6 +22,7 @@ env:
         path: ${operator_robot_xml}
         role: operator
   cameras:
+    # One static environment camera; the wrist camera remains robot-mounted.
     - name: eef_wrist_cam
       role: operator
       width: ${cam_width}
@@ -173,15 +174,19 @@ task:
 task_operators:
   arm:
     initial_state:
-      # Mount the V4 arm beside the source stand.  The home TCP is the first
-      # approach point; the stage then advances to the measured grasp pose.
+      # Mount the V4 arm midway between the source stand (x=-0.4) and rack
+      # (x≈0), with its +X axis pointing from the front of the table toward the
+      # work area.  The EEF home below is expressed in this rotated base frame.
       base_pose:
-        position: [-0.4, -0.5, 0.075]
-        orientation: [0.0, 0.0, 1.0, 0.0]
-      eef_pose:
-        position: [-0.080, 0.105, 0.130165074]
+        position: [-0.20, -0.5, 0.075]
+        # XYZW quaternion: +90° about world Z, so base +X points toward +Y.
         orientation: [0.0, 0.0, 0.70710678, 0.70710678]
-        reference: world
+      eef_pose:
+        # Same world pose as before, represented relative to the rotated base:
+        # R_base^T * (p_world - p_base) = [0.605, 0, 0.055165074].
+        position: [0.605, 0.0, 0.055165074]
+        orientation: [0.0, 0.0, 0.0, 1.0]
+        reference: base
       eef: 0.0
     control:
       timeout_steps: 900

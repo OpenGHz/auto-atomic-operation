@@ -22,14 +22,6 @@
     <light name="rack_plate_light" pos="0 -0.2 1.5" dir="0 0 -1" diffuse="0.9 0.9 0.9"/>
     <camera name="rack_camera_front" pos="0 -0.85 0.52"
             xyaxes="1 0 0 0 0.459707 0.888071" fovy="52"/>
-    <camera name="rack_camera_back" pos="0 0.85 0.52"
-            xyaxes="-1 0 0 0 -0.459707 0.888071" fovy="52"/>
-    <camera name="rack_camera_left" pos="-0.75 -0.35 0.45"
-            xyaxes="0.422885 -0.906183 0 0.369835 0.172590 0.912926" fovy="52"/>
-    <camera name="rack_camera_right" pos="0.75 0.35 0.45"
-            xyaxes="-0.422885 0.906183 0 -0.369835 -0.172590 0.912926" fovy="52"/>
-    <camera name="rack_camera_top" pos="0 0 1.20"
-            xyaxes="1 0 0 0 1 0" fovy="42"/>
     <geom name="rack_plate_floor" type="plane" size="0.8 0.8 0.05"
           material="rack_plate_floor"/>
 
@@ -80,23 +72,23 @@
           size="0.70 0.70 0.014" rgba="0 0 0 0"
           contype="0" conaffinity="0"/>
 
-    <!-- A small geometric stand keeps the vertical plate upright before the
-         P7 approaches.  The raised base and low side rails support the smaller
-         plate at its authored initial pose.  The rear stop and front guide are
-         render-only so the finger sweep and +X transfer path remain clear. -->
+    <!-- A minimal stand keeps the vertical plate upright before the P7
+         approaches: one base and four vertical posts around the plate rim. -->
     <body name="plate_stand" pos="0 0 0">
       <geom name="plate_stand_base" type="box" pos="-0.400 0 0.0375"
-            size="0.080 0.160 0.005" material="rack_plate_stand"/>
-      <geom name="plate_stand_back" type="box" pos="-0.432 0 0.060"
-            size="0.006 0.020 0.050" material="rack_plate_stand"
-            contype="0" conaffinity="0"/>
-      <geom name="plate_stand_front" type="box" pos="-0.340 0 0.030"
-            size="0.006 0.120 0.030" material="rack_plate_stand"
-            contype="0" conaffinity="0"/>
-      <geom name="plate_stand_left_rail" type="box" pos="-0.400 -0.065 0.0465"
-            size="0.040 0.001 0.014" material="rack_plate_stand"/>
-      <geom name="plate_stand_right_rail" type="box" pos="-0.400 0.065 0.0465"
-            size="0.040 0.001 0.014" material="rack_plate_stand"/>
+            size="0.030 0.105 0.005" material="rack_plate_stand"/>
+      <geom name="plate_stand_post_front_left" type="box"
+            pos="-0.420 -0.095 0.0875" size="0.004 0.004 0.045"
+            material="rack_plate_stand"/>
+      <geom name="plate_stand_post_front_right" type="box"
+            pos="-0.380 -0.095 0.0875" size="0.004 0.004 0.045"
+            material="rack_plate_stand"/>
+      <geom name="plate_stand_post_back_left" type="box"
+            pos="-0.420 0.095 0.0875" size="0.004 0.004 0.045"
+            material="rack_plate_stand"/>
+      <geom name="plate_stand_post_back_right" type="box"
+            pos="-0.380 0.095 0.0875" size="0.004 0.004 0.045"
+            material="rack_plate_stand"/>
     </body>
 
     <!-- The smaller 175 mm plate rests on the stand with its collision
