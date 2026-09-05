@@ -46,6 +46,7 @@ env:
     elevation: -28
     step_delay: 0.03
     hold_seconds: 1.0
+    # disable: false
   gaussian_render:
     body_gaussians:
       vase_gs: ${gs_dir}/vase.ply
