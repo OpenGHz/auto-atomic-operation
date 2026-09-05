@@ -17,12 +17,14 @@ assets/
     └── demo.xml
 ```
 
-`demo.xml` keeps the PlaceGen rack geometry, target support, plate pose, and five
-fixed observation cameras. It uses relative `meshdir="../../../meshes"` paths so
+`demo.xml` keeps the PlaceGen rack geometry, target support, and one fixed
+observation camera. It uses relative `meshdir="../../../meshes"` paths so
 the final scene can be loaded from any AAO checkout. The rack visual mesh is
 render-only; nine invisible box ribs preserve the source collision representation
 without turning the non-convex wire mesh into a solid collision hull. The plate
-uses its source visual transform and a finite cylinder collision proxy.
+uses its source visual transform and the same `plate.obj` mesh for physical
+collision, so the rim and thickness seen by the simulator match the rendered
+object.
 
 The host contains no robot include, actuator, keyframe, or Gaussian asset. A robot
 can be injected later as an ordered `SceneConfig` MJCF layer, for example with
@@ -40,23 +42,28 @@ aao-info rack_plate_p7_v4_umi_v3
 aao-demo --config-name rack_plate_p7_v4_umi_v3
 ```
 
-The scene places the draining rack on the table plane and keeps the plate upright
-in a small geometric stand outside the rack. The stand is intentionally minimal:
-one compact raised base (about 70 × 224 mm) and four vertical box posts around
-the plate rim. The posts leave the centre and transfer direction open, while the
-base supports the smaller 175 mm plate at its authored initial pose. The source stand is deliberately
-separated from the first rack rib, preventing the free plate from rolling into
-the rack before the pick stage starts.
+The scene places the draining rack on the table plane and starts the smaller
+175 mm plate with a 15 degree lean in a small geometric stand outside the rack.
+The stand is intentionally minimal: one compact raised base (about 70 × 224 mm)
+and four vertical box posts. The post centres are 28 mm apart across the plate
+thickness and 180 mm apart along its diameter, leaving a narrow gap that catches
+the real 20 mm-thick mesh instead of forcing it into an upright cylinder proxy.
+The source stand is separated from the first rack rib, preventing the free plate
+from rolling into the rack before the pick stage starts.
 
-The task's pick stage uses two waypoints: it first moves above the plate front,
-then extends along the same shallow front offset for the two-sided grasp. This
-keeps the gripper base behind the plate while preserving a direct approach.
+The task's pick stage uses two waypoints expressed in the plate's `object`
+reference frame: it first moves above the plate front, then extends along the
+same 25 mm shallow front offset for the two-sided grasp. The gripper orientation
+uses an `axis_alignment` goal against the plate's object-local +X normal, so the
+plate's lean is followed while its symmetric in-plane twist remains unconstrained.
+This keeps the gripper base behind the plate while preserving a direct approach.
 After a verified grasp,
 the place stage moves the held-object frame above the selected slot and releases
 17 mm above the settled centre. Its `axis_alignment` goal constrains the plate's
 physical normal while leaving its in-plane twist free. The smaller plate then
-settles on the rack floor; the regression checks that no plate--rib or robot--stand
-contact occurs while allowing the intentional base/floor support contacts.
+settles on the rack floor; the regression forbids rack-rib contact during the
+carried transfer and allows the intentional support contact that can occur after
+release while the plate seats in the slot.
 
 The focused end-to-end check is:
 

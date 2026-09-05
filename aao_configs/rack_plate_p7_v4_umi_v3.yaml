@@ -76,21 +76,33 @@ task:
       operator: arm
       param:
         pre_move:
-          # Two motions are sufficient: move to the plate front while staying
-          # above its centre, then extend along the same front offset for the
-          # two-sided grasp.  Keeping the whole approach at y=-0.05 leaves the
-          # gripper base behind the plate instead of driving it through the
-          # plate body.
-          - position: [0.0, -0.05, 0.17]
-            orientation: [0.0, 0.0, 0.70710678, 0.70710678]
-            reference: object_world
+          # The plate starts leaned in the four-post stand.  Both approach
+          # poses use the plate frame, so the translation follows the actual
+          # object pose instead of assuming a world-aligned disk.
+          - position: [0.0, -0.025, 0.17]
+            reference: object
             static: true
+            orientation_goal:
+              kind: axis_alignment
+              # The UMI jaws close along EEF +Y.  The plate mesh normal is
+              # object +X; the jaws therefore face it in the opposite sense.
+              controlled_axis: [0.0, 1.0, 0.0]
+              target_axis:
+                vector: [1.0, 0.0, 0.0]
+                reference: object
+              direction: opposite
             max_linear_step: 0.02
             max_angular_step: 0.20
-          - position: [0.0, -0.05, 0.0]
-            orientation: [0.0, 0.0, 0.70710678, 0.70710678]
-            reference: object_world
+          - position: [0.0, -0.025, 0.0]
+            reference: object
             static: true
+            orientation_goal:
+              kind: axis_alignment
+              controlled_axis: [0.0, 1.0, 0.0]
+              target_axis:
+                vector: [1.0, 0.0, 0.0]
+                reference: object
+              direction: opposite
             max_linear_step: 0.01
             max_angular_step: 0.10
         eef:

@@ -86,6 +86,8 @@ def test_robotless_scene_loads_and_preserves_source_geometry_contract() -> None:
     assert model.geom_contype[object_visual] == 0
     assert model.geom_conaffinity[object_visual] == 0
     assert model.geom_contype[object_collision] != 0
+    assert model.geom_type[object_collision] == mujoco.mjtGeom.mjGEOM_MESH
+    assert model.geom_dataid[object_collision] == model.geom_dataid[object_visual]
     stand_base = _id(model, mujoco.mjtObj.mjOBJ_GEOM, "plate_stand_base")
     np.testing.assert_allclose(
         model.geom_size[stand_base], [0.035, 0.112, 0.005], atol=1.0e-6
@@ -109,10 +111,10 @@ def test_robotless_scene_loads_and_preserves_source_geometry_contract() -> None:
         tuple(np.round(model.geom_pos[post], 6)) for post in stand_posts
     )
     assert post_positions == [
-        (-0.428, -0.102, 0.0875),
-        (-0.428, 0.102, 0.0875),
-        (-0.372, -0.102, 0.0875),
-        (-0.372, 0.102, 0.0875),
+        (-0.414, -0.09, 0.0875),
+        (-0.414, 0.09, 0.0875),
+        (-0.386, -0.09, 0.0875),
+        (-0.386, 0.09, 0.0875),
     ]
     target_body = _id(model, mujoco.mjtObj.mjOBJ_BODY, "rack_target")
     np.testing.assert_allclose(
@@ -122,16 +124,35 @@ def test_robotless_scene_loads_and_preserves_source_geometry_contract() -> None:
     address = int(model.jnt_qposadr[freejoint])
     np.testing.assert_allclose(
         model.qpos0[address : address + 7],
-        [-0.4, 0.0, 0.130165074, 1.0, 0.0, 0.0, 0.0],
+        [
+            -0.4,
+            0.0,
+            0.130165074,
+            0.991444861,
+            0.0,
+            0.130526192,
+            0.0,
+        ],
         atol=1.0e-12,
     )
     data = mujoco.MjData(model)
     mujoco.mj_forward(model, data)
     for guide in stand_posts:
-        assert (
+        assert np.isfinite(
             mujoco.mj_geomDistance(model, data, object_collision, guide, 10.0, None)
-            > 1.0e-4
         )
+    support_distances = [
+        mujoco.mj_geomDistance(model, data, object_collision, guide, 10.0, None)
+        for guide in stand_posts
+    ]
+    assert min(support_distances) <= 1.0e-6
+
+    # The free joint is authored with a 15 degree lean around world Y.  Check
+    # the initial body quaternion directly; the mesh's local axes are not a
+    # reliable proxy for the world-facing plate normal.
+    np.testing.assert_allclose(
+        model.qpos0[address + 5], np.sin(np.deg2rad(7.5)), atol=1.0e-6
+    )
 
     _id(model, mujoco.mjtObj.mjOBJ_CAMERA, "rack_camera_front")
 

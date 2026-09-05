@@ -3,6 +3,7 @@
   <option timestep="0.002" gravity="0 0 -9.81" integrator="implicitfast"/>
   <visual>
     <global azimuth="135" elevation="-22"/>
+    <map znear="0.001"/>
   </visual>
   <default>
     <geom friction="1.0 0.02 0.002" solref="0.01 1"/>
@@ -72,28 +73,31 @@
           size="0.70 0.70 0.014" rgba="0 0 0 0"
           contype="0" conaffinity="0"/>
 
-    <!-- A minimal stand keeps the vertical plate upright before the P7
-         approaches: one base and four vertical posts around the plate rim. -->
+    <!-- A compact four-post stand keeps the plate leaned in place before the
+         P7 approaches.  The posts sit just inside the plate diameter and the
+         narrow front/back gap lets the real plate mesh settle against them. -->
     <body name="plate_stand" pos="0 0 0">
       <geom name="plate_stand_base" type="box" pos="-0.400 0 0.0375"
             size="0.035 0.112 0.005" material="rack_plate_stand"/>
       <geom name="plate_stand_post_front_left" type="box"
-            pos="-0.428 -0.102 0.0875" size="0.004 0.004 0.045"
+            pos="-0.414 -0.090 0.0875" size="0.004 0.004 0.045"
             material="rack_plate_stand"/>
       <geom name="plate_stand_post_front_right" type="box"
-            pos="-0.372 -0.102 0.0875" size="0.004 0.004 0.045"
+            pos="-0.386 -0.090 0.0875" size="0.004 0.004 0.045"
             material="rack_plate_stand"/>
       <geom name="plate_stand_post_back_left" type="box"
-            pos="-0.428 0.102 0.0875" size="0.004 0.004 0.045"
+            pos="-0.414 0.090 0.0875" size="0.004 0.004 0.045"
             material="rack_plate_stand"/>
       <geom name="plate_stand_post_back_right" type="box"
-            pos="-0.372 0.102 0.0875" size="0.004 0.004 0.045"
+            pos="-0.386 0.090 0.0875" size="0.004 0.004 0.045"
             material="rack_plate_stand"/>
     </body>
 
-    <!-- The smaller 175 mm plate rests on the stand with its collision
-         cylinder bottom at the 10 mm-high support base. -->
-    <body name="object" pos="-0.400 0 0.130165074">
+    <!-- The smaller 175 mm plate starts with a 15 degree lean.  Its authored
+         mesh is used for both visual and physical shape so the initial
+         support contacts and the later grasp see the same rim and thickness. -->
+    <body name="object" pos="-0.400 0 0.130165074"
+          quat="0.991444861 0 0.130526192 0">
       <freejoint name="object_free"/>
       <site name="object_site" size="0.006" rgba="1 0.75 0.2 1"/>
       <geom name="object_visual" type="mesh" mesh="plate_mesh"
@@ -101,8 +105,8 @@
             quat="0.707106781 0 0.707106781 0"
             material="rack_plate_object" mass="0"
             contype="0" conaffinity="0"/>
-      <geom name="object_collision" type="cylinder"
-            size="0.088000000 0.010500000"
+      <geom name="object_collision" type="mesh" mesh="plate_mesh"
+            pos="-0.00245486 -0.00016954 -0.00011210"
             quat="0.707106781 0 0.707106781 0"
             mass="0.35" rgba="0 0 0 0"/>
     </body>
