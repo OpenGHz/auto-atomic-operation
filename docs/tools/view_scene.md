@@ -35,10 +35,16 @@ python examples/view_scene.py --config-name pick_and_place
 python examples/view_scene.py --config-name open_door_airbot_play_back_gs
 python examples/view_scene.py --config-name open_door_p7_ik
 python examples/view_scene.py --debug --config-name open_door_p7_ik
+python examples/view_scene.py --show-object-frames --config-name open_door_p7_ik
 ```
 
 Press `Ctrl+C` in the terminal to close the viewer and tear down the backend;
 no GUI click is required.
+
+Pass `--show-object-frames` to start the MuJoCo window with **Frame → Body**
+already enabled. MuJoCo displays axes for all model bodies, including task
+objects and robot links. In GS mode this affects the synchronized MuJoCo window;
+the Gaussian raster window itself does not render MuJoCo debug overlays.
 
 The default config is `pick_and_place`. Any Hydra override can be appended after `--`:
 

@@ -91,12 +91,37 @@ def test_without_embedded_viewer_does_not_mutate_hydra_config() -> None:
     assert isolated.env.viewer is None
 
 
+def test_script_cli_config_enables_object_frames_without_consuming_hydra_args() -> None:
+    argv = [
+        "view_scene.py",
+        "--debug",
+        "--show-object-frames",
+        "--config-name",
+        "pick_and_place",
+        "--",
+        "--show-object-frames",
+    ]
+
+    config = view_scene._parse_script_cli_config(argv)
+
+    assert config.debug
+    assert config.show_object_frames
+    assert argv == [
+        "view_scene.py",
+        "--config-name",
+        "pick_and_place",
+        "--",
+        "--show-object-frames",
+    ]
+
+
 def test_native_viewer_reload_replaces_and_tears_down_backend(monkeypatch) -> None:
     current, current_env = _backend()
     replacement, replacement_env = _backend()
     loaded = {}
 
-    def launch_interruptibly(loader):
+    def launch_interruptibly(loader, *, show_object_frames=False):
+        loaded["show_object_frames"] = show_object_frames
         model, data = loader()
         loaded["initial_model"] = model
         loaded["initial_data"] = data
@@ -110,9 +135,14 @@ def test_native_viewer_reload_replaces_and_tears_down_backend(monkeypatch) -> No
         launch_interruptibly,
     )
 
-    active = view_scene.run_native_viewer(current, lambda: replacement)
+    active = view_scene.run_native_viewer(
+        current,
+        lambda: replacement,
+        show_object_frames=True,
+    )
 
     assert active is replacement
+    assert loaded["show_object_frames"] is True
     assert loaded["initial_model"] is current_env.envs[0].model
     assert loaded["initial_data"] is current_env.envs[0].data
     assert loaded["reloaded_model"] is replacement_env.envs[0].model
@@ -138,9 +168,13 @@ def test_native_viewer_sigint_wakeup_exits_active_simulate(monkeypatch) -> None:
         created.append(simulate)
         return simulate
 
+    options = []
+
     def launch(*, loader):
         del loader
-        simulate = viewer_module.mujoco.viewer._Simulate()
+        option = mujoco.MjvOption()
+        options.append(option)
+        simulate = viewer_module.mujoco.viewer._Simulate(object(), option)
         os.kill(os.getpid(), signal.SIGINT)
         assert simulate.exited.wait(timeout=1.0)
 
@@ -152,15 +186,29 @@ def test_native_viewer_sigint_wakeup_exits_active_simulate(monkeypatch) -> None:
     data = mujoco.MjData(model)
 
     with pytest.raises(KeyboardInterrupt):
-        viewer_module._launch_native_viewer_interruptibly(lambda: (model, data))
+        viewer_module._launch_native_viewer_interruptibly(
+            lambda: (model, data),
+            show_object_frames=True,
+        )
 
     assert len(created) == 1
     assert created[0].exited.is_set()
+    assert options[0].frame == mujoco.mjtFrame.mjFRAME_BODY
     assert signal.getsignal(signal.SIGINT) is previous_sigint_handler
     assert not any(
         thread.name == "view-scene-sigint" and thread.is_alive()
         for thread in threading.enumerate()
     )
+
+
+def test_object_frame_visualization_is_opt_in() -> None:
+    option = mujoco.MjvOption()
+
+    viewer_module._configure_object_frame_visualization(option, enabled=False)
+    assert option.frame == mujoco.mjtFrame.mjFRAME_NONE
+
+    viewer_module._configure_object_frame_visualization(option, enabled=True)
+    assert option.frame == mujoco.mjtFrame.mjFRAME_BODY
 
 
 def test_gaussian_config_comes_from_backend_environment() -> None:

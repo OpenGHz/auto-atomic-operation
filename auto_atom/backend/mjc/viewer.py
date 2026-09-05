@@ -38,8 +38,60 @@ def print_model_summary(backend: MujocoTaskBackend) -> None:
     )
 
 
+def _passive_viewer_thread(
+    existing_threads: set[threading.Thread],
+) -> threading.Thread | None:
+    """Return the UI thread created by the latest passive viewer launch."""
+
+    candidates = [
+        thread
+        for thread in threading.enumerate()
+        if thread not in existing_threads
+        and (
+            "_launch_internal" in thread.name
+            or getattr(getattr(thread, "_target", None), "__name__", "")
+            == "_launch_internal"
+        )
+    ]
+    return candidates[-1] if candidates else None
+
+
+def _wait_for_viewer_exit(
+    viewer,
+    viewer_thread: threading.Thread | None = None,
+) -> None:
+    """Wait briefly for a passive viewer to release its C++ state."""
+
+    if (
+        viewer_thread is not None
+        and viewer_thread is not threading.current_thread()
+        and viewer_thread.is_alive()
+    ):
+        viewer_thread.join(timeout=2.0)
+        if not viewer_thread.is_alive():
+            return
+
+    sim_ref = getattr(viewer, "_sim", None)
+    if not callable(sim_ref):
+        return
+    deadline = time.perf_counter() + 2.0
+    while time.perf_counter() < deadline:
+        if sim_ref() is None:
+            return
+        time.sleep(0.01)
+
+
+def _configure_object_frame_visualization(option, *, enabled: bool) -> None:
+    """Enable MuJoCo body-frame axes without changing other render options."""
+
+    if enabled:
+        option.frame = mujoco.mjtFrame.mjFRAME_BODY
+
+
 def _launch_native_viewer_interruptibly(
     loader: Callable[[], tuple[mujoco.MjModel, mujoco.MjData]],
+    *,
+    show_object_frames: bool = False,
 ) -> None:
     """Run MuJoCo's native viewer while making its C++ loop interruptible.
 
@@ -51,13 +103,37 @@ def _launch_native_viewer_interruptibly(
     speed controls, and reload therefore remain owned by the native viewer.
     """
 
-    if (
-        os.name != "posix"
-        or threading.current_thread() is not threading.main_thread()
-        or not hasattr(signal, "set_wakeup_fd")
-        or not hasattr(mujoco.viewer, "_Simulate")
-    ):
+    original_simulate = getattr(mujoco.viewer, "_Simulate", None)
+    if original_simulate is None:
         mujoco.viewer.launch(loader=loader)
+        return
+
+    simulate_ready = threading.Event()
+    active_simulate = {}
+
+    def capture_simulate(*args, **kwargs):
+        option = args[1] if len(args) > 1 else kwargs.get("opt")
+        if option is not None:
+            _configure_object_frame_visualization(
+                option,
+                enabled=show_object_frames,
+            )
+        simulate = original_simulate(*args, **kwargs)
+        active_simulate["value"] = simulate
+        simulate_ready.set()
+        return simulate
+
+    can_interrupt = (
+        os.name == "posix"
+        and threading.current_thread() is threading.main_thread()
+        and hasattr(signal, "set_wakeup_fd")
+    )
+    if not can_interrupt:
+        mujoco.viewer._Simulate = capture_simulate
+        try:
+            mujoco.viewer.launch(loader=loader)
+        finally:
+            mujoco.viewer._Simulate = original_simulate
         return
 
     read_fd, write_fd = os.pipe()
@@ -70,17 +146,8 @@ def _launch_native_viewer_interruptibly(
     previous_sigint_handler = signal.getsignal(signal.SIGINT)
     signal.signal(signal.SIGINT, lambda _signum, _frame: None)
 
-    original_simulate = mujoco.viewer._Simulate
-    simulate_ready = threading.Event()
     stop_watcher = threading.Event()
     interrupted = threading.Event()
-    active_simulate = {}
-
-    def capture_simulate(*args, **kwargs):
-        simulate = original_simulate(*args, **kwargs)
-        active_simulate["value"] = simulate
-        simulate_ready.set()
-        return simulate
 
     def watch_sigint() -> None:
         while not stop_watcher.is_set():
@@ -136,6 +203,8 @@ def gaussian_config(backend: MujocoTaskBackend):
 def run_native_viewer(
     backend: MujocoTaskBackend,
     reload_callback: Callable[[], MujocoTaskBackend],
+    *,
+    show_object_frames: bool = False,
 ) -> MujocoTaskBackend:
     """Launch the native viewer and rebuild the backend on reload."""
 
@@ -156,7 +225,10 @@ def run_native_viewer(
         env = _viewer_env(active)
         return env.model, env.data
 
-    _launch_native_viewer_interruptibly(loader)
+    _launch_native_viewer_interruptibly(
+        loader,
+        show_object_frames=show_object_frames,
+    )
     return active
 
 
@@ -188,6 +260,7 @@ def run_gs_synced_viewer(
     height: int = 480,
     *,
     debug: bool = False,
+    show_object_frames: bool = False,
 ) -> MujocoTaskBackend:
     """Passive MuJoCo viewer + cv2 window showing the GS render of the same
     free-camera pose, refreshed every step."""
@@ -353,14 +426,6 @@ def run_gs_synced_viewer(
         target.azimuth = source.azimuth
         target.elevation = source.elevation
 
-    def wait_for_viewer_exit(v) -> None:
-        deadline = time.perf_counter() + 2.0
-        sim_ref = getattr(v, "_sim", None)
-        while time.perf_counter() < deadline:
-            if sim_ref is None or sim_ref() is None:
-                return
-            time.sleep(0.01)
-
     def load_reloaded_scene_with_status():
         if reload_callback is None:
             raise RuntimeError("GS reload is not enabled")
@@ -390,11 +455,21 @@ def run_gs_synced_viewer(
     camera_state: mujoco.MjvCamera | None = None
     while True:
         restart_requested = False
-        with mujoco.viewer.launch_passive(
+        existing_threads = set(threading.enumerate())
+        viewer = mujoco.viewer.launch_passive(
             _viewer_env(backend).model,
             _viewer_env(backend).data,
             key_callback=key_callback if reload_callback is not None else None,
-        ) as v:
+        )
+        viewer_thread = _passive_viewer_thread(existing_threads)
+        try:
+            v = viewer
+            _configure_object_frame_visualization(
+                v.opt,
+                enabled=show_object_frames,
+            )
+            if show_object_frames:
+                v.sync()
             if camera_state is not None:
                 with v.lock():
                     restore_camera(v.cam, camera_state)
@@ -503,7 +578,12 @@ def run_gs_synced_viewer(
                 sleep_for = float(_viewer_env(backend).model.opt.timestep) - elapsed
                 if sleep_for > 0:
                     time.sleep(sleep_for)
-        wait_for_viewer_exit(v)
+        finally:
+            try:
+                viewer.close()
+            except Exception:
+                pass
+            _wait_for_viewer_exit(viewer, viewer_thread)
         if not restart_requested:
             break
         try:

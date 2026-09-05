@@ -9,6 +9,8 @@ from hydra import compose, initialize_config_dir
 from hydra.core.global_hydra import GlobalHydra
 from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, OmegaConf
+from pydantic import BaseModel, ConfigDict
+from pydantic_settings import CliApp
 
 from auto_atom.backend.mjc.mujoco_backend import MujocoTaskBackend
 from auto_atom.backend.mjc.viewer import (
@@ -20,25 +22,44 @@ from auto_atom.backend.mjc.viewer import (
 from auto_atom.runner.common import get_config_dir, prepare_task_file
 from auto_atom.runtime import construct_scene_backend
 
-_DEBUG = False
+
+class ViewSceneCliConfig(BaseModel, frozen=True):
+    """Script-owned options parsed before Hydra handles task composition."""
+
+    model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid")
+
+    debug: bool = False
+    """Print full tracebacks for Gaussian render and reload errors."""
+
+    show_object_frames: bool = False
+    """Show MuJoCo body coordinate frames immediately when the viewer opens."""
 
 
-def _strip_debug_arg(argv: list[str]) -> bool:
-    """Consume this script's --debug flag before Hydra parses argv."""
+_CLI_CONFIG = ViewSceneCliConfig()
 
-    debug = False
+
+def _parse_script_cli_config(argv: list[str]) -> ViewSceneCliConfig:
+    """Consume script-owned flags before Hydra parses the remaining argv."""
+
+    script_args: list[str] = []
     stripped: list[str] = []
     hydra_separator_seen = False
+    owned_flags = {
+        "--debug",
+        "--no-debug",
+        "--show-object-frames",
+        "--no-show-object-frames",
+    }
     for arg in argv:
         if arg == "--":
             hydra_separator_seen = True
             stripped.append(arg)
-        elif not hydra_separator_seen and arg == "--debug":
-            debug = True
+        elif not hydra_separator_seen and arg in owned_flags:
+            script_args.append(arg)
         else:
             stripped.append(arg)
     argv[:] = stripped
-    return debug
+    return CliApp.run(ViewSceneCliConfig, cli_args=script_args)
 
 
 def _without_embedded_viewer(cfg: DictConfig) -> DictConfig:
@@ -118,10 +139,15 @@ def main(cfg: DictConfig) -> None:
                 backend,
                 gs_cfg,
                 reload_callback=reload_backend,
-                debug=_DEBUG,
+                debug=_CLI_CONFIG.debug,
+                show_object_frames=_CLI_CONFIG.show_object_frames,
             )
         else:
-            backend = run_native_viewer(backend, reload_callback=reload_backend)
+            backend = run_native_viewer(
+                backend,
+                reload_callback=reload_backend,
+                show_object_frames=_CLI_CONFIG.show_object_frames,
+            )
     except KeyboardInterrupt:
         print("[info] interrupted; closing viewer.", flush=True)
     finally:
@@ -129,5 +155,5 @@ def main(cfg: DictConfig) -> None:
 
 
 if __name__ == "__main__":
-    _DEBUG = _strip_debug_arg(sys.argv)
+    _CLI_CONFIG = _parse_script_cli_config(sys.argv)
     main()
