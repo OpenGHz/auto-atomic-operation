@@ -76,18 +76,18 @@
          approaches: one base and four vertical posts around the plate rim. -->
     <body name="plate_stand" pos="0 0 0">
       <geom name="plate_stand_base" type="box" pos="-0.400 0 0.0375"
-            size="0.030 0.105 0.005" material="rack_plate_stand"/>
+            size="0.035 0.112 0.005" material="rack_plate_stand"/>
       <geom name="plate_stand_post_front_left" type="box"
-            pos="-0.420 -0.095 0.0875" size="0.004 0.004 0.045"
+            pos="-0.428 -0.102 0.0875" size="0.004 0.004 0.045"
             material="rack_plate_stand"/>
       <geom name="plate_stand_post_front_right" type="box"
-            pos="-0.380 -0.095 0.0875" size="0.004 0.004 0.045"
+            pos="-0.372 -0.102 0.0875" size="0.004 0.004 0.045"
             material="rack_plate_stand"/>
       <geom name="plate_stand_post_back_left" type="box"
-            pos="-0.420 0.095 0.0875" size="0.004 0.004 0.045"
+            pos="-0.428 0.102 0.0875" size="0.004 0.004 0.045"
             material="rack_plate_stand"/>
       <geom name="plate_stand_post_back_right" type="box"
-            pos="-0.380 0.095 0.0875" size="0.004 0.004 0.045"
+            pos="-0.372 0.102 0.0875" size="0.004 0.004 0.045"
             material="rack_plate_stand"/>
     </body>
 

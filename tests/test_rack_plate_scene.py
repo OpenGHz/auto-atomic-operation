@@ -88,7 +88,7 @@ def test_robotless_scene_loads_and_preserves_source_geometry_contract() -> None:
     assert model.geom_contype[object_collision] != 0
     stand_base = _id(model, mujoco.mjtObj.mjOBJ_GEOM, "plate_stand_base")
     np.testing.assert_allclose(
-        model.geom_size[stand_base], [0.030, 0.105, 0.005], atol=1.0e-6
+        model.geom_size[stand_base], [0.035, 0.112, 0.005], atol=1.0e-6
     )
     stand_posts = [
         _id(model, mujoco.mjtObj.mjOBJ_GEOM, name)
@@ -109,10 +109,10 @@ def test_robotless_scene_loads_and_preserves_source_geometry_contract() -> None:
         tuple(np.round(model.geom_pos[post], 6)) for post in stand_posts
     )
     assert post_positions == [
-        (-0.42, -0.095, 0.0875),
-        (-0.42, 0.095, 0.0875),
-        (-0.38, -0.095, 0.0875),
-        (-0.38, 0.095, 0.0875),
+        (-0.428, -0.102, 0.0875),
+        (-0.428, 0.102, 0.0875),
+        (-0.372, -0.102, 0.0875),
+        (-0.372, 0.102, 0.0875),
     ]
     target_body = _id(model, mujoco.mjtObj.mjOBJ_BODY, "rack_target")
     np.testing.assert_allclose(

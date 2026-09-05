@@ -190,6 +190,11 @@ def test_rack_plate_p7_v4_umi_v3_completes_headless() -> None:
 
         plate_normal = data.geom_xmat[plate_geom].reshape(3, 3)[:, 2]
         assert float(np.dot(plate_normal, np.array([1.0, 0.0, 0.0]))) >= np.cos(0.15)
+
+        pick_waypoints = config.task.stages[0].param.pre_move
+        assert len(pick_waypoints) == 2
+        assert list(pick_waypoints[0].position) == [0.0, -0.05, 0.17]
+        assert list(pick_waypoints[1].position) == [0.0, -0.05, 0.0]
     finally:
         runner.close()
         ComponentRegistry.clear()

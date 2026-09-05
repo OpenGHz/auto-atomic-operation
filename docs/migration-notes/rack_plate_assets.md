@@ -42,14 +42,16 @@ aao-demo --config-name rack_plate_p7_v4_umi_v3
 
 The scene places the draining rack on the table plane and keeps the plate upright
 in a small geometric stand outside the rack. The stand is intentionally minimal:
-one compact raised base (about 60 × 210 mm) and four vertical box posts around
+one compact raised base (about 70 × 224 mm) and four vertical box posts around
 the plate rim. The posts leave the centre and transfer direction open, while the
 base supports the smaller 175 mm plate at its authored initial pose. The source stand is deliberately
 separated from the first rack rib, preventing the free plate from rolling into
 the rack before the pick stage starts.
 
-The task's pick stage raises the open gripper above the plate, translates to the
-plate centre, and then descends between its faces. After a verified two-sided grasp,
+The task's pick stage uses two waypoints: it first moves above the plate front,
+then extends along the same shallow front offset for the two-sided grasp. This
+keeps the gripper base behind the plate while preserving a direct approach.
+After a verified grasp,
 the place stage moves the held-object frame above the selected slot and releases
 17 mm above the settled centre. Its `axis_alignment` goal constrains the plate's
 physical normal while leaving its in-plane twist free. The smaller plate then

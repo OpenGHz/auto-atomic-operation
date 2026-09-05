@@ -76,27 +76,18 @@ task:
       operator: arm
       param:
         pre_move:
-          # The plate is vertical (its collision-cylinder axis is world X).
-          # First rise above the plate, then move laterally before descending
-          # between the two faces.  This prevents the open fingers from
-          # sweeping through the plate while the arm changes X.
-          - position: [0.0, 0.0, 0.17]
-            reference: eef_world
+          # Two motions are sufficient: move to the plate front while staying
+          # above its centre, then extend along the same front offset for the
+          # two-sided grasp.  Keeping the whole approach at y=-0.05 leaves the
+          # gripper base behind the plate instead of driving it through the
+          # plate body.
+          - position: [0.0, -0.05, 0.17]
+            orientation: [0.0, 0.0, 0.70710678, 0.70710678]
+            reference: object_world
+            static: true
             max_linear_step: 0.02
             max_angular_step: 0.20
-          - position: [0.0, 0.105, 0.17]
-            orientation: [0.0, 0.0, 0.70710678, 0.70710678]
-            reference: object_world
-            static: true
-            max_linear_step: 0.025
-            max_angular_step: 0.20
-          - position: [0.0, 0.022, 0.17]
-            orientation: [0.0, 0.0, 0.70710678, 0.70710678]
-            reference: object_world
-            static: true
-            max_linear_step: 0.01
-            max_angular_step: 0.10
-          - position: [0.0, 0.022, 0.0]
+          - position: [0.0, -0.05, 0.0]
             orientation: [0.0, 0.0, 0.70710678, 0.70710678]
             reference: object_world
             static: true
