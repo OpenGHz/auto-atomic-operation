@@ -67,17 +67,6 @@ aao-demo --config-name pick_and_place    # MuJoCo demo (default)
 aao-demo --config-name <config>          # any other config
 ```
 
-For a fast geometry-only rollout that hides the physical operator and moves a
-picked object directly along configured held-object waypoints, add
-`execution.mode=object_only` (the default remains `physical`):
-
-```bash
-aao-demo --config-name dishwasher_plate execution.mode=object_only
-```
-
-This is a kinematic/ghost transport check, not a claim about real grasp,
-contact, reachability, or collision success. See the [task-file schema](https://openghz.github.io/auto-atomic-operation/#/task-configuration/task_file_schema) for the mode contract and limits.
-
 For all CLI flags, Hydra overrides, and `aao-eval` usage, see the [CLI Reference](https://openghz.github.io/auto-atomic-operation/#/getting-started/cli_reference).
 
 ### Robotiq tasks
