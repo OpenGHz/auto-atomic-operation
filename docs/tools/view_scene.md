@@ -37,6 +37,9 @@ python examples/view_scene.py --config-name open_door_p7_ik
 python examples/view_scene.py --debug --config-name open_door_p7_ik
 ```
 
+Press `Ctrl+C` in the terminal to close the viewer and tear down the backend;
+no GUI click is required.
+
 The default config is `pick_and_place`. Any Hydra override can be appended after `--`:
 
 ```bash

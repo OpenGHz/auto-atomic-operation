@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import os
+import select
+import signal
 import threading
 import time
 import traceback
@@ -33,6 +36,90 @@ def print_model_summary(backend: MujocoTaskBackend) -> None:
         f"nbody={model.nbody} ngeom={model.ngeom}",
         flush=True,
     )
+
+
+def _launch_native_viewer_interruptibly(
+    loader: Callable[[], tuple[mujoco.MjModel, mujoco.MjData]],
+) -> None:
+    """Run MuJoCo's native viewer while making its C++ loop interruptible.
+
+    Python normally defers ``SIGINT`` handling until control returns from the
+    native render loop. A wakeup fd makes the low-level signal handler notify
+    a small watcher thread immediately; the watcher asks MuJoCo's active
+    ``Simulate`` instance to exit, after which the normal Python
+    ``KeyboardInterrupt`` cleanup path can run. Physics, rendering, pause,
+    speed controls, and reload therefore remain owned by the native viewer.
+    """
+
+    if (
+        os.name != "posix"
+        or threading.current_thread() is not threading.main_thread()
+        or not hasattr(signal, "set_wakeup_fd")
+        or not hasattr(mujoco.viewer, "_Simulate")
+    ):
+        mujoco.viewer.launch(loader=loader)
+        return
+
+    read_fd, write_fd = os.pipe()
+    os.set_blocking(read_fd, False)
+    os.set_blocking(write_fd, False)
+    previous_wakeup_fd = signal.set_wakeup_fd(
+        write_fd,
+        warn_on_full_buffer=False,
+    )
+    previous_sigint_handler = signal.getsignal(signal.SIGINT)
+    signal.signal(signal.SIGINT, lambda _signum, _frame: None)
+
+    original_simulate = mujoco.viewer._Simulate
+    simulate_ready = threading.Event()
+    stop_watcher = threading.Event()
+    interrupted = threading.Event()
+    active_simulate = {}
+
+    def capture_simulate(*args, **kwargs):
+        simulate = original_simulate(*args, **kwargs)
+        active_simulate["value"] = simulate
+        simulate_ready.set()
+        return simulate
+
+    def watch_sigint() -> None:
+        while not stop_watcher.is_set():
+            readable, _, _ = select.select([read_fd], [], [], 0.1)
+            if not readable:
+                continue
+            try:
+                pending_signals = os.read(read_fd, 1024)
+            except BlockingIOError:
+                continue
+            if signal.SIGINT % 256 not in pending_signals:
+                continue
+            interrupted.set()
+            while not simulate_ready.wait(0.01):
+                if stop_watcher.is_set():
+                    return
+            active_simulate["value"].exit()
+            return
+
+    watcher = threading.Thread(
+        target=watch_sigint,
+        name="view-scene-sigint",
+        daemon=True,
+    )
+    mujoco.viewer._Simulate = capture_simulate
+    try:
+        watcher.start()
+        mujoco.viewer.launch(loader=loader)
+    finally:
+        stop_watcher.set()
+        mujoco.viewer._Simulate = original_simulate
+        signal.set_wakeup_fd(previous_wakeup_fd)
+        signal.signal(signal.SIGINT, previous_sigint_handler)
+        os.close(write_fd)
+        watcher.join(timeout=0.5)
+        os.close(read_fd)
+
+    if interrupted.is_set():
+        raise KeyboardInterrupt
 
 
 def gaussian_config(backend: MujocoTaskBackend):
@@ -69,7 +156,7 @@ def run_native_viewer(
         env = _viewer_env(active)
         return env.model, env.data
 
-    mujoco.viewer.launch(loader=loader)
+    _launch_native_viewer_interruptibly(loader)
     return active
 
 

@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import os
+import signal
+import threading
 from types import SimpleNamespace
 
 import mujoco
+import pytest
 from omegaconf import OmegaConf
 
 from auto_atom.backend.mjc.mujoco_backend import MujocoTaskBackend
@@ -91,10 +95,8 @@ def test_native_viewer_reload_replaces_and_tears_down_backend(monkeypatch) -> No
     current, current_env = _backend()
     replacement, replacement_env = _backend()
     loaded = {}
-    callbacks = []
 
-    def launch(*, loader):
-        callbacks.append(loader)
+    def launch_interruptibly(loader):
         model, data = loader()
         loaded["initial_model"] = model
         loaded["initial_data"] = data
@@ -102,7 +104,11 @@ def test_native_viewer_reload_replaces_and_tears_down_backend(monkeypatch) -> No
         loaded["reloaded_model"] = model
         loaded["reloaded_data"] = data
 
-    monkeypatch.setattr(viewer_module.mujoco.viewer, "launch", launch)
+    monkeypatch.setattr(
+        viewer_module,
+        "_launch_native_viewer_interruptibly",
+        launch_interruptibly,
+    )
 
     active = view_scene.run_native_viewer(current, lambda: replacement)
 
@@ -113,6 +119,48 @@ def test_native_viewer_reload_replaces_and_tears_down_backend(monkeypatch) -> No
     assert loaded["reloaded_data"] is replacement_env.envs[0].data
     assert current_env.closed
     assert not replacement_env.closed
+
+
+def test_native_viewer_sigint_wakeup_exits_active_simulate(monkeypatch) -> None:
+    previous_sigint_handler = signal.getsignal(signal.SIGINT)
+
+    class _FakeSim:
+        def __init__(self, *_args, **_kwargs) -> None:
+            self.exited = threading.Event()
+
+        def exit(self) -> None:
+            self.exited.set()
+
+    created = []
+
+    def fake_simulate(*args, **kwargs):
+        simulate = _FakeSim(*args, **kwargs)
+        created.append(simulate)
+        return simulate
+
+    def launch(*, loader):
+        del loader
+        simulate = viewer_module.mujoco.viewer._Simulate()
+        os.kill(os.getpid(), signal.SIGINT)
+        assert simulate.exited.wait(timeout=1.0)
+
+    monkeypatch.setattr(viewer_module.mujoco.viewer, "_Simulate", fake_simulate)
+    monkeypatch.setattr(viewer_module.mujoco.viewer, "launch", launch)
+    model = mujoco.MjModel.from_xml_string(
+        "<mujoco><worldbody><body/></worldbody></mujoco>"
+    )
+    data = mujoco.MjData(model)
+
+    with pytest.raises(KeyboardInterrupt):
+        viewer_module._launch_native_viewer_interruptibly(lambda: (model, data))
+
+    assert len(created) == 1
+    assert created[0].exited.is_set()
+    assert signal.getsignal(signal.SIGINT) is previous_sigint_handler
+    assert not any(
+        thread.name == "view-scene-sigint" and thread.is_alive()
+        for thread in threading.enumerate()
+    )
 
 
 def test_gaussian_config_comes_from_backend_environment() -> None:

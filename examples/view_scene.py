@@ -122,6 +122,8 @@ def main(cfg: DictConfig) -> None:
             )
         else:
             backend = run_native_viewer(backend, reload_callback=reload_backend)
+    except KeyboardInterrupt:
+        print("[info] interrupted; closing viewer.", flush=True)
     finally:
         backend.teardown()
 
