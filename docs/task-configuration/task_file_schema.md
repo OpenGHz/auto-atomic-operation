@@ -30,7 +30,7 @@ A composed runnable config normally exposes these top-level keys:
 | `env` | Hydra environment definition.  For the built-in backend this is usually a `BatchedUnifiedMujocoEnv` with `scene`, sensors, cameras, operators, and viewer settings. |
 | `backend` | Dotted import path to a backend factory, such as `auto_atom.backend.mjc.mujoco_backend.build_mujoco_backend`. |
 | `task` | `env_name`, ordered stages, seed, initial poses, and randomization. |
-| `task_operators` | Logical operator definitions keyed by name.  Backend-specific control and initial-state settings belong here. |
+| `task_operators` | Logical operator definitions keyed by name. Shared initial-state fields and backend-specific control settings belong here. |
 | `execution` | Optional `TaskRunner` policy, including update boundaries, interval selection, and the `physical` / `object_only` execution mode. |
 
 The CLI also accepts entry-point options such as `rounds`, `max_updates`,
@@ -39,10 +39,10 @@ consumed by the corresponding runner and are not part of the `AutoAtomConfig`
 task model.  See the [CLI Reference](../getting-started/cli_reference.md) and
 the tool pages for their complete schemas.
 
-`env.operators` describes how a simulator environment binds logical names to
-XML actuators and sensors.  `task_operators` describes the operators exposed
-to the task backend.  They commonly use the same names, but they are separate
-configuration layers.
+`env.operators` describes how an environment binds logical names to its native
+actuators, sensors, or equivalent resources. `task_operators` describes the
+operators exposed to the task backend. They commonly use the same names, but
+they are separate configuration layers.
 
 ## Minimal task file
 
@@ -98,15 +98,15 @@ task_operators:
 `task_operators` is the task-facing operator contract.  Its mapping key is the
 logical name used by `stage.operator`; the key is also the operator name, so a
 separate `name` field is normally unnecessary.  The corresponding
-`env.operators` entry binds that name to the simulator's root body, actuators,
-sites, and sensors.  Keep these two layers distinct: `env.operators` describes
-the physical binding, while `task_operators.<name>` supplies task control and
-initial-state values.
+`env.operators` entry binds that name to the environment's native control,
+state, and frame resources. Keep these two layers distinct: `env.operators`
+describes the physical binding, while `task_operators.<name>` supplies task
+control and initial-state values.
 
-The optional `initial_state` is applied after the scene keyframe reset and
-before operator randomization baselines are recorded. It can set the base
-pose, a home EEF pose, or raw qpos values for the operator's declared arm
-joints:
+The optional `initial_state` is applied after the backend restores its reset
+state and before operator randomization baselines are recorded. It can set the
+base pose, a home EEF pose, or joint-space coordinates for the operator's
+declared arm joints:
 
 ```yaml
 task_operators:
@@ -122,20 +122,20 @@ task_operators:
         joint7: 0.0
       eef: 0.0                               # gripper control value
       base_pose:
-        # A named site/body/geom/joint is resolved in the composed scene.
+        # A named scene frame is resolved by the selected backend.
         reference: door__handle_grasp_center
         position: [0.25, -0.47, -0.10]       # local x/y/z in that frame
         orientation: [0.0, 0.0, 0.7071, 0.7071]  # local xyzw quaternion
 ```
 
-`joint_positions` is the canonical raw-qpos home representation for an
-operator's arm. It is mutually exclusive with `eef_pose`; use `eef` separately
-when configuring the gripper control value. Joint names are resolved against
-`env.operators.<name>` and may not target passive scene joints. The lower-level
-`env.initial_joint_positions` mapping remains available for scene joints and
-for basis defaults; a task can set it to `null` to clear inherited entries.
-For gripper-only control without raw joint qpos, use `eef` instead of
-`joint_positions`.
+`joint_positions` is the canonical joint-space home representation for an
+operator's arm. Values use the operator model's declared joint coordinates and
+units; the selected backend maps them to native state. It is mutually exclusive
+with `eef_pose`; use `eef` separately when configuring the gripper control
+value. Joint names are resolved against the selected operator and may not
+target resources owned outside it. Environment-level joint defaults, if
+supported, belong to the backend-specific `env` schema. For gripper-only
+control, use `eef` instead of `joint_positions`.
 
 When an EEF pose is the desired arm-home source instead, omit
 `joint_positions` and use the existing structured form:
@@ -162,10 +162,10 @@ axis-level > component-level > pose-level. The accepted reference forms are:
 
 | Owner | Built-in references | Named references |
 | --- | --- | --- |
-| object `task.initial_pose` | `world` | MuJoCo site, body, geom, or joint |
-| camera `task.camera_initial_pose` | `world` | MuJoCo site, body, geom, or joint |
-| operator `base_pose` | `world` | MuJoCo site, body, geom, or joint |
-| operator `eef_pose` | `world`, `base` | MuJoCo site, body, geom, or joint; `<operator>.base` / `<operator>.eef` |
+| object `task.initial_pose` | `world` | Scene frames exposed by the selected backend |
+| camera `task.camera_initial_pose` | `world` | Scene frames exposed by the selected backend |
+| operator `base_pose` | `world` | Scene frames exposed by the selected backend |
+| operator `eef_pose` | `world`, `base` | Scene or operator frames exposed by the selected backend; `<operator>.base` / `<operator>.eef` |
 
 Named references are setup/reset anchors, not live tracking references.  For
 object `initial_pose` entries, a reference that exactly matches another
@@ -213,11 +213,10 @@ at the configuration boundary and is not a second pose model.  Code that
 constructs these models directly should import them from `auto_atom.framework`
 or the package root (`auto_atom.PoseOverrideConfig`).
 
-For a joint-mode operator, changing `base_pose` relocates the configured root
-body so the physical arm and its base-frame IK agree. A pure mocap operator
-keeps its registered physical mocap home and changes only the virtual base
-frame used for world/base conversion; use the operator's EEF pose or mocap home
-configuration when the physical mocap body itself must move.
+How `base_pose`, `joint_positions`, and `eef` map to simulator state is backend
+specific. See
+[MuJoCo Initialization & Randomization](../mujoco-backend/initialization_randomization.md)
+for the built-in implementation.
 
 Example of a mixed-reference base pose:
 
@@ -232,7 +231,7 @@ base_pose:
 
 The `eef` scalar controls only the gripper command and does not alter either
 pose baseline.  If an `initial_state` field is omitted, the corresponding
-keyframe/registration pose remains the fallback.
+backend-provided reset value remains the fallback.
 
 ### Object-only execution
 
@@ -450,10 +449,10 @@ The following optional fields live under `task`:
 
 | Field | Description |
 | --- | --- |
-| `seed` | NumPy randomization seed; defaults to `0`, which selects an entropy-seeded generator rather than a reproducible fixed seed. |
-| `initial_pose` | Per-object `PoseOverrideConfig` values applied after the XML keyframe and before randomization. `reference` may be `world` or a named scene element. |
+| `seed` | Episode randomization seed; defaults to `0`, which selects an entropy-seeded generator rather than a reproducible fixed seed. |
+| `initial_pose` | Per-object `PoseOverrideConfig` values applied after the backend reset and before randomization. `reference` may be `world` or a named scene frame. |
 | `randomization` | Per-object or operator pose ranges sampled at reset. Objects and operator `base` / `eef` entries accept either one range or a non-empty `regions` list for disjoint workspaces; operators use the nested form. |
-| `camera_initial_pose` | Per-camera `PoseOverrideConfig` values applied after the keyframe and before camera randomization. `reference` may be `world` or a named scene element. |
+| `camera_initial_pose` | Per-camera `PoseOverrideConfig` values applied after the backend reset and before camera randomization. `reference` may be `world` or a named scene frame. |
 | `camera_randomization` | Per-camera relative or absolute-world pose ranges. |
 | `randomization_debug` | Cycle through configured extrema before ordinary random sampling when enabled. |
 
@@ -483,4 +482,5 @@ and [Execution Completion Flow](execution_completion_flow.md).
 - [Scene Composition](scene_composition.md) — host MJCF and asset-assembly layers.
 - [Action Space](action_space.md) — joint and pose action conventions.
 - [Execution Completion Flow](execution_completion_flow.md) — operation phases and conditions.
+- [MuJoCo Initialization & Randomization](../mujoco-backend/initialization_randomization.md) — built-in backend state mapping and reset behavior.
 - [Implementing a Custom Backend](../mujoco-backend/custom-backend.md) — backend and environment contracts.

@@ -920,12 +920,9 @@ class ExecutionConfig(BaseModel, frozen=True):
 class OperatorRandomizationConfig(BaseModel):
     """Randomization options for an operator.
 
-    ``base`` controls the operator base pose returned by ``get_base_pose()``.
-    For mocap operators this is the virtual base frame; for joint-mode
-    operators this is the robot base reference frame.
-
-    ``eef`` controls the operator home end-effector pose in world frame. After
-    sampling, reset re-homes the operator to the sampled EEF pose.
+    ``base`` controls the operator's logical base pose. ``eef`` controls its
+    home end-effector pose. Concrete backends own the mapping from these
+    logical poses to simulator or hardware state.
     """
 
     model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid")
@@ -1024,10 +1021,10 @@ class PoseOverrideConfig(BaseModel, frozen=True):
     axis-level, component-level, then pose-level.
 
     ``reference`` accepts the built-in :class:`PoseReference` values and a
-    named MuJoCo site/body/geom/joint.  Which references are legal is checked
-    by the owner-specific backend seam (objects/cameras accept scene frames;
-    operator EEF poses may additionally use ``base`` and operator frame
-    aliases).
+    named scene frame exposed by the selected backend. Which references are
+    legal is checked by the owner-specific backend seam (objects/cameras accept
+    scene frames; operator EEF poses may additionally use ``base`` and operator
+    frame aliases).
     Named-frame poses are resolved once during backend setup/reset; they do not
     continue to follow an articulated frame during execution.
 
@@ -1070,7 +1067,7 @@ class PoseOverrideConfig(BaseModel, frozen=True):
     orientation: Optional[Union[Rotation, Orientation, PoseOrientationConfig]] = None
     """Quaternion, RPY tuple, or expanded roll/pitch/yaw components."""
     reference: Union[PoseReference, str] = PoseReference.WORLD
-    """Built-in pose reference or a named scene element."""
+    """Built-in pose reference or a named scene frame."""
 
     @field_validator("position", mode="before")
     @classmethod
@@ -1184,9 +1181,9 @@ class AutoAtomConfig(BaseModel):
     seed: int = 0
     """The random seed for the AutoAtom operator. This is used to ensure reproducibility of the operator's behavior."""
     initial_pose: Dict[str, PoseOverrideConfig] = Field(default_factory=dict)
-    """Per-object initial pose overrides applied after keyframe reset, before
-    randomization.  Keys are object names matching the MuJoCo body (or stage
-    ``object`` field).  Supports both freejoint and static bodies."""
+    """Per-object initial pose overrides applied after the backend reset and
+    before randomization. Keys are logical object names exposed by the selected
+    backend."""
     randomization: Dict[
         str,
         Union[PoseRandomizationSpec, OperatorRandomizationConfig],
@@ -1205,10 +1202,10 @@ class AutoAtomConfig(BaseModel):
     """Per-camera initial pose overrides applied at each reset, before
     camera randomization records its defaults.
 
-    Keys are camera names as defined in the MuJoCo XML. Each entry may
-    set ``position`` and/or ``orientation`` (4-float quaternion xyzw or
-    3-float Euler roll/pitch/yaw in radians). Components omitted fall
-    back to the XML value.
+    Keys are logical camera names exposed by the selected backend. Each entry
+    may set ``position`` and/or ``orientation`` (4-float quaternion xyzw or
+    3-float Euler roll/pitch/yaw in radians). Omitted components preserve the
+    backend-provided reset value.
 
     Example YAML::
 
@@ -1220,7 +1217,7 @@ class AutoAtomConfig(BaseModel):
     camera_randomization: Dict[str, PoseRandomRange] = Field(default_factory=dict)
     """Per-camera pose randomization applied at each reset.
 
-    Keys are camera names as defined in the MuJoCo XML model.  Each entry
+    Keys are logical camera names exposed by the selected backend. Each entry
     is a ``PoseRandomRange`` controlling which axes are randomized and how.
 
     Only ``relative`` (default) and ``absolute_world`` reference modes are
@@ -1281,19 +1278,20 @@ class AutoAtomConfig(BaseModel):
 class OperatorInitialState(BaseModel, frozen=True):
     """Optional override for an operator's home control state applied at reset.
 
-    ``joint_positions`` is the raw-qpos representation for operator-owned arm
-    joints. The gripper remains controlled by the separate ``eef`` field.
+    ``joint_positions`` uses the operator model's declared joint-space
+    coordinates. The selected backend maps them to native state. The gripper
+    remains controlled by the separate ``eef`` field.
     """
 
     model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid")
 
     joint_positions: Dict[str, Union[float, List[float]]] = Field(default_factory=dict)
-    """Raw qpos values for the operator's arm joints, keyed by joint name.
+    """Operator joint-space coordinates, keyed by logical joint name.
 
-    Values are applied through the operator home seam after the low-level
-    environment reset. Operator actuator bindings currently expose one-DOF
-    arm joints, so use scalars (a one-value list is also accepted). These
-    values bypass any EEF user-space mapper.
+    Values are applied through the operator home seam after the environment
+    reset. A value may be a scalar or a non-empty sequence as declared by the
+    operator model. The backend maps them to native state; they remain distinct
+    from EEF user-space controls.
     """
 
     @field_validator("joint_positions", mode="after")
@@ -1326,7 +1324,7 @@ class OperatorInitialState(BaseModel, frozen=True):
        - Both position and orientation are optional in structured format
        - orientation can be Euler angles (3 floats) or quaternion (4 floats)
 
-    When omitted the keyframe value is kept."""
+    When omitted the backend-provided reset value is kept."""
 
     @field_validator("eef_pose", mode="before")
     @classmethod
@@ -1366,7 +1364,7 @@ class OperatorInitialState(BaseModel, frozen=True):
 
     eef: Optional[float] = None
     """Override value for the end-effector/gripper control.
-    When omitted the keyframe value is kept."""
+    When omitted the backend-provided reset value is kept."""
 
     @field_validator("eef", mode="after")
     @classmethod
@@ -1379,9 +1377,10 @@ class OperatorInitialState(BaseModel, frozen=True):
     base_pose: Optional[PoseOverrideConfig] = None
     """Override for the operator's base pose.
 
-    ``reference: world`` keeps the historical world-frame behavior.  A named
-    site/body/geom/joint expresses the base pose relative to that scene frame;
-    the resolved world pose is sampled at setup/reset and then held fixed.
+    ``reference: world`` expresses the pose in the world frame. A named scene
+    frame exposed by the backend expresses the base pose relative to that
+    frame; the resolved world pose is sampled at setup/reset and then held
+    fixed.
     """
 
     @model_validator(mode="after")
@@ -1406,7 +1405,7 @@ class OperatorConfig(BaseModel):
 
     initial_state: Optional[OperatorInitialState] = None
     """Optional initial control state applied to this operator on every reset.
-    Overrides the keyframe-defined values for the specified fields."""
+    Overrides the backend-provided reset values for the specified fields."""
 
 
 def _phase_waypoint_count(stage: StageConfig, phase: TaskPhase) -> int:

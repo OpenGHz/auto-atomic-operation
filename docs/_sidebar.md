@@ -17,6 +17,7 @@
   - [Update Granularity & Keypoint Stepping](/design/update-granularity-analysis.md)
 
 - **MuJoCo Backend**
+  - [Initialization & Randomization](/mujoco-backend/initialization_randomization.md)
   - [Backend Conditions](/mujoco-backend/mujoco_backend_conditions.md)
   - [Custom Backend](/mujoco-backend/custom-backend.md)
   - [Mesh Density & Gravity](/mujoco-backend/mesh_density_gravity_issue.md)

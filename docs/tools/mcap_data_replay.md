@@ -335,8 +335,8 @@ When `eef_mapper` is configured, EEF joint values are excluded from
 `initial_joint_positions` (since they are in user-space, not raw qpos) and
 are applied through the mapper via the reset action instead.
 
-See [Scene Initialization & Randomization](../task-configuration/randomization.md) for details on
-`initial_joint_positions`.
+See [MuJoCo Initialization & Randomization](../mujoco-backend/initialization_randomization.md#joint-initialization)
+for the backend-specific `initial_joint_positions` mapping.
 
 ### 9. Randomization disabled
 
@@ -457,6 +457,7 @@ NPZ files produced by `record_demo.py` contain:
 
 ## Related
 
-- [Scene Initialization & Randomization](../task-configuration/randomization.md) — `initial_joint_positions` and `initial_pose`
+- [Scene Initialization & Randomization](../task-configuration/randomization.md) — shared `initial_pose` semantics
+- [MuJoCo Initialization & Randomization](../mujoco-backend/initialization_randomization.md) — raw `initial_joint_positions` mapping
 - [EEF Mapper](../mujoco-backend/eef_mapper.md) — finger-distance mapping for parallel-linkage grippers
 - [Data Collection](data_collection.md) — recording demos with `record_demo.py`

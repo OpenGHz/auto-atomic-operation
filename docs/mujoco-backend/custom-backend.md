@@ -453,6 +453,27 @@ implement the method; it may reject every requested element (while preserving
 the same unknown-name behavior). Backends that accept a named frame must also
 override `get_element_pose()` so the runner can resolve that frame's world pose.
 
+### Initialization and randomization responsibility
+
+The shared `AutoAtomConfig` fields `initial_pose`, `randomization`,
+`camera_initial_pose`, and `camera_randomization`, together with
+`task_operators.*.initial_state`, have backend-independent meanings defined in
+[Scene Initialization & Randomization](../task-configuration/randomization.md).
+The backend owns the mechanics that realize those meanings in simulator or
+hardware state.
+
+A backend that supports these fields should consume them in its factory and
+apply this reset ordering: restore the backend-native reset state, reapply
+configured initial overrides, record the effective baselines, then sample and
+apply randomization. Logical names must resolve through the backend's object,
+operator, camera, joint, and named-frame bindings. Backend-specific limitations
+must not reinterpret shared frame modes or omitted-axis behavior.
+
+If a backend does not support a configured initialization or randomization
+capability, reject the non-empty field during construction with a clear error.
+Do not silently ignore it. Environment-only defaults belong to that backend's
+`env` schema and should be documented separately from the shared task fields.
+
 ---
 
 ## Step 5 — Write the factory function
@@ -477,6 +498,26 @@ def build_my_backend(
         else AutoAtomConfig.model_validate(task)
     )
     operator_configs = list(operators.values())
+
+    # This minimal example does not implement scene initialization or
+    # entity/camera randomization. Reject configured fields explicitly instead
+    # of silently changing the shared task semantics.
+    unsupported = [
+        field
+        for field in (
+            "initial_pose",
+            "randomization",
+            "camera_initial_pose",
+            "camera_randomization",
+        )
+        if getattr(config, field)
+    ]
+    if any(operator.initial_state is not None for operator in operator_configs):
+        unsupported.append("task_operators.*.initial_state")
+    if unsupported:
+        raise NotImplementedError(
+            "MySceneBackend does not support: " + ", ".join(unsupported)
+        )
 
     # Retrieve the basis environment registered by the `env` YAML section.
     env: MyEnv = ComponentRegistry.get_env(config.env_name)
