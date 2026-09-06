@@ -220,8 +220,9 @@ Keys are object or operator names.
   supported and raises `TypeError` at sample time.
 
 For a target whose valid workspace is disjoint, use
-`PoseRandomizationConfig`'s `regions` list. The legacy direct form remains
-valid; `regions` is a non-empty list of complete per-region configurations.
+`PoseRandomizationConfig`'s `regions` list. A direct per-axis range is the
+compact form for one region; `regions` is the advanced form for a non-empty
+list of complete per-region configurations.
 Each region owns its axis ranges, `reference`, and `collision_radius`.
 On every sampling attempt, exactly one region is selected with equal
 probability for each target and environment. A collision-rejection retry
@@ -301,12 +302,14 @@ apply to that sampled region.
 accept only a single `PoseRandomRange`; use `task.randomization` (and an
 operator's nested `base`/`eef`) for disjoint entity workspaces.
 
-### Canonical distribution and constraints
+### Advanced distribution and constraints
 
-For new configurations, wrap the proposal in a canonical specification when
-the sampling objective or hard constraints need to be explicit. A legacy
-`PoseRandomRange` or `regions` value remains valid and is normalized to the
-historical best-effort behavior.
+Wrap the pose proposal in an advanced specification when the sampling
+objective, hard constraints, or failure policy need to be configured. The
+`proposal` field accepts the same single-region or `regions` forms described
+above; `distribution`, `constraints`, and `failure` add the advanced behavior.
+A bare `PoseRandomRange` or `regions` value is the concise form and uses the
+default uniform, best-effort behavior.
 
 ```yaml
 task:
@@ -487,8 +490,8 @@ Restrictions on `absolute_base`:
 ### Operator semantics
 
 Operator entries must use the nested form with explicit `base:` and/or `eef:`
-sub-entries. Writing per-axis ranges directly under an operator key (the legacy
-"direct form") is rejected at sample time with a `TypeError`.
+sub-entries. Writing per-axis ranges directly under an operator key (the
+unnested "direct form") is rejected at sample time with a `TypeError`.
 
 - `base` randomizes the operator's logical base pose.
 - `eef` randomizes the operator's home end-effector pose; the next episode
