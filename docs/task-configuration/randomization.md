@@ -304,12 +304,19 @@ operator's nested `base`/`eef`) for disjoint entity workspaces.
 
 ### Advanced distribution and constraints
 
-Wrap the pose proposal in an advanced specification when the sampling
-objective, hard constraints, or failure policy need to be configured. The
-`proposal` field accepts the same single-region or `regions` forms described
-above; `distribution`, `constraints`, and `failure` add the advanced behavior.
-A bare `PoseRandomRange` or `regions` value is the concise form and uses the
-default uniform, best-effort behavior.
+The advanced form groups four responsibilities in one configuration object:
+
+| Field | Function | Supported contents |
+|-------|----------|--------------------|
+| `proposal` | Defines the candidate pose space. | One `PoseRandomRange`, or a `regions` list of ranges. |
+| `distribution` | Defines how candidates are generated and selected. | Sampling objective, candidate sequence, region weighting, candidate count, and spacing target. |
+| `constraints` | Defines conditions a candidate must satisfy. | Camera visibility and inter-object separation. |
+| `failure` | Defines what happens when no candidate satisfies the constraints within the attempt budget. | Failure mode and `max_attempts`. |
+
+Use `proposal` alone when the pose space is all that needs to be described.
+Add the other fields when the sampling behavior, feasibility conditions, or
+failure handling must be explicit. The same field meanings apply to object
+entries and to an operator's nested `base` / `eef` entries.
 
 ```yaml
 task:
@@ -337,16 +344,58 @@ task:
         max_attempts: 64
 ```
 
-`uniform_feasible` samples the proposal conditioned on hard constraints;
-`space_filling` generates a candidate pool and selects a sample farthest from
-already selected samples. `stratified`, `low_discrepancy`, and `poisson_disk`
-are candidate-sequence choices for the latter objective. A visibility
-constraint applies to the target's support geometry in every selected camera;
-a separation constraint applies to the randomized-object set. The selected
-backend may expose a conservative geometry approximation or reject a geometry
-mode it cannot evaluate. When the attempt budget is exhausted, `error` aborts
-the reset with the violated constraints, while `best_effort` applies the least
-violating candidate and exposes the diagnostics in reset details.
+#### `proposal`: candidate pose space
+
+`proposal` uses the same pose-range fields described in the preceding
+sections. A single `PoseRandomRange` describes one axis-aligned region;
+`PoseRandomizationConfig(regions=[...])` describes several disjoint regions.
+The selected region supplies the active axis ranges, reference frame, and
+`collision_radius` for that candidate.
+
+#### `distribution`: candidate generation and selection
+
+| Field | Function | Supported values | Default |
+|-------|----------|------------------|---------|
+| `distribution.kind` | Chooses the sampling objective. | `uniform_feasible`: draw from `proposal` and accept candidates satisfying the hard constraints; `space_filling`: generate a candidate pool and prefer samples far from previously selected samples. | `uniform_feasible` |
+| `distribution.sequence` | Chooses how candidate coordinates are generated. | `iid`: independent pseudo-random samples; `stratified`: samples distributed across axis strata; `low_discrepancy`: deterministic low-discrepancy sequence; `poisson_disk`: spacing-oriented sequence. `uniform_feasible` requires `iid`; `space_filling` requires one of the other three. | `iid` |
+| `distribution.region_weighting` | Chooses how multiple `proposal.regions` participate in sampling. | `equal`: every region has equal proposal weight; `volume`: weight by the product of configured axis extents. | `volume` |
+| `distribution.candidate_count` | Limits the candidate pool considered for one target or joint component. | Positive integer. | `64` |
+| `distribution.min_distance` | Sets the desired distance from previously selected `space_filling` samples, in metres. | Non-negative number. | `0.0` |
+
+#### `constraints`: candidate feasibility
+
+`constraints.visible_in` keeps the target inside the selected cameras' views:
+
+| Field | Function | Supported values | Default |
+|-------|----------|------------------|---------|
+| `constraints.visible_in.cameras` | Selects the cameras in which the target must be visible. | `all`, or a non-empty list of logical camera names. | `all` |
+| `constraints.visible_in.geometry` | Selects the target geometry used by the visibility check. | `center`, `bounding_sphere`, `support_hull`. | `bounding_sphere` |
+| `constraints.visible_in.mode` | Selects how visibility is evaluated. | `frustum`: image-bound and depth check; `segmentation`: rendered visible-fraction check. | `frustum` |
+| `constraints.visible_in.margin_px` | Reserves a margin from every image edge. | Non-negative integer pixels. | `0` |
+| `constraints.visible_in.min_visible_fraction` | Sets the required rendered fraction for `mode: segmentation`. | Number in `[0, 1]`. | `0.0` |
+
+`constraints.separated` keeps entities apart:
+
+| Field | Function | Supported values | Default |
+|-------|----------|------------------|---------|
+| `constraints.separated.scope` | Selects the set of possible collision partners. | `randomized`: other randomized objects; `scene`: all scene geometry supported by the backend. | `randomized` |
+| `constraints.separated.geometry` | Selects the geometry used to measure separation. | `center`: entity reference points; `support`: backend-provided support geometry. | `support` |
+| `constraints.separated.min_distance` | Adds required clearance between the selected geometries. | Non-negative number in metres. | `0.0` |
+
+The configuration defines these semantics independently of any simulator. A
+backend may provide a conservative geometry approximation or reject a geometry
+or visibility mode it cannot evaluate; backend-specific capability details are
+documented separately.
+
+#### `failure`: exhausted candidate search
+
+| Field | Function | Supported values | Default |
+|-------|----------|------------------|---------|
+| `failure.mode` | Chooses the result when the attempt budget is exhausted. | `error`: abort reset and report the violated constraints; `best_effort`: apply the least-violating candidate and expose diagnostics in reset details. | `error` |
+| `failure.max_attempts` | Limits the number of candidate attempts before applying `failure.mode`. | Positive integer. | `100` |
+
+Best-effort diagnostics contain the attempt count, violated constraints, and
+minimum clearance.
 
 ### Supported axes
 

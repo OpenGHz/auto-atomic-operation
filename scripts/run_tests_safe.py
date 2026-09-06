@@ -40,6 +40,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
+from xml.etree import ElementTree
 
 from pydantic import (
     BaseModel,
@@ -1377,6 +1378,7 @@ def _classify_batch(
     launch_error: str | None = None,
     timeout_expired: bool = False,
     file_size_limit_hit: bool = False,
+    no_tests_collected: bool = False,
 ) -> tuple[str, str | None]:
     """Map process and cgroup evidence to a stable manifest status."""
     if interrupted:
@@ -1411,9 +1413,26 @@ def _classify_batch(
         )
     if returncode == 0:
         return "PASSED", None
+    if returncode == 5 and no_tests_collected:
+        return "NO_TESTS", "pytest collected no tests"
     if returncode is None:
         return "LAUNCH_FAILURE", "batch process could not be started"
     return "TEST_FAILURE", f"pytest return code {returncode}"
+
+
+def _junit_no_tests_collected(path: Path) -> bool:
+    """Recognize pytest's collection code without masking collection errors."""
+    if not path.is_file():
+        return False
+    try:
+        root = ElementTree.parse(path).getroot()
+    except (ElementTree.ParseError, OSError, ValueError):
+        return False
+    suites = [root, *root.findall(".//testsuite")]
+    tests = sum(int(suite.attrib.get("tests", "0")) for suite in suites)
+    failures = sum(int(suite.attrib.get("failures", "0")) for suite in suites)
+    errors = sum(int(suite.attrib.get("errors", "0")) for suite in suites)
+    return tests == 0 and failures == 0 and errors == 0
 
 
 @contextmanager
@@ -1476,6 +1495,7 @@ def _finalize_batch(
         launch_error,
         timeout_expired,
         file_size_limit_hit,
+        no_tests_collected=(returncode == 5 and _junit_no_tests_collected(junit_path)),
     )
     if cleanup_incomplete:
         original_status = status
@@ -2197,7 +2217,7 @@ def _finalize_run(
         "INTERRUPTED"
         if interrupted or "INTERRUPTED" in statuses
         else "PASSED"
-        if statuses and all(status == "PASSED" for status in statuses)
+        if statuses and all(status in {"PASSED", "NO_TESTS"} for status in statuses)
         else "FAILED"
     )
     manifest["finished_at"] = _now()
@@ -2205,6 +2225,7 @@ def _finalize_run(
         "total_batches": len(batches),
         "started_batches": sum(status != "NOT_STARTED" for status in statuses),
         "passed": statuses.count("PASSED"),
+        "no_tests": statuses.count("NO_TESTS"),
         "test_failures": statuses.count("TEST_FAILURE"),
         "launch_failures": statuses.count("LAUNCH_FAILURE"),
         "cleanup_failures": statuses.count("CLEANUP_FAILURE"),
@@ -2220,7 +2241,9 @@ def _finalize_run(
         return 130
     if any(status in {"OOM", "TIMEOUT"} for status in statuses):
         return 2
-    if len(results) != len(batches) or any(status != "PASSED" for status in statuses):
+    if len(results) != len(batches) or any(
+        status not in {"PASSED", "NO_TESTS"} for status in statuses
+    ):
         return 1
     return 0
 

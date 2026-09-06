@@ -18,6 +18,8 @@ from scripts.run_tests_safe import (
     _expand_targets,
     _file_size_limit_evidence,
     _finalize_batch,
+    _finalize_run,
+    _junit_no_tests_collected,
     _make_batches,
     _pytest_arguments,
 )
@@ -386,6 +388,64 @@ def test_classify_batch_uses_resource_evidence(
     status, _reason = _classify_batch(returncode, False, properties, journal)
 
     assert status == expected_status
+
+
+def test_classify_batch_distinguishes_no_tests_from_test_failure() -> None:
+    assert _classify_batch(5, False, {}, "")[0] == "TEST_FAILURE"
+    assert _classify_batch(5, False, {}, "", no_tests_collected=True) == (
+        "NO_TESTS",
+        "pytest collected no tests",
+    )
+
+
+def test_junit_no_tests_collected_requires_clean_zero_test_suite(
+    tmp_path: Path,
+) -> None:
+    junit = tmp_path / "empty.xml"
+    junit.write_text(
+        '<testsuites><testsuite tests="0" failures="0" errors="0" /></testsuites>',
+        encoding="utf-8",
+    )
+    assert _junit_no_tests_collected(junit) is True
+
+    junit.write_text(
+        '<testsuites><testsuite tests="0" failures="0" errors="1" /></testsuites>',
+        encoding="utf-8",
+    )
+    assert _junit_no_tests_collected(junit) is False
+
+
+def test_junit_no_tests_collected_rejects_missing_or_malformed_files(
+    tmp_path: Path,
+) -> None:
+    assert _junit_no_tests_collected(tmp_path / "missing.xml") is False
+    malformed = tmp_path / "malformed.xml"
+    malformed.write_text("not xml", encoding="utf-8")
+    assert _junit_no_tests_collected(malformed) is False
+
+
+def test_finalize_run_treats_no_tests_as_neutral(tmp_path: Path) -> None:
+    manifest = {
+        "batches": [
+            {"index": 1, "status": "NO_TESTS"},
+            {"index": 2, "status": "PASSED"},
+        ]
+    }
+    assert (
+        _finalize_run(
+            manifest=manifest,
+            batches=[
+                _Batch(index=1, targets=("tests/helper.py",)),
+                _Batch(index=2, targets=("tests/test_real.py",)),
+            ],
+            results=[object(), object()],  # type: ignore[list-item]
+            interrupted=False,
+            output=tmp_path,
+        )
+        == 0
+    )
+    assert manifest["status"] == "PASSED"
+    assert manifest["summary"]["no_tests"] == 1
 
 
 def test_classify_batch_prioritizes_user_interrupt() -> None:

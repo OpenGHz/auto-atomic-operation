@@ -92,9 +92,12 @@ cap inherited by the batch and its descendants. It is a guard against runaway
 artifacts, not a total output-directory quota; raise it when a test intentionally
 writes a larger video, model, or coverage artifact.
 
-Batch states are `PASSED`, `TEST_FAILURE`, `TIMEOUT`, `OOM`,
+Batch states are `PASSED`, `NO_TESTS`, `TEST_FAILURE`, `TIMEOUT`, `OOM`,
 `RESOURCE_KILL`, `FILE_SIZE_LIMIT`, `CLEANUP_FAILURE`, `LAUNCH_FAILURE`, or
-`INTERRUPTED`. `RESOURCE_KILL` means the process was SIGKILLed without reliable
+`INTERRUPTED`. `NO_TESTS` means pytest returned its collection code 5 and the
+JUnit report confirms a clean zero-test suite; it is recorded for transparency
+but does not fail the overall run. A return code 5 without that evidence remains
+`TEST_FAILURE`. `RESOURCE_KILL` means the process was SIGKILLed without reliable
 evidence distinguishing an OOM from timeout escalation. `FILE_SIZE_LIMIT` means
 Linux `RLIMIT_FSIZE` (`--max-file-size-mb`) was reached: it caps the size of
 each regular file written by the batch process or its descendants (including
