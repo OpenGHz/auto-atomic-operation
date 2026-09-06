@@ -19,7 +19,13 @@ from auto_atom.framework import (
     PoseRandomizationConfig,
     PoseRandomRange,
     RandomizationAxisConfig,
+    RandomizationFailureConfig,
+    RandomizationFailureMode,
     RandomizationReference,
+    RandomizationSequenceKind,
+    RandomizationSpec,
+    RandomizationDistributionConfig,
+    RandomizationDistributionKind,
 )
 from auto_atom.utils.pose import PoseState
 
@@ -112,7 +118,10 @@ def _masked_pose_update(
 
 
 def _make_backend(
-    randomization: Dict[str, PoseRandomRange | PoseRandomizationConfig],
+    randomization: Dict[
+        str,
+        PoseRandomRange | PoseRandomizationConfig | RandomizationSpec,
+    ],
     object_positions: Dict[str, tuple[float, float, float]],
 ) -> MujocoTaskBackend:
     object_handlers = {
@@ -356,6 +365,71 @@ def test_collision_rejection_warns_after_attempts_exhausted(
     assert "Collision rejection exhausted for 'vase2'" in caplog.text
     vase2_pos = backend.object_handlers["vase2"].get_pose().position[0]
     assert np.allclose(vase2_pos[:2], [0.0, 0.0])
+
+
+def test_canonical_error_policy_raises_with_collision_diagnostics() -> None:
+    def canonical() -> RandomizationSpec:
+        return RandomizationSpec(
+            proposal=PoseRandomRange(
+                reference=RandomizationReference.ABSOLUTE_WORLD,
+                x=(0.0, 0.0),
+                y=(0.0, 0.0),
+                collision_radius=0.05,
+            ),
+            failure=RandomizationFailureConfig(
+                mode=RandomizationFailureMode.ERROR,
+                max_attempts=2,
+            ),
+        )
+
+    backend = _make_backend(
+        randomization={"vase": canonical(), "vase2": canonical()},
+        object_positions={"vase": (0.0, 0.0, 0.0), "vase2": (0.0, 0.0, 0.0)},
+    )
+    backend._rng = SequenceRNG([0.0] * 8)
+
+    with pytest.raises(RuntimeError, match="after 2 attempts"):
+        backend._apply_randomization(np.asarray([True], dtype=bool))
+
+    diagnostics = backend.get_randomization_diagnostics(0)
+    assert diagnostics["attempts"][0]["attempts"] == 2
+    assert diagnostics["attempts"][0]["minimum_clearance"] == pytest.approx(-0.1)
+
+
+def test_space_filling_reference_component_is_declaration_order_independent() -> None:
+    distribution = RandomizationDistributionConfig(
+        kind=RandomizationDistributionKind.SPACE_FILLING,
+        sequence=RandomizationSequenceKind.LOW_DISCREPANCY,
+        candidate_count=4,
+    )
+
+    def run(randomization: dict[str, RandomizationSpec]) -> dict[str, np.ndarray]:
+        backend = _make_backend(
+            randomization=randomization,
+            object_positions={"vase": (0.0, 0.0, 0.0), "flower": (0.0, 0.0, 0.0)},
+        )
+        backend._apply_randomization(np.asarray([True], dtype=bool))
+        return {
+            name: backend.object_handlers[name].get_pose().position[0].copy()
+            for name in ("vase", "flower")
+        }
+
+    vase = RandomizationSpec(
+        proposal=PoseRandomRange(x=(0.0, 1.0), collision_radius=0.0),
+        distribution=distribution,
+    )
+    flower = RandomizationSpec(
+        proposal=PoseRandomRange(
+            reference="vase",
+            x=(-0.1, 0.1),
+            collision_radius=0.0,
+        ),
+        distribution=distribution,
+    )
+    first = run({"vase": vase, "flower": flower})
+    second = run({"flower": flower, "vase": vase})
+    assert np.allclose(first["vase"], second["vase"])
+    assert np.allclose(first["flower"], second["flower"])
 
 
 def test_legacy_single_range_and_multi_region_config_are_accepted() -> None:

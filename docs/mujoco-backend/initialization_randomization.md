@@ -67,8 +67,9 @@ During every `reset()` it:
 2. Homes the registered operators.
 3. Reapplies `task.initial_pose`, operator initial states, and
    `task.camera_initial_pose` in the same ownership order used during setup.
-4. Samples and applies object/operator randomization, then camera
-   randomization, and refreshes the viewer.
+4. Samples and applies operator context randomization.
+5. Applies camera randomization, then samples constrained object candidates
+   against the final camera poses, and refreshes the viewer.
 
 Because the native state and configured overrides are restored before every
 sample, randomization offsets do not accumulate between episodes.

@@ -25,10 +25,23 @@ from ...framework import (
     PoseRandomizationSpec,
     PoseRandomRange,
     PoseReference,
+    RandomizationConstraintConfig,
+    RandomizationInput,
     RandomizationReference,
+    RandomizationSequenceKind,
+    RandomizationSpec,
+    canonical_randomization_spec,
     pose_randomization_regions,
 )
+from ...randomization import (
+    RandomizationFailureError,
+    RandomizationPlan,
+    compile_randomization_plan,
+    maximin_select,
+    unit_candidate,
+)
 from ...runtime import (
+    CameraModel,
     ComponentRegistry,
     ContactObservation,
     ControlResult,
@@ -36,7 +49,9 @@ from ...runtime import (
     IKSolver,
     ObjectHandler,
     OperatorHandler,
+    RandomizationConstraintReport,
     SceneBackend,
+    SupportGeometry,
 )
 from ...utils.pose import (
     PoseState,
@@ -212,6 +227,7 @@ class _PendingRandomizationAction:
     radius: float | np.ndarray
     references: tuple[Union[RandomizationReference, str], ...] = ()
     ancestors: _RandomizationAncestors = field(default_factory=set)
+    constraints: Optional[RandomizationConstraintConfig] = None
 
 
 @dataclass(frozen=True)
@@ -219,7 +235,7 @@ class _RandomizationActionSpec:
     kind: str
     owner: str
     label: str
-    randomization: PoseRandomizationSpec
+    randomization: RandomizationSpec
 
 
 @dataclass
@@ -1092,9 +1108,9 @@ class MujocoTaskBackend(SceneBackend):
     object_handlers: Dict[str, MujocoObjectHandler]
     randomization: Dict[
         str,
-        PoseRandomizationSpec | OperatorRandomizationConfig,
+        RandomizationInput | OperatorRandomizationConfig,
     ] = field(default_factory=dict)
-    camera_randomization: Dict[str, PoseRandomRange] = field(default_factory=dict)
+    camera_randomization: Dict[str, RandomizationInput] = field(default_factory=dict)
     initial_poses: Dict[str, PoseOverrideConfig] = field(default_factory=dict)
     camera_initial_poses: Dict[str, PoseOverrideConfig] = field(default_factory=dict)
     operator_initial_states: Dict[str, OperatorInitialState] = field(
@@ -1103,6 +1119,17 @@ class MujocoTaskBackend(SceneBackend):
     random_seed: Optional[int] = None
     randomization_debug: bool = False
     _rng: np.random.Generator = field(init=False, repr=False)
+    _randomization_reset_index: int = field(init=False, repr=False, default=0)
+    _last_randomization_diagnostics: Dict[int, List[Dict[str, Any]]] = field(
+        init=False,
+        repr=False,
+        default_factory=dict,
+    )
+    _space_filling_history: Dict[Tuple[str, ...], List[np.ndarray]] = field(
+        init=False,
+        repr=False,
+        default_factory=dict,
+    )
     _default_object_poses: Dict[str, PoseState] = field(
         init=False, repr=False, default_factory=dict
     )
@@ -1201,6 +1228,81 @@ class MujocoTaskBackend(SceneBackend):
                 continue
         return poses
 
+    def get_randomization_diagnostics(self, env_index: int = 0) -> Dict[str, Any]:
+        """Return diagnostics from the most recent constrained reset."""
+        if not 0 <= env_index < self.batch_size:
+            raise IndexError(
+                f"env_index must be in [0, {self.batch_size}), got {env_index}"
+            )
+        entries = self._last_randomization_diagnostics.get(env_index, ())
+        return {"attempts": [dict(entry) for entry in entries]} if entries else {}
+
+    def get_camera_model(self, camera_name: str, env_index: int = 0) -> CameraModel:
+        if not 0 <= env_index < self.batch_size:
+            raise IndexError(
+                f"env_index must be in [0, {self.batch_size}), got {env_index}"
+            )
+        physical_index = (
+            0 if bool(getattr(self.env, "_share_physics", False)) else env_index
+        )
+        return self.env.envs[physical_index].get_camera_model(camera_name)
+
+    def get_support_geometry(
+        self,
+        entity_name: str,
+        env_index: int = 0,
+    ) -> SupportGeometry:
+        if not 0 <= env_index < self.batch_size:
+            raise IndexError(
+                f"env_index must be in [0, {self.batch_size}), got {env_index}"
+            )
+        handler = self.get_object_handler(entity_name)
+        if handler is None:
+            raise KeyError(f"Unknown randomization entity '{entity_name}'.")
+        physical_index = (
+            0 if bool(getattr(self.env, "_share_physics", False)) else env_index
+        )
+        return self.env.envs[physical_index].get_support_geometry(handler.body_name)
+
+    def evaluate_randomization_constraints(
+        self,
+        candidate_poses: Mapping[str, PoseState],
+        *,
+        env_index: int = 0,
+        constraints: Any = None,
+        ancestors: Optional[Mapping[str, Set[str]]] = None,
+        target_names: Optional[Set[str]] = None,
+    ) -> RandomizationConstraintReport:
+        physical_index = (
+            0 if bool(getattr(self.env, "_share_physics", False)) else env_index
+        )
+        mapped_poses = {
+            self.object_handlers[name].body_name: pose
+            for name, pose in candidate_poses.items()
+            if name in self.object_handlers
+        }
+        mapped_ancestors = None
+        if ancestors is not None:
+            mapped_ancestors = {
+                self.object_handlers[name].body_name: {
+                    self.object_handlers[ancestor].body_name
+                    for ancestor in values
+                    if ancestor in self.object_handlers
+                }
+                for name, values in ancestors.items()
+                if name in self.object_handlers
+            }
+        return self.env.envs[physical_index].evaluate_randomization_constraints(
+            mapped_poses,
+            constraints=constraints,
+            ancestors=mapped_ancestors,
+            target_names={
+                self.object_handlers[name].body_name
+                for name in (target_names or set(mapped_poses))
+                if name in self.object_handlers
+            },
+        )
+
     def setup(self, config: AutoAtomConfig) -> None:
         for operator in self.operator_handlers.values():
             operator.home()
@@ -1213,6 +1315,8 @@ class MujocoTaskBackend(SceneBackend):
 
     def reset(self, env_mask: Optional[np.ndarray] = None) -> None:
         mask = self._normalize_mask(env_mask)
+        self._randomization_reset_index += 1
+        self._last_randomization_diagnostics.clear()
         self.env.reset(mask)
         for operator in self.operator_handlers.values():
             operator.home(mask)
@@ -1228,10 +1332,8 @@ class MujocoTaskBackend(SceneBackend):
             or self._default_camera_poses
         ):
             self._record_default_poses()
-        if self.randomization:
+        if self.randomization or self.camera_randomization:
             self._apply_randomization(mask)
-        if self.camera_randomization:
-            self._apply_camera_randomization(mask)
         self.env.refresh_viewer()
 
     @contextmanager
@@ -1636,7 +1738,9 @@ class MujocoTaskBackend(SceneBackend):
 
     def _select_randomization_region(
         self,
-        spec: PoseRandomizationSpec,
+        spec: RandomizationInput,
+        *,
+        candidate_index: int = 0,
     ) -> PoseRandomRange:
         """Select one region from a possibly multi-region randomization spec.
 
@@ -1645,11 +1749,32 @@ class MujocoTaskBackend(SceneBackend):
         naturally draw a fresh region on every attempt.  The legacy single
         ``PoseRandomRange`` path does not consume an extra random value.
         """
-        regions = pose_randomization_regions(spec)
+        canonical = canonical_randomization_spec(spec)
+        regions = pose_randomization_regions(canonical)
         if not regions:
             raise ValueError("Randomization region lists must not be empty")
         if len(regions) == 1:
             return regions[0]
+        distribution = canonical.distribution
+        if distribution.kind.value == "space_filling":
+            return regions[candidate_index % len(regions)]
+        if distribution.region_weighting == "volume":
+            volumes = []
+            for region in regions:
+                volume = 1.0
+                for axis in ("x", "y", "z", "roll", "pitch", "yaw"):
+                    axis_range = region.axis_range(axis)
+                    if axis_range is not None:
+                        volume *= max(float(axis_range[1]) - float(axis_range[0]), 0.0)
+                volumes.append(volume)
+            total_volume = float(sum(volumes))
+            if total_volume > 0.0:
+                sampled = float(self._rng.uniform(0.0, total_volume))
+                cumulative = 0.0
+                for region, volume in zip(regions, volumes):
+                    cumulative += volume
+                    if sampled <= cumulative:
+                        return region
         sampled_index = int(self._rng.uniform(0.0, float(len(regions))))
         sampled_index = max(0, min(sampled_index, len(regions) - 1))
         return regions[sampled_index]
@@ -1670,60 +1795,30 @@ class MujocoTaskBackend(SceneBackend):
 
     def _randomization_action_specs(self) -> Dict[str, _RandomizationActionSpec]:
         """Expand public entity configs into independently ordered actions."""
-        actions: Dict[str, _RandomizationActionSpec] = {}
-        for owner, randomization in self.randomization.items():
-            if (
-                owner not in self.object_handlers
-                and owner not in self.operator_handlers
-            ):
-                continue
-            if isinstance(randomization, OperatorRandomizationConfig):
-                if randomization.base is not None:
-                    label = f"{owner}.base"
-                    actions[label] = _RandomizationActionSpec(
-                        kind="operator_base",
-                        owner=owner,
-                        label=label,
-                        randomization=randomization.base,
-                    )
-                if randomization.eef is not None:
-                    label = f"{owner}.eef"
-                    actions[label] = _RandomizationActionSpec(
-                        kind="operator_eef",
-                        owner=owner,
-                        label=label,
-                        randomization=randomization.eef,
-                    )
-                continue
-            actions[owner] = _RandomizationActionSpec(
-                kind="object" if owner in self.object_handlers else "unknown",
-                owner=owner,
-                label=owner,
-                randomization=randomization,
+        plan = self._randomization_plan()
+        return {
+            label: _RandomizationActionSpec(
+                kind=action.kind,
+                owner=action.owner,
+                label=action.label,
+                randomization=action.randomization,
             )
-        return actions
+            for label, action in plan.actions.items()
+        }
+
+    def _randomization_plan(self) -> RandomizationPlan:
+        """Compile the backend's public randomization mapping into a plan."""
+        return compile_randomization_plan(
+            self.randomization,
+            object_names=set(self.object_handlers),
+            operator_names=set(self.operator_handlers),
+        )
 
     def _randomization_dependencies(self) -> Dict[str, Set[str]]:
-        actions = self._randomization_action_specs()
-        deps: Dict[str, Set[str]] = {label: set() for label in actions}
-        for label, action in actions.items():
-            if action.kind == "operator_eef":
-                base_label = f"{action.owner}.base"
-                if base_label in actions:
-                    deps[label].add(base_label)
-            for reference in _randomization_references(action.randomization):
-                if isinstance(reference, RandomizationReference):
-                    continue
-                bare, attr = self._parse_entity_reference(reference)
-                if attr is not None:
-                    dependency = f"{bare}.{attr}"
-                elif f"{bare}.base" in actions:
-                    dependency = f"{bare}.base"
-                else:
-                    dependency = bare
-                if dependency in actions:
-                    deps[label].add(dependency)
-        return deps
+        return {
+            label: set(dependencies)
+            for label, dependencies in self._randomization_plan().dependencies.items()
+        }
 
     def _randomization_order(self) -> List[str]:
         """Return randomization keys in dependency order (referenced first).
@@ -1731,29 +1826,7 @@ class MujocoTaskBackend(SceneBackend):
         An entry whose ``reference`` is another entity name depends on that
         entity being sampled first. Cycles raise ``ValueError``.
         """
-        deps = self._randomization_dependencies()
-        declaration_index = {
-            name: index for index, name in enumerate(self._randomization_action_specs())
-        }
-        order: List[str] = []
-        visited: Set[str] = set()
-        visiting: Set[str] = set()
-
-        def _visit(n: str) -> None:
-            if n in visited:
-                return
-            if n in visiting:
-                raise ValueError(f"Circular randomization reference involving '{n}'")
-            visiting.add(n)
-            for dep in sorted(deps[n], key=declaration_index.__getitem__):
-                _visit(dep)
-            visiting.remove(n)
-            visited.add(n)
-            order.append(n)
-
-        for name in deps:
-            _visit(name)
-        return order
+        return list(self._randomization_plan().order)
 
     def _reference_ancestors(
         self,
@@ -1916,19 +1989,15 @@ class MujocoTaskBackend(SceneBackend):
 
     def _apply_randomization(self, env_mask: np.ndarray) -> None:
         self._validate_randomization_configuration()
-        deps = self._randomization_dependencies()
-        order = self._randomization_order()
-        components = self._randomization_components(order, deps)
+        plan = self._randomization_plan()
+        order = list(plan.order)
+        components = [list(component) for component in plan.components]
+        action_specs = self._randomization_action_specs()
         sampled_poses: Dict[str, PoseState] = {}
         collision_participants: List[_CollisionParticipant] = []
-        for component in components:
-            component_poses, component_actions = self._sample_randomization_component(
-                component,
-                env_mask,
-                sampled_poses,
-                collision_participants,
-            )
-            for action in component_actions:
+
+        def apply_actions(actions: List[_PendingRandomizationAction]) -> None:
+            for action in actions:
                 if action.kind == "object":
                     self.object_handlers[action.owner].set_pose(action.pose, env_mask)
                 elif action.kind == "operator_base":
@@ -1951,6 +2020,46 @@ class MujocoTaskBackend(SceneBackend):
                         ancestors=_copy_randomization_ancestors(action.ancestors),
                     )
                 )
+
+        # Operators form the context for mounted cameras and object references.
+        # Sampling them first makes the camera state final before visibility
+        # constraints are evaluated for objects.
+        operator_labels = {
+            label for label, action in action_specs.items() if action.kind != "object"
+        }
+        for component in components:
+            operator_component = [
+                label for label in component if label in operator_labels
+            ]
+            if not operator_component:
+                continue
+            component_poses, component_actions = self._sample_randomization_component(
+                operator_component,
+                env_mask,
+                sampled_poses,
+                collision_participants,
+            )
+            apply_actions(component_actions)
+            sampled_poses.update(component_poses)
+
+        if self.camera_randomization:
+            self._apply_camera_randomization(env_mask)
+
+        # Object components retain reference-connected and separated joint
+        # sampling, but now see the already-final operator/camera context.
+        for component in components:
+            object_component = [
+                label for label in component if action_specs[label].kind == "object"
+            ]
+            if not object_component:
+                continue
+            component_poses, component_actions = self._sample_randomization_component(
+                object_component,
+                env_mask,
+                sampled_poses,
+                collision_participants,
+            )
+            apply_actions(component_actions)
             sampled_poses.update(component_poses)
 
     def _randomization_components(
@@ -2044,6 +2153,7 @@ class MujocoTaskBackend(SceneBackend):
                         pose=template,
                         radius=buffered_radius,
                         ancestors=buffered_ancestors,
+                        constraints=action.constraints,
                     )
                     action_order.append(action.label)
                 action_buffers[action.label].pose.position[env_index] = (
@@ -2089,20 +2199,70 @@ class MujocoTaskBackend(SceneBackend):
         last_sampled_poses: Dict[str, PoseState] = {}
         last_actions: List[_PendingRandomizationAction] = []
         last_failure: Optional[tuple[str, str]] = None
+        last_violations: List[str] = []
+        last_minimum_clearance = float("inf")
+        best_failure: Optional[
+            tuple[
+                tuple[int, float],
+                Dict[str, PoseState],
+                List[_PendingRandomizationAction],
+                Optional[tuple[str, str]],
+                List[str],
+                float,
+            ]
+        ] = None
         action_specs = self._randomization_action_specs()
+        configured_attempts = [
+            int(action_specs[label].randomization.failure.max_attempts)
+            for label in component
+        ]
+        attempt_budget = min(
+            configured_attempts, default=_MAX_COLLISION_REJECTION_ATTEMPTS
+        )
+        # Keep the historical module constant useful for existing callers and
+        # tests that override the legacy 100-attempt default, while allowing a
+        # canonical spec to explicitly request a larger budget.
+        if (
+            configured_attempts
+            and all(value == 100 for value in configured_attempts)
+            and _MAX_COLLISION_REJECTION_ATTEMPTS != 100
+        ):
+            attempt_budget = _MAX_COLLISION_REJECTION_ATTEMPTS
+        space_filling = any(
+            action_specs[label].randomization.distribution.kind.value == "space_filling"
+            for label in component
+        )
+        candidate_limit = max(
+            (
+                int(action_specs[label].randomization.distribution.candidate_count)
+                for label in component
+            ),
+            default=1,
+        )
+        valid_candidates: list[
+            tuple[Dict[str, PoseState], List[_PendingRandomizationAction], np.ndarray]
+        ] = []
+        stable_labels = {label: index for index, label in enumerate(sorted(component))}
 
-        for _ in range(_MAX_COLLISION_REJECTION_ATTEMPTS):
+        for attempt in range(attempt_budget):
             working_poses = dict(accepted_env_poses)
             env_sampled_poses: Dict[str, PoseState] = {}
             env_actions: List[_PendingRandomizationAction] = []
             env_participants: List[_CollisionParticipant] = []
             selected_ancestors: Dict[str, Set[str]] = {}
             failure: Optional[tuple[str, str]] = None
+            violations: List[str] = []
+            minimum_clearance = float("inf")
             for action_label in component:
                 sampled_poses, actions = self._sample_randomization_target_for_env(
                     action_specs[action_label],
                     env_index,
                     working_poses,
+                    candidate_index=(
+                        self._randomization_reset_index * 1009
+                        + attempt * 17
+                        + stable_labels[action_label]
+                    ),
                 )
                 for key, pose in sampled_poses.items():
                     working_poses[key] = pose
@@ -2140,12 +2300,187 @@ class MujocoTaskBackend(SceneBackend):
                     )
                     if failure is None and blocking is not None:
                         failure = (action.label, blocking.label)
+                        violations.append(f"{action.label}:collides:{blocking.label}")
+                        candidate_row = 0 if action.pose.batch_size == 1 else env_index
+                        other_row = 0 if blocking.pose.batch_size == 1 else env_index
+                        candidate_position = np.asarray(
+                            action.pose.position[candidate_row], dtype=np.float64
+                        )
+                        other_position = np.asarray(
+                            blocking.pose.position[other_row], dtype=np.float64
+                        )
+                        minimum_clearance = min(
+                            minimum_clearance,
+                            float(
+                                np.linalg.norm(candidate_position - other_position)
+                                - float(action.radius)
+                                - self._collision_radius_for_env(
+                                    blocking.radius,
+                                    env_index,
+                                )
+                            ),
+                        )
+            constraint_groups: dict[
+                RandomizationConstraintConfig, list[_PendingRandomizationAction]
+            ] = {}
+            for action in env_actions:
+                if action.constraints is None or (
+                    action.constraints.visible_in is None
+                    and action.constraints.separated is None
+                ):
+                    continue
+                constraint_groups.setdefault(action.constraints, []).append(action)
+            for constraints, constrained_actions in constraint_groups.items():
+                constrained_names = {action.owner for action in constrained_actions}
+                candidate_poses = {
+                    name: pose
+                    for name, pose in accepted_env_poses.items()
+                    if name in self.object_handlers
+                }
+                candidate_poses.update(
+                    {
+                        action.owner: action.pose
+                        for action in env_actions
+                        if action.kind == "object"
+                    }
+                )
+                candidate_ancestors = {
+                    participant.owner: self._collision_ancestors_for_env(
+                        participant.ancestors,
+                        env_index,
+                    )
+                    for participant in accepted_participants
+                    if participant.owner in candidate_poses
+                }
+                candidate_ancestors.update(
+                    {
+                        action.owner: set(action.ancestors)
+                        for action in env_actions
+                        if action.kind == "object" and action.owner in candidate_poses
+                    }
+                )
+                report = self.evaluate_randomization_constraints(
+                    candidate_poses,
+                    env_index=env_index,
+                    constraints=constraints,
+                    ancestors=candidate_ancestors,
+                    target_names=constrained_names,
+                )
+                if not report.valid and failure is None:
+                    failure = (constrained_actions[0].label, report.violations[0])
+                if not report.valid:
+                    violations.extend(report.violations)
+                    minimum_clearance = min(
+                        minimum_clearance,
+                        float(report.minimum_clearance),
+                    )
             last_sampled_poses = env_sampled_poses
             last_actions = env_actions
             last_failure = failure
+            last_violations = violations
+            last_minimum_clearance = minimum_clearance
             if failure is None:
-                return env_sampled_poses, env_actions, None
+                if not space_filling:
+                    return env_sampled_poses, env_actions, None
+                vector = np.concatenate(
+                    [
+                        np.asarray(
+                            next(
+                                action.pose
+                                for action in env_actions
+                                if action.label == label
+                            ).position[0],
+                            dtype=np.float64,
+                        )
+                        for label in sorted(component)
+                    ]
+                )
+                valid_candidates.append((env_sampled_poses, env_actions, vector))
+                if len(valid_candidates) >= candidate_limit:
+                    break
+            else:
+                unique_violations = list(dict.fromkeys(violations))
+                score = (len(unique_violations), -minimum_clearance)
+                if best_failure is None or score < best_failure[0]:
+                    best_failure = (
+                        score,
+                        env_sampled_poses,
+                        env_actions,
+                        failure,
+                        unique_violations,
+                        minimum_clearance,
+                    )
 
+        if valid_candidates:
+            vectors = np.vstack([candidate[2] for candidate in valid_candidates])
+            history_key = tuple(sorted(component))
+            history = self._space_filling_history.get(history_key, [])
+            seed_points = np.vstack(history) if history else None
+            distribution = action_specs[component[0]].randomization.distribution
+            selected = maximin_select(
+                vectors,
+                count=1,
+                min_distance=float(distribution.min_distance),
+                seed_points=seed_points,
+            )
+            if len(selected) == 0:
+                selected = maximin_select(
+                    vectors,
+                    count=1,
+                    min_distance=0.0,
+                    seed_points=seed_points,
+                )
+            selected_index = int(
+                np.flatnonzero(np.all(np.isclose(vectors, selected[0]), axis=1))[0]
+            )
+            chosen_poses, chosen_actions, chosen_vector = valid_candidates[
+                selected_index
+            ]
+            history = (history + [chosen_vector])[-256:]
+            self._space_filling_history[history_key] = history
+            return chosen_poses, chosen_actions, None
+
+        if best_failure is not None:
+            (
+                _,
+                best_poses,
+                best_actions,
+                best_failure_reason,
+                best_violations,
+                best_clearance,
+            ) = best_failure
+            error_actions = [
+                action_specs[label]
+                for label in component
+                if action_specs[label].randomization.failure.mode.value == "error"
+            ]
+            diagnostics = {
+                "labels": list(component),
+                "attempts": attempt_budget,
+                "violations": best_violations,
+                "minimum_clearance": best_clearance,
+                "mode": "error" if error_actions else "best_effort",
+            }
+            self._last_randomization_diagnostics.setdefault(env_index, []).append(
+                diagnostics
+            )
+            if error_actions:
+                raise RandomizationFailureError(
+                    target=error_actions[0].label,
+                    attempts=attempt_budget,
+                    violations=diagnostics["violations"],
+                    minimum_clearance=best_clearance,
+                )
+            logger = logging.getLogger(MujocoTaskBackend.__name__)
+            logger.warning(
+                "Randomization constraints exhausted for '%s' after %d attempts; "
+                "applying best-effort candidate. violations=%s minimum_clearance=%s",
+                component[0],
+                attempt_budget,
+                diagnostics["violations"],
+                best_clearance,
+            )
+            return best_poses, best_actions, best_failure_reason
         return last_sampled_poses, last_actions, last_failure
 
     def _sample_randomization_target_for_env(
@@ -2153,6 +2488,8 @@ class MujocoTaskBackend(SceneBackend):
         action_spec: _RandomizationActionSpec,
         env_index: int,
         working_poses: Dict[str, PoseState],
+        *,
+        candidate_index: int = 0,
     ) -> tuple[Dict[str, PoseState], List[_PendingRandomizationAction]]:
         name = action_spec.owner
         if action_spec.kind == "unknown" or (
@@ -2165,7 +2502,11 @@ class MujocoTaskBackend(SceneBackend):
             )
             return {}, []
 
-        selected_range = self._select_randomization_region(action_spec.randomization)
+        selected_range = self._select_randomization_region(
+            action_spec.randomization,
+            candidate_index=candidate_index,
+        )
+        distribution = action_spec.randomization.distribution
         if action_spec.kind == "object":
             if RandomizationReference.ABSOLUTE_BASE in selected_range.references():
                 raise ValueError(
@@ -2178,6 +2519,8 @@ class MujocoTaskBackend(SceneBackend):
                 selected_range,
                 env_index,
                 working_poses,
+                distribution=distribution,
+                sample_index=candidate_index,
             )
             return {action_spec.label: sampled}, [
                 _PendingRandomizationAction(
@@ -2187,6 +2530,7 @@ class MujocoTaskBackend(SceneBackend):
                     pose=sampled,
                     radius=float(selected_range.collision_radius),
                     references=selected_range.references(),
+                    constraints=action_spec.randomization.constraints,
                 )
             ]
 
@@ -2203,6 +2547,8 @@ class MujocoTaskBackend(SceneBackend):
                 selected_range,
                 env_index,
                 working_poses,
+                distribution=distribution,
+                sample_index=candidate_index,
             )
         elif action_spec.kind == "operator_eef":
             sampled = self._sample_operator_eef_pose_for_env(
@@ -2211,6 +2557,8 @@ class MujocoTaskBackend(SceneBackend):
                 selected_range,
                 env_index,
                 working_poses,
+                distribution=distribution,
+                sample_index=candidate_index,
             )
         else:
             raise ValueError(f"Unknown randomization action kind: {action_spec.kind}")
@@ -2225,6 +2573,7 @@ class MujocoTaskBackend(SceneBackend):
                 pose=sampled,
                 radius=float(selected_range.collision_radius),
                 references=selected_range.references(),
+                constraints=action_spec.randomization.constraints,
             )
         ]
 
@@ -2234,6 +2583,9 @@ class MujocoTaskBackend(SceneBackend):
         rand_range: PoseRandomRange,
         env_index: int,
         sampled_poses: Dict[str, PoseState],
+        *,
+        distribution: Any = None,
+        sample_index: int = 0,
     ) -> PoseState:
         default_pose = self._default_object_poses.get(
             name,
@@ -2250,6 +2602,8 @@ class MujocoTaskBackend(SceneBackend):
             rand_range,
             0,
             reference_poses=reference_poses,
+            distribution=distribution,
+            sample_index=sample_index,
         )
 
     def _sample_operator_base_pose_for_env(
@@ -2259,6 +2613,9 @@ class MujocoTaskBackend(SceneBackend):
         rand_range: PoseRandomRange,
         env_index: int,
         sampled_poses: Dict[str, PoseState],
+        *,
+        distribution: Any = None,
+        sample_index: int = 0,
     ) -> PoseState:
         default_base = self._default_operator_base_poses.get(
             name,
@@ -2275,6 +2632,8 @@ class MujocoTaskBackend(SceneBackend):
             rand_range,
             0,
             reference_poses=reference_poses,
+            distribution=distribution,
+            sample_index=sample_index,
         )
 
     def _operator_default_eef_following_base(
@@ -2335,6 +2694,9 @@ class MujocoTaskBackend(SceneBackend):
         rand_range: PoseRandomRange,
         env_index: int,
         sampled_poses: Dict[str, PoseState],
+        *,
+        distribution: Any = None,
+        sample_index: int = 0,
     ) -> PoseState:
         following_base_default, base_world = self._operator_default_eef_following_base(
             name,
@@ -2352,6 +2714,8 @@ class MujocoTaskBackend(SceneBackend):
                 default_in_base,
                 rand_range,
                 0,
+                distribution=distribution,
+                sample_index=sample_index,
             )
             return compose_pose(base_world, sampled_in_base)
 
@@ -2375,6 +2739,8 @@ class MujocoTaskBackend(SceneBackend):
             rand_range,
             0,
             reference_poses=reference_poses,
+            distribution=distribution,
+            sample_index=sample_index,
         )
 
     def _resolve_reference_poses_for_env(
@@ -2460,7 +2826,12 @@ class MujocoTaskBackend(SceneBackend):
         raise ValueError(f"Unknown randomization action kind: {kind}")
 
     def _sample_random_pose(
-        self, base_pose: PoseState, rand_range: PoseRandomRange, env_mask: np.ndarray
+        self,
+        base_pose: PoseState,
+        rand_range: PoseRandomRange,
+        env_mask: np.ndarray,
+        *,
+        distribution: Any = None,
     ) -> PoseState:
         return self._sample_pose_batch(
             base_pose=base_pose,
@@ -2469,6 +2840,8 @@ class MujocoTaskBackend(SceneBackend):
                 base_pose,
                 rand_range,
                 env_index,
+                distribution=distribution,
+                sample_index=self._randomization_reset_index * 1009 + env_index,
             ),
         )
 
@@ -2571,6 +2944,8 @@ class MujocoTaskBackend(SceneBackend):
         reference_poses: Optional[
             Mapping[Union[RandomizationReference, str], PoseState]
         ] = None,
+        distribution: Any = None,
+        sample_index: int = 0,
     ) -> PoseState:
         base_pose = base_pose.broadcast_to(self.batch_size)
         pose_by_reference = {
@@ -2581,6 +2956,18 @@ class MujocoTaskBackend(SceneBackend):
         def _baseline(reference: Union[RandomizationReference, str]) -> PoseState:
             return pose_by_reference.get(reference, base_pose)
 
+        sequence = getattr(distribution, "sequence", RandomizationSequenceKind.IID)
+        candidate_count = int(getattr(distribution, "candidate_count", 64))
+        low_discrepancy_values = None
+        if sequence != RandomizationSequenceKind.IID:
+            low_discrepancy_values = unit_candidate(
+                rng=self._rng,
+                dimension=6,
+                sequence=sequence,
+                index=sample_index,
+                candidate_count=candidate_count,
+            )
+
         position = np.empty(3, dtype=np.float64)
         for axis_index, axis_name in enumerate(("x", "y", "z")):
             reference = rand_range.axis_reference(axis_name)
@@ -2588,7 +2975,14 @@ class MujocoTaskBackend(SceneBackend):
             value = float(baseline.position[env_index, axis_index])
             rng_pair = rand_range.axis_range(axis_name)
             if rng_pair is not None:
-                sampled = float(self._rng.uniform(*rng_pair))
+                if low_discrepancy_values is None:
+                    sampled = float(self._rng.uniform(*rng_pair))
+                else:
+                    sampled = float(
+                        rng_pair[0]
+                        + low_discrepancy_values[axis_index]
+                        * (rng_pair[1] - rng_pair[0])
+                    )
                 if reference in (
                     RandomizationReference.ABSOLUTE_WORLD,
                     RandomizationReference.ABSOLUTE_BASE,
@@ -2620,7 +3014,14 @@ class MujocoTaskBackend(SceneBackend):
             value = float(baseline_rpy[axis_index])
             rng_pair = rand_range.axis_range(axis_name)
             if rng_pair is not None:
-                sampled = float(self._rng.uniform(*rng_pair))
+                if low_discrepancy_values is None:
+                    sampled = float(self._rng.uniform(*rng_pair))
+                else:
+                    sampled = float(
+                        rng_pair[0]
+                        + low_discrepancy_values[3 + axis_index]
+                        * (rng_pair[1] - rng_pair[0])
+                    )
                 if reference in (
                     RandomizationReference.ABSOLUTE_WORLD,
                     RandomizationReference.ABSOLUTE_BASE,
@@ -2710,7 +3111,9 @@ class MujocoTaskBackend(SceneBackend):
 
     def _apply_camera_randomization(self, env_mask: np.ndarray) -> None:
         """Sample and apply pose randomization for configured cameras."""
-        for cam_name, rand_range in self.camera_randomization.items():
+        for cam_name, randomization in self.camera_randomization.items():
+            canonical = canonical_randomization_spec(randomization)
+            rand_range = self._select_randomization_region(canonical)
             for reference in rand_range.references():
                 if reference == RandomizationReference.ABSOLUTE_BASE:
                     raise ValueError(
@@ -2734,7 +3137,12 @@ class MujocoTaskBackend(SceneBackend):
                     cam_name,
                 )
                 continue
-            sampled = self._sample_random_pose(default_pose, rand_range, env_mask)
+            sampled = self._sample_random_pose(
+                default_pose,
+                rand_range,
+                env_mask,
+                distribution=canonical.distribution,
+            )
             self._set_camera_pose(cam_name, sampled, env_mask)
 
     def get_element_pose(self, name: str, env_index: int = 0) -> PoseState:

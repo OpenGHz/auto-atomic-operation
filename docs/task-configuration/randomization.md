@@ -301,6 +301,50 @@ apply to that sampled region.
 accept only a single `PoseRandomRange`; use `task.randomization` (and an
 operator's nested `base`/`eef`) for disjoint entity workspaces.
 
+### Canonical distribution and constraints
+
+For new configurations, wrap the proposal in a canonical specification when
+the sampling objective or hard constraints need to be explicit. A legacy
+`PoseRandomRange` or `regions` value remains valid and is normalized to the
+historical best-effort behavior.
+
+```yaml
+task:
+  randomization:
+    source_block:
+      proposal:
+        reference: absolute_world
+        x: [0.25, 0.55]
+        y: [-0.15, 0.15]
+      distribution:
+        kind: space_filling
+        sequence: low_discrepancy
+        candidate_count: 32
+        min_distance: 0.04
+      constraints:
+        visible_in:
+          cameras: all
+          geometry: bounding_sphere
+          margin_px: 8
+        separated:
+          scope: randomized
+          min_distance: 0.01
+      failure:
+        mode: error
+        max_attempts: 64
+```
+
+`uniform_feasible` samples the proposal conditioned on hard constraints;
+`space_filling` generates a candidate pool and selects a sample farthest from
+already selected samples. `stratified`, `low_discrepancy`, and `poisson_disk`
+are candidate-sequence choices for the latter objective. A visibility
+constraint applies to the target's support geometry in every selected camera;
+a separation constraint applies to the randomized-object set. The selected
+backend may expose a conservative geometry approximation or reject a geometry
+mode it cannot evaluate. When the attempt budget is exhausted, `error` aborts
+the reset with the violated constraints, while `best_effort` applies the least
+violating candidate and exposes the diagnostics in reset details.
+
 ### Supported axes
 
 | Axis    | Unit    | Description            |
@@ -609,8 +653,9 @@ no operator base frame and do not participate in entity dependency ordering.
 
 ### Semantics
 
-- Camera randomization is applied at each `reset()` **after** object and operator
-  randomization.
+- Camera randomization is applied at each `reset()` after operator context
+  randomization and before constrained object candidates are evaluated. This
+  makes visibility constraints refer to the final camera poses for that reset.
 - The default camera pose (the baseline for `relative` mode) is the effective
   reset pose: the backend-provided pose when no `camera_initial_pose` entry
   exists, otherwise that resolved override.

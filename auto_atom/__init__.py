@@ -29,7 +29,19 @@ from .framework import (
     PoseRandomRange,
     PoseReference,
     RandomizationAxisConfig,
+    RandomizationConstraintConfig,
+    RandomizationDistributionConfig,
+    RandomizationDistributionKind,
+    RandomizationFailureConfig,
+    RandomizationFailureMode,
+    RandomizationInput,
     RandomizationReference,
+    RandomizationSeparationConfig,
+    RandomizationSequenceKind,
+    RandomizationSpec,
+    RandomizationVisibilityConfig,
+    RandomizationVisibilityGeometry,
+    RandomizationVisibilityMode,
     StageConfig,
     StageControlConfig,
     TargetAxisConfig,
@@ -40,6 +52,7 @@ from .framework import (
 )
 from .mock import MockOperatorHandler, MockSceneBackend
 from .policy_eval import ConfigDrivenDemoPolicy, PolicyEvaluator
+from .randomization import RandomizationFailureError
 
 # Runner imports last – runner subpackage depends on the modules above.
 from .runner.base import RunnerBase
@@ -50,6 +63,7 @@ from .runner.data_replay import (
 )
 from .runner.replay_recording import ReplayTimeline, ReplayTrajectory
 from .runtime import (
+    CameraModel,
     ComponentRegistry,
     ControlResult,
     ControlSignal,
@@ -67,11 +81,14 @@ from .runtime import (
     OperatorHandler,
     PoseActionEnvProtocol,
     PrimitiveAction,
+    RandomizationConstraintEnvProtocol,
+    RandomizationConstraintReport,
     ResolvedMotionGoal,
     ResolvedObjectMotionGoal,
     SimulationLoopEnvProtocol,
     StageExecutionStatus,
     StepEnvProtocol,
+    SupportGeometry,
     TaskFlowBuilder,
     TaskRunner,
     TaskUpdate,
@@ -87,6 +104,7 @@ __all__ = [
     "ComponentRegistry",
     "ControlResult",
     "ControlSignal",
+    "CameraModel",
     "ControlledFrameConfig",
     "ControlledFrameKind",
     "ConfigDrivenDemoPolicy",
@@ -132,7 +150,23 @@ __all__ = [
     "PoseReference",
     "PoseState",
     "RandomizationAxisConfig",
+    "RandomizationConstraintConfig",
+    "RandomizationDistributionConfig",
+    "RandomizationDistributionKind",
+    "RandomizationFailureConfig",
+    "RandomizationFailureError",
+    "RandomizationFailureMode",
+    "RandomizationInput",
     "RandomizationReference",
+    "RandomizationConstraintEnvProtocol",
+    "RandomizationConstraintReport",
+    "SupportGeometry",
+    "RandomizationSequenceKind",
+    "RandomizationSeparationConfig",
+    "RandomizationSpec",
+    "RandomizationVisibilityConfig",
+    "RandomizationVisibilityGeometry",
+    "RandomizationVisibilityMode",
     "PrimitiveAction",
     "ResolvedMotionGoal",
     "ResolvedObjectMotionGoal",

@@ -21,6 +21,7 @@ from typing import (
     List,
     Optional,
     Protocol,
+    Set,
     TypeVar,
     cast,
     runtime_checkable,
@@ -339,6 +340,67 @@ class InfoEnvProtocol(EnvProtocol, Protocol):
     """Environment capability for returning serializable metadata."""
 
     def get_info(self) -> Dict[str, Any]: ...
+
+
+@dataclass(frozen=True)
+class CameraModel:
+    """Backend-neutral pinhole camera model for reset constraints."""
+
+    name: str
+    pose: PoseState
+    width: int
+    height: int
+    fovy_radians: float
+    near: float = 0.0
+    far: float = float("inf")
+
+
+@dataclass(frozen=True)
+class SupportGeometry:
+    """Conservative world-frame-independent support geometry for an entity."""
+
+    center: np.ndarray
+    radius: float
+    points: Optional[np.ndarray] = None
+
+    def __post_init__(self) -> None:
+        center = np.asarray(self.center, dtype=np.float64).reshape(-1)
+        if center.shape != (3,):
+            raise ValueError("SupportGeometry.center must contain three values")
+        if self.radius < 0.0:
+            raise ValueError("SupportGeometry.radius must be non-negative")
+        if self.points is not None:
+            points = np.asarray(self.points, dtype=np.float64)
+            if points.ndim != 2 or points.shape[1] != 3:
+                raise ValueError("SupportGeometry.points must have shape (N, 3)")
+            object.__setattr__(self, "points", points)
+        object.__setattr__(self, "center", center)
+
+
+@dataclass(frozen=True)
+class RandomizationConstraintReport:
+    """Result of evaluating one candidate against backend constraints."""
+
+    valid: bool
+    violations: tuple[str, ...] = ()
+    minimum_clearance: float = float("inf")
+
+
+@runtime_checkable
+class RandomizationConstraintEnvProtocol(EnvProtocol, Protocol):
+    """Optional environment capability for camera/geometry constraints."""
+
+    def get_camera_model(self, camera_name: str) -> CameraModel: ...
+
+    def get_support_geometry(self, entity_name: str) -> SupportGeometry: ...
+
+    def evaluate_randomization_constraints(
+        self,
+        candidate_poses: Mapping[str, PoseState],
+        *,
+        env_index: int = 0,
+        constraints: Any = None,
+    ) -> RandomizationConstraintReport: ...
 
 
 _EnvCapabilityT = TypeVar("_EnvCapabilityT")
@@ -771,6 +833,42 @@ class SceneBackend(ABC):
         Backends without camera randomization return an empty mapping.
         """
         return {}
+
+    def get_randomization_diagnostics(self, env_index: int = 0) -> Dict[str, Any]:
+        """Return diagnostics produced by the most recent randomization reset."""
+        return {}
+
+    def get_camera_model(self, camera_name: str, env_index: int = 0) -> CameraModel:
+        """Return camera projection metadata for constrained randomization."""
+        raise NotImplementedError(
+            f"Backend does not expose camera projection metadata for '{camera_name}'."
+        )
+
+    def get_support_geometry(
+        self,
+        entity_name: str,
+        env_index: int = 0,
+    ) -> SupportGeometry:
+        """Return conservative support geometry for one logical entity."""
+        raise NotImplementedError(
+            f"Backend does not expose support geometry for '{entity_name}'."
+        )
+
+    def evaluate_randomization_constraints(
+        self,
+        candidate_poses: Mapping[str, PoseState],
+        *,
+        env_index: int = 0,
+        constraints: Any = None,
+        ancestors: Optional[Mapping[str, Set[str]]] = None,
+        target_names: Optional[Set[str]] = None,
+    ) -> RandomizationConstraintReport:
+        """Evaluate backend-supported visibility and separation constraints."""
+        if constraints is not None:
+            raise NotImplementedError(
+                "Backend does not support constrained randomization evaluation."
+            )
+        return RandomizationConstraintReport(valid=True)
 
 
 def _teardown_backend_after_initialization_failure(backend: SceneBackend) -> None:
@@ -3183,9 +3281,15 @@ class TaskRunner:
         if camera_poses:
             initial_poses["_cameras"] = camera_poses
 
-        if not initial_poses:
+        details: Dict[str, Any] = {}
+        if initial_poses:
+            details["initial_poses"] = initial_poses
+        randomization = context.backend.get_randomization_diagnostics(env_index)
+        if randomization:
+            details["randomization"] = randomization
+        if not details:
             return {}
-        return {"initial_poses": initial_poses}
+        return details
 
     @staticmethod
     def _serialize_pose(pose: PoseState) -> Dict[str, List[float]]:

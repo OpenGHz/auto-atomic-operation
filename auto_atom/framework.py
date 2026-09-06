@@ -8,6 +8,7 @@ from pydantic import (
     ConfigDict,
     Field,
     ImportString,
+    NonNegativeFloat,
     NonNegativeInt,
     PositiveFloat,
     PositiveInt,
@@ -639,13 +640,231 @@ class PoseRandomizationConfig(BaseModel, frozen=True):
 
 
 PoseRandomizationSpec = Union[PoseRandomRange, PoseRandomizationConfig]
-"""Canonical single- or multi-region pose randomization specification."""
+"""Legacy single- or multi-region pose randomization proposal."""
+
+
+class RandomizationDistributionKind(str, Enum):
+    """Distribution objective for a canonical randomization specification."""
+
+    UNIFORM_FEASIBLE = "uniform_feasible"
+    """Sample uniformly in the proposal conditioned on hard constraints."""
+
+    SPACE_FILLING = "space_filling"
+    """Prefer well-spaced samples across a batch or reset sequence."""
+
+
+class RandomizationSequenceKind(str, Enum):
+    """Candidate sequence used by the space-filling distribution."""
+
+    IID = "iid"
+    """Independent pseudo-random candidates."""
+
+    STRATIFIED = "stratified"
+    """Stratified candidates over each active position axis."""
+
+    LOW_DISCREPANCY = "low_discrepancy"
+    """Deterministic low-discrepancy candidates derived from the seed."""
+
+    POISSON_DISK = "poisson_disk"
+    """Candidates selected with a hard minimum distance when possible."""
+
+
+class RandomizationVisibilityGeometry(str, Enum):
+    """Geometry approximation used by a camera visibility constraint."""
+
+    CENTER = "center"
+    """Check only the entity reference point."""
+
+    BOUNDING_SPHERE = "bounding_sphere"
+    """Check a conservative sphere enclosing the entity."""
+
+    SUPPORT_HULL = "support_hull"
+    """Check the backend-provided support points or convex hull."""
+
+
+class RandomizationVisibilityMode(str, Enum):
+    """Visibility test used by a camera constraint."""
+
+    FRUSTUM = "frustum"
+    """Require the support geometry to project inside every image."""
+
+    SEGMENTATION = "segmentation"
+    """Additionally require a minimum visible rendered fraction."""
+
+
+class RandomizationFailureMode(str, Enum):
+    """Behavior when no candidate satisfies a hard randomization constraint."""
+
+    ERROR = "error"
+    """Fail reset and report the violated constraint."""
+
+    BEST_EFFORT = "best_effort"
+    """Apply the least-violating candidate and report diagnostics."""
+
+
+class RandomizationVisibilityConfig(BaseModel, frozen=True):
+    """Keep an entity's support geometry inside a set of camera views."""
+
+    model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid")
+
+    cameras: Union[Literal["all"], List[str]] = "all"
+    """Camera names to satisfy, or ``all`` for the backend's observation set."""
+
+    geometry: RandomizationVisibilityGeometry = (
+        RandomizationVisibilityGeometry.BOUNDING_SPHERE
+    )
+    """Entity geometry approximation used for the image-bound check."""
+
+    mode: RandomizationVisibilityMode = RandomizationVisibilityMode.FRUSTUM
+    """Frustum-only or rendered-segmentation visibility."""
+
+    margin_px: NonNegativeInt = 0
+    """Required pixel margin from every image edge."""
+
+    min_visible_fraction: float = 0.0
+    """Minimum rendered fraction when ``mode=segmentation``; range ``[0, 1]``."""
+
+    @field_validator("cameras", mode="after")
+    @classmethod
+    def _validate_cameras(
+        cls, value: Union[Literal["all"], List[str]]
+    ) -> Union[Literal["all"], List[str]]:
+        if value == "all":
+            return value
+        if not value or any(not str(name).strip() for name in value):
+            raise ValueError("visibility cameras must be 'all' or non-empty names")
+        return [str(name) for name in value]
+
+    @field_validator("min_visible_fraction", mode="after")
+    @classmethod
+    def _validate_visible_fraction(cls, value: float) -> float:
+        if not 0.0 <= value <= 1.0:
+            raise ValueError("min_visible_fraction must be in [0, 1]")
+        return value
+
+
+class RandomizationSeparationConfig(BaseModel, frozen=True):
+    """Hard separation constraints for randomized entities."""
+
+    model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid")
+
+    scope: Literal["randomized", "scene"] = "randomized"
+    """Check only randomized participants or all backend-supported scene geometry."""
+
+    min_distance: NonNegativeFloat = 0.0
+    """Additional required clearance in metres."""
+
+    geometry: Literal["center", "support"] = "support"
+    """Use center distances or backend support geometry."""
+
+
+class RandomizationConstraintConfig(BaseModel, frozen=True):
+    """Optional hard constraints applied to sampled pose candidates."""
+
+    model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid")
+
+    visible_in: Optional[RandomizationVisibilityConfig] = None
+    """Require the target entity to remain inside the selected camera views."""
+
+    separated: Optional[RandomizationSeparationConfig] = None
+    """Require clearance from other randomized entities or the scene."""
+
+
+class RandomizationDistributionConfig(BaseModel, frozen=True):
+    """Sampling objective and candidate sequence for one randomization target."""
+
+    model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid")
+
+    kind: RandomizationDistributionKind = RandomizationDistributionKind.UNIFORM_FEASIBLE
+    """Whether to preserve feasible-volume probability or maximize coverage."""
+
+    sequence: RandomizationSequenceKind = RandomizationSequenceKind.IID
+    """Candidate sequence used by the sampler."""
+
+    region_weighting: Literal["equal", "volume"] = "volume"
+    """How multiple proposal regions are selected for uniform sampling."""
+
+    candidate_count: PositiveInt = 64
+    """Maximum candidates considered for one target or joint sample."""
+
+    min_distance: NonNegativeFloat = 0.0
+    """Optional spacing target for ``space_filling`` selection, in metres."""
+
+    @model_validator(mode="after")
+    def _validate_sequence(self) -> Self:
+        if (
+            self.kind == RandomizationDistributionKind.UNIFORM_FEASIBLE
+            and self.sequence != RandomizationSequenceKind.IID
+        ):
+            raise ValueError(
+                "uniform_feasible requires sequence='iid'; use space_filling "
+                "for stratified, low_discrepancy, or poisson_disk sampling"
+            )
+        if (
+            self.kind == RandomizationDistributionKind.SPACE_FILLING
+            and self.sequence == RandomizationSequenceKind.IID
+        ):
+            raise ValueError(
+                "space_filling requires a non-iid sequence such as 'stratified', "
+                "'low_discrepancy', or 'poisson_disk'"
+            )
+        return self
+
+
+class RandomizationFailureConfig(BaseModel, frozen=True):
+    """Failure policy and budget for constrained randomization."""
+
+    model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid")
+
+    mode: RandomizationFailureMode = RandomizationFailureMode.ERROR
+    """Fail closed or apply a best-effort candidate with a diagnostic."""
+
+    max_attempts: PositiveInt = 100
+    """Maximum candidate attempts before applying the failure policy."""
+
+
+class RandomizationSpec(BaseModel, frozen=True):
+    """Canonical proposal, distribution, and constraint specification."""
+
+    model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid")
+
+    proposal: PoseRandomizationSpec
+    """Single or multi-region pose proposal."""
+
+    distribution: RandomizationDistributionConfig = RandomizationDistributionConfig()
+    """Distribution objective for accepted candidates."""
+
+    constraints: RandomizationConstraintConfig = RandomizationConstraintConfig()
+    """Visibility and separation constraints evaluated by the backend."""
+
+    failure: RandomizationFailureConfig = RandomizationFailureConfig()
+    """Behavior when the constrained proposal is infeasible or exhausted."""
+
+
+RandomizationInput = Union[PoseRandomizationSpec, RandomizationSpec]
+"""Accepted legacy or canonical randomization input at configuration seams."""
+
+
+def canonical_randomization_spec(spec: RandomizationInput) -> RandomizationSpec:
+    """Normalize legacy ranges into the canonical randomization specification."""
+    if isinstance(spec, RandomizationSpec):
+        return spec
+    # Preserve the historical equal-probability region mixture for legacy
+    # ``PoseRandomizationConfig`` values. New canonical specs default to
+    # proposal-volume weighting for uniform-feasible sampling.
+    return RandomizationSpec(
+        proposal=spec,
+        distribution=RandomizationDistributionConfig(region_weighting="equal"),
+        failure=RandomizationFailureConfig(mode=RandomizationFailureMode.BEST_EFFORT),
+    )
 
 
 def pose_randomization_regions(
-    spec: PoseRandomizationSpec,
+    spec: RandomizationInput,
 ) -> Tuple[PoseRandomRange, ...]:
     """Return the concrete regions represented by a randomization spec."""
+    if isinstance(spec, RandomizationSpec):
+        spec = spec.proposal
     if isinstance(spec, PoseRandomizationConfig):
         return tuple(spec.regions)
     return (spec,)
@@ -927,9 +1146,9 @@ class OperatorRandomizationConfig(BaseModel):
 
     model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid")
 
-    base: Optional[PoseRandomizationSpec] = None
+    base: Optional[RandomizationInput] = None
     """Optional single- or multi-region randomization for the operator base."""
-    eef: Optional[PoseRandomizationSpec] = None
+    eef: Optional[RandomizationInput] = None
     """Optional single- or multi-region randomization for the end effector."""
 
 
@@ -1186,7 +1405,7 @@ class AutoAtomConfig(BaseModel):
     backend."""
     randomization: Dict[
         str,
-        Union[PoseRandomizationSpec, OperatorRandomizationConfig],
+        Union[RandomizationInput, OperatorRandomizationConfig],
     ] = {}
     """Per-entity pose randomization applied at each reset.
 
@@ -1214,7 +1433,10 @@ class AutoAtomConfig(BaseModel):
             position: [2.4, 0.6, -0.1]
             orientation: [-0.5, 0.5, 0.5, 0.5]   # xyzw
     """
-    camera_randomization: Dict[str, PoseRandomRange] = Field(default_factory=dict)
+    camera_randomization: Dict[
+        str,
+        Union[PoseRandomRange, RandomizationSpec],
+    ] = Field(default_factory=dict)
     """Per-camera pose randomization applied at each reset.
 
     Keys are logical camera names exposed by the selected backend. Each entry
@@ -1271,6 +1493,27 @@ class AutoAtomConfig(BaseModel):
             return value
 
         return _strip(v)
+
+    @field_validator("camera_randomization", mode="after")
+    @classmethod
+    def _reject_camera_region_wrappers(
+        cls,
+        value: Dict[str, Union[PoseRandomRange, RandomizationSpec]],
+    ) -> Dict[str, Union[PoseRandomRange, RandomizationSpec]]:
+        for name, spec in value.items():
+            if isinstance(spec, RandomizationSpec) and isinstance(
+                spec.proposal, PoseRandomizationConfig
+            ):
+                raise ValueError(
+                    f"camera_randomization[{name!r}] accepts one PoseRandomRange; "
+                    "regions are not supported for cameras"
+                )
+            if isinstance(spec, PoseRandomizationConfig):
+                raise ValueError(
+                    f"camera_randomization[{name!r}] accepts one PoseRandomRange; "
+                    "regions are not supported for cameras"
+                )
+        return value
 
     """When True the first N resets cycle through extreme poses (each axis at its min/max, then all-min and all-max) before switching to random sampling.  Use this to verify that configured ranges are not too large."""
 

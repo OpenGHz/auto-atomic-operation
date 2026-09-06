@@ -14,7 +14,18 @@ import time
 from contextlib import contextmanager
 from enum import Enum
 from math import pi, tan
-from typing import Any, Callable, Dict, Iterator, List, Literal, Optional, Set, Tuple
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    Iterator,
+    List,
+    Literal,
+    Mapping,
+    Optional,
+    Set,
+    Tuple,
+)
 
 import mujoco
 import numpy as np
@@ -30,11 +41,21 @@ from pydantic import (
 
 from auto_atom.basis.mjc.model_initialization import apply_initial_joint_positions
 from auto_atom.basis.mjc.tactile.tactile_sensor import TactileSensorManager
+from auto_atom.runtime import (
+    CameraModel,
+    RandomizationConstraintReport,
+    SupportGeometry,
+)
 from auto_atom.scene_composition import (
     SceneArtifact,
     SceneConfig,
     compile_scene,
     load_composed_scene,
+)
+from auto_atom.utils.pose import (
+    PoseState,
+    quaternion_from_matrix_3x3,
+    quaternion_to_rotation_matrix,
 )
 
 
@@ -1195,6 +1216,182 @@ class MujocoBasis:
             }
             info[cam_name] = camera_info
         return info
+
+    def get_camera_model(self, camera_name: str) -> CameraModel:
+        """Return the current world-frame camera model for constraints."""
+        cam_id = self._camera_ids.get(camera_name)
+        if cam_id is None:
+            raise KeyError(f"Camera '{camera_name}' not found in the MuJoCo model.")
+        mujoco.mj_forward(self.model, self.data)
+        spec = self._camera_specs[camera_name]
+        pose = PoseState(
+            position=np.asarray(self.data.cam_xpos[cam_id], dtype=np.float64),
+            orientation=quaternion_from_matrix_3x3(
+                np.asarray(self.data.cam_xmat[cam_id], dtype=np.float64).reshape(3, 3)
+            ),
+        )
+        fovy = float(self.model.cam_fovy[cam_id]) * pi / 180.0
+        return CameraModel(
+            name=camera_name,
+            pose=pose,
+            width=spec.width,
+            height=spec.height,
+            fovy_radians=fovy,
+            near=float(self.model.vis.map.znear),
+            far=float(self.model.vis.map.zfar),
+        )
+
+    def get_support_geometry(self, entity_name: str) -> SupportGeometry:
+        """Return a conservative sphere around the named body's current geoms."""
+        body_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, entity_name)
+        if body_id < 0:
+            raise KeyError(f"Entity '{entity_name}' not found as a MuJoCo body.")
+        mujoco.mj_forward(self.model, self.data)
+        geom_ids = [
+            gid
+            for gid in range(self.model.ngeom)
+            if int(self.model.geom_bodyid[gid]) == body_id
+        ]
+        if not geom_ids:
+            return SupportGeometry(
+                center=np.asarray(self.data.xpos[body_id], dtype=np.float64),
+                radius=0.0,
+            )
+        center = np.mean(
+            np.asarray(
+                [self.data.geom_xpos[gid] for gid in geom_ids], dtype=np.float64
+            ),
+            axis=0,
+        )
+        radius = 0.0
+        for gid in geom_ids:
+            geom_center = np.asarray(self.data.geom_xpos[gid], dtype=np.float64)
+            size = np.asarray(self.model.geom_size[gid], dtype=np.float64)
+            geom_radius = float(np.linalg.norm(size))
+            radius = max(
+                radius, float(np.linalg.norm(geom_center - center)) + geom_radius
+            )
+        return SupportGeometry(center=center, radius=radius)
+
+    def evaluate_randomization_constraints(
+        self,
+        candidate_poses: Mapping[str, PoseState],
+        *,
+        env_index: int = 0,
+        constraints: Any = None,
+        ancestors: Optional[Mapping[str, Set[str]]] = None,
+        target_names: Optional[Set[str]] = None,
+    ) -> RandomizationConstraintReport:
+        """Evaluate frustum and support-separation constraints for a candidate."""
+        if constraints is None:
+            return RandomizationConstraintReport(valid=True)
+        violations: list[str] = []
+        minimum_clearance = float("inf")
+        visible = getattr(constraints, "visible_in", None)
+        if visible is not None:
+            if visible.mode.value != "frustum":
+                raise NotImplementedError(
+                    "MuJoCo randomization currently supports frustum visibility; "
+                    "segmentation visibility belongs to the backend hardening phase."
+                )
+            if visible.geometry.value == "support_hull":
+                raise NotImplementedError(
+                    "MuJoCo randomization currently uses a bounding-sphere support; "
+                    "support-hull visibility belongs to the backend hardening phase."
+                )
+            cameras = (
+                list(self._camera_ids)
+                if visible.cameras == "all"
+                else list(visible.cameras)
+            )
+            visibility_candidates = (
+                candidate_poses
+                if target_names is None
+                else {
+                    name: pose
+                    for name, pose in candidate_poses.items()
+                    if name in target_names
+                }
+            )
+            for entity_name, pose in visibility_candidates.items():
+                geometry = self.get_support_geometry(entity_name)
+                delta = np.asarray(pose.position[0], dtype=np.float64) - geometry.center
+                # The support sphere follows the proposed pose translation.
+                center = np.asarray(pose.position[0], dtype=np.float64)
+                radius = (
+                    0.0
+                    if visible.geometry.value == "center"
+                    else float(geometry.radius)
+                )
+                for camera_name in cameras:
+                    camera = self.get_camera_model(camera_name)
+                    cam_pos = camera.pose.position[0]
+                    rotation = np.asarray(
+                        quaternion_to_rotation_matrix(camera.pose.orientation[0]),
+                        dtype=np.float64,
+                    )
+                    # MuJoCo camera x-axis is right, y-axis up, z-axis backward.
+                    camera_point = rotation.T @ (center - cam_pos)
+                    depth = -float(camera_point[2])
+                    half_fovy = camera.fovy_radians / 2.0
+                    half_fovx = np.arctan(
+                        np.tan(half_fovy) * (camera.width / camera.height)
+                    )
+                    depth_margin = radius / max(depth, 1e-9)
+                    px = camera.width * 0.5 + camera_point[0] / max(depth, 1e-9) * (
+                        camera.width * 0.5 / np.tan(half_fovx)
+                    )
+                    py = camera.height * 0.5 - camera_point[1] / max(depth, 1e-9) * (
+                        camera.height * 0.5 / np.tan(half_fovy)
+                    )
+                    margin = float(visible.margin_px)
+                    if depth <= camera.near + radius or depth >= camera.far - radius:
+                        violations.append(f"{entity_name}:outside_depth:{camera_name}")
+                    if (
+                        px - depth_margin * camera.width < margin
+                        or px + depth_margin * camera.width > camera.width - margin
+                        or py - depth_margin * camera.height < margin
+                        or py + depth_margin * camera.height > camera.height - margin
+                    ):
+                        violations.append(f"{entity_name}:outside_view:{camera_name}")
+
+        separated = getattr(constraints, "separated", None)
+        if separated is not None and separated.scope == "scene":
+            raise NotImplementedError(
+                "MuJoCo scene-scope separation requires geom-level broad-phase "
+                "support and is reserved for the backend hardening phase."
+            )
+        if separated is not None and separated.scope == "randomized":
+            names = list(candidate_poses)
+            for index, left_name in enumerate(names):
+                left_geometry = self.get_support_geometry(left_name)
+                left_center = np.asarray(
+                    candidate_poses[left_name].position[0], dtype=np.float64
+                )
+                for right_name in names[index + 1 :]:
+                    if ancestors and (
+                        right_name in ancestors.get(left_name, set())
+                        or left_name in ancestors.get(right_name, set())
+                    ):
+                        continue
+                    right_geometry = self.get_support_geometry(right_name)
+                    right_center = np.asarray(
+                        candidate_poses[right_name].position[0], dtype=np.float64
+                    )
+                    clearance = (
+                        float(np.linalg.norm(left_center - right_center))
+                        - left_geometry.radius
+                        - right_geometry.radius
+                        - float(separated.min_distance)
+                    )
+                    minimum_clearance = min(minimum_clearance, clearance)
+                    if clearance < 0.0:
+                        violations.append(f"{left_name}:collides:{right_name}")
+        return RandomizationConstraintReport(
+            valid=not violations,
+            violations=tuple(violations),
+            minimum_clearance=minimum_clearance,
+        )
 
     def _get_camera_extrinsics(self) -> Dict[str, dict]:
         extrinsics = {}

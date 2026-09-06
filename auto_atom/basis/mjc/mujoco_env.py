@@ -33,7 +33,12 @@ from auto_atom.basis.mjc.mujoco_basis import (
     OperatorBinding,
     ViewerConfig,
 )
-from auto_atom.runtime import ComponentRegistry
+from auto_atom.runtime import (
+    CameraModel,
+    ComponentRegistry,
+    RandomizationConstraintReport,
+    SupportGeometry,
+)
 from auto_atom.scene_composition import SceneArtifact, compile_scene
 from auto_atom.utils.pose import PoseState, quaternion_from_matrix_3x3
 from auto_atom.utils.transformations import (
@@ -2411,6 +2416,40 @@ class BatchedUnifiedMujocoEnv:
         info = self.envs[0].get_info()
         info["batch_size"] = self.batch_size
         return info
+
+    def get_camera_model(self, camera_name: str) -> CameraModel:
+        return self._batch_adapter().collect(
+            lambda env: env.get_camera_model(camera_name)
+        )[0]
+
+    def get_support_geometry(self, entity_name: str) -> SupportGeometry:
+        return self._batch_adapter().collect(
+            lambda env: env.get_support_geometry(entity_name)
+        )[0]
+
+    def evaluate_randomization_constraints(
+        self,
+        candidate_poses: Mapping[str, PoseState],
+        *,
+        env_index: int = 0,
+        constraints: Any = None,
+        ancestors: Optional[Mapping[str, set[str]]] = None,
+        target_names: Optional[set[str]] = None,
+    ) -> RandomizationConstraintReport:
+        if not 0 <= env_index < self.batch_size:
+            raise IndexError(
+                f"env_index must be in [0, {self.batch_size}), got {env_index}"
+            )
+        physical_index = (
+            0 if self._batch_adapter().mode == BatchExecutionMode.SHARED else env_index
+        )
+        return self.envs[physical_index].evaluate_randomization_constraints(
+            candidate_poses,
+            env_index=0,
+            constraints=constraints,
+            ancestors=ancestors,
+            target_names=target_names,
+        )
 
     def is_updated(self) -> NDArray[np.bool]:
         return self._batch_adapter().probe_bool(lambda env: env.is_updated())
