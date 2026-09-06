@@ -356,31 +356,31 @@ The selected region supplies the active axis ranges, reference frame, and
 
 | Field | Function | Supported values | Default |
 |-------|----------|------------------|---------|
-| `distribution.kind` | Chooses the sampling objective. | `uniform_feasible`: draw from `proposal` and accept candidates satisfying the hard constraints; `space_filling`: generate a candidate pool and prefer samples far from previously selected samples. | `uniform_feasible` |
-| `distribution.sequence` | Chooses how candidate coordinates are generated. | `iid`: independent pseudo-random samples; `stratified`: samples distributed across axis strata; `low_discrepancy`: deterministic low-discrepancy sequence; `poisson_disk`: spacing-oriented sequence. `uniform_feasible` requires `iid`; `space_filling` requires one of the other three. | `iid` |
-| `distribution.region_weighting` | Chooses how multiple `proposal.regions` participate in sampling. | `equal`: every region has equal proposal weight; `volume`: weight by the product of configured axis extents. | `volume` |
-| `distribution.candidate_count` | Limits the candidate pool considered for one target or joint component. | Positive integer. | `64` |
-| `distribution.min_distance` | Sets the desired distance from previously selected `space_filling` samples, in metres. | Non-negative number. | `0.0` |
+| `kind` | Chooses the sampling objective. | `uniform_feasible`: draw from `proposal` and accept candidates satisfying the hard constraints; `space_filling`: generate a candidate pool and prefer samples far from previously selected samples. | `uniform_feasible` |
+| `sequence` | Chooses how candidate coordinates are generated. | `iid`: independent pseudo-random samples; `stratified`: samples distributed across axis strata; `low_discrepancy`: deterministic low-discrepancy sequence; `poisson_disk`: spacing-oriented sequence. `uniform_feasible` requires `iid`; `space_filling` requires one of the other three. | `iid` |
+| `region_weighting` | Chooses how multiple regions in `proposal` participate in sampling. | `equal`: every region has equal proposal weight; `volume`: weight by the product of configured axis extents. | `volume` |
+| `candidate_count` | Limits the candidate pool considered for one target or joint component. | Positive integer. | `64` |
+| `min_distance` | Sets the desired distance from previously selected `space_filling` samples, in metres. | Non-negative number. | `0.0` |
 
 #### `constraints`: candidate feasibility
 
-`constraints.visible_in` keeps the target inside the selected cameras' views:
+`visible_in` keeps the target inside the selected cameras' views:
 
 | Field | Function | Supported values | Default |
 |-------|----------|------------------|---------|
-| `constraints.visible_in.cameras` | Selects the cameras in which the target must be visible. | `all`, or a non-empty list of logical camera names. | `all` |
-| `constraints.visible_in.geometry` | Selects the target geometry used by the visibility check. | `center`, `bounding_sphere`, `support_hull`. | `bounding_sphere` |
-| `constraints.visible_in.mode` | Selects how visibility is evaluated. | `frustum`: image-bound and depth check; `segmentation`: rendered visible-fraction check. | `frustum` |
-| `constraints.visible_in.margin_px` | Reserves a margin from every image edge. | Non-negative integer pixels. | `0` |
-| `constraints.visible_in.min_visible_fraction` | Sets the required rendered fraction for `mode: segmentation`. | Number in `[0, 1]`. | `0.0` |
+| `cameras` | Selects the cameras in which the target must be visible. | `all`, or a non-empty list of logical camera names. | `all` |
+| `geometry` | Selects the target geometry used by the visibility check. | `center`, `bounding_sphere`, `support_hull`. | `bounding_sphere` |
+| `mode` | Selects how visibility is evaluated. | `frustum`: image-bound and depth check; `segmentation`: rendered visible-fraction check. | `frustum` |
+| `margin_px` | Reserves a margin from every image edge. | Non-negative integer pixels. | `0` |
+| `min_visible_fraction` | Sets the required rendered fraction for `mode: segmentation`. | Number in `[0, 1]`. | `0.0` |
 
-`constraints.separated` keeps entities apart:
+`separated` keeps entities apart:
 
 | Field | Function | Supported values | Default |
 |-------|----------|------------------|---------|
-| `constraints.separated.scope` | Selects the set of possible collision partners. | `randomized`: other randomized objects; `scene`: all scene geometry supported by the backend. | `randomized` |
-| `constraints.separated.geometry` | Selects the geometry used to measure separation. | `center`: entity reference points; `support`: backend-provided support geometry. | `support` |
-| `constraints.separated.min_distance` | Adds required clearance between the selected geometries. | Non-negative number in metres. | `0.0` |
+| `scope` | Selects the set of possible collision partners. | `randomized`: other randomized objects; `scene`: all scene geometry supported by the backend. | `randomized` |
+| `geometry` | Selects the geometry used to measure separation. | `center`: entity reference points; `support`: backend-provided support geometry. | `support` |
+| `min_distance` | Adds required clearance between the selected geometries. | Non-negative number in metres. | `0.0` |
 
 The configuration defines these semantics independently of any simulator. A
 backend may provide a conservative geometry approximation or reject a geometry
@@ -391,8 +391,8 @@ documented separately.
 
 | Field | Function | Supported values | Default |
 |-------|----------|------------------|---------|
-| `failure.mode` | Chooses the result when the attempt budget is exhausted. | `error`: abort reset and report the violated constraints; `best_effort`: apply the least-violating candidate and expose diagnostics in reset details. | `error` |
-| `failure.max_attempts` | Limits the number of candidate attempts before applying `failure.mode`. | Positive integer. | `100` |
+| `mode` | Chooses the result when the attempt budget is exhausted. | `error`: abort reset and report the violated constraints; `best_effort`: apply the least-violating candidate and expose diagnostics in reset details. | `error` |
+| `max_attempts` | Limits the number of candidate attempts before applying `mode`. | Positive integer. | `100` |
 
 Best-effort diagnostics contain the attempt count, violated constraints, and
 minimum clearance.
