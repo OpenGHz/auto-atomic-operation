@@ -214,8 +214,9 @@ semantics.
 aao-demo --config-name dishwasher_plate execution.mode=object_only
 ```
 
-`object_only` filters operator layers and cameras, clears operator bindings,
-and transports a picked object through `held_object` waypoints without
+`object_only` filters operator layers and cameras, clears physical operator
+bindings, and installs a logical operator handler under each stage's existing
+`operator` name. It transports a picked object through `held_object` waypoints without
 executing physical EEF motions. It is a kinematic geometry/final-placement
 check; it does not claim physical grasp, contact, reachability, or collision
 success. Unsupported operations (`move`, `push`, `pull`, `press`, standalone

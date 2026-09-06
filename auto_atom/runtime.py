@@ -246,6 +246,41 @@ class OperatorHandler(ABC):
         )
 
 
+class ObjectOnlyOperatorHandler:
+    """Logical operator used when execution has no embodied robot.
+
+    The handler keeps the configured stage operator identity while delegating
+    primitive execution to object-only transport. It intentionally does not
+    expose EEF/base pose methods: those are embodied-operator capabilities and
+    must not be fabricated for object-only evaluation.
+    """
+
+    execution_mode = ExecutionMode.OBJECT_ONLY
+
+    def __init__(self, context: "ExecutionContext", name: str) -> None:
+        if not name:
+            raise ValueError("Object-only operator requires a non-empty name.")
+        self.context = context
+        self.name = name
+
+    def execute_stage_action(
+        self,
+        *,
+        env_index: int,
+        plan: "StageExecutionPlan",
+        action: PrimitiveAction,
+        env_mask: np.ndarray,
+    ) -> ControlResult:
+        """Execute one semantic primitive through logical object transport."""
+        return TaskRunner._run_object_only_action(
+            env_index=env_index,
+            plan=plan,
+            action=action,
+            context=self.context,
+            env_mask=env_mask,
+        )
+
+
 @runtime_checkable
 class EnvProtocol(Protocol):
     """Core batched environment interface returned by ``SceneBackend.get_env()``.
@@ -987,6 +1022,12 @@ class ExecutionContext:
     def is_object_only(self) -> bool:
         """Whether this context executes by kinematically transporting objects."""
         return self.task_file.execution.mode == ExecutionMode.OBJECT_ONLY
+
+    def get_action_executor(self, operator_name: str) -> Any:
+        """Return the configured physical or logical operator implementation."""
+        if self.is_object_only:
+            return ObjectOnlyOperatorHandler(self, operator_name)
+        return self.backend.get_operator_handler(operator_name)
 
     def get_logical_carried_object(self, env_index: int) -> Optional[str]:
         """Return the object logically carried in one object-only environment."""
@@ -1928,11 +1969,11 @@ class TaskRunner:
         so callers cannot forget to forward fields like ``reference_site``.
         """
         if context is not None and context.is_object_only:
-            return TaskRunner._run_object_only_action(
+            executor = context.get_action_executor(plan.operator_name)
+            return executor.execute_stage_action(
                 env_index=env_index,
                 plan=plan,
                 action=action,
-                context=context,
                 env_mask=env_mask,
             )
 

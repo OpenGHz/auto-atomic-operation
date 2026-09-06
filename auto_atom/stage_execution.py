@@ -490,11 +490,7 @@ class StageExecution:
         actions_override: Optional[List[PrimitiveAction]],
     ) -> ActiveStageState:
         backend = self.context.backend
-        operator = (
-            None
-            if self.context.is_object_only
-            else backend.get_operator_handler(plan.operator_name)
-        )
+        operator = self.context.get_action_executor(plan.operator_name)
         target = backend.get_object_handler(plan.stage.object)
         initial_object_pose = (
             None if target is None else target.get_pose().select(env_index)
@@ -732,12 +728,11 @@ class StageExecution:
         active: ActiveStageState,
     ) -> Optional[Dict[str, Any]]:
         """Synchronize binding state at an external-policy observation edge."""
-        # ``object_only`` deliberately instantiates no operator handlers.  An
-        # external policy may still drive the scene directly (for example by
-        # calling ``context.acquire_logical_object``/``apply_object_pose``),
-        # but there is no physical grasp state to synchronize here.  Skipping
-        # this probe keeps that path backend-independent and avoids turning a
-        # valid object-only policy update into ``Unknown operator 'object_only'``.
+        # ``object_only`` uses a logical operator handler, not a physical
+        # backend operator. An external policy may still drive the scene
+        # directly (for example by calling
+        # ``context.acquire_logical_object``/``apply_object_pose``), but there
+        # is no physical grasp state to synchronize here.
         if self.context.is_object_only:
             return None
         operator_name = active.plan.operator_name

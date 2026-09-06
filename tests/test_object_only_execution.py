@@ -32,6 +32,7 @@ from auto_atom.policy_eval import (
 from auto_atom.runtime import (
     ComponentRegistry,
     ControlSignal,
+    ObjectOnlyOperatorHandler,
     PoseState,
     StageExecutionStatus,
     TaskRunner,
@@ -213,10 +214,10 @@ def test_object_only_runner_moves_object_directly_by_default() -> None:
     try:
         assert config.execution.mode == ExecutionMode.OBJECT_ONLY
         assert config.execution.object_motion.mode == ObjectMotionMode.DIRECT
-        assert [plan.operator_name for plan in runner._plan] == [
-            "object_only",
-            "object_only",
-        ]
+        assert [plan.operator_name for plan in runner._plan] == ["arm", "arm"]
+        assert isinstance(
+            runner._context.get_action_executor("arm"), ObjectOnlyOperatorHandler
+        )
         pick_actions = runner._materialize_stage_actions(runner._plan[0])
         place_actions = runner._materialize_stage_actions(runner._plan[1])
         assert [action.kind for action in pick_actions] == [
@@ -478,6 +479,7 @@ def test_config_driven_policy_evaluator_uses_object_only_transport() -> None:
         config
     )
     try:
+        assert [plan.operator_name for plan in evaluator.stage_plans] == ["arm", "arm"]
         policy.reset()
         update = evaluator.reset()
         observed_actions: list[str] = []

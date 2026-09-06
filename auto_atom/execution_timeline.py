@@ -388,7 +388,7 @@ class ExecutionTimeline:
 
         for stage_index, stage in enumerate(context.config.stages):
             operator_name = (
-                "object_only"
+                stage.operator or "object_only"
                 if execution.mode == ExecutionMode.OBJECT_ONLY
                 else builder._select_operator(stage, context.backend)
             )

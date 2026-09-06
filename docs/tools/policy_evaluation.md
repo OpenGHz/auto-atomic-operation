@@ -182,6 +182,23 @@ policy:
   _target_: auto_atom.ConfigDrivenDemoPolicy
 ```
 
+### Object-only evaluation
+
+When `execution.mode: object_only`, the evaluator installs a logical
+`ObjectOnlyOperatorHandler` for each stage's configured `operator` name (for
+example `arm`). The handler has the same stage/operator identity used by the
+physical path, but executes `pick`/`place` primitives through logical acquire,
+held-object pose transport, and release. It does not fabricate an EEF pose,
+contact, grasp, or reachability result.
+
+This means `ConfigDrivenDemoPolicy` uses the same configured stage operator in
+both `aao-demo` and `aao-eval`. A learned policy that emits low-level physical
+arrays still needs a custom `action_applier`; the evaluator cannot infer how an
+arbitrary array should map to logical pick/place semantics. A semantic policy
+can call `context.get_action_executor(operator_name).execute_stage_action(...)`
+with a materialized `PrimitiveAction` and use the same logical operator
+contract.
+
 ## Default Action Applier
 
 The package runner ships with a default action applier that expects:
