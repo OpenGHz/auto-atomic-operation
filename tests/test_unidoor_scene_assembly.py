@@ -1334,8 +1334,8 @@ def test_demo_grasps_before_unlatching_and_unlocks_before_opening() -> None:
         assert quaternion_angular_distance(
             eef_home.orientation[0], eef_target
         ) == pytest.approx(0.0, abs=0.01)
-        # The complete staged rollout reaches the final 0.2 rad door arc after
-        # roughly 520 control ticks with the collision-free home placement.
+        # The opening target is a physical 0.16 m EEF arc length. The runtime
+        # converts that distance to an angle from the measured pivot radius.
         for _ in range(700):
             update = runner.update()
             active = runner._env_states[0].active
@@ -1370,7 +1370,12 @@ def test_demo_grasps_before_unlatching_and_unlocks_before_opening() -> None:
             "pull_handle",
             "push_open",
         ]
-        assert backend.get_joint_angle("door__door_hinge", 0) >= 0.18
+        push_record = next(
+            record for record in runner.records if record.stage_name == "push_open"
+        )
+        assert push_record.details["arc_length"] == pytest.approx(0.16)
+        assert push_record.details["arc_length_remaining"] == pytest.approx(0.0)
+        assert backend.get_joint_angle("door__door_hinge", 0) >= 0.12
         assert backend.is_object_grasped("arm", "door__door_handle").tolist() == [True]
     finally:
         runner.close()
