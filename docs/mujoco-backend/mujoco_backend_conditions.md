@@ -258,7 +258,7 @@ arbitrary object is accepted as completion.
 
 | Parameter | Location | Default | Description |
 |-----------|----------|---------|-------------|
-| `control.grasp.settle_steps` | `MujocoGraspConfig` | `5` | Control updates to wait before checking grasp |
+| `settle_steps` | `MujocoGraspConfig` | `5` | Control updates to wait before checking grasp |
 
 ### 6.2 Closing without a required grasp
 
@@ -282,9 +282,9 @@ Gripper has opened to within tolerance of fully open, or reached the minimum ope
 
 | Parameter | Location | Default | Description |
 |-----------|----------|---------|-------------|
-| `control.tolerance.eef` | `MujocoToleranceConfig` | `0.03` | Gripper position tolerance |
-| `control.grasp.settle_steps` | `MujocoGraspConfig` | `5` | Control updates to wait before grasp check |
-| `control.grasp.release_settle_steps` | `MujocoGraspConfig` | `0` | Control updates to wait after opening before completion |
+| `eef` | `MujocoToleranceConfig` | `0.03` | Gripper position tolerance |
+| `settle_steps` | `MujocoGraspConfig` | `5` | Control updates to wait before grasp check |
+| `release_settle_steps` | `MujocoGraspConfig` | `0` | Control updates to wait after opening before completion |
 
 `require_grasp` belongs to the individual `eef` primitive rather than the
 operator defaults. `pick` and `pull` supply it automatically; use the explicit
@@ -307,7 +307,7 @@ All control actions have a maximum step limit:
 
 | Parameter | Location | Default | Description |
 |-----------|----------|---------|-------------|
-| `control.timeout_steps` | `MujocoControlConfig` | `100` | Max simulation steps per action |
+| `timeout_steps` | `MujocoControlConfig` | `100` | Max simulation steps per action |
 
 At 600 Hz simulation frequency with 30 Hz control, this equals about 3.3 seconds of simulated time.
 

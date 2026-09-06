@@ -251,21 +251,21 @@ task_operators:
 
 ### IK 参数说明
 
-| 参数 | 默认值 | 说明 |
-|------|--------|------|
-| `control.cartesian_max_linear_step` | `0.0` | 默认笛卡尔位置分段步长上限（m/tick）。大于 0 时，末端位置按直线小步逼近 |
-| `control.cartesian_max_angular_step` | `0.0` | 默认笛卡尔姿态分段步长上限（rad/tick）。大于 0 时，末端姿态按 SLERP 小步逼近 |
-| `pose.max_linear_step` | `0.0` | 单个 waypoint 的笛卡尔位置分段步长。若 > 0，则覆盖 operator 默认值 |
-| `pose.max_angular_step` | `0.0` | 单个 waypoint 的笛卡尔姿态分段步长。若 > 0，则覆盖 operator 默认值 |
-| `joint_control_mode` | `solve_once_interpolate` | Joint 模式执行策略。可选 `solve_once_interpolate` 或 `per_step_ik` |
-| `joint_interp_speed` | `0.05` | 当 `joint_control_mode=solve_once_interpolate` 时，每个 control step 允许的最大单关节位移上限（rad/step），系统据此自适应计算插值步数 |
-| `control.ik_unreachable_threshold` | `30` | 连续 IK 求解失败次数阈值；超过即把当前 stage 判为 `ik_unreachable` 失败，而不是等到 `timeout_steps` 再报 `move_timeout` |
-| `n_iterations` | 300 | 每次 solve 的 mink 迭代步数。越大求解越精确，但越慢 |
-| `dt` | 0.1 | 每个 IK 迭代的虚拟时间步（秒）。`n_iterations × dt` = 总积分时长 |
-| `position_cost` | 1.0 | EEF 位置跟踪权重 |
-| `orientation_cost` | 1.0 | EEF 姿态跟踪权重。增大可提高姿态精度 |
-| `posture_cost` | 1e-4 | 关节姿态正则化权重。增大使关节更保守（不易跳变），但降低末端精度 |
-| `max_joint_delta` | 0.8 | 单次 solve 允许的最大关节位移（rad）。防止奇异点附近的解跳变 |
+| 参数 | 配置块 | 默认值 | 说明 |
+|------|--------|--------|------|
+| `cartesian_max_linear_step` | `control` | `0.0` | 默认笛卡尔位置分段步长上限（m/tick）。大于 0 时，末端位置按直线小步逼近 |
+| `cartesian_max_angular_step` | `control` | `0.0` | 默认笛卡尔姿态分段步长上限（rad/tick）。大于 0 时，末端姿态按 SLERP 小步逼近 |
+| `max_linear_step` | `pose` | `0.0` | 单个 waypoint 的笛卡尔位置分段步长。若 > 0，则覆盖 operator 默认值 |
+| `max_angular_step` | `pose` | `0.0` | 单个 waypoint 的笛卡尔姿态分段步长。若 > 0，则覆盖 operator 默认值 |
+| `joint_control_mode` | `ik` | `solve_once_interpolate` | Joint 模式执行策略。可选 `solve_once_interpolate` 或 `per_step_ik` |
+| `joint_interp_speed` | `ik` | `0.05` | 当 `joint_control_mode=solve_once_interpolate` 时，每个 control step 允许的最大单关节位移上限（rad/step），系统据此自适应计算插值步数 |
+| `ik_unreachable_threshold` | `control` | `30` | 连续 IK 求解失败次数阈值；超过即把当前 stage 判为 `ik_unreachable` 失败，而不是等到 `timeout_steps` 再报 `move_timeout` |
+| `n_iterations` | `ik` | 300 | 每次 solve 的 mink 迭代步数。越大求解越精确，但越慢 |
+| `dt` | `ik` | 0.1 | 每个 IK 迭代的虚拟时间步（秒）。`n_iterations × dt` = 总积分时长 |
+| `position_cost` | `ik` | 1.0 | EEF 位置跟踪权重 |
+| `orientation_cost` | `ik` | 1.0 | EEF 姿态跟踪权重。增大可提高姿态精度 |
+| `posture_cost` | `ik` | 1e-4 | 关节姿态正则化权重。增大使关节更保守（不易跳变），但降低末端精度 |
+| `max_joint_delta` | `ik` | 0.8 | 单次 solve 允许的最大关节位移（rad）。防止奇异点附近的解跳变 |
 
 ### 参数调优指南
 

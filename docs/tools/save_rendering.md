@@ -79,12 +79,12 @@ python examples/save_rendering.py +recorder.enabled=true +recorder.save_gif=true
 
 | Recorder option | Default | Description |
 |---|---|---|
-| `recorder.enabled` | false | Enable video recording |
-| `recorder.fps` | 25 | Video frame rate |
-| `recorder.max_steps` | 300 | Maximum steps to record |
-| `recorder.save_mp4` | true | Save MP4 video |
-| `recorder.save_gif` | false | Save GIF animation |
-| `recorder.video_stream` | `overlay` | Frame source: `overlay`, `rgb`, or `mask` |
+| `enabled` | false | Enable video recording |
+| `fps` | 25 | Video frame rate |
+| `max_steps` | 300 | Maximum steps to record |
+| `save_mp4` | true | Save MP4 video |
+| `save_gif` | false | Save GIF animation |
+| `video_stream` | `overlay` | Frame source: `overlay`, `rgb`, or `mask` |
 
 When recording with `env.batch_size > 1`, videos are also written per environment:
 
