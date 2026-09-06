@@ -114,10 +114,12 @@ the default.
 | `keypoint` | Completes one YAML waypoint; an arc's sub-actions remain grouped |
 | `stage` | Completes one whole task stage |
 
-For macro boundaries, AAO still executes the same physics and controller
-updates internally. The host receives only the boundary state because there is
-currently no public per-internal-update observation callback. Use the default
-`control_tick` for dense trajectory collection; use `primitive`, `keypoint`, or
+For physical execution and interpolated object-only motion, macro boundaries
+still execute the same physics and controller updates internally. The host
+receives only the boundary state because there is currently no public
+per-internal-update observation callback. Direct object-only motion is
+different: each held-object waypoint is written once. Use the default
+`control_tick` for dense physical trajectories; use `primitive`, `keypoint`, or
 `stage` only when boundary-only samples are intentional.
 
 `execution.render_internal_updates: false` only coalesces passive-viewer

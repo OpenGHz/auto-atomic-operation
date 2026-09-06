@@ -278,13 +278,20 @@ and fails fast with `ValueError`, because the runner otherwise cannot determine
 a stable YAML keypoint boundary. Override `build_actions()` to customize this
 compiled primitive sequence; Stage order and identity come from the task config.
 
-Macro boundaries do not teleport or bypass the state machine. They repeat the
-same control flow internally, up to
+For physical execution and interpolated object-only motion, macro boundaries do
+not teleport or bypass the state machine. They repeat the same control flow
+internally, up to
 `execution.max_internal_updates_per_update` controller updates per selected
 environment (default `10000`). Reaching this limit is an explicit terminal
 failure. In a batch, each environment stops at its own first requested
 boundary, so a faster environment never crosses an extra boundary while
 another catches up.
+
+`object_only` is the exception to the controller-tick part of this rule:
+with `execution.object_motion.mode: direct` (the default), each held-object
+waypoint is resolved and written once, so it reaches its boundary without
+internal interpolation updates. Set the mode to `interpolated` when those
+intermediate kinematic poses are required.
 
 `execution.render_internal_updates: false` can hide those internal ticks from
 the passive viewer without removing them from this flow. Viewer refresh and

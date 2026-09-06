@@ -221,15 +221,22 @@ check; it does not claim physical grasp, contact, reachability, or collision
 success. Unsupported operations (`move`, `push`, `pull`, `press`, standalone
 `grasp`/`release`) fail fast in this mode.
 
-Interpolation limits can be configured under `object_motion`:
+`object_only` applies each held-object waypoint directly by default. If a
+trajectory of intermediate kinematic poses is needed, opt into interpolation:
 
 ```yaml
 execution:
   mode: object_only
   object_motion:
+    mode: interpolated
     max_linear_step: 0.02   # metres per update
     max_angular_step: 0.15  # radians per update
 ```
+
+`object_motion.mode` accepts `direct` (the default) and `interpolated`.
+`direct` performs one kinematic pose write per held-object waypoint and does
+not run physics/controller ticks; `interpolated` retains the bounded motion
+behavior controlled by `max_linear_step` and `max_angular_step`.
 
 See [Stages & Waypoints](stages_and_waypoints.md) for the held-object waypoint
 contract and [Execution Completion Flow](execution_completion_flow.md) for

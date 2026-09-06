@@ -63,6 +63,7 @@ backend: auto_atom.backend.mjc.mujoco_backend.build_mujoco_backend
 execution:
   mode: physical
   object_motion:
+    mode: direct
     max_linear_step: 0.02
     max_angular_step: 0.15
 

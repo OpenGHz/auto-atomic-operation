@@ -56,6 +56,7 @@ from .framework import (
     FixedOrientationGoalConfig,
     IntervalSelectionConfig,
     KeypointSide,
+    ObjectMotionMode,
     Operation,
     PoseControlConfig,
     PoseReference,
@@ -2200,6 +2201,22 @@ class TaskRunner:
             )
         )
         motion = context.task_file.execution.object_motion
+        if motion.mode == ObjectMotionMode.DIRECT:
+            context.backend.apply_object_pose(
+                goal.controlled_object_name,
+                target,
+                env_mask=env_mask,
+            )
+            return True, {
+                "event": "object_pose_reached",
+                "motion_mode": motion.mode.value,
+                "carried_object": goal.controlled_object_name,
+                "target_position": [float(value) for value in target.position[0]],
+                "target_orientation": [float(value) for value in target.orientation[0]],
+                "position_error_before_step": position_distance,
+                "orientation_error_before_step": angular_distance,
+            }
+
         linear_step = float(
             goal.configured_pose.max_linear_step
             if goal.configured_pose.max_linear_step > 0.0
@@ -2232,6 +2249,7 @@ class TaskRunner:
         reached = position_reached and orientation_reached
         return reached, {
             "event": "object_pose_reached" if reached else "object_pose_running",
+            "motion_mode": motion.mode.value,
             "carried_object": goal.controlled_object_name,
             "target_position": [float(value) for value in target.position[0]],
             "target_orientation": [float(value) for value in target.orientation[0]],

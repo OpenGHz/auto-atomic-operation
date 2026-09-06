@@ -23,7 +23,7 @@ from omegaconf import OmegaConf
 
 from auto_atom.execution_config import prepare_task_config_for_instantiation
 from auto_atom.backend.mjc.mujoco_backend import MujocoObjectHandler
-from auto_atom.framework import ExecutionMode, TaskFileConfig
+from auto_atom.framework import ExecutionMode, ObjectMotionMode, TaskFileConfig
 from auto_atom.policy_eval import (
     ConfigDrivenDemoPolicy,
     PolicyActionFeedback,
@@ -201,23 +201,18 @@ def test_physical_preparation_is_a_noop_copy() -> None:
     assert prepared is not raw
 
 
-def test_object_only_runner_skips_eef_and_moves_object_in_bounded_steps() -> None:
-    """EEF approach/retreat is inert; only held-object waypoints move the item."""
+def test_object_only_runner_moves_object_directly_by_default() -> None:
+    """EEF approach/retreat is inert; held-object waypoints are direct by default."""
 
     config = _task_file(
-        "object_only_bounded_motion",
+        "object_only_direct_motion",
         operators={},
-        execution={
-            "mode": "object_only",
-            "object_motion": {
-                "max_linear_step": 0.1,
-                "max_angular_step": 0.2,
-            },
-        },
+        execution={"mode": "object_only"},
     )
     runner = TaskRunner().from_config(config)
     try:
         assert config.execution.mode == ExecutionMode.OBJECT_ONLY
+        assert config.execution.object_motion.mode == ObjectMotionMode.DIRECT
         assert [plan.operator_name for plan in runner._plan] == [
             "object_only",
             "object_only",
@@ -237,29 +232,17 @@ def test_object_only_runner_skips_eef_and_moves_object_in_bounded_steps() -> Non
 
         object_handler = runner._context.backend.objects["item"]
         previous = object_handler.get_pose().position[0].copy()
-        previous_orientation = object_handler.get_pose().orientation[0].copy()
         update = runner.reset()
         assert update.done.tolist() == [False]
         assert update.details[0]["execution"]["mode"] == "object_only"
 
-        movement_deltas: list[float] = []
-        angular_deltas: list[float] = []
         action_events: list[tuple[str, str]] = []
-        for _ in range(30):
+        movement_deltas: list[float] = []
+        for _ in range(10):
             update = runner.update()
             current = object_handler.get_pose().position[0].copy()
-            current_orientation = object_handler.get_pose().orientation[0].copy()
             movement_deltas.append(float(np.linalg.norm(current - previous)))
-            angular_deltas.append(
-                float(
-                    quaternion_angular_distance(
-                        previous_orientation,
-                        current_orientation,
-                    )
-                )
-            )
             previous = current
-            previous_orientation = current_orientation
             action_events.append(
                 (
                     str(update.details[0].get("action", "")),
@@ -276,9 +259,13 @@ def test_object_only_runner_skips_eef_and_moves_object_in_bounded_steps() -> Non
         assert object_handler.get_pose().orientation[0] == pytest.approx(
             [0.0, 0.0, 1.0, 0.0]
         )
-        assert max(movement_deltas) <= 0.1000001
-        assert max(angular_deltas) <= 0.200001
+        assert len(movement_deltas) == 6
         assert movement_deltas[0] == pytest.approx(0.0)
+        assert max(movement_deltas) > 0.2
+        assert any(
+            action == "object_pose" and event == "object_pose_reached"
+            for action, event in action_events
+        )
         assert any(action == "noop" for action, _event in action_events)
         assert any(event == "object_acquired" for _action, event in action_events)
         assert any(event == "object_released" for _action, event in action_events)
@@ -287,6 +274,57 @@ def test_object_only_runner_skips_eef_and_moves_object_in_bounded_steps() -> Non
             record.details["execution_mode"] == "object_only"
             for record in runner.records
         )
+    finally:
+        runner.close()
+
+
+def test_object_only_runner_can_interpolate_when_explicitly_configured() -> None:
+    """The former bounded transport remains available as an explicit mode."""
+
+    config = _task_file(
+        "object_only_interpolated_motion",
+        operators={},
+        execution={
+            "mode": "object_only",
+            "object_motion": {
+                "mode": "interpolated",
+                "max_linear_step": 0.1,
+                "max_angular_step": 0.2,
+            },
+        },
+    )
+    runner = TaskRunner().from_config(config)
+    try:
+        object_handler = runner._context.backend.objects["item"]
+        previous = object_handler.get_pose().position[0].copy()
+        previous_orientation = object_handler.get_pose().orientation[0].copy()
+        runner.reset()
+
+        movement_deltas: list[float] = []
+        angular_deltas: list[float] = []
+        for _ in range(30):
+            update = runner.update()
+            current = object_handler.get_pose().position[0].copy()
+            current_orientation = object_handler.get_pose().orientation[0].copy()
+            movement_deltas.append(float(np.linalg.norm(current - previous)))
+            angular_deltas.append(
+                float(
+                    quaternion_angular_distance(
+                        previous_orientation,
+                        current_orientation,
+                    )
+                )
+            )
+            previous = current
+            previous_orientation = current_orientation
+            if bool(update.done[0]):
+                break
+
+        assert update.done.tolist() == [True]
+        assert update.success.tolist() == [True]
+        assert max(movement_deltas) <= 0.1000001
+        assert max(angular_deltas) <= 0.200001
+        assert sum(value > 1e-8 for value in movement_deltas) > 1
     finally:
         runner.close()
 

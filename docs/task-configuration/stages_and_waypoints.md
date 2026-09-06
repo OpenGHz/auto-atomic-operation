@@ -100,8 +100,11 @@ call returns:
 
 For `primitive`, `keypoint`, and `stage`, `TaskRunner` performs normal
 controller updates internally until each selected environment reaches its own
-next boundary. Faster batch environments stop at their first boundary instead
-of advancing again while slower environments catch up.
+next boundary. This applies to physical execution and to
+`object_only` with `object_motion.mode: interpolated`. In the default
+`object_only` `direct` mode, a held-object waypoint is written once and does
+not require interpolation ticks. Faster batch environments stop at their first
+boundary instead of advancing again while slower environments catch up.
 
 `execution.max_internal_updates_per_update` (default `10000`) is a
 per-environment safety limit for those internal controller updates within one
@@ -163,8 +166,10 @@ update reaches its boundary.
   fast-forward remains a task failure; it is never overwritten as interval
   success.
 
-Fast-forward uses the same physics, IK, contact handling, randomization, pose
-references, and timeouts as ordinary updates. It does not teleport state.
+For physical execution and interpolated object-only motion, fast-forward uses
+the same physics, IK, contact handling, randomization, pose references, and
+timeouts as ordinary updates. It does not teleport state. Direct object-only
+motion intentionally writes each resolved object pose once.
 Set `execution.render_internal_updates: false` to show only the selected start
 boundary state instead of animating the reset prefix.
 

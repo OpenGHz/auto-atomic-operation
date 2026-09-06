@@ -1100,16 +1100,29 @@ class ExecutionMode(str, Enum):
     """Hide operators and kinematically transport picked objects."""
 
 
+class ObjectMotionMode(str, Enum):
+    """How held-object waypoints are applied in ``object_only`` mode."""
+
+    DIRECT = "direct"
+    """Apply each resolved held-object waypoint in one kinematic update."""
+
+    INTERPOLATED = "interpolated"
+    """Advance toward each waypoint using the configured per-update limits."""
+
+
 class ObjectMotionExecutionConfig(BaseModel, frozen=True):
     """Kinematic object-transport settings for ``object_only`` execution."""
 
     model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid")
 
+    mode: ObjectMotionMode = ObjectMotionMode.DIRECT
+    """Object-motion strategy; ``direct`` is the efficient default."""
+
     max_linear_step: PositiveFloat = 0.02
-    """Default maximum object translation per controller update, in metres."""
+    """Maximum translation per update when ``mode=interpolated``, in metres."""
 
     max_angular_step: PositiveFloat = 0.15
-    """Default maximum object rotation per controller update, in radians."""
+    """Maximum rotation per update when ``mode=interpolated``, in radians."""
 
 
 class ExecutionConfig(BaseModel, frozen=True):
@@ -1119,9 +1132,10 @@ class ExecutionConfig(BaseModel, frozen=True):
 
     mode: ExecutionMode = ExecutionMode.PHYSICAL
     """Execution strategy. ``object_only`` removes configured operators and
-    directly moves the logically picked object along held-object waypoints."""
+    directly moves the logically picked object along held-object waypoints.
+    """
     object_motion: ObjectMotionExecutionConfig = ObjectMotionExecutionConfig()
-    """Kinematic object-motion limits used only by ``object_only`` mode."""
+    """Kinematic object-motion policy used only by ``object_only`` mode."""
     interval_selection: Optional[IntervalSelectionConfig] = None
     """Optional task interval. ``reset()`` advances to the configured start
     boundary, and execution succeeds at the configured stop boundary."""

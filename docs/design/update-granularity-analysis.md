@@ -25,6 +25,11 @@
   外部交互次数；配置 `render_internal_updates: false` 后，viewer 只显示每次
   公开调用的最终 boundary 状态。
 
+`object_only` 默认使用 `execution.object_motion.mode: direct`，held-object
+waypoint 会在一次运动学写入中完成，不执行无意义的物体插值 tick。若需要
+中间位姿轨迹，可显式设置 `mode: interpolated`，恢复按
+`max_linear_step` / `max_angular_step` 限步推进。
+
 如果要求物理状态真正瞬时跳到点位，只能使用 kinematic teleport 或状态
 snapshot。这两类方案会绕过正常接触动力学，不适合作为 pick/place
 数据采集的默认模式。
@@ -410,13 +415,18 @@ return
 Runner 宏步只改变外部调用粒度。如果内部每个物理 tick 仍然同步 viewer 并执行
 `step_delay`，画面仍会逐步运动，只是调用方被阻塞在一次函数调用中。
 
+Direct object-only motion 是有意的例外：它没有内部物理 tick，viewer 只会看到
+该 held-object waypoint 的最终运动学状态。
+
 viewer-only fast-forward 独立于公开调用粒度配置：
 
 - `render_internal_updates=true`：显示完整运动过程；
 - `render_internal_updates=false`：内部不 sync/sleep，只在 boundary 刷新一次；
 
-boundary 的最终刷新本身不执行 `step_delay`。两种模式执行相同的物理 tick、IK、
-接触、抓取判定与 timeout，也不影响显式 `capture_observation()` 或 camera render。
+boundary 的最终刷新本身不执行 `step_delay`。物理模式和 interpolated
+object-only 模式执行相同的物理 tick、IK、接触、抓取判定与 timeout；direct
+object-only 模式不执行这些物理 tick，也不影响显式 `capture_observation()` 或
+camera render。
 尚未实现的 dense-recording callback 将继续与 viewer 策略保持独立。
 
 ### 数据采集影响
