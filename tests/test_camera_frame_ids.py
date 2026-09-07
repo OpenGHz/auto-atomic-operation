@@ -3,17 +3,27 @@ import sys
 from pathlib import Path
 
 import numpy as np
+import mujoco
+import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from auto_atom.basis.mjc.mujoco_basis import DataType, MujocoBasis
+from auto_atom.basis.mjc.mujoco_basis import (
+    CameraCalibrationConfig,
+    CameraExtrinsicsConfig,
+    CameraSpec,
+    DataType,
+    EnvConfig,
+    MujocoBasis,
+)
 from auto_atom.basis.mjc.mujoco_env import (
     KeyCreator,
     UnifiedMujocoEnv,
     create_image_data,
 )
+from auto_atom.scene_composition import SceneConfig
 
 
 class _FakeRenderer:
@@ -89,6 +99,77 @@ def test_camera_info_exposes_header_frame_id() -> None:
     assert camera_info["header"]["frame_id"] == "camera_color_optical_frame"
     assert camera_info["width"] == 640
     assert camera_info["height"] == 480
+
+
+def test_camera_clip_range_requires_near_before_far() -> None:
+    with pytest.raises(ValueError, match="near < far"):
+        CameraSpec(name="camera", clip_range_m=(1.0, 1.0))
+
+
+def test_camera_clip_scope_converts_metric_range_and_restores_model() -> None:
+    model = mujoco.MjModel.from_xml_string(
+        """
+        <mujoco>
+          <statistic extent="2"/>
+          <visual><map znear="0.01" zfar="50"/></visual>
+          <worldbody><camera name="camera"/></worldbody>
+        </mujoco>
+        """
+    )
+    env = MujocoBasis.__new__(MujocoBasis)
+    env.model = model
+    spec = CameraSpec(name="camera", clip_range_m=(0.001, 5.0))
+    original = (float(model.vis.map.znear), float(model.vis.map.zfar))
+
+    with env._camera_clip_scope(spec):
+        assert float(model.vis.map.znear) == pytest.approx(0.0005)
+        assert float(model.vis.map.zfar) == pytest.approx(2.5)
+
+    assert (float(model.vis.map.znear), float(model.vis.map.zfar)) == original
+
+
+def test_yaml_camera_calibration_overrides_fovy_and_parent_frame_pose(
+    tmp_path: Path,
+) -> None:
+    scene = tmp_path / "scene.xml"
+    scene.write_text(
+        """
+        <mujoco>
+          <worldbody>
+            <body name="mount" pos="1 2 3">
+              <camera name="mounted_cam"/>
+            </body>
+          </worldbody>
+        </mujoco>
+        """,
+        encoding="utf-8",
+    )
+    config = EnvConfig(
+        scene=SceneConfig(base=scene),
+        enabled_sensors={DataType.CAMERA},
+        cameras=[
+            CameraSpec(
+                name="mounted_cam",
+                parent_frame="mount",
+                calibration=CameraCalibrationConfig(
+                    fovy_deg=60.0,
+                    extrinsics=CameraExtrinsicsConfig(
+                        position=(0.1, 0.2, 0.3),
+                        orientation=(0.0, 0.0, 0.0, 1.0),
+                    ),
+                ),
+            )
+        ],
+    )
+    env = MujocoBasis(config)
+    try:
+        camera_id = mujoco.mj_name2id(
+            env.model, mujoco.mjtObj.mjOBJ_CAMERA, "mounted_cam"
+        )
+        np.testing.assert_allclose(env.data.cam_xpos[camera_id], [1.1, 2.2, 3.3])
+        assert float(env.model.cam_fovy[camera_id]) == pytest.approx(60.0)
+    finally:
+        env.close()
 
 
 def test_structured_camera_messages_share_frame_id_with_camera_info() -> None:

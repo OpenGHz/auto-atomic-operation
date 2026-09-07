@@ -43,6 +43,42 @@ the tool pages for their complete schemas.
 and frame resources. `task_operators` supplies task-facing settings for those
 logical names. The names commonly match, but the two layers are independent.
 
+### MuJoCo camera configuration
+
+MuJoCo camera streams are configured under `env.cameras`. `enable_color` and
+`enable_depth` select RGB and depth outputs independently. `depth_max` keeps
+the existing depth-value limit; `clip_range_m: [near_m, far_m]` additionally
+defines a per-camera metric near/far range. Native MuJoCo rendering applies
+that range while rendering the complete RGB/depth pass and restores the model's
+global clip state afterward. Gaussian Splatting uses the same range when its
+RGB/depth outputs are injected.
+
+```yaml
+env:
+  cameras:
+    - name: eef_wrist_cam
+      role: operator
+      width: 640
+      height: 352
+      enable_color: true
+      enable_depth: true
+      parent_frame: eef_pose
+      is_static: false
+      clip_range_m: [0.001, 5.0]
+      calibration:
+        projection: mujoco_perspective
+        fovy_deg: 102.89
+        extrinsics:
+          position: [-0.1086, 0.0, 0.04]
+          orientation: [0.0, 0.0, 0.0, 1.0]
+```
+
+`calibration.fovy_deg` overrides the XML camera's vertical FOV. Calibration
+`extrinsics` are expressed relative to `parent_frame`; omitted components keep
+the XML value. The supported projection is `mujoco_perspective`, matching both
+the native MuJoCo and Gaussian Splatting adapters. `clip_range_m` is optional;
+when omitted, the XML scene's clipping behavior is preserved.
+
 ## Minimal task file
 
 This example uses the same Hydra registration pattern as the custom-backend

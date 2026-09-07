@@ -33,6 +33,7 @@ env:
       enable_heat_map: ${enable_heat_map}
       parent_frame: eef_pose
       is_static: false
+      clip_range_m: [0.001, 50.0]
     - name: rack_camera_front
       width: ${cam_width}
       height: ${cam_height}

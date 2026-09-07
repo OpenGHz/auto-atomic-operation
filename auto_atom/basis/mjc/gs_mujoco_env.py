@@ -59,6 +59,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from auto_atom.basis.mjc.mujoco_env import (
     BatchedUnifiedMujocoEnv,
+    CameraSpec,
     EnvConfig,
     UnifiedMujocoEnv,
     create_image_data,
@@ -69,6 +70,34 @@ _GLOB_META = ("*", "?", "[")
 
 def _has_glob(pattern: str) -> bool:
     return any(c in pattern for c in _GLOB_META)
+
+
+def _apply_gs_clip_to_depth(depth: Any, spec: CameraSpec) -> Any:
+    """Apply a camera's metric clip range to a GS depth image."""
+    if spec.clip_range_m is None:
+        return depth
+    near_m, far_m = (float(value) for value in spec.clip_range_m)
+    if isinstance(depth, torch.Tensor):
+        valid = (depth >= near_m) & (depth <= far_m)
+        return torch.where(valid, depth, torch.zeros_like(depth))
+    array = np.asarray(depth)
+    return np.where((array >= near_m) & (array <= far_m), array, 0.0)
+
+
+def _apply_gs_clip_to_rgb(rgb: Any, spec: CameraSpec, depth: Any | None = None) -> Any:
+    """Blank GS RGB pixels whose paired depth is outside clip range."""
+    if spec.clip_range_m is None or depth is None:
+        return rgb
+    near_m, far_m = (float(value) for value in spec.clip_range_m)
+    if isinstance(depth, torch.Tensor):
+        valid = (depth >= near_m) & (depth <= far_m)
+        if isinstance(rgb, torch.Tensor):
+            return torch.where(valid[..., None], rgb, torch.zeros_like(rgb))
+        valid = valid.detach().cpu().numpy()
+    else:
+        valid = (np.asarray(depth) >= near_m) & (np.asarray(depth) <= far_m)
+    array = np.asarray(rgb)
+    return np.where(valid[..., None], array, 0)
 
 
 def _expand_background_entry(entry: str) -> list[str]:
@@ -1726,7 +1755,14 @@ class GSUnifiedMujocoEnv(UnifiedMujocoEnv):
         for cam_name in all_gs_cams:
             spec = self._camera_specs[cam_name]
             cam_id = self._camera_ids[cam_name]
-            if cam_name in gs_color_set:
+            need_mask = cam_name in gs_mask_set and self._gs_mask_renderers
+            need_depth = (
+                cam_name in gs_depth_set
+                or bool(need_mask)
+                or (cam_name in gs_color_set and spec.clip_range_m is not None)
+            )
+            color_t: Any | None = None
+            if cam_name in gs_color_set and not need_depth:
                 rgb_t = self._render_gs_color_camera(
                     cam_id=cam_id,
                     width=spec.width,
@@ -1735,11 +1771,10 @@ class GSUnifiedMujocoEnv(UnifiedMujocoEnv):
                 rgb = torch.clamp(rgb_t, 0.0, 1.0).mul(255).to(torch.uint8)
                 if self.config.to_numpy:
                     rgb = rgb.cpu().numpy()
-                obs[kc.create_color_key(cam_name)] = {"data": rgb, "t": t}
+                color_t = rgb
             depth_t: torch.Tensor | None = None
             scene_depth_t: torch.Tensor | None = None
-            need_mask = cam_name in gs_mask_set and self._gs_mask_renderers
-            if cam_name in gs_depth_set or need_mask:
+            if need_depth:
                 (
                     _fg_rgb,
                     fg_depth,
@@ -1757,6 +1792,14 @@ class GSUnifiedMujocoEnv(UnifiedMujocoEnv):
                     bg_depth=bg_depth,
                 )
                 depth_t = full_depth[0, 0]
+                if cam_name in gs_color_set:
+                    rgb_t = _full_rgb[0, 0]
+                    color_t = torch.clamp(rgb_t, 0.0, 1.0).mul(255).to(torch.uint8)
+                    if self.config.to_numpy:
+                        color_t = color_t.cpu().numpy()
+                    color_t = _apply_gs_clip_to_rgb(color_t, spec, depth_t[..., 0])
+            if color_t is not None:
+                obs[kc.create_color_key(cam_name)] = {"data": color_t, "t": t}
             if cam_name in gs_depth_set and depth_t is not None:
                 depth = depth_t[..., 0]  # (H, W, 1) -> (H, W)
                 if self.config.to_numpy:
@@ -1766,6 +1809,7 @@ class GSUnifiedMujocoEnv(UnifiedMujocoEnv):
                     depth = torch.where(
                         depth > spec.depth_max, torch.zeros_like(depth), depth
                     )
+                depth = _apply_gs_clip_to_depth(depth, spec)
                 obs[kc.create_depth_key(cam_name)] = {
                     "data": depth,
                     "t": t,
@@ -2540,6 +2584,10 @@ class BatchedGSUnifiedMujocoEnv(BatchedUnifiedMujocoEnv):
                 any(c in gs_mask_set for c in cam_names) and self._gs_mask_renderers
             )
             need_depth_render = any_depth or any_mask
+            need_depth_render = need_depth_render or any(
+                c in gs_color_set and self._camera_specs[c].clip_range_m is not None
+                for c in cam_names
+            )
 
             # ---- Single FG+BG render for all cameras in this group ----
             fg_rgb = fg_depth = bg_depth = full_rgb = full_depth = alphas = None
@@ -2588,11 +2636,19 @@ class BatchedGSUnifiedMujocoEnv(BatchedUnifiedMujocoEnv):
                     rgb = torch.clamp(rgb, 0.0, 1.0).mul(255).to(torch.uint8)
                     if self.config.to_numpy:
                         rgb = rgb.cpu().numpy()
+                    if spec.clip_range_m is not None and full_depth is not None:
+                        rgb = _apply_gs_clip_to_rgb(
+                            rgb, spec, full_depth[:, cam_idx, :, :, 0]
+                        )
                 elif cam_name in gs_color_set and fg_rgb is not None:
                     rgb = fg_rgb[:, cam_idx]
                     rgb = torch.clamp(rgb, 0.0, 1.0).mul(255).to(torch.uint8)
                     if self.config.to_numpy:
                         rgb = rgb.cpu().numpy()
+                    if spec.clip_range_m is not None and full_depth is not None:
+                        rgb = _apply_gs_clip_to_rgb(
+                            rgb, spec, full_depth[:, cam_idx, :, :, 0]
+                        )
                 else:
                     has_color = False
                 if has_color:
@@ -2617,6 +2673,7 @@ class BatchedGSUnifiedMujocoEnv(BatchedUnifiedMujocoEnv):
                             torch.zeros_like(depth),
                             depth,
                         )
+                    depth = _apply_gs_clip_to_depth(depth, spec)
                     data = (
                         create_image_data_batch(depth, timestamps, cam_name)
                         if structured
@@ -3031,6 +3088,14 @@ class BatchedGSUnifiedMujocoEnv(BatchedUnifiedMujocoEnv):
             any_mask = (
                 any(c in gs_mask_set for c in cam_names) and self._gs_mask_renderers
             )
+            need_depth_render = (
+                any_depth
+                or any_mask
+                or any(
+                    c in gs_color_set and self._camera_specs[c].clip_range_m is not None
+                    for c in cam_names
+                )
+            )
 
             # Foreground render at nenv=1, no bg_imgs (we composite manually
             # so background can have leading dim N).
@@ -3077,6 +3142,10 @@ class BatchedGSUnifiedMujocoEnv(BatchedUnifiedMujocoEnv):
                     )
                     if self.config.to_numpy:
                         rgb = rgb.cpu().numpy()
+                    if spec.clip_range_m is not None:
+                        rgb = _apply_gs_clip_to_rgb(
+                            rgb, spec, full_depth[:, cam_idx, :, :, 0]
+                        )
                     obs[kc.create_color_key(cam_name)] = {
                         "data": rgb
                         if not structured
@@ -3096,6 +3165,7 @@ class BatchedGSUnifiedMujocoEnv(BatchedUnifiedMujocoEnv):
                             torch.zeros_like(depth),
                             depth,
                         )
+                    depth = _apply_gs_clip_to_depth(depth, spec)
                     data = (
                         create_image_data_batch(depth, timestamps, cam_name)
                         if structured

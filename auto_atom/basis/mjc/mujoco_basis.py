@@ -9,6 +9,7 @@ stepping.  It deliberately does **not** provide ``step(action)`` or
 
 import copy
 import logging
+import math
 import threading
 import time
 from contextlib import contextmanager
@@ -34,6 +35,7 @@ from pydantic import (
     ConfigDict,
     Field,
     ImportString,
+    PositiveFloat,
     field_serializer,
     field_validator,
     model_validator,
@@ -70,6 +72,51 @@ class DataType(str, Enum):
     POSE = "pose"
 
 
+class CameraExtrinsicsConfig(BaseModel, frozen=True):
+    """Optional camera pose overrides expressed in the camera's parent frame."""
+
+    model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid")
+
+    position: Tuple[float, float, float] | None = None
+    """Camera position ``[x, y, z]`` in metres relative to ``parent_frame``."""
+    orientation: Tuple[float, float, float, float] | None = None
+    """Camera orientation quaternion ``[x, y, z, w]`` relative to ``parent_frame``."""
+
+    @model_validator(mode="after")
+    def validate_orientation(self) -> "CameraExtrinsicsConfig":
+        if self.position is None and self.orientation is None:
+            raise ValueError("camera extrinsics must set position or orientation")
+        if self.orientation is not None:
+            if any(not math.isfinite(value) for value in self.orientation):
+                raise ValueError("camera extrinsics orientation must be finite")
+            if math.fsum(value * value for value in self.orientation) <= 1.0e-24:
+                raise ValueError("camera extrinsics orientation must be non-zero")
+        if self.position is not None and any(
+            not math.isfinite(value) for value in self.position
+        ):
+            raise ValueError("camera extrinsics position must be finite")
+        return self
+
+
+class CameraCalibrationConfig(BaseModel, frozen=True):
+    """YAML-owned projection and extrinsic calibration for one camera."""
+
+    model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid")
+
+    projection: Literal["mujoco_perspective"] = "mujoco_perspective"
+    """Projection model supported by the native MuJoCo and GS adapters."""
+    fovy_deg: PositiveFloat | None = None
+    """Vertical field of view in degrees; omitted preserves the XML value."""
+    extrinsics: CameraExtrinsicsConfig | None = None
+    """Optional pose override relative to the camera's ``parent_frame``."""
+
+    @model_validator(mode="after")
+    def validate_fovy(self) -> "CameraCalibrationConfig":
+        if self.fovy_deg is not None and self.fovy_deg >= 180.0:
+            raise ValueError("camera calibration fovy_deg must be less than 180")
+        return self
+
+
 class CameraSpec(BaseModel, frozen=True):
     model_config = ConfigDict(validate_assignment=True, extra="forbid")
 
@@ -88,6 +135,17 @@ class CameraSpec(BaseModel, frozen=True):
     """Whether to include depth images in the captured observation."""
     depth_max: float = 5.0
     """Maximum valid depth in metres; pixels beyond this distance are set to 0."""
+    calibration: CameraCalibrationConfig | None = None
+    """Optional YAML-owned projection and extrinsic calibration."""
+    clip_range_m: Tuple[PositiveFloat, PositiveFloat] | None = None
+    """Per-camera native rendering clip range ``[near, far]`` in metres.
+
+    MuJoCo stores near/far values as scene-extent multipliers globally on the
+    model.  When this is set, the backend temporarily converts the range to
+    those multipliers around the complete RGB/depth render for this camera,
+    then restores the previous model values.  ``None`` preserves the XML
+    scene's native clipping behavior.
+    """
     enable_mask: bool = False
     """Whether to include a binary segmentation mask for configured objects."""
     enable_heat_map: bool = False
@@ -117,6 +175,16 @@ class CameraSpec(BaseModel, frozen=True):
             or self.enable_mask
             or self.enable_heat_map
         )
+
+    @model_validator(mode="after")
+    def validate_clip_range(self) -> "CameraSpec":
+        if self.clip_range_m is not None:
+            near_m, far_m = self.clip_range_m
+            if near_m >= far_m:
+                raise ValueError(
+                    f"clip_range_m must satisfy near < far, got [{near_m}, {far_m}]"
+                )
+        return self
 
 
 class ViewerConfig(BaseModel, frozen=True):
@@ -593,6 +661,8 @@ class MujocoBasis:
                         f"Camera '{name}' auto-detected parent frame: {entry[0]} '{entry[2]}'"
                     )
 
+        self._apply_camera_calibrations()
+
         self._tactile_manager = None
         if (
             DataType.TACTILE in config.enabled_sensors
@@ -838,6 +908,102 @@ class MujocoBasis:
         if body_id >= 0:
             return ("body", int(body_id), name)
         return None
+
+    def _frame_pose_world(
+        self, frame: tuple[str, int, str]
+    ) -> tuple[np.ndarray, np.ndarray]:
+        kind, frame_id, _name = frame
+        if kind == "site":
+            return (
+                np.asarray(self.data.site_xpos[frame_id], dtype=np.float64),
+                np.asarray(self.data.site_xmat[frame_id], dtype=np.float64).reshape(
+                    3, 3
+                ),
+            )
+        return (
+            np.asarray(self.data.xpos[frame_id], dtype=np.float64),
+            np.asarray(self.data.xmat[frame_id], dtype=np.float64).reshape(3, 3),
+        )
+
+    def _apply_camera_calibrations(self) -> None:
+        """Apply YAML camera calibration before capturing reset baselines."""
+        calibrations = {
+            name: spec.calibration
+            for name, spec in self._camera_specs.items()
+            if spec.calibration is not None and name in self._camera_ids
+        }
+        if not calibrations:
+            return
+
+        mujoco.mj_forward(self.model, self.data)
+        for name, calibration in calibrations.items():
+            assert calibration is not None
+            cam_id = self._camera_ids[name]
+            if calibration.fovy_deg is not None:
+                self.model.cam_fovy[cam_id] = float(calibration.fovy_deg)
+            extrinsics = calibration.extrinsics
+            if extrinsics is None:
+                continue
+
+            parent = self._camera_parent_frame.get(name)
+            if parent is None:
+                body_id = int(self.model.cam_bodyid[cam_id])
+                if body_id == 0:
+                    parent_pos = np.zeros(3, dtype=np.float64)
+                    parent_rot = np.eye(3, dtype=np.float64)
+                else:
+                    parent_pos = np.asarray(self.data.xpos[body_id], dtype=np.float64)
+                    parent_rot = np.asarray(
+                        self.data.xmat[body_id], dtype=np.float64
+                    ).reshape(3, 3)
+            else:
+                parent_pos, parent_rot = self._frame_pose_world(parent)
+
+            current_pos = parent_rot.T @ (
+                np.asarray(self.data.cam_xpos[cam_id], dtype=np.float64) - parent_pos
+            )
+            current_rot = parent_rot.T @ np.asarray(
+                self.data.cam_xmat[cam_id], dtype=np.float64
+            ).reshape(3, 3)
+            relative_pos = (
+                np.asarray(extrinsics.position, dtype=np.float64)
+                if extrinsics.position is not None
+                else current_pos
+            )
+            relative_rot = (
+                quaternion_to_rotation_matrix(
+                    np.asarray(extrinsics.orientation, dtype=np.float64)
+                )
+                if extrinsics.orientation is not None
+                else current_rot
+            )
+            world_pos = parent_pos + parent_rot @ relative_pos
+            world_rot = parent_rot @ relative_rot
+
+            body_id = int(self.model.cam_bodyid[cam_id])
+            body_pos = np.asarray(self.data.xpos[body_id], dtype=np.float64)
+            body_rot = np.asarray(self.data.xmat[body_id], dtype=np.float64).reshape(
+                3, 3
+            )
+            self.model.cam_pos[cam_id] = body_rot.T @ (world_pos - body_pos)
+            world_quat_xyzw = quaternion_from_matrix_3x3(world_rot)
+            world_quat_wxyz = np.asarray(
+                [world_quat_xyzw[3], *world_quat_xyzw[:3]], dtype=np.float64
+            )
+            body_quat_wxyz = np.asarray(self.data.xquat[body_id], dtype=np.float64)
+            inverse_body_quat = np.empty(4, dtype=np.float64)
+            local_quat = np.empty(4, dtype=np.float64)
+            mujoco.mju_negQuat(inverse_body_quat, body_quat_wxyz)
+            mujoco.mju_mulQuat(local_quat, inverse_body_quat, world_quat_wxyz)
+            self.model.cam_quat[cam_id] = local_quat
+            mujoco.mj_forward(self.model, self.data)
+
+        self._model_cam_pos_baseline = np.asarray(
+            self.model.cam_pos, dtype=np.float64
+        ).copy()
+        self._model_cam_quat_baseline = np.asarray(
+            self.model.cam_quat, dtype=np.float64
+        ).copy()
 
     def _sensor_id(self, name: str) -> int:
         sid = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_SENSOR, name)
@@ -1099,6 +1265,29 @@ class MujocoBasis:
     # Camera render visibility
     # ------------------------------------------------------------------
 
+    @contextmanager
+    def _camera_clip_scope(self, spec: CameraSpec) -> Iterator[None]:
+        """Apply one camera's metric clip range for a complete render pass."""
+        clip_range = getattr(spec, "clip_range_m", None)
+        if clip_range is None:
+            yield
+            return
+        extent = float(self.model.stat.extent)
+        if not np.isfinite(extent) or extent <= 0.0:
+            raise ValueError(
+                "Cannot apply camera clip_range_m: model.stat.extent must be positive"
+            )
+        previous_znear = float(self.model.vis.map.znear)
+        previous_zfar = float(self.model.vis.map.zfar)
+        near_m, far_m = (float(value) for value in clip_range)
+        try:
+            self.model.vis.map.znear = near_m / extent
+            self.model.vis.map.zfar = far_m / extent
+            yield
+        finally:
+            self.model.vis.map.znear = previous_znear
+            self.model.vis.map.zfar = previous_zfar
+
     def _resolve_operator_render_geom_ids(self) -> frozenset[int]:
         """Return geom IDs belonging to configured operator body subtrees."""
         root_names = {
@@ -1231,14 +1420,20 @@ class MujocoBasis:
             ),
         )
         fovy = float(self.model.cam_fovy[cam_id]) * pi / 180.0
+        clip_range = getattr(spec, "clip_range_m", None)
+        if clip_range is None:
+            near_m = float(self.model.vis.map.znear * self.model.stat.extent)
+            far_m = float(self.model.vis.map.zfar * self.model.stat.extent)
+        else:
+            near_m, far_m = (float(value) for value in clip_range)
         return CameraModel(
             name=camera_name,
             pose=pose,
             width=spec.width,
             height=spec.height,
             fovy_radians=fovy,
-            near=float(self.model.vis.map.znear),
-            far=float(self.model.vis.map.zfar),
+            near=near_m,
+            far=far_m,
         )
 
     def get_support_geometry(self, entity_name: str) -> SupportGeometry:
@@ -1440,6 +1635,7 @@ class MujocoBasis:
         camera_info = self._get_camera_info()
         camera_extrinsics = self._get_camera_extrinsics()
         for cam_name in self._camera_ids:
+            clip_range = getattr(self._camera_specs[cam_name], "clip_range_m", None)
             info["cameras"][cam_name] = {
                 "camera_info": {
                     stream_type: camera_info[cam_name]
@@ -1447,6 +1643,7 @@ class MujocoBasis:
                 },
                 # TODO: should separate extrinsics for color and depth?
                 "camera_extrinsics": camera_extrinsics[cam_name],
+                "clip_range_m": list(clip_range) if clip_range is not None else None,
             }
         return info
 
