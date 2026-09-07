@@ -1764,45 +1764,65 @@ class UnifiedMujocoEnv(MujocoBasis):
                 obs_keys = set(obs.keys())
                 cam_id = self._camera_ids[cam_name]
                 spec = self._camera_specs[cam_name]
-                with self._camera_clip_scope(spec):
-                    renderer.update_scene(
-                        self.data,
-                        camera=cam_id,
-                        scene_option=self._renderer_scene_option,
+                rgb_and_depth_share_clip = (
+                    spec.rgb_clip_range_m == spec.depth_clip_range_m
+                )
+                if spec.enable_color or spec.enable_mask or spec.enable_heat_map:
+                    with self._camera_clip_scope(spec.rgb_clip_range_m):
+                        renderer.update_scene(
+                            self.data,
+                            camera=cam_id,
+                            scene_option=self._renderer_scene_option,
+                        )
+                        self._hide_operator_geoms_from_camera_scene(renderer)
+                        renderer.disable_depth_rendering()
+                        renderer.disable_segmentation_rendering()
+                        if spec.enable_color:
+                            color_key = kc.create_color_key(cam_name)
+                            obs[color_key] = {
+                                "data": np.asarray(renderer.render(), dtype=np.uint8),
+                                "t": t,
+                            }
+                            color_keys.add(color_key)
+                        if spec.enable_mask or spec.enable_heat_map:
+                            renderer.enable_segmentation_rendering()
+                            segmentation = np.asarray(renderer.render(), dtype=np.int32)
+                            renderer.disable_segmentation_rendering()
+                            if spec.enable_mask:
+                                obs[kc.create_mask_key(cam_name)] = {
+                                    "data": self._build_binary_mask(segmentation),
+                                    "t": t,
+                                }
+                            if spec.enable_heat_map:
+                                obs[kc.create_heat_map_key(cam_name)] = {
+                                    "data": self._build_operation_mask(segmentation),
+                                    "t": t,
+                                }
+                if spec.enable_depth:
+                    depth_clip_range = (
+                        spec.rgb_clip_range_m
+                        if rgb_and_depth_share_clip
+                        else spec.depth_clip_range_m
                     )
-                    self._hide_operator_geoms_from_camera_scene(renderer)
-                    renderer.disable_depth_rendering()
-                    renderer.disable_segmentation_rendering()
-                    if spec.enable_color:
-                        color_key = kc.create_color_key(cam_name)
-                        obs[color_key] = {
-                            "data": np.asarray(renderer.render(), dtype=np.uint8),
-                            "t": t,
-                        }
-                        color_keys.add(color_key)
-                    if spec.enable_depth:
+                    with self._camera_clip_scope(depth_clip_range):
+                        if not rgb_and_depth_share_clip or not (
+                            spec.enable_color
+                            or spec.enable_mask
+                            or spec.enable_heat_map
+                        ):
+                            renderer.update_scene(
+                                self.data,
+                                camera=cam_id,
+                                scene_option=self._renderer_scene_option,
+                            )
+                            self._hide_operator_geoms_from_camera_scene(renderer)
                         renderer.enable_depth_rendering()
                         depth = np.asarray(renderer.render())
                         renderer.disable_depth_rendering()
-                        depth[depth > spec.depth_max] = 0.0
                         obs[kc.create_depth_key(cam_name)] = {
                             "data": depth,
                             "t": t,
                         }
-                    if spec.enable_mask or spec.enable_heat_map:
-                        renderer.enable_segmentation_rendering()
-                        segmentation = np.asarray(renderer.render(), dtype=np.int32)
-                        renderer.disable_segmentation_rendering()
-                        if spec.enable_mask:
-                            obs[kc.create_mask_key(cam_name)] = {
-                                "data": self._build_binary_mask(segmentation),
-                                "t": t,
-                            }
-                        if spec.enable_heat_map:
-                            obs[kc.create_heat_map_key(cam_name)] = {
-                                "data": self._build_operation_mask(segmentation),
-                                "t": t,
-                            }
                 if structured:
                     cam_keys = obs.keys() - obs_keys
                     frame_id = cam_name

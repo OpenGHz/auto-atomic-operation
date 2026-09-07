@@ -46,12 +46,17 @@ logical names. The names commonly match, but the two layers are independent.
 ### MuJoCo camera configuration
 
 MuJoCo camera streams are configured under `env.cameras`. `enable_color` and
-`enable_depth` select RGB and depth outputs independently. `depth_max` keeps
-the existing depth-value limit; `clip_range_m: [near_m, far_m]` additionally
-defines a per-camera metric near/far range. Native MuJoCo rendering applies
-that range while rendering the complete RGB/depth pass and restores the model's
-global clip state afterward. Gaussian Splatting uses the same range when its
-RGB/depth outputs are injected.
+`enable_depth` select RGB and depth outputs independently.
+`rgb_clip_range_m: [near_m, far_m]` and
+`depth_clip_range_m: [near_m, far_m]` define independent per-camera metric
+ranges. This models an RGB-D sensor whose depth stream has a narrower valid
+range than its aligned RGB stream.
+
+Native MuJoCo applies the RGB range to RGB and semantic-mask rendering and the
+depth range to depth rendering. When the two ranges differ, it rebuilds the
+camera scene for the appropriate output pass and restores the model's global
+clip state afterward. Gaussian Splatting applies the same independent ranges
+to its injected RGB and depth outputs.
 
 ```yaml
 env:
@@ -64,7 +69,8 @@ env:
       enable_depth: true
       parent_frame: eef_pose
       is_static: false
-      clip_range_m: [0.001, 5.0]
+      rgb_clip_range_m: [0.001, 50.0]
+      depth_clip_range_m: [0.10, 5.0]
       calibration:
         projection: mujoco_perspective
         fovy_deg: 102.89
@@ -76,8 +82,9 @@ env:
 `calibration.fovy_deg` overrides the XML camera's vertical FOV. Calibration
 `extrinsics` are expressed relative to `parent_frame`; omitted components keep
 the XML value. The supported projection is `mujoco_perspective`, matching both
-the native MuJoCo and Gaussian Splatting adapters. `clip_range_m` is optional;
-when omitted, the XML scene's clipping behavior is preserved.
+the native MuJoCo and Gaussian Splatting adapters. Both clip ranges are
+optional; when either is omitted, that output stream preserves the XML scene's
+clipping behavior.
 
 ## Minimal task file
 

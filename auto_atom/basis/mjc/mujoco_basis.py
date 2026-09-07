@@ -133,18 +133,23 @@ class CameraSpec(BaseModel, frozen=True):
     """Whether to include RGB images in the captured observation."""
     enable_depth: bool = True
     """Whether to include depth images in the captured observation."""
-    depth_max: float = 5.0
-    """Maximum valid depth in metres; pixels beyond this distance are set to 0."""
     calibration: CameraCalibrationConfig | None = None
     """Optional YAML-owned projection and extrinsic calibration."""
-    clip_range_m: Tuple[PositiveFloat, PositiveFloat] | None = None
-    """Per-camera native rendering clip range ``[near, far]`` in metres.
+    rgb_clip_range_m: Tuple[PositiveFloat, PositiveFloat] | None = None
+    """RGB and semantic-mask clip range ``[near, far]`` in metres.
 
     MuJoCo stores near/far values as scene-extent multipliers globally on the
-    model.  When this is set, the backend temporarily converts the range to
-    those multipliers around the complete RGB/depth render for this camera,
-    then restores the previous model values.  ``None`` preserves the XML
-    scene's native clipping behavior.
+    model. When this is set, the backend temporarily converts the range to
+    those multipliers around the RGB and semantic-mask pass, then restores the
+    previous model values. ``None`` preserves the XML scene's native clipping
+    behavior.
+    """
+    depth_clip_range_m: Tuple[PositiveFloat, PositiveFloat] | None = None
+    """Depth clip range ``[near, far]`` in metres.
+
+    This range is independent from ``rgb_clip_range_m`` so the simulated depth
+    sensor can model a stricter measurable range than its aligned RGB stream.
+    ``None`` preserves the XML scene's native clipping behavior.
     """
     enable_mask: bool = False
     """Whether to include a binary segmentation mask for configured objects."""
@@ -177,12 +182,18 @@ class CameraSpec(BaseModel, frozen=True):
         )
 
     @model_validator(mode="after")
-    def validate_clip_range(self) -> "CameraSpec":
-        if self.clip_range_m is not None:
-            near_m, far_m = self.clip_range_m
+    def validate_clip_ranges(self) -> "CameraSpec":
+        for stream, clip_range in (
+            ("rgb", self.rgb_clip_range_m),
+            ("depth", self.depth_clip_range_m),
+        ):
+            if clip_range is None:
+                continue
+            near_m, far_m = clip_range
             if near_m >= far_m:
                 raise ValueError(
-                    f"clip_range_m must satisfy near < far, got [{near_m}, {far_m}]"
+                    f"{stream}_clip_range_m must satisfy near < far, "
+                    f"got [{near_m}, {far_m}]"
                 )
         return self
 
@@ -1266,20 +1277,22 @@ class MujocoBasis:
     # ------------------------------------------------------------------
 
     @contextmanager
-    def _camera_clip_scope(self, spec: CameraSpec) -> Iterator[None]:
-        """Apply one camera's metric clip range for a complete render pass."""
-        clip_range = getattr(spec, "clip_range_m", None)
-        if clip_range is None:
+    def _camera_clip_scope(
+        self,
+        clip_range_m: Tuple[PositiveFloat, PositiveFloat] | None,
+    ) -> Iterator[None]:
+        """Apply one output stream's metric clip range for a render pass."""
+        if clip_range_m is None:
             yield
             return
         extent = float(self.model.stat.extent)
         if not np.isfinite(extent) or extent <= 0.0:
             raise ValueError(
-                "Cannot apply camera clip_range_m: model.stat.extent must be positive"
+                "Cannot apply camera clip range: model.stat.extent must be positive"
             )
         previous_znear = float(self.model.vis.map.znear)
         previous_zfar = float(self.model.vis.map.zfar)
-        near_m, far_m = (float(value) for value in clip_range)
+        near_m, far_m = (float(value) for value in clip_range_m)
         try:
             self.model.vis.map.znear = near_m / extent
             self.model.vis.map.zfar = far_m / extent
@@ -1420,12 +1433,24 @@ class MujocoBasis:
             ),
         )
         fovy = float(self.model.cam_fovy[cam_id]) * pi / 180.0
-        clip_range = getattr(spec, "clip_range_m", None)
-        if clip_range is None:
-            near_m = float(self.model.vis.map.znear * self.model.stat.extent)
-            far_m = float(self.model.vis.map.zfar * self.model.stat.extent)
+        default_near_m = float(self.model.vis.map.znear * self.model.stat.extent)
+        default_far_m = float(self.model.vis.map.zfar * self.model.stat.extent)
+        if spec.enable_depth:
+            clip_range = spec.depth_clip_range_m
+            near_m, far_m = (
+                (default_near_m, default_far_m)
+                if clip_range is None
+                else tuple(float(value) for value in clip_range)
+            )
+        elif spec.enable_color or spec.enable_mask or spec.enable_heat_map:
+            clip_range = spec.rgb_clip_range_m
+            near_m, far_m = (
+                (default_near_m, default_far_m)
+                if clip_range is None
+                else tuple(float(value) for value in clip_range)
+            )
         else:
-            near_m, far_m = (float(value) for value in clip_range)
+            near_m, far_m = default_near_m, default_far_m
         return CameraModel(
             name=camera_name,
             pose=pose,
@@ -1635,7 +1660,7 @@ class MujocoBasis:
         camera_info = self._get_camera_info()
         camera_extrinsics = self._get_camera_extrinsics()
         for cam_name in self._camera_ids:
-            clip_range = getattr(self._camera_specs[cam_name], "clip_range_m", None)
+            spec = self._camera_specs[cam_name]
             info["cameras"][cam_name] = {
                 "camera_info": {
                     stream_type: camera_info[cam_name]
@@ -1643,7 +1668,16 @@ class MujocoBasis:
                 },
                 # TODO: should separate extrinsics for color and depth?
                 "camera_extrinsics": camera_extrinsics[cam_name],
-                "clip_range_m": list(clip_range) if clip_range is not None else None,
+                "rgb_clip_range_m": (
+                    list(spec.rgb_clip_range_m)
+                    if spec.rgb_clip_range_m is not None
+                    else None
+                ),
+                "depth_clip_range_m": (
+                    list(spec.depth_clip_range_m)
+                    if spec.depth_clip_range_m is not None
+                    else None
+                ),
             }
         return info
 

@@ -73,10 +73,10 @@ def _has_glob(pattern: str) -> bool:
 
 
 def _apply_gs_clip_to_depth(depth: Any, spec: CameraSpec) -> Any:
-    """Apply a camera's metric clip range to a GS depth image."""
-    if spec.clip_range_m is None:
+    """Apply a camera's depth clip range to a GS depth image."""
+    if spec.depth_clip_range_m is None:
         return depth
-    near_m, far_m = (float(value) for value in spec.clip_range_m)
+    near_m, far_m = (float(value) for value in spec.depth_clip_range_m)
     if isinstance(depth, torch.Tensor):
         valid = (depth >= near_m) & (depth <= far_m)
         return torch.where(valid, depth, torch.zeros_like(depth))
@@ -85,10 +85,10 @@ def _apply_gs_clip_to_depth(depth: Any, spec: CameraSpec) -> Any:
 
 
 def _apply_gs_clip_to_rgb(rgb: Any, spec: CameraSpec, depth: Any | None = None) -> Any:
-    """Blank GS RGB pixels whose paired depth is outside clip range."""
-    if spec.clip_range_m is None or depth is None:
+    """Blank GS RGB pixels outside the RGB clip range."""
+    if spec.rgb_clip_range_m is None or depth is None:
         return rgb
-    near_m, far_m = (float(value) for value in spec.clip_range_m)
+    near_m, far_m = (float(value) for value in spec.rgb_clip_range_m)
     if isinstance(depth, torch.Tensor):
         valid = (depth >= near_m) & (depth <= far_m)
         if isinstance(rgb, torch.Tensor):
@@ -1759,7 +1759,7 @@ class GSUnifiedMujocoEnv(UnifiedMujocoEnv):
             need_depth = (
                 cam_name in gs_depth_set
                 or bool(need_mask)
-                or (cam_name in gs_color_set and spec.clip_range_m is not None)
+                or (cam_name in gs_color_set and spec.rgb_clip_range_m is not None)
             )
             color_t: Any | None = None
             if cam_name in gs_color_set and not need_depth:
@@ -1804,11 +1804,6 @@ class GSUnifiedMujocoEnv(UnifiedMujocoEnv):
                 depth = depth_t[..., 0]  # (H, W, 1) -> (H, W)
                 if self.config.to_numpy:
                     depth = depth.cpu().numpy()
-                    depth[depth > spec.depth_max] = 0.0
-                else:
-                    depth = torch.where(
-                        depth > spec.depth_max, torch.zeros_like(depth), depth
-                    )
                 depth = _apply_gs_clip_to_depth(depth, spec)
                 obs[kc.create_depth_key(cam_name)] = {
                     "data": depth,
@@ -2585,7 +2580,7 @@ class BatchedGSUnifiedMujocoEnv(BatchedUnifiedMujocoEnv):
             )
             need_depth_render = any_depth or any_mask
             need_depth_render = need_depth_render or any(
-                c in gs_color_set and self._camera_specs[c].clip_range_m is not None
+                c in gs_color_set and self._camera_specs[c].rgb_clip_range_m is not None
                 for c in cam_names
             )
 
@@ -2636,7 +2631,7 @@ class BatchedGSUnifiedMujocoEnv(BatchedUnifiedMujocoEnv):
                     rgb = torch.clamp(rgb, 0.0, 1.0).mul(255).to(torch.uint8)
                     if self.config.to_numpy:
                         rgb = rgb.cpu().numpy()
-                    if spec.clip_range_m is not None and full_depth is not None:
+                    if spec.rgb_clip_range_m is not None and full_depth is not None:
                         rgb = _apply_gs_clip_to_rgb(
                             rgb, spec, full_depth[:, cam_idx, :, :, 0]
                         )
@@ -2645,7 +2640,7 @@ class BatchedGSUnifiedMujocoEnv(BatchedUnifiedMujocoEnv):
                     rgb = torch.clamp(rgb, 0.0, 1.0).mul(255).to(torch.uint8)
                     if self.config.to_numpy:
                         rgb = rgb.cpu().numpy()
-                    if spec.clip_range_m is not None and full_depth is not None:
+                    if spec.rgb_clip_range_m is not None and full_depth is not None:
                         rgb = _apply_gs_clip_to_rgb(
                             rgb, spec, full_depth[:, cam_idx, :, :, 0]
                         )
@@ -2666,13 +2661,6 @@ class BatchedGSUnifiedMujocoEnv(BatchedUnifiedMujocoEnv):
                     depth = full_depth[:, cam_idx, :, :, 0]  # (Nenv, H, W)
                     if self.config.to_numpy:
                         depth = depth.cpu().numpy()
-                        depth[depth > spec.depth_max] = 0.0
-                    else:
-                        depth = torch.where(
-                            depth > spec.depth_max,
-                            torch.zeros_like(depth),
-                            depth,
-                        )
                     depth = _apply_gs_clip_to_depth(depth, spec)
                     data = (
                         create_image_data_batch(depth, timestamps, cam_name)
@@ -3092,7 +3080,8 @@ class BatchedGSUnifiedMujocoEnv(BatchedUnifiedMujocoEnv):
                 any_depth
                 or any_mask
                 or any(
-                    c in gs_color_set and self._camera_specs[c].clip_range_m is not None
+                    c in gs_color_set
+                    and self._camera_specs[c].rgb_clip_range_m is not None
                     for c in cam_names
                 )
             )
@@ -3142,7 +3131,7 @@ class BatchedGSUnifiedMujocoEnv(BatchedUnifiedMujocoEnv):
                     )
                     if self.config.to_numpy:
                         rgb = rgb.cpu().numpy()
-                    if spec.clip_range_m is not None:
+                    if spec.rgb_clip_range_m is not None:
                         rgb = _apply_gs_clip_to_rgb(
                             rgb, spec, full_depth[:, cam_idx, :, :, 0]
                         )
@@ -3158,13 +3147,6 @@ class BatchedGSUnifiedMujocoEnv(BatchedUnifiedMujocoEnv):
                     depth = full_depth[:, cam_idx, :, :, 0]
                     if self.config.to_numpy:
                         depth = depth.cpu().numpy()
-                        depth[depth > spec.depth_max] = 0.0
-                    else:
-                        depth = torch.where(
-                            depth > spec.depth_max,
-                            torch.zeros_like(depth),
-                            depth,
-                        )
                     depth = _apply_gs_clip_to_depth(depth, spec)
                     data = (
                         create_image_data_batch(depth, timestamps, cam_name)

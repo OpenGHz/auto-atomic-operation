@@ -34,6 +34,7 @@ import numpy as np
 from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig
 
+from auto_atom.basis.mjc.gs_mujoco_env import _apply_gs_clip_to_depth
 from auto_atom.runner.common import get_config_dir, prepare_task_file
 from auto_atom.runtime import ComponentRegistry, TaskRunner
 
@@ -187,14 +188,14 @@ def main(cfg: DictConfig) -> None:
             cam_id = single_env._camera_ids[cam_name]
             spec = single_env._camera_specs[cam_name]
 
-            native_depth = _native_depth(
-                renderer,
-                single_env.data,
-                cam_id,
-                single_env._renderer_scene_option,
-            )
+            with single_env._camera_clip_scope(spec.depth_clip_range_m):
+                native_depth = _native_depth(
+                    renderer,
+                    single_env.data,
+                    cam_id,
+                    single_env._renderer_scene_option,
+                )
             native_depth = _to_depth_image(native_depth.copy())
-            native_depth[native_depth > spec.depth_max] = 0.0
 
             if hasattr(gs_env, "_render_gs_camera_batch") and hasattr(
                 gs_env, "_render_gs_camera"
@@ -257,8 +258,8 @@ def main(cfg: DictConfig) -> None:
             comp_depth_np = _to_depth_image(
                 comp_depth.detach().cpu().numpy().astype(np.float32)
             )
-            fg_depth_np[fg_depth_np > spec.depth_max] = 0.0
-            comp_depth_np[comp_depth_np > spec.depth_max] = 0.0
+            fg_depth_np = _apply_gs_clip_to_depth(fg_depth_np, spec)
+            comp_depth_np = _apply_gs_clip_to_depth(comp_depth_np, spec)
 
             rows.append((cam_name, native_depth, fg_depth_np, comp_depth_np))
             print(

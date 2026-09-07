@@ -1,3 +1,4 @@
+from contextlib import contextmanager
 from types import SimpleNamespace
 import sys
 from pathlib import Path
@@ -29,8 +30,10 @@ from auto_atom.scene_composition import SceneConfig
 class _FakeRenderer:
     def __init__(self, image: np.ndarray):
         self._image = image
+        self.update_count = 0
 
     def update_scene(self, data, camera, scene_option) -> None:
+        self.update_count += 1
         return None
 
     def disable_depth_rendering(self) -> None:
@@ -101,9 +104,10 @@ def test_camera_info_exposes_header_frame_id() -> None:
     assert camera_info["height"] == 480
 
 
-def test_camera_clip_range_requires_near_before_far() -> None:
-    with pytest.raises(ValueError, match="near < far"):
-        CameraSpec(name="camera", clip_range_m=(1.0, 1.0))
+@pytest.mark.parametrize("field", ["rgb_clip_range_m", "depth_clip_range_m"])
+def test_camera_clip_ranges_require_near_before_far(field: str) -> None:
+    with pytest.raises(ValueError, match=field):
+        CameraSpec(name="camera", **{field: (1.0, 1.0)})
 
 
 def test_camera_clip_scope_converts_metric_range_and_restores_model() -> None:
@@ -118,14 +122,82 @@ def test_camera_clip_scope_converts_metric_range_and_restores_model() -> None:
     )
     env = MujocoBasis.__new__(MujocoBasis)
     env.model = model
-    spec = CameraSpec(name="camera", clip_range_m=(0.001, 5.0))
     original = (float(model.vis.map.znear), float(model.vis.map.zfar))
 
-    with env._camera_clip_scope(spec):
+    with env._camera_clip_scope((0.001, 5.0)):
         assert float(model.vis.map.znear) == pytest.approx(0.0005)
         assert float(model.vis.map.zfar) == pytest.approx(2.5)
 
     assert (float(model.vis.map.znear), float(model.vis.map.zfar)) == original
+
+
+def test_camera_model_prefers_depth_stream_valid_range() -> None:
+    model = mujoco.MjModel.from_xml_string(
+        """
+        <mujoco>
+          <statistic extent="2"/>
+          <visual><map znear="0.01" zfar="50"/></visual>
+          <worldbody><camera name="camera"/></worldbody>
+        </mujoco>
+        """
+    )
+    data = mujoco.MjData(model)
+    mujoco.mj_forward(model, data)
+    env = MujocoBasis.__new__(MujocoBasis)
+    env.model = model
+    env.data = data
+    env._camera_ids = {"camera": 0}
+    env._camera_specs = {
+        "camera": CameraSpec(
+            name="camera",
+            rgb_clip_range_m=(0.001, 50.0),
+            depth_clip_range_m=(0.2, 5.0),
+        )
+    }
+
+    camera = env.get_camera_model("camera")
+
+    assert camera.near == pytest.approx(0.2)
+    assert camera.far == pytest.approx(5.0)
+
+
+def test_native_camera_uses_separate_rgb_and_depth_clip_scopes() -> None:
+    cam_name = "camera"
+    env = UnifiedMujocoEnv.__new__(UnifiedMujocoEnv)
+    env.config = SimpleNamespace(
+        structured=False,
+        stamp_ns=False,
+        enabled_sensors={DataType.CAMERA},
+    )
+    env.data = SimpleNamespace(time=0.0)
+    env._key_creator = KeyCreator(False)
+    env._operators = {}
+    env._tactile_manager = None
+    renderer = _FakeRenderer(np.zeros((2, 3, 3), dtype=np.uint8))
+    env._renderers = {cam_name: renderer}
+    env._camera_ids = {cam_name: 0}
+    env._camera_specs = {
+        cam_name: CameraSpec(
+            name=cam_name,
+            rgb_clip_range_m=(0.001, 50.0),
+            depth_clip_range_m=(0.1, 5.0),
+        )
+    }
+    env._camera_hidden_geom_ids = frozenset()
+    env._renderer_scene_option = object()
+    clip_scopes: list[tuple[float, float] | None] = []
+
+    @contextmanager
+    def record_clip_scope(clip_range_m: tuple[float, float] | None):
+        clip_scopes.append(clip_range_m)
+        yield
+
+    env._camera_clip_scope = record_clip_scope
+
+    env._collect_obs(False)
+
+    assert clip_scopes == [(0.001, 50.0), (0.1, 5.0)]
+    assert renderer.update_count == 2
 
 
 def test_yaml_camera_calibration_overrides_fovy_and_parent_frame_pose(
@@ -192,7 +264,8 @@ def test_structured_camera_messages_share_frame_id_with_camera_info() -> None:
             enable_depth=False,
             enable_mask=False,
             enable_heat_map=False,
-            depth_max=10.0,
+            rgb_clip_range_m=None,
+            depth_clip_range_m=None,
         )
     }
     env._renderer_scene_option = object()

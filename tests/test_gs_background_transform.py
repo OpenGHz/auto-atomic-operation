@@ -12,12 +12,15 @@ from auto_atom.basis.mjc.gs_mujoco_env import (
     BatchedGSUnifiedMujocoEnv,
     GaussianRenderConfig,
     GSUnifiedMujocoEnv,
+    _apply_gs_clip_to_depth,
+    _apply_gs_clip_to_rgb,
     _materialize_transformed_background_ply,
     _merge_background_plys,
     _normalize_background_pose,
     _sample_combinations,
     _sample_env_background_indices,
 )
+from auto_atom.basis.mjc.mujoco_basis import CameraSpec
 from auto_atom.basis.mjc.mujoco_env import BatchedUnifiedMujocoEnv, UnifiedMujocoEnv
 
 
@@ -34,6 +37,31 @@ def _write_dummy_ply(path) -> None:
         ),
         path,
     )
+
+
+def test_gs_rgb_and_depth_clip_ranges_are_independent() -> None:
+    spec = CameraSpec(
+        name="camera",
+        rgb_clip_range_m=(0.1, 4.0),
+        depth_clip_range_m=(0.5, 2.0),
+    )
+    depth = np.array([[0.05, 0.2, 1.0, 5.0]], dtype=np.float32)
+    rgb = np.array(
+        [[(10, 0, 0), (20, 0, 0), (30, 0, 0), (40, 0, 0)]],
+        dtype=np.uint8,
+    )
+
+    clipped_rgb = _apply_gs_clip_to_rgb(rgb, spec, depth)
+    clipped_depth = _apply_gs_clip_to_depth(depth, spec)
+
+    np.testing.assert_array_equal(
+        clipped_rgb,
+        np.array(
+            [[(0, 0, 0), (20, 0, 0), (30, 0, 0), (0, 0, 0)]],
+            dtype=np.uint8,
+        ),
+    )
+    np.testing.assert_allclose(clipped_depth, [[0.0, 0.0, 1.0, 0.0]])
 
 
 # --- _normalize_background_pose ---
