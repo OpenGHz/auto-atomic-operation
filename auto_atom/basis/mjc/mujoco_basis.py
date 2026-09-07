@@ -1477,20 +1477,23 @@ class MujocoBasis:
         fovy = float(self.model.cam_fovy[cam_id]) * pi / 180.0
         default_near_m = float(self.model.vis.map.znear * self.model.stat.extent)
         default_far_m = float(self.model.vis.map.zfar * self.model.stat.extent)
+        active_clip_ranges: list[tuple[float, float]] = []
+        if spec.enable_color or spec.enable_mask or spec.enable_heat_map:
+            active_clip_ranges.append(
+                (default_near_m, default_far_m)
+                if spec.rgb_clip_range_m is None
+                else tuple(float(value) for value in spec.rgb_clip_range_m)
+            )
         if spec.enable_depth:
-            clip_range = spec.depth_clip_range_m
-            near_m, far_m = (
+            active_clip_ranges.append(
                 (default_near_m, default_far_m)
-                if clip_range is None
-                else tuple(float(value) for value in clip_range)
+                if spec.depth_clip_range_m is None
+                else tuple(float(value) for value in spec.depth_clip_range_m)
             )
-        elif spec.enable_color or spec.enable_mask or spec.enable_heat_map:
-            clip_range = spec.rgb_clip_range_m
-            near_m, far_m = (
-                (default_near_m, default_far_m)
-                if clip_range is None
-                else tuple(float(value) for value in clip_range)
-            )
+        if active_clip_ranges:
+            # A visibility-constrained object must survive every enabled image stream.
+            near_m = max(near_m for near_m, _ in active_clip_ranges)
+            far_m = min(far_m for _, far_m in active_clip_ranges)
         else:
             near_m, far_m = default_near_m, default_far_m
         return CameraModel(

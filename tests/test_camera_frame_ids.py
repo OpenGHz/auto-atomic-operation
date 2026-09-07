@@ -24,7 +24,9 @@ from auto_atom.basis.mjc.mujoco_env import (
     UnifiedMujocoEnv,
     create_image_data,
 )
+from auto_atom.framework import RandomizationConstraintConfig
 from auto_atom.scene_composition import SceneConfig
+from auto_atom.utils.pose import PoseState
 
 
 class _FakeRenderer:
@@ -131,7 +133,7 @@ def test_camera_clip_scope_converts_metric_range_and_restores_model() -> None:
     assert (float(model.vis.map.znear), float(model.vis.map.zfar)) == original
 
 
-def test_camera_model_prefers_depth_stream_valid_range() -> None:
+def test_camera_model_intersects_enabled_rgb_and_depth_clip_ranges() -> None:
     model = mujoco.MjModel.from_xml_string(
         """
         <mujoco>
@@ -150,15 +152,58 @@ def test_camera_model_prefers_depth_stream_valid_range() -> None:
     env._camera_specs = {
         "camera": CameraSpec(
             name="camera",
-            rgb_clip_range_m=(0.001, 50.0),
+            rgb_clip_range_m=(0.5, 4.0),
             depth_clip_range_m=(0.2, 5.0),
         )
     }
 
     camera = env.get_camera_model("camera")
 
-    assert camera.near == pytest.approx(0.2)
-    assert camera.far == pytest.approx(5.0)
+    assert camera.near == pytest.approx(0.5)
+    assert camera.far == pytest.approx(4.0)
+
+
+def test_randomization_visibility_uses_rgb_depth_clip_intersection() -> None:
+    model = mujoco.MjModel.from_xml_string(
+        """
+        <mujoco>
+          <statistic extent="2"/>
+          <visual><map znear="0.01" zfar="50"/></visual>
+          <worldbody>
+            <camera name="camera"/>
+            <body name="subject"><geom type="sphere" size="0.01"/></body>
+          </worldbody>
+        </mujoco>
+        """
+    )
+    data = mujoco.MjData(model)
+    mujoco.mj_forward(model, data)
+    env = MujocoBasis.__new__(MujocoBasis)
+    env.model = model
+    env.data = data
+    env._camera_ids = {"camera": 0}
+    env._camera_specs = {
+        "camera": CameraSpec(
+            name="camera",
+            rgb_clip_range_m=(0.5, 4.0),
+            depth_clip_range_m=(0.2, 5.0),
+        )
+    }
+
+    report = env.evaluate_randomization_constraints(
+        {
+            "subject": PoseState(
+                position=np.asarray([[0.0, 0.0, -4.5]], dtype=np.float64),
+                orientation=np.asarray([[0.0, 0.0, 0.0, 1.0]], dtype=np.float64),
+            )
+        },
+        constraints=RandomizationConstraintConfig(
+            visible_in={"cameras": ["camera"], "geometry": "center"}
+        ),
+    )
+
+    assert not report.valid
+    assert report.violations == ("subject:outside_depth:camera",)
 
 
 def test_native_camera_uses_separate_rgb_and_depth_clip_scopes() -> None:

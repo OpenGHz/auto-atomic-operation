@@ -103,6 +103,17 @@ episodes, its viewpoint changes while the cached background remains tied to the
 first rendered pose. Set `is_static: false` when the background must be
 re-rendered after camera randomization.
 
+## Constrained Camera Visibility
+
+For `visible_in.mode: frustum`, MuJoCo evaluates the support geometry against
+each selected camera's final reset pose. The depth interval is the intersection
+of all enabled image streams for that camera: RGB, mask, and heat-map outputs
+use `rgb_clip_range_m`; depth uses `depth_clip_range_m`. An omitted range uses
+the XML scene clipping range for that stream. A candidate must fit inside this
+common interval, so a point retained by depth but clipped from RGB is rejected.
+If the enabled stream ranges do not overlap, no candidate can satisfy the
+visibility constraint.
+
 ## Implementation Pointers
 
 - `auto_atom/backend/mjc/mujoco_backend.py` owns object, operator, and camera
