@@ -1134,6 +1134,11 @@ class MujocoTaskBackend(SceneBackend):
         repr=False,
         default_factory=dict,
     )
+    _poisson_streams: Dict[Tuple[object, ...], PoissonDiskCandidateStream] = field(
+        init=False,
+        repr=False,
+        default_factory=dict,
+    )
     _default_object_poses: Dict[str, PoseState] = field(
         init=False, repr=False, default_factory=dict
     )
@@ -1857,6 +1862,119 @@ class MujocoTaskBackend(SceneBackend):
         history = (history + [np.asarray(vector, dtype=np.float64).copy()])[-256:]
         self._space_filling_history[history_key] = history
 
+    def _poisson_stream_for_action(
+        self,
+        action_spec: _RandomizationActionSpec,
+        env_index: int,
+        rand_range: PoseRandomRange,
+        distribution: Any,
+        working_poses: Dict[str, PoseState],
+    ) -> PoissonDiskCandidateStream | None:
+        """Return the persistent physical-position stream for one proposal range."""
+        generator = getattr(
+            distribution,
+            "generator",
+            RandomizationGeneratorKind.IID,
+        )
+        if isinstance(generator, RandomizationGeneratorConfig):
+            poisson_config = generator.poisson_disk
+        elif generator == RandomizationGeneratorKind.POISSON_DISK:
+            poisson_config = RandomizationPoissonDiskConfig()
+        else:
+            return None
+
+        position_axes = tuple(
+            axis for axis in ("x", "y", "z") if rand_range.axis_range(axis) is not None
+        )
+        if not position_axes:
+            return None
+        min_distance = float(getattr(distribution, "min_distance", 0.0))
+        if min_distance <= 0.0:
+            raise ValueError(
+                f"Poisson-disk randomization '{action_spec.label}' requires "
+                "distribution.min_distance > 0"
+            )
+        lower_bounds = tuple(
+            float(rand_range.axis_range(axis)[0]) for axis in position_axes
+        )
+        upper_bounds = tuple(
+            float(rand_range.axis_range(axis)[1]) for axis in position_axes
+        )
+        reference_context: list[float] = []
+        for reference in rand_range.references():
+            if isinstance(reference, RandomizationReference):
+                if reference == RandomizationReference.ABSOLUTE_WORLD:
+                    continue
+                if reference == RandomizationReference.ABSOLUTE_BASE:
+                    key = f"{action_spec.owner}.base"
+                    pose = working_poses.get(key)
+                    if pose is None:
+                        pose = self._default_operator_base_poses.get(
+                            action_spec.owner,
+                            self.operator_handlers[action_spec.owner].get_base_pose(),
+                        )
+                else:
+                    pose = working_poses.get(action_spec.label)
+                    if pose is None:
+                        pose = self._current_pose_for_action(
+                            action_spec.kind, action_spec.owner
+                        )
+            else:
+                bare, attr = self._parse_entity_reference(reference)
+                if attr is None and bare in self.operator_handlers:
+                    attr = "base"
+                key = f"{bare}.{attr}" if attr is not None else bare
+                pose = working_poses.get(key)
+                if pose is None and attr is None:
+                    pose = working_poses.get(bare)
+                if pose is None:
+                    if attr == "base":
+                        pose = self._default_operator_base_poses.get(
+                            bare, self.operator_handlers[bare].get_base_pose()
+                        )
+                    elif attr == "eef":
+                        pose = self._default_operator_eef_poses.get(
+                            bare, self.operator_handlers[bare].get_end_effector_pose()
+                        )
+                    else:
+                        pose = self._default_object_poses.get(
+                            bare, self.object_handlers[bare].get_pose()
+                        )
+            selected_pose = pose.select(env_index)
+            reference_context.extend(
+                np.asarray(selected_pose.position[0], dtype=np.float64).tolist()
+            )
+            reference_context.extend(
+                np.asarray(selected_pose.orientation[0], dtype=np.float64).tolist()
+            )
+        key = (
+            env_index,
+            action_spec.label,
+            position_axes,
+            lower_bounds,
+            upper_bounds,
+            min_distance,
+            tuple(reference_context),
+            poisson_config.hypersphere,
+            int(poisson_config.ncandidates),
+            poisson_config.optimization,
+        )
+        stream = self._poisson_streams.get(key)
+        if stream is None:
+            label_seed = sum(
+                (index + 1) * ord(character)
+                for index, character in enumerate(action_spec.label)
+            )
+            stream = PoissonDiskCandidateStream(
+                poisson_config,
+                lower_bounds=lower_bounds,
+                upper_bounds=upper_bounds,
+                radius=min_distance,
+                seed=int((self.random_seed or 0) + env_index * 10_007 + label_seed),
+            )
+            self._poisson_streams[key] = stream
+        return stream
+
     def _randomization_order(self) -> List[str]:
         """Return randomization keys in dependency order (referenced first).
 
@@ -2302,27 +2420,6 @@ class MujocoTaskBackend(SceneBackend):
             tuple[Dict[str, PoseState], List[_PendingRandomizationAction], np.ndarray]
         ] = []
         stable_labels = {label: index for index, label in enumerate(sorted(component))}
-        poisson_streams: dict[str, PoissonDiskCandidateStream] = {}
-        for label in component:
-            distribution = action_specs[label].randomization.distribution
-            generator = distribution.generator
-            if isinstance(generator, RandomizationGeneratorConfig):
-                poisson_config = generator.poisson_disk
-            elif generator == RandomizationGeneratorKind.POISSON_DISK:
-                poisson_config = RandomizationPoissonDiskConfig()
-            else:
-                continue
-            poisson_streams[label] = PoissonDiskCandidateStream(
-                poisson_config,
-                dimension=6,
-                sample_count=attempt_budget,
-                seed=int(
-                    self._randomization_reset_index * 1_000_003
-                    + stable_labels[label]
-                    + env_index * 10_007
-                ),
-            )
-
         for attempt in range(attempt_budget):
             working_poses = dict(accepted_env_poses)
             env_sampled_poses: Dict[str, PoseState] = {}
@@ -2342,7 +2439,6 @@ class MujocoTaskBackend(SceneBackend):
                         + attempt * 17
                         + stable_labels[action_label]
                     ),
-                    poisson_stream=poisson_streams.get(action_label),
                 )
                 for key, pose in sampled_poses.items():
                     working_poses[key] = pose
@@ -2607,7 +2703,6 @@ class MujocoTaskBackend(SceneBackend):
         working_poses: Dict[str, PoseState],
         *,
         candidate_index: int = 0,
-        poisson_stream: PoissonDiskCandidateStream | None = None,
     ) -> tuple[Dict[str, PoseState], List[_PendingRandomizationAction]]:
         name = action_spec.owner
         if action_spec.kind == "unknown" or (
@@ -2625,6 +2720,13 @@ class MujocoTaskBackend(SceneBackend):
             candidate_index=candidate_index,
         )
         distribution = action_spec.randomization.distribution
+        poisson_stream = self._poisson_stream_for_action(
+            action_spec,
+            env_index,
+            selected_range,
+            distribution,
+            working_poses,
+        )
         if action_spec.kind == "object":
             if RandomizationReference.ABSOLUTE_BASE in selected_range.references():
                 raise ValueError(
@@ -3090,18 +3192,32 @@ class MujocoTaskBackend(SceneBackend):
             "generator",
             RandomizationGeneratorKind.IID,
         )
+        is_poisson_generator = generator == RandomizationGeneratorKind.POISSON_DISK or (
+            isinstance(generator, RandomizationGeneratorConfig)
+        )
         candidate_count = int(getattr(distribution, "candidate_count", 1))
+        poisson_position_axes = (
+            tuple(
+                axis
+                for axis in ("x", "y", "z")
+                if rand_range.axis_range(axis) is not None
+            )
+            if poisson_stream is not None
+            else ()
+        )
+        poisson_values = poisson_stream.next() if poisson_stream is not None else None
         qmc_values = None
         if generator != RandomizationGeneratorKind.IID:
+            orientation_generator = (
+                RandomizationGeneratorKind.SOBOL if is_poisson_generator else generator
+            )
             qmc_values = unit_candidate(
                 rng=self._rng,
-                dimension=6,
-                generator=generator,
+                dimension=3 if is_poisson_generator else 6,
+                generator=orientation_generator,
                 index=sample_index,
                 candidate_count=candidate_count,
-                min_distance=float(getattr(distribution, "min_distance", 0.0)),
                 seed=int(self._randomization_reset_index * 1_000_003 + sample_index),
-                poisson_stream=poisson_stream,
             )
 
         position = np.empty(3, dtype=np.float64)
@@ -3111,7 +3227,11 @@ class MujocoTaskBackend(SceneBackend):
             value = float(baseline.position[env_index, axis_index])
             rng_pair = rand_range.axis_range(axis_name)
             if rng_pair is not None:
-                if qmc_values is None:
+                if poisson_values is not None:
+                    sampled = float(
+                        poisson_values[poisson_position_axes.index(axis_name)]
+                    )
+                elif qmc_values is None:
                     sampled = float(self._rng.uniform(*rng_pair))
                 else:
                     sampled = float(
@@ -3154,7 +3274,10 @@ class MujocoTaskBackend(SceneBackend):
                 else:
                     sampled = float(
                         rng_pair[0]
-                        + qmc_values[3 + axis_index] * (rng_pair[1] - rng_pair[0])
+                        + qmc_values[
+                            axis_index if is_poisson_generator else 3 + axis_index
+                        ]
+                        * (rng_pair[1] - rng_pair[0])
                     )
                 if reference in (
                     RandomizationReference.ABSOLUTE_WORLD,

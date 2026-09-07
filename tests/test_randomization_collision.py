@@ -19,13 +19,15 @@ from auto_atom.framework import (
     PoseRandomizationConfig,
     PoseRandomRange,
     RandomizationAxisConfig,
+    RandomizationDistributionConfig,
     RandomizationFailureConfig,
     RandomizationFailureMode,
-    RandomizationReference,
-    RandomizationSpec,
-    RandomizationDistributionConfig,
+    RandomizationGeneratorConfig,
     RandomizationGeneratorKind,
+    RandomizationPoissonDiskConfig,
+    RandomizationReference,
     RandomizationSelectorKind,
+    RandomizationSpec,
 )
 from auto_atom.utils.pose import PoseState
 
@@ -464,6 +466,36 @@ def test_first_feasible_non_iid_generator_avoids_accepted_samples_across_resets(
     assert len(history) == 2
     assert np.allclose(history[0], first)
     assert np.allclose(history[1], second)
+
+
+def test_poisson_disk_uses_physical_bounds_across_resets() -> None:
+    distribution = RandomizationDistributionConfig(
+        generator=RandomizationGeneratorConfig(
+            poisson_disk=RandomizationPoissonDiskConfig(ncandidates=20)
+        ),
+        min_distance=0.2,
+    )
+    spec = RandomizationSpec(
+        proposal=PoseRandomRange(
+            reference=RandomizationReference.ABSOLUTE_WORLD,
+            x=(0.0, 1.0),
+        ),
+        distribution=distribution,
+    )
+    backend = _make_backend(
+        randomization={"vase": spec},
+        object_positions={"vase": (0.0, 0.0, 0.0)},
+    )
+
+    backend._apply_randomization(np.asarray([True], dtype=bool))
+    first = float(backend.object_handlers["vase"].get_pose().position[0, 0])
+    backend._apply_randomization(np.asarray([True], dtype=bool))
+    second = float(backend.object_handlers["vase"].get_pose().position[0, 0])
+
+    assert 0.0 <= first <= 1.0
+    assert 0.0 <= second <= 1.0
+    assert abs(first - second) >= 0.2 - 1e-12
+    assert len(backend._space_filling_history[("vase",)]) == 2
 
 
 def test_maximin_records_only_the_selected_candidate_not_the_whole_group() -> None:

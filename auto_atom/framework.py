@@ -663,21 +663,13 @@ class RandomizationGeneratorKind(str, Enum):
 
 
 class RandomizationPoissonDiskConfig(BaseModel, frozen=True):
-    """Parameters for the SciPy Poisson-disk candidate generator.
+    """Algorithm parameters for the SciPy Poisson-disk candidate generator.
 
     The configuration is nested under ``distribution.generator.poisson_disk``
     only when the default Poisson-disk parameters need to be overridden.
     """
 
     model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid")
-
-    radius: Optional[PositiveFloat] = None
-    """Minimum distance in the normalized unit-cube candidate space.
-
-    ``None`` derives a dimension-aware default from the candidate pool size.
-    This is distinct from ``distribution.min_distance``, which is the
-    project-level maximin spacing target in metres.
-    """
 
     hypersphere: Literal["volume", "surface"] = "volume"
     """Whether potential points are sampled inside or on the candidate sphere."""
@@ -834,7 +826,7 @@ class RandomizationDistributionConfig(BaseModel, frozen=True):
     """Maximum candidate pool size considered for one target or joint sample."""
 
     min_distance: NonNegativeFloat = 0.0
-    """Required spacing from accepted non-iid samples across resets, in metres."""
+    """Physical position spacing in metres for Poisson and history coverage."""
 
 
 class RandomizationFailureConfig(BaseModel, frozen=True):

@@ -360,7 +360,7 @@ The selected region supplies the active axis ranges, reference frame, and
 | `selector` | Chooses how the current reset's feasible candidate group is reduced to one sample. | `first_feasible`: accept the first feasible candidate in generation order; `maximin`: select the candidate farthest from accepted samples. | `first_feasible` |
 | `region_weighting` | Chooses how multiple regions in `proposal` participate in sampling. | `equal`: every region has equal proposal weight; `volume`: weight by the product of configured axis extents. | `volume` |
 | `candidate_count` | Limits the candidate pool considered for one target or joint component. | Positive integer. With `first_feasible`, generation stops as soon as the first feasible candidate is found; with `maximin`, the feasible group is collected up to this limit. | `1` |
-| `min_distance` | Sets the required physical distance from accepted samples of a non-`iid` generator across resets. | Non-negative number. | `0.0` |
+| `min_distance` | Sets the physical position spacing for Poisson disk and accepted-sample history across resets. | Non-negative number. | `0.0` |
 
 The generator names are the algorithms, not a second family/category field.
 `halton` and `sobol` use SciPy's QMC implementations; `latin_hypercube` and
@@ -372,55 +372,53 @@ across resets. SciPy is a core project dependency for these generators
 and for the vectorized distance calculations used by maximin; the backend does
 not provide separate sampling implementations.
 
-`poisson_disk` exposes SciPy's algorithm parameters through a generator object
-when the defaults are not sufficient. The short form remains valid:
+`poisson_disk` uses the physical proposal ranges and
+`distribution.min_distance` directly. The short form is normally sufficient:
 
 ```yaml
 distribution:
   generator: poisson_disk
 ```
 
-The parameterized form is:
+The parameterized form only controls the SciPy algorithm's proposal quality:
 
 ```yaml
 distribution:
   generator:
     poisson_disk:
-      radius: 0.5
       hypersphere: volume   # or surface
       ncandidates: 30
-      optimization: null    # or random-cd / lloyd
+      optimization: null    # or random-cd
 ```
 
-`radius` is the minimum distance in the normalized unit-cube candidate space;
-when omitted, the implementation derives a dimension-aware value from the
-requested candidate/attempt pool (rather than using SciPy's fixed `0.05`
-default, which can be impractical for six-dimensional poses). It is not the metre-valued
-`distribution.min_distance` used by `maximin`.
+For Poisson disk, `distribution.min_distance` is the minimum distance in the
+same physical units as the active position axes (metres for task poses). The
+backend passes the proposal's lower and upper position bounds to SciPy, so no
+unit-cube conversion or simulator-specific scale factor is exposed. A positive
+`min_distance` is required. Orientation axes are sampled by a separate
+low-discrepancy stream and are not mixed into the metre-valued distance.
 `hypersphere` chooses whether SciPy proposes points inside the candidate sphere
 or on its surface. `ncandidates` controls proposals per active point and
 therefore density/performance. `optimization` is optional post-processing;
-SciPy does not guarantee that strict Poisson-disk properties are preserved after
-`random-cd` or `lloyd`.
+`random-cd` is supported, while `lloyd` is rejected because a persistent
+one-point stream cannot apply a batch Voronoi post-processing step.
 
 SciPy's `PoissonDisk` implementation is based on the classic Bridson algorithm:
 it keeps an active sample pool, proposes points around active samples, and uses
-a grid to accelerate neighborhood checks. The backend creates one generator per
-randomized action and reset component, generates that action's candidate pool in
-one call, and then feeds the pool through the shared feasibility and selection
-policies. This preserves Poisson-disk spacing within that generated pool; the
-project-level `maximin` policy and physical collision constraints remain
-independent layers. Rejected candidates are consumed only by the current reset
-and are not added to history; the selected candidate is recorded for later
-resets. For every non-`iid` generator, a later reset rejects an already
-accepted sample (and any candidate closer than `distribution.min_distance`).
-Thus `selector` never switches cross-reset history on or off: it only decides
-which member of the current feasible group is applied. `maximin` uses the
-history as its scoring baseline, while `first_feasible` keeps generation order;
-both selectors record only the selected candidate. `min_distance` is measured
-after the generator coordinates are mapped to the pose's physical position
-vector; the Poisson radius itself is the within-pool normalized-space
-guarantee.
+a grid to accelerate neighborhood checks. The backend keeps one physical
+generator per environment, action, proposal region, and distance configuration
+across resets. Every call advances that stream; candidates rejected by a
+collision or visibility constraint are consumed by the stream and are not
+re-emitted during its lifetime. If the bounded proposal space is exhausted,
+reset fails explicitly instead of silently repeating an earlier point. The selected candidate is still recorded as
+accepted history for diagnostics and for rebuilding a stream when its physical
+proposal space changes. `selector` only decides which feasible candidates from
+the current reset are applied. `maximin` and `separated` remain independent
+layers: the former chooses among feasible candidates, while the latter checks
+geometry between different randomized entities or scene supports.
+Poisson streams are per randomized action; they do not coordinate different
+objects or account for object geometry, so Poisson alone is not a no-collision
+guarantee for a multi-object scene.
 
 #### `constraints`: candidate feasibility
 

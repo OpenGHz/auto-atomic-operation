@@ -81,50 +81,52 @@ def test_halton_candidates_are_deterministic_and_bounded() -> None:
     assert np.all((first >= 0.0) & (first <= 1.0))
 
 
-def test_sobol_and_poisson_disk_candidates_use_scipy_qmc() -> None:
-    for generator in (
-        RandomizationGeneratorKind.SOBOL,
-        RandomizationGeneratorKind.POISSON_DISK,
-    ):
-        candidate = unit_candidate(
-            rng=np.random.default_rng(7),
-            dimension=3,
-            generator=generator,
-            index=2,
-            candidate_count=8,
-        )
-        assert candidate.shape == (3,)
-        assert np.all((candidate >= 0.0) & (candidate <= 1.0))
-
-
-def test_poisson_disk_generator_accepts_scipy_parameters() -> None:
-    generator = RandomizationGeneratorConfig(
-        poisson_disk=RandomizationPoissonDiskConfig(
-            radius=0.2,
-            hypersphere="surface",
-            ncandidates=11,
-            optimization="random-cd",
-        )
-    )
+def test_sobol_candidates_use_scipy_qmc() -> None:
     candidate = unit_candidate(
         rng=np.random.default_rng(7),
         dimension=3,
-        generator=generator,
+        generator=RandomizationGeneratorKind.SOBOL,
         index=2,
-        candidate_count=4,
+        candidate_count=8,
     )
     assert candidate.shape == (3,)
     assert np.all((candidate >= 0.0) & (candidate <= 1.0))
 
 
-def test_poisson_disk_stream_preserves_intra_pool_spacing() -> None:
+def test_poisson_disk_generator_accepts_scipy_parameters() -> None:
+    generator = RandomizationGeneratorConfig(
+        poisson_disk=RandomizationPoissonDiskConfig(
+            hypersphere="surface",
+            ncandidates=11,
+        )
+    )
     stream = PoissonDiskCandidateStream(
-        RandomizationPoissonDiskConfig(radius=0.2, ncandidates=11),
-        dimension=3,
-        sample_count=8,
+        generator.poisson_disk,
+        lower_bounds=(-0.2, -0.1),
+        upper_bounds=(0.4, 0.3),
+        radius=0.1,
         seed=7,
     )
-    samples = np.asarray([stream.next() for _ in range(8)])
+    candidate = stream.next()
+    assert candidate.shape == (2,)
+    assert np.all(candidate >= (-0.2, -0.1))
+    assert np.all(candidate <= (0.4, 0.3))
+
+
+def test_poisson_disk_rejects_abstract_radius_configuration() -> None:
+    with pytest.raises(ValueError, match="radius"):
+        RandomizationPoissonDiskConfig.model_validate({"radius": 0.2})
+
+
+def test_poisson_disk_stream_preserves_intra_pool_spacing() -> None:
+    stream = PoissonDiskCandidateStream(
+        RandomizationPoissonDiskConfig(ncandidates=11),
+        lower_bounds=(0.0, 0.0, 0.0),
+        upper_bounds=(1.0, 1.0, 1.0),
+        radius=0.2,
+        seed=7,
+    )
+    samples = np.asarray([stream.next() for _ in range(4)])
     distances = np.linalg.norm(samples[:, None, :] - samples[None, :, :], axis=2)
     off_diagonal = distances[np.triu_indices(len(samples), k=1)]
     assert np.all(off_diagonal >= 0.2 - 1e-12)
