@@ -28,6 +28,7 @@ from ...framework import (
     RandomizationConstraintConfig,
     RandomizationGeneratorConfig,
     RandomizationGeneratorKind,
+    RandomizationGroupConfig,
     RandomizationInput,
     RandomizationPoissonDiskConfig,
     RandomizationReference,
@@ -1114,6 +1115,9 @@ class MujocoTaskBackend(SceneBackend):
         str,
         RandomizationInput | OperatorRandomizationConfig,
     ] = field(default_factory=dict)
+    randomization_groups: Dict[str, RandomizationGroupConfig] = field(
+        default_factory=dict
+    )
     camera_randomization: Dict[str, RandomizationInput] = field(default_factory=dict)
     initial_poses: Dict[str, PoseOverrideConfig] = field(default_factory=dict)
     camera_initial_poses: Dict[str, PoseOverrideConfig] = field(default_factory=dict)
@@ -1341,7 +1345,7 @@ class MujocoTaskBackend(SceneBackend):
             or self._default_camera_poses
         ):
             self._record_default_poses()
-        if self.randomization or self.camera_randomization:
+        if self.randomization or self.randomization_groups or self.camera_randomization:
             self._apply_randomization(mask)
         self.env.refresh_viewer()
 
@@ -1819,6 +1823,7 @@ class MujocoTaskBackend(SceneBackend):
             self.randomization,
             object_names=set(self.object_handlers),
             operator_names=set(self.operator_handlers),
+            randomization_groups=self.randomization_groups,
         )
 
     def _randomization_dependencies(self) -> Dict[str, Set[str]]:
@@ -2148,6 +2153,10 @@ class MujocoTaskBackend(SceneBackend):
         order = list(plan.order)
         components = [list(component) for component in plan.components]
         action_specs = self._randomization_action_specs()
+        hard_sphere_groups = {
+            frozenset(group.members): (group_name, group)
+            for group_name, group in plan.groups.items()
+        }
         sampled_poses: Dict[str, PoseState] = {}
         collision_participants: List[_CollisionParticipant] = []
 
@@ -2208,11 +2217,13 @@ class MujocoTaskBackend(SceneBackend):
             ]
             if not object_component:
                 continue
+            hard_sphere_group = hard_sphere_groups.get(frozenset(object_component))
             component_poses, component_actions = self._sample_randomization_component(
                 object_component,
                 env_mask,
                 sampled_poses,
                 collision_participants,
+                hard_sphere_rsa_group=hard_sphere_group,
             )
             apply_actions(component_actions)
             sampled_poses.update(component_poses)
@@ -2251,6 +2262,7 @@ class MujocoTaskBackend(SceneBackend):
         env_mask: np.ndarray,
         accepted_sampled_poses: Dict[str, PoseState],
         accepted_participants: List[_CollisionParticipant],
+        hard_sphere_rsa_group: tuple[str, RandomizationGroupConfig] | None = None,
     ) -> tuple[Dict[str, PoseState], List[_PendingRandomizationAction]]:
         key_buffers = {
             name: self._current_pose_for_randomization_key(name) for name in component
@@ -2261,22 +2273,45 @@ class MujocoTaskBackend(SceneBackend):
         for env_index, enabled in enumerate(env_mask):
             if not enabled:
                 continue
-            env_sampled_poses, env_actions, failure = self._sample_component_for_env(
-                component,
-                env_index,
-                accepted_sampled_poses,
-                accepted_participants,
-            )
+            if hard_sphere_rsa_group is None:
+                env_sampled_poses, env_actions, failure = (
+                    self._sample_component_for_env(
+                        component,
+                        env_index,
+                        accepted_sampled_poses,
+                        accepted_participants,
+                    )
+                )
+            else:
+                env_sampled_poses, env_actions, failure = (
+                    self._sample_hard_sphere_rsa_component_for_env(
+                        component,
+                        env_index,
+                        accepted_sampled_poses,
+                        accepted_participants,
+                        group_name=hard_sphere_rsa_group[0],
+                        group=hard_sphere_rsa_group[1],
+                    )
+                )
             if failure is not None:
                 logger = logging.getLogger(MujocoTaskBackend.__name__)
                 failed_label, blocking_label = failure
-                logger.warning(
-                    "Collision rejection exhausted for '%s' after %d attempts; "
-                    "keeping the last overlapping sample against '%s'.",
-                    failed_label,
-                    _MAX_COLLISION_REJECTION_ATTEMPTS,
-                    blocking_label,
-                )
+                if hard_sphere_rsa_group is None:
+                    logger.warning(
+                        "Collision rejection exhausted for '%s' after %d attempts; "
+                        "keeping the last overlapping sample against '%s'.",
+                        failed_label,
+                        _MAX_COLLISION_REJECTION_ATTEMPTS,
+                        blocking_label,
+                    )
+                else:
+                    logger.warning(
+                        "Hard-sphere RSA exhausted for '%s' after %d attempts; "
+                        "keeping the best-effort sample against '%s'.",
+                        failed_label,
+                        int(hard_sphere_rsa_group[1].failure.max_attempts),
+                        blocking_label,
+                    )
 
             for name, pose in env_sampled_poses.items():
                 if name not in key_buffers:
@@ -2335,6 +2370,202 @@ class MujocoTaskBackend(SceneBackend):
 
         component_actions = [action_buffers[label] for label in action_order]
         return key_buffers, component_actions
+
+    def _sample_hard_sphere_rsa_component_for_env(
+        self,
+        component: List[str],
+        env_index: int,
+        accepted_sampled_poses: Dict[str, PoseState],
+        accepted_participants: List[_CollisionParticipant],
+        *,
+        group_name: str,
+        group: RandomizationGroupConfig,
+    ) -> tuple[
+        Dict[str, PoseState],
+        List[_PendingRandomizationAction],
+        Optional[tuple[str, str]],
+    ]:
+        """Place group members sequentially with heterogeneous hard spheres.
+
+        RSA is deliberately local: a rejected proposal is discarded, while
+        already accepted members remain fixed for the current reset.  Member
+        order is independently shuffled for every environment/reset, so the
+        YAML declaration order does not become a spatial bias.
+        """
+        action_specs = self._randomization_action_specs()
+        accepted_env_poses = {
+            name: pose.select(env_index)
+            for name, pose in accepted_sampled_poses.items()
+        }
+        working_poses = dict(accepted_env_poses)
+        sampled_poses: Dict[str, PoseState] = {}
+        actions: List[_PendingRandomizationAction] = []
+        local_participants: List[_CollisionParticipant] = []
+        max_attempts = int(group.failure.max_attempts)
+        order = [str(value) for value in self._rng.permutation(component)]
+        for member in order:
+            action_spec = action_specs[member]
+            best: tuple[float, PoseState, _PendingRandomizationAction, str] | None = (
+                None
+            )
+            accepted = False
+            for attempt in range(max_attempts):
+                candidate_poses, candidate_actions = (
+                    self._sample_randomization_target_for_env(
+                        action_spec,
+                        env_index,
+                        working_poses,
+                        candidate_index=(
+                            self._randomization_reset_index * 1009
+                            + attempt * 17
+                            + sum(ord(c) for c in member)
+                        ),
+                    )
+                )
+                candidate = next(
+                    (item for item in candidate_actions if item.label == member),
+                    None,
+                )
+                if candidate is None:
+                    raise RuntimeError(
+                        f"Randomization group '{group_name}' member '{member}' "
+                        "did not produce a candidate"
+                    )
+                candidate.ancestors = self._reference_ancestors(
+                    candidate.references,
+                    {},
+                )
+                blocking = self._find_collision_participant(
+                    owner_name=candidate.owner,
+                    env_index=env_index,
+                    candidate_pose=candidate.pose,
+                    collision_radius=candidate.radius,
+                    ancestors=candidate.ancestors,
+                    collision_participants=accepted_participants,
+                )
+                if blocking is None:
+                    blocking = self._find_collision_participant(
+                        owner_name=candidate.owner,
+                        env_index=env_index,
+                        candidate_pose=candidate.pose,
+                        collision_radius=candidate.radius,
+                        ancestors=candidate.ancestors,
+                        collision_participants=local_participants,
+                        extra_clearance=float(group.distribution.clearance),
+                    )
+                constraint_report: RandomizationConstraintReport | None = None
+                if (
+                    candidate.constraints is not None
+                    and candidate.constraints.visible_in is not None
+                ):
+                    candidate_poses_for_constraints = dict(working_poses)
+                    candidate_poses_for_constraints.update(candidate_poses)
+                    constraint_report = self.evaluate_randomization_constraints(
+                        candidate_poses_for_constraints,
+                        env_index=env_index,
+                        constraints=candidate.constraints,
+                        ancestors={candidate.owner: set(candidate.ancestors)},
+                        target_names={candidate.owner},
+                    )
+                violation = (
+                    f"{candidate.label}:collides:{blocking.label}"
+                    if blocking is not None
+                    else (
+                        constraint_report.violations[0]
+                        if constraint_report is not None and not constraint_report.valid
+                        else ""
+                    )
+                )
+                candidate_row = 0 if candidate.pose.batch_size == 1 else env_index
+                candidate_pos = np.asarray(
+                    candidate.pose.position[candidate_row], dtype=np.float64
+                )
+                clearance = float("inf")
+                if blocking is not None:
+                    other_row = 0 if blocking.pose.batch_size == 1 else env_index
+                    other_pos = np.asarray(
+                        blocking.pose.position[other_row], dtype=np.float64
+                    )
+                    local_blocking = any(
+                        blocking is participant for participant in local_participants
+                    )
+                    clearance = float(
+                        np.linalg.norm(candidate_pos - other_pos)
+                        - candidate.radius
+                        - self._collision_radius_for_env(blocking.radius, env_index)
+                        - (
+                            float(group.distribution.clearance)
+                            if local_blocking
+                            else 0.0
+                        )
+                    )
+                elif constraint_report is not None and not constraint_report.valid:
+                    clearance = float(constraint_report.minimum_clearance)
+                if best is None or clearance > best[0]:
+                    best = (clearance, candidate.pose, candidate, violation)
+                if blocking is not None or (
+                    constraint_report is not None and not constraint_report.valid
+                ):
+                    continue
+                candidate_poses.update({member: candidate.pose})
+                working_poses.update(candidate_poses)
+                candidate.ancestors = set(candidate.ancestors)
+                local_participants.append(
+                    _CollisionParticipant(
+                        owner=candidate.owner,
+                        label=candidate.label,
+                        pose=candidate.pose,
+                        radius=candidate.radius,
+                        ancestors=set(candidate.ancestors),
+                    )
+                )
+                sampled_poses.update(candidate_poses)
+                actions.append(candidate)
+                accepted = True
+                break
+            if accepted:
+                continue
+            if best is None:
+                raise RandomizationFailureError(
+                    target=member,
+                    attempts=max_attempts,
+                    violations=[f"{member}:no_candidate"],
+                    minimum_clearance=float("-inf"),
+                )
+            _, best_pose, best_action, violation = best
+            diagnostics = {
+                "group": group_name,
+                "generator": group.distribution.generator.value,
+                "member": member,
+                "attempts": max_attempts,
+                "violations": [violation],
+                "minimum_clearance": best[0],
+                "mode": group.failure.mode.value,
+            }
+            self._last_randomization_diagnostics.setdefault(env_index, []).append(
+                diagnostics
+            )
+            if group.failure.mode.value == "error":
+                raise RandomizationFailureError(
+                    target=member,
+                    attempts=max_attempts,
+                    violations=diagnostics["violations"],
+                    minimum_clearance=best[0],
+                )
+            working_poses[member] = best_pose
+            sampled_poses[member] = best_pose
+            best_action.ancestors = set(best_action.ancestors)
+            local_participants.append(
+                _CollisionParticipant(
+                    owner=best_action.owner,
+                    label=best_action.label,
+                    pose=best_action.pose,
+                    radius=best_action.radius,
+                    ancestors=set(best_action.ancestors),
+                )
+            )
+            actions.append(best_action)
+        return sampled_poses, actions, None
 
     def _sample_component_for_env(
         self,
@@ -3101,6 +3332,7 @@ class MujocoTaskBackend(SceneBackend):
         collision_radius: float,
         ancestors: Set[str],
         collision_participants: List[_CollisionParticipant],
+        extra_clearance: float = 0.0,
     ) -> Optional[_CollisionParticipant]:
         candidate_radius = float(collision_radius)
         if candidate_radius <= 0.0:
@@ -3129,10 +3361,9 @@ class MujocoTaskBackend(SceneBackend):
                 participant.pose.position[other_row],
                 dtype=np.float64,
             )
-            if (
-                np.linalg.norm(candidate_pos - other_pos)
-                < candidate_radius + participant_radius
-            ):
+            if np.linalg.norm(
+                candidate_pos - other_pos
+            ) < candidate_radius + participant_radius + float(extra_clearance):
                 return participant
         return None
 
@@ -3858,6 +4089,7 @@ def build_mujoco_backend(
         operator_handlers=operator_handlers,
         object_handlers=object_handlers,
         randomization=dict(config.randomization),
+        randomization_groups=dict(config.randomization_groups),
         camera_randomization=dict(config.camera_randomization),
         initial_poses=dict(config.initial_pose),
         camera_initial_poses=dict(config.camera_initial_pose),

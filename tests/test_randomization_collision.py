@@ -24,11 +24,15 @@ from auto_atom.framework import (
     RandomizationFailureMode,
     RandomizationGeneratorConfig,
     RandomizationGeneratorKind,
+    RandomizationGroupConfig,
+    RandomizationGroupDistributionConfig,
+    RandomizationGroupGeneratorKind,
     RandomizationPoissonDiskConfig,
     RandomizationReference,
     RandomizationSelectorKind,
     RandomizationSpec,
 )
+from auto_atom.randomization import RandomizationFailureError
 from auto_atom.utils.pose import PoseState
 
 
@@ -45,6 +49,20 @@ class SequenceRNG:
                 f"Sample {value} is outside requested range [{low}, {high}]"
             )
         return value
+
+
+class OrderedGroupRNG(SequenceRNG):
+    def __init__(self, values: Iterable[float], order: tuple[str, ...]) -> None:
+        super().__init__(values)
+        self._order = order
+        self.permutation_inputs: list[tuple[str, ...]] = []
+
+    def permutation(self, values: Iterable[str]) -> np.ndarray:
+        input_values = tuple(str(value) for value in values)
+        self.permutation_inputs.append(input_values)
+        if set(input_values) != set(self._order):
+            raise AssertionError("Unexpected hard-sphere RSA member set")
+        return np.asarray(self._order, dtype=object)
 
 
 @dataclass
@@ -125,6 +143,7 @@ def _make_backend(
         PoseRandomRange | PoseRandomizationConfig | RandomizationSpec,
     ],
     object_positions: Dict[str, tuple[float, float, float]],
+    randomization_groups: Optional[Dict[str, RandomizationGroupConfig]] = None,
 ) -> MujocoTaskBackend:
     object_handlers = {
         name: DummyObjectHandler(
@@ -141,11 +160,127 @@ def _make_backend(
         operator_handlers={},
         object_handlers=object_handlers,
         randomization=randomization,
+        randomization_groups=randomization_groups or {},
     )
     backend._default_object_poses = {
         name: handler.get_pose() for name, handler in object_handlers.items()
     }
     return backend
+
+
+def _hard_sphere_group(
+    members: list[str],
+    *,
+    clearance: float = 0.0,
+    mode: RandomizationFailureMode = RandomizationFailureMode.ERROR,
+    max_attempts: int = 100,
+) -> RandomizationGroupConfig:
+    return RandomizationGroupConfig(
+        members=members,
+        distribution=RandomizationGroupDistributionConfig(
+            generator=RandomizationGroupGeneratorKind.HARD_SPHERE_RSA,
+            clearance=clearance,
+        ),
+        failure=RandomizationFailureConfig(mode=mode, max_attempts=max_attempts),
+    )
+
+
+def test_hard_sphere_rsa_resamples_locally_with_heterogeneous_radii() -> None:
+    backend = _make_backend(
+        randomization={
+            "large": PoseRandomRange(
+                reference=RandomizationReference.ABSOLUTE_WORLD,
+                x=(0.0, 0.0),
+                collision_radius=0.10,
+            ),
+            "small": PoseRandomRange(
+                reference=RandomizationReference.ABSOLUTE_WORLD,
+                x=(0.0, 0.30),
+                collision_radius=0.05,
+            ),
+        },
+        object_positions={"large": (0.0, 0.0, 0.0), "small": (0.0, 0.0, 0.0)},
+        randomization_groups={
+            "tabletop": _hard_sphere_group(
+                ["large", "small"],
+                clearance=0.02,
+                max_attempts=2,
+            )
+        },
+    )
+    rng = OrderedGroupRNG([0.0, 0.0, 0.18], order=("large", "small"))
+    backend._rng = rng
+
+    backend._apply_randomization(np.asarray([True], dtype=bool))
+
+    large = backend.object_handlers["large"].get_pose().position[0]
+    small = backend.object_handlers["small"].get_pose().position[0]
+    assert rng.permutation_inputs == [("large", "small")]
+    assert np.linalg.norm(large - small) >= 0.10 + 0.05 + 0.02
+    assert np.allclose(small, [0.18, 0.0, 0.0])
+
+
+def test_hard_sphere_rsa_error_reports_an_infeasible_member() -> None:
+    backend = _make_backend(
+        randomization={
+            "large": PoseRandomRange(
+                reference=RandomizationReference.ABSOLUTE_WORLD,
+                x=(0.0, 0.0),
+                collision_radius=0.10,
+            ),
+            "small": PoseRandomRange(
+                reference=RandomizationReference.ABSOLUTE_WORLD,
+                x=(0.0, 0.0),
+                collision_radius=0.05,
+            ),
+        },
+        object_positions={"large": (0.0, 0.0, 0.0), "small": (0.0, 0.0, 0.0)},
+        randomization_groups={
+            "tabletop": _hard_sphere_group(
+                ["large", "small"],
+                clearance=0.02,
+                max_attempts=2,
+            )
+        },
+    )
+    backend._rng = OrderedGroupRNG([0.0, 0.0, 0.0], order=("large", "small"))
+
+    with pytest.raises(RandomizationFailureError, match="small.*after 2 attempts"):
+        backend._apply_randomization(np.asarray([True], dtype=bool))
+
+
+def test_hard_sphere_rsa_best_effort_records_diagnostics() -> None:
+    backend = _make_backend(
+        randomization={
+            "large": PoseRandomRange(
+                reference=RandomizationReference.ABSOLUTE_WORLD,
+                x=(0.0, 0.0),
+                collision_radius=0.10,
+            ),
+            "small": PoseRandomRange(
+                reference=RandomizationReference.ABSOLUTE_WORLD,
+                x=(0.0, 0.0),
+                collision_radius=0.05,
+            ),
+        },
+        object_positions={"large": (0.0, 0.0, 0.0), "small": (0.0, 0.0, 0.0)},
+        randomization_groups={
+            "tabletop": _hard_sphere_group(
+                ["large", "small"],
+                clearance=0.02,
+                mode=RandomizationFailureMode.BEST_EFFORT,
+                max_attempts=1,
+            )
+        },
+    )
+    backend._rng = OrderedGroupRNG([0.0, 0.0], order=("large", "small"))
+
+    backend._apply_randomization(np.asarray([True], dtype=bool))
+
+    diagnostics = backend.get_randomization_diagnostics()
+    assert diagnostics["attempts"][0]["group"] == "tabletop"
+    assert diagnostics["attempts"][0]["member"] == "small"
+    assert diagnostics["attempts"][0]["mode"] == "best_effort"
 
 
 def test_collision_rejection_resamples_overlapping_objects() -> None:

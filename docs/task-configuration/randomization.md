@@ -638,6 +638,80 @@ Practical implications:
   carried child is allowed to remain inside/on its referenced parent as
   intended.
 
+### Joint hard-sphere placement
+
+`task.randomization_groups` jointly places a set of independent object
+proposals. The first implemented group generator is `hard_sphere_rsa`: random
+sequential adsorption (RSA) with a bounding sphere per object. The sphere is
+the member proposal's existing `collision_radius`.
+
+```yaml
+task:
+  seed: 42
+  randomization:
+    plate:
+      reference: absolute_world
+      x: [0.15, 0.55]
+      y: [-0.25, 0.25]
+      collision_radius: 0.11
+      distribution:
+        generator: poisson_disk
+        min_distance: 0.04
+    cup:
+      reference: absolute_world
+      x: [0.15, 0.55]
+      y: [-0.25, 0.25]
+      collision_radius: 0.05
+      distribution:
+        generator: poisson_disk
+        min_distance: 0.04
+  randomization_groups:
+    tabletop:
+      members: [plate, cup]
+      distribution:
+        generator: hard_sphere_rsa
+        clearance: 0.01
+      failure:
+        mode: error
+        max_attempts: 100
+```
+
+For each environment and reset, the backend shuffles `members` using the task
+seed. It keeps each accepted member fixed, then retries only the current member
+until its proposal is feasible. For members `i` and `j`, the accepted positions
+satisfy:
+
+```text
+||p_i - p_j|| >= collision_radius_i + collision_radius_j + clearance
+```
+
+This avoids the single-radius problem: a large plate only increases the spacing
+of pairs that include that plate. A member's own `proposal` and `distribution`
+remain its candidate source. In particular, a persistent `poisson_disk` stream
+continues to provide physical-space coverage across resets; RSA only decides
+whether a candidate is feasible relative to already placed group members.
+
+`clearance` applies between two group members. Objects outside the group still
+use the ordinary `collision_radius` rejection rule. Visibility constraints also
+remain hard constraints and can cause the current member to try another
+proposal.
+
+The initial implementation accepts only object members with independent
+references (`relative` or an absolute reference), positive `collision_radius`
+in every region, and no `constraints.separated`. Members cannot appear in more
+than one group. Operators, named entity references, and mixing a group with a
+reference/separation-connected non-member are rejected during configuration
+compilation. A member must keep the default
+`distribution.selector: first_feasible`: RSA owns placement selection, so
+`maximin` is intentionally rejected instead of being ignored.
+
+`failure.max_attempts` is the local budget for each member, not a whole-group
+restart budget. `mode: error` aborts reset with the failed member, attempted
+count, violated constraint, and minimum clearance. `mode: best_effort` keeps
+the least-violating local candidate and records the same details in reset
+diagnostics. It is intended for inspection, not for collision-free data
+collection.
+
 ## Per-Waypoint Randomization
 
 In addition to entity-level randomization under `task.randomization`, individual

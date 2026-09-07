@@ -19,11 +19,14 @@ from .framework import (
     RandomizationGeneratorConfig,
     RandomizationGeneratorInput,
     RandomizationGeneratorKind,
+    RandomizationGroupConfig,
     RandomizationInput,
     RandomizationPoissonDiskConfig,
     RandomizationReference,
+    RandomizationSelectorKind,
     RandomizationSpec,
     canonical_randomization_spec,
+    pose_randomization_regions,
 )
 
 
@@ -45,6 +48,8 @@ class RandomizationPlan:
     dependencies: Mapping[str, frozenset[str]]
     order: Tuple[str, ...]
     components: Tuple[Tuple[str, ...], ...]
+    groups: Mapping[str, RandomizationGroupConfig]
+    """Validated joint-placement groups keyed by their task-level name."""
 
 
 class RandomizationFailureError(RuntimeError):
@@ -158,6 +163,7 @@ def compile_randomization_plan(
     *,
     object_names: Set[str],
     operator_names: Set[str],
+    randomization_groups: Mapping[str, RandomizationGroupConfig] | None = None,
 ) -> RandomizationPlan:
     """Compile randomization entries into a deterministic dependency graph."""
     actions: Dict[str, RandomizationAction] = {}
@@ -185,6 +191,66 @@ def compile_randomization_plan(
                 randomization=canonical_randomization_spec(value),
             )
             declaration_order.append(owner)
+
+    groups = dict(randomization_groups or {})
+    group_members: Dict[str, str] = {}
+    for group_name, group in groups.items():
+        for member in group.members:
+            previous_group = group_members.get(member)
+            if previous_group is not None:
+                raise ValueError(
+                    f"Randomization group member '{member}' appears in both "
+                    f"'{previous_group}' and '{group_name}'"
+                )
+            group_members[member] = group_name
+            action = actions.get(member)
+            if action is None:
+                if member in operator_names:
+                    raise ValueError(
+                        f"Randomization group '{group_name}' member '{member}' "
+                        "must be an object, not an operator"
+                    )
+                raise ValueError(
+                    f"Randomization group '{group_name}' references unknown "
+                    f"randomization member '{member}'"
+                )
+            if action.kind != "object":
+                raise ValueError(
+                    f"Randomization group '{group_name}' member '{member}' must "
+                    "be an object, not an operator action"
+                )
+            if action.randomization.constraints.separated is not None:
+                raise ValueError(
+                    f"Randomization group '{group_name}' member '{member}' cannot "
+                    "also declare constraints.separated"
+                )
+            if (
+                action.randomization.distribution.selector
+                != RandomizationSelectorKind.FIRST_FEASIBLE
+            ):
+                raise ValueError(
+                    f"Randomization group '{group_name}' member '{member}' must "
+                    "use distribution.selector=first_feasible; hard_sphere_rsa "
+                    "owns group placement selection"
+                )
+            for region_index, region in enumerate(
+                pose_randomization_regions(action.randomization)
+            ):
+                if float(region.collision_radius) <= 0.0:
+                    raise ValueError(
+                        f"Randomization group '{group_name}' member '{member}' "
+                        f"region {region_index} requires collision_radius > 0"
+                    )
+                named_references = [
+                    reference
+                    for reference in region.references()
+                    if not isinstance(reference, RandomizationReference)
+                ]
+                if named_references:
+                    raise ValueError(
+                        f"Randomization group '{group_name}' member '{member}' "
+                        "cannot use named entity references"
+                    )
 
     dependencies: Dict[str, Set[str]] = {label: set() for label in actions}
     for label, action in actions.items():
@@ -247,6 +313,11 @@ def compile_randomization_plan(
         for label in joint_objects[1:]:
             adjacency[anchor].add(label)
             adjacency[label].add(anchor)
+    for group in groups.values():
+        anchor = group.members[0]
+        for member in group.members[1:]:
+            adjacency[anchor].add(member)
+            adjacency[member].add(anchor)
     order_index = {label: index for index, label in enumerate(order)}
     components: List[Tuple[str, ...]] = []
     seen: Set[str] = set()
@@ -264,6 +335,25 @@ def compile_randomization_plan(
             stack.extend(adjacency[current] - seen)
         components.append(tuple(sorted(component, key=order_index.__getitem__)))
 
+    for group_name, group in groups.items():
+        group_member_set = set(group.members)
+        containing_component = next(
+            (
+                component
+                for component in components
+                if group_member_set <= set(component)
+            ),
+            None,
+        )
+        if (
+            containing_component is None
+            or set(containing_component) != group_member_set
+        ):
+            raise ValueError(
+                f"Randomization group '{group_name}' must form an independent "
+                "component; remove reference or separation links to non-members"
+            )
+
     return RandomizationPlan(
         actions=actions,
         dependencies={
@@ -271,6 +361,7 @@ def compile_randomization_plan(
         },
         order=tuple(order),
         components=tuple(components),
+        groups=groups,
     )
 
 

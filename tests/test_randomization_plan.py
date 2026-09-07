@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 
 from auto_atom.framework import (
+    AutoAtomConfig,
     OperatorRandomizationConfig,
     PoseRandomRange,
     RandomizationConstraintConfig,
@@ -12,6 +13,9 @@ from auto_atom.framework import (
     RandomizationFailureMode,
     RandomizationGeneratorConfig,
     RandomizationGeneratorKind,
+    RandomizationGroupConfig,
+    RandomizationGroupDistributionConfig,
+    RandomizationGroupGeneratorKind,
     RandomizationPoissonDiskConfig,
     RandomizationSelectorKind,
     RandomizationSpec,
@@ -23,6 +27,7 @@ from auto_atom.randomization import (
     maximin_select,
     unit_candidate,
 )
+from auto_atom.runner.data_replay import DataReplayTaskFileConfig
 
 
 def test_compile_plan_groups_all_randomized_objects_for_separation() -> None:
@@ -60,6 +65,175 @@ def test_compile_plan_keeps_operator_dependency_order() -> None:
 
     assert plan.order.index("arm.base") < plan.order.index("arm.eef")
     assert plan.order.index("arm.base") < plan.order.index("cup")
+
+
+def _hard_sphere_group(
+    members: list[str],
+    *,
+    clearance: float = 0.0,
+    mode: RandomizationFailureMode = RandomizationFailureMode.ERROR,
+    max_attempts: int = 100,
+) -> RandomizationGroupConfig:
+    return RandomizationGroupConfig(
+        members=members,
+        distribution=RandomizationGroupDistributionConfig(
+            generator=RandomizationGroupGeneratorKind.HARD_SPHERE_RSA,
+            clearance=clearance,
+        ),
+        failure=RandomizationFailureConfig(mode=mode, max_attempts=max_attempts),
+    )
+
+
+def test_compile_plan_connects_hard_sphere_rsa_group_members() -> None:
+    group = _hard_sphere_group(["large", "small"], clearance=0.01)
+
+    plan = compile_randomization_plan(
+        {
+            "large": PoseRandomRange(x=(0.0, 1.0), collision_radius=0.10),
+            "small": PoseRandomRange(x=(0.0, 1.0), collision_radius=0.05),
+        },
+        object_names={"large", "small"},
+        operator_names=set(),
+        randomization_groups={"tabletop": group},
+    )
+
+    assert plan.components == (("large", "small"),)
+    assert plan.groups == {"tabletop": group}
+
+
+@pytest.mark.parametrize(
+    ("randomization", "object_names", "operator_names", "group", "match"),
+    [
+        (
+            {"block": PoseRandomRange(x=(0.0, 1.0), collision_radius=0.05)},
+            {"block"},
+            set(),
+            _hard_sphere_group(["missing", "block"]),
+            "unknown",
+        ),
+        (
+            {
+                "arm": OperatorRandomizationConfig(
+                    base=PoseRandomRange(x=(0.0, 1.0), collision_radius=0.05)
+                ),
+                "block": PoseRandomRange(x=(0.0, 1.0), collision_radius=0.05),
+            },
+            {"block"},
+            {"arm"},
+            _hard_sphere_group(["arm", "block"]),
+            "must be an object",
+        ),
+        (
+            {
+                "anchor": PoseRandomRange(x=(0.0, 1.0), collision_radius=0.05),
+                "block": PoseRandomRange(
+                    reference="anchor",
+                    x=(0.0, 1.0),
+                    collision_radius=0.05,
+                ),
+            },
+            {"anchor", "block"},
+            set(),
+            _hard_sphere_group(["anchor", "block"]),
+            "named entity references",
+        ),
+        (
+            {
+                "large": PoseRandomRange(x=(0.0, 1.0), collision_radius=0.10),
+                "small": PoseRandomRange(x=(0.0, 1.0), collision_radius=0.0),
+            },
+            {"large", "small"},
+            set(),
+            _hard_sphere_group(["large", "small"]),
+            "collision_radius > 0",
+        ),
+        (
+            {
+                "large": RandomizationSpec(
+                    proposal=PoseRandomRange(x=(0.0, 1.0), collision_radius=0.10),
+                    constraints=RandomizationConstraintConfig(
+                        separated={"min_distance": 0.01}
+                    ),
+                ),
+                "small": PoseRandomRange(x=(0.0, 1.0), collision_radius=0.05),
+            },
+            {"large", "small"},
+            set(),
+            _hard_sphere_group(["large", "small"]),
+            "constraints.separated",
+        ),
+        (
+            {
+                "large": RandomizationSpec(
+                    proposal=PoseRandomRange(x=(0.0, 1.0), collision_radius=0.10),
+                    distribution=RandomizationDistributionConfig(
+                        selector=RandomizationSelectorKind.MAXIMIN
+                    ),
+                ),
+                "small": PoseRandomRange(x=(0.0, 1.0), collision_radius=0.05),
+            },
+            {"large", "small"},
+            set(),
+            _hard_sphere_group(["large", "small"]),
+            "selector=first_feasible",
+        ),
+    ],
+)
+def test_compile_plan_rejects_invalid_hard_sphere_rsa_groups(
+    randomization,
+    object_names,
+    operator_names,
+    group,
+    match,
+) -> None:
+    with pytest.raises(ValueError, match=match):
+        compile_randomization_plan(
+            randomization,
+            object_names=object_names,
+            operator_names=operator_names,
+            randomization_groups={"tabletop": group},
+        )
+
+
+def test_config_rejects_members_shared_by_hard_sphere_rsa_groups() -> None:
+    with pytest.raises(ValueError, match="appears in both"):
+        AutoAtomConfig.model_validate(
+            {
+                "stages": [],
+                "env_name": "randomization_test",
+                "randomization": {
+                    "large": {"x": [0.0, 1.0]},
+                    "small": {"x": [0.0, 1.0]},
+                    "third": {"x": [0.0, 1.0]},
+                },
+                "randomization_groups": {
+                    "first": _hard_sphere_group(["large", "small"]).model_dump(),
+                    "second": _hard_sphere_group(["small", "third"]).model_dump(),
+                },
+            }
+        )
+
+
+def test_data_replay_disables_hard_sphere_rsa_groups() -> None:
+    config = DataReplayTaskFileConfig.model_validate(
+        {
+            "backend": "auto_atom.mock.build_mock_backend",
+            "task": {
+                "env_name": "randomization_test",
+                "stages": [],
+                "randomization": {
+                    "large": {"x": [0.0, 1.0]},
+                    "small": {"x": [0.0, 1.0]},
+                },
+                "randomization_groups": {
+                    "tabletop": _hard_sphere_group(["large", "small"]).model_dump(),
+                },
+            },
+        }
+    )
+
+    assert config.task.randomization == {}
+    assert config.task.randomization_groups == {}
 
 
 def test_halton_candidates_are_deterministic_and_bounded() -> None:

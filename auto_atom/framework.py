@@ -841,6 +841,49 @@ class RandomizationFailureConfig(BaseModel, frozen=True):
     """Maximum candidate attempts before applying the failure policy."""
 
 
+class RandomizationGroupGeneratorKind(str, Enum):
+    """Joint candidate-placement algorithms for randomized-object groups."""
+
+    HARD_SPHERE_RSA = "hard_sphere_rsa"
+    """Random sequential adsorption using each member's bounding-sphere radius."""
+
+
+class RandomizationGroupDistributionConfig(BaseModel, frozen=True):
+    """Distribution settings shared by every member of one placement group."""
+
+    model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid")
+
+    generator: RandomizationGroupGeneratorKind
+    """Joint placement algorithm applied after member proposals generate candidates."""
+
+    clearance: NonNegativeFloat = 0.0
+    """Additional pairwise surface clearance in metres between group members."""
+
+
+class RandomizationGroupConfig(BaseModel, frozen=True):
+    """A jointly randomized set of scene objects."""
+
+    model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid")
+
+    members: List[str] = Field(min_length=2)
+    """Distinct object randomization keys placed by this joint distribution."""
+
+    distribution: RandomizationGroupDistributionConfig
+    """Joint placement distribution and its physical clearance."""
+
+    failure: RandomizationFailureConfig = RandomizationFailureConfig()
+    """Behavior when sequential placement cannot find a feasible local candidate."""
+
+    @field_validator("members", mode="after")
+    @classmethod
+    def _validate_members(cls, value: List[str]) -> List[str]:
+        if any(not member.strip() for member in value):
+            raise ValueError("randomization group members must be non-empty names")
+        if len(set(value)) != len(value):
+            raise ValueError("randomization group members must be distinct")
+        return value
+
+
 class RandomizationSpec(BaseModel, frozen=True):
     """Canonical proposal, distribution, and constraint specification."""
 
@@ -1449,6 +1492,10 @@ class AutoAtomConfig(BaseModel):
     The direct ``PoseRandomRange`` shorthand is rejected at sample time for
     operator entries.
     """
+    randomization_groups: Dict[str, RandomizationGroupConfig] = Field(
+        default_factory=dict
+    )
+    """Named joint object-placement distributions applied at reset."""
     camera_initial_pose: Dict[str, PoseOverrideConfig] = Field(default_factory=dict)
     """Per-camera initial pose overrides applied at each reset, before
     camera randomization records its defaults.
@@ -1497,6 +1544,7 @@ class AutoAtomConfig(BaseModel):
     @field_validator(
         "initial_pose",
         "randomization",
+        "randomization_groups",
         "camera_initial_pose",
         "camera_randomization",
         mode="before",
@@ -1546,6 +1594,26 @@ class AutoAtomConfig(BaseModel):
                     "regions are not supported for cameras"
                 )
         return value
+
+    @model_validator(mode="after")
+    def _validate_randomization_groups(self) -> Self:
+        """Ensure each configured entity belongs to at most one joint group."""
+        member_groups: Dict[str, str] = {}
+        for group_name, group in self.randomization_groups.items():
+            for member in group.members:
+                if member not in self.randomization:
+                    raise ValueError(
+                        f"randomization_groups[{group_name!r}] member {member!r} "
+                        "must also be declared in task.randomization"
+                    )
+                previous_group = member_groups.get(member)
+                if previous_group is not None:
+                    raise ValueError(
+                        f"randomization group member {member!r} appears in both "
+                        f"{previous_group!r} and {group_name!r}"
+                    )
+                member_groups[member] = group_name
+        return self
 
     """When True the first N resets cycle through extreme poses (each axis at its min/max, then all-min and all-max) before switching to random sampling.  Use this to verify that configured ranges are not too large."""
 
