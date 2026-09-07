@@ -1732,7 +1732,12 @@ class GSUnifiedMujocoEnv(UnifiedMujocoEnv):
         return pose
 
     def capture_observation(self) -> dict[str, dict[str, Any]]:
-        obs = super().capture_observation()
+        obs = self._capture_observation_raw()
+        return self._apply_camera_noise(obs)
+
+    def _capture_observation_raw(self) -> dict[str, dict[str, Any]]:
+        """Capture native data and inject GS streams before sensor noise."""
+        obs = super()._capture_observation_raw()
         self._inject_gs_renders(obs)
         return obs
 
@@ -2472,8 +2477,13 @@ class BatchedGSUnifiedMujocoEnv(BatchedUnifiedMujocoEnv):
 
     def capture_observation(self) -> dict[str, dict[str, Any]]:
         # The canonical adapter stacks replicated observations or broadcasts a
-        # single shared-physics observation exactly once.
-        obs = super().capture_observation()
+        # single shared-physics observation exactly once, before noise.
+        obs = self._capture_observation_raw()
+        return self._apply_camera_noise(obs)
+
+    def _capture_observation_raw(self) -> dict[str, dict[str, Any]]:
+        """Capture the logical batch and inject GS streams before noise."""
+        obs = super()._capture_observation_raw()
         self._inject_batched_gs_renders(obs)
         return obs
 

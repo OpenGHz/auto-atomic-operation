@@ -35,6 +35,7 @@ from pydantic import (
     ConfigDict,
     Field,
     ImportString,
+    NonNegativeFloat,
     PositiveFloat,
     field_serializer,
     field_validator,
@@ -117,6 +118,45 @@ class CameraCalibrationConfig(BaseModel, frozen=True):
         return self
 
 
+class RGBNoiseConfig(BaseModel, frozen=True):
+    """Sensor-noise parameters applied to an RGB camera stream."""
+
+    model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid")
+
+    gaussian_std: NonNegativeFloat = 0.0
+    """Gaussian readout-noise standard deviation in normalized RGB units."""
+    shot_noise_scale: PositiveFloat | None = None
+    """Optional Poisson shot-noise scale in normalized RGB units."""
+    dropout_probability: float = Field(default=0.0, ge=0.0, le=1.0)
+    """Independent per-pixel dropout probability."""
+
+
+class DepthNoiseConfig(BaseModel, frozen=True):
+    """Sensor-noise parameters applied to a metric depth stream."""
+
+    model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid")
+
+    gaussian_std_m: NonNegativeFloat = 0.0
+    """Fixed Gaussian depth-noise standard deviation in metres."""
+    relative_std: NonNegativeFloat = 0.0
+    """Distance-proportional depth-noise coefficient."""
+    quantization_step_m: PositiveFloat | None = None
+    """Optional positive depth quantization step in metres."""
+    dropout_probability: float = Field(default=0.0, ge=0.0, le=1.0)
+    """Independent per-pixel dropout probability for valid depth pixels."""
+
+
+class CameraNoiseConfig(BaseModel, frozen=True):
+    """Independent RGB and depth sensor-noise configuration for one camera."""
+
+    model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid")
+
+    rgb: RGBNoiseConfig | None = None
+    """RGB noise configuration; omitted to leave RGB unchanged."""
+    depth: DepthNoiseConfig | None = None
+    """Depth noise configuration; omitted to leave depth unchanged."""
+
+
 class CameraSpec(BaseModel, frozen=True):
     model_config = ConfigDict(validate_assignment=True, extra="forbid")
 
@@ -151,6 +191,8 @@ class CameraSpec(BaseModel, frozen=True):
     sensor can model a stricter measurable range than its aligned RGB stream.
     ``None`` preserves the XML scene's native clipping behavior.
     """
+    noise: CameraNoiseConfig | None = None
+    """Optional independent RGB and depth sensor-noise configuration."""
     enable_mask: bool = False
     """Whether to include a binary segmentation mask for configured objects."""
     enable_heat_map: bool = False
@@ -1676,6 +1718,11 @@ class MujocoBasis:
                 "depth_clip_range_m": (
                     list(spec.depth_clip_range_m)
                     if spec.depth_clip_range_m is not None
+                    else None
+                ),
+                "noise": (
+                    spec.noise.model_dump(mode="json")
+                    if spec.noise is not None
                     else None
                 ),
             }

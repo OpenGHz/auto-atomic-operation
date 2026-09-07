@@ -25,14 +25,18 @@ from auto_atom.basis.mjc.batch_execution import (
     BatchExecutionAdapter,
     BatchExecutionMode,
 )
+from auto_atom.basis.mjc.camera_noise import CameraNoiseProcessor
 from auto_atom.basis.mjc.mujoco_basis import (
     CameraCalibrationConfig,
     CameraExtrinsicsConfig,
+    CameraNoiseConfig,
     CameraSpec,
     DataType,
+    DepthNoiseConfig,
     EnvConfig,
     MujocoBasis,
     OperatorBinding,
+    RGBNoiseConfig,
     ViewerConfig,
 )
 from auto_atom.runtime import (
@@ -58,6 +62,9 @@ __all__ = [
     "DataType",
     "CameraCalibrationConfig",
     "CameraExtrinsicsConfig",
+    "RGBNoiseConfig",
+    "DepthNoiseConfig",
+    "CameraNoiseConfig",
     "CameraSpec",
     "ViewerConfig",
     "OperatorBinding",
@@ -273,6 +280,9 @@ class UnifiedMujocoEnv(MujocoBasis):
         super().__init__(config, scene_artifact=scene_artifact, **kwargs)
         self._operator_states: dict[str, _OperatorState] = {}
         self._key_creator = KeyCreator(self.config.structured)
+        self._camera_noise_processor = CameraNoiseProcessor(
+            {spec.name: spec for spec in self.config.cameras}
+        )
         # Off by default — IK runs in the hot path of every control step in
         # ``per_step_ik`` mode and the proximity check, while cheap, is still
         # noise unless the caller opted in (e.g. randomization tooling that
@@ -1502,7 +1512,33 @@ class UnifiedMujocoEnv(MujocoBasis):
         s.target_quat_in_base = quat_b.copy()
 
     def capture_observation(self) -> dict[str, dict[str, Any]]:
+        return self._apply_camera_noise(self._capture_observation_raw())
+
+    def _capture_observation_raw(self) -> dict[str, dict[str, Any]]:
+        """Capture an observation before RGB/depth sensor noise is applied."""
         return self._collect_obs(self.config.structured)
+
+    def _apply_camera_noise(
+        self,
+        observation: dict[str, dict[str, Any]],
+        *,
+        logical_env_index: int = 0,
+    ) -> dict[str, dict[str, Any]]:
+        processor = getattr(self, "_camera_noise_processor", None)
+        if processor is None:
+            return observation
+        return processor.process_observation(
+            observation,
+            self._key_creator,
+            structured=self.config.structured,
+            logical_env_index=logical_env_index,
+        )
+
+    def set_camera_noise_seed(self, seed: int | None) -> None:
+        """Set the deterministic root seed for RGB/depth camera noise."""
+        processor = getattr(self, "_camera_noise_processor", None)
+        if processor is not None:
+            processor.set_seed(seed)
 
     def _collect_obs(self, structured: bool) -> dict[str, dict[str, Any]]:
         sim_time = self.data.time
@@ -1974,6 +2010,9 @@ class BatchedUnifiedMujocoEnv:
         if config.name:
             ComponentRegistry.register_env(config.name, self)
         self._key_creator = KeyCreator(self.config.structured)
+        self._camera_noise_processor = CameraNoiseProcessor(
+            {spec.name: spec for spec in self.config.cameras}
+        )
         self._batch_execution = BatchExecutionAdapter(self.envs, self.batch_size)
 
     def _batch_adapter(self) -> BatchExecutionAdapter:
@@ -2435,7 +2474,39 @@ class BatchedUnifiedMujocoEnv:
         self._batch_adapter().dispatch(set_interest)
 
     def capture_observation(self) -> dict[str, dict[str, Any]]:
-        return self._batch_adapter().capture_observation()
+        observation = self._capture_observation_raw()
+        processor = getattr(self, "_camera_noise_processor", None)
+        if processor is None:
+            return observation
+        return processor.process_batched_observation(
+            observation,
+            self._key_creator,
+            structured=self.config.structured,
+            batch_size=self.batch_size,
+        )
+
+    def _capture_observation_raw(self) -> dict[str, dict[str, Any]]:
+        """Capture a logical batch before RGB/depth sensor noise is applied."""
+        return self._batch_adapter().capture_observation_raw()
+
+    def set_camera_noise_seed(self, seed: int | None) -> None:
+        """Set the deterministic root seed for all logical batch rows."""
+        processor = getattr(self, "_camera_noise_processor", None)
+        if processor is not None:
+            processor.set_seed(seed)
+
+    def _apply_camera_noise(
+        self, observation: dict[str, dict[str, Any]]
+    ) -> dict[str, dict[str, Any]]:
+        processor = getattr(self, "_camera_noise_processor", None)
+        if processor is None:
+            return observation
+        return processor.process_batched_observation(
+            observation,
+            self._key_creator,
+            structured=self.config.structured,
+            batch_size=self.batch_size,
+        )
 
     def get_info(self) -> dict[str, Any]:
         info = self.envs[0].get_info()

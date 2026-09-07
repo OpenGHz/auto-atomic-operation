@@ -71,6 +71,16 @@ env:
       is_static: false
       rgb_clip_range_m: [0.001, 50.0]
       depth_clip_range_m: [0.10, 5.0]
+      noise:
+        rgb:
+          gaussian_std: 0.01
+          shot_noise_scale: 5000.0
+          dropout_probability: 0.001
+        depth:
+          gaussian_std_m: 0.001
+          relative_std: 0.001
+          quantization_step_m: 0.001
+          dropout_probability: 0.01
       calibration:
         projection: mujoco_perspective
         fovy_deg: 102.89
@@ -85,6 +95,15 @@ the XML value. The supported projection is `mujoco_perspective`, matching both
 the native MuJoCo and Gaussian Splatting adapters. Both clip ranges are
 optional; when either is omitted, that output stream preserves the XML scene's
 clipping behavior.
+
+The optional `noise.rgb` and `noise.depth` blocks model sensor noise
+independently. RGB noise uses normalized-domain Gaussian noise, optional
+Poisson shot noise, and per-pixel dropout; output remains `uint8` in
+`[0, 255]`. Depth noise uses fixed and distance-relative Gaussian terms,
+optional quantization, and dropout; only finite positive depth is perturbed,
+and values outside `depth_clip_range_m` are returned as zero. Omitting either
+block leaves that stream unchanged. Noise is applied after Native/GS rendering
+and batch expansion, while masks and heat maps remain clean supervision data.
 
 ## Minimal task file
 

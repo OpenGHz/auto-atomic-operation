@@ -1161,6 +1161,9 @@ class MujocoTaskBackend(SceneBackend):
             "MujocoTaskBackend random_seed=%s", self.random_seed
         )
         self._rng = np.random.default_rng(self.random_seed)
+        set_noise_seed = getattr(self.env, "set_camera_noise_seed", None)
+        if set_noise_seed is not None:
+            set_noise_seed(self.random_seed)
         self._validate_initial_joint_position_ownership()
 
     def _validate_initial_joint_position_ownership(self) -> None:
