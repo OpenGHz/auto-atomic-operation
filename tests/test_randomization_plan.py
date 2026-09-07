@@ -8,13 +8,16 @@ from auto_atom.framework import (
     PoseRandomRange,
     RandomizationConstraintConfig,
     RandomizationDistributionConfig,
-    RandomizationDistributionKind,
     RandomizationFailureConfig,
     RandomizationFailureMode,
-    RandomizationSequenceKind,
+    RandomizationGeneratorConfig,
+    RandomizationGeneratorKind,
+    RandomizationPoissonDiskConfig,
+    RandomizationSelectorKind,
     RandomizationSpec,
 )
 from auto_atom.randomization import (
+    PoissonDiskCandidateStream,
     RandomizationFailureError,
     compile_randomization_plan,
     maximin_select,
@@ -59,23 +62,72 @@ def test_compile_plan_keeps_operator_dependency_order() -> None:
     assert plan.order.index("arm.base") < plan.order.index("cup")
 
 
-def test_low_discrepancy_candidates_are_deterministic_and_bounded() -> None:
+def test_halton_candidates_are_deterministic_and_bounded() -> None:
     first = unit_candidate(
         rng=np.random.default_rng(7),
         dimension=4,
-        sequence=RandomizationSequenceKind.LOW_DISCREPANCY,
+        generator=RandomizationGeneratorKind.HALTON,
         index=8,
         candidate_count=32,
     )
     second = unit_candidate(
         rng=np.random.default_rng(999),
         dimension=4,
-        sequence=RandomizationSequenceKind.LOW_DISCREPANCY,
+        generator=RandomizationGeneratorKind.HALTON,
         index=8,
         candidate_count=32,
     )
     assert np.array_equal(first, second)
     assert np.all((first >= 0.0) & (first <= 1.0))
+
+
+def test_sobol_and_poisson_disk_candidates_use_scipy_qmc() -> None:
+    for generator in (
+        RandomizationGeneratorKind.SOBOL,
+        RandomizationGeneratorKind.POISSON_DISK,
+    ):
+        candidate = unit_candidate(
+            rng=np.random.default_rng(7),
+            dimension=3,
+            generator=generator,
+            index=2,
+            candidate_count=8,
+        )
+        assert candidate.shape == (3,)
+        assert np.all((candidate >= 0.0) & (candidate <= 1.0))
+
+
+def test_poisson_disk_generator_accepts_scipy_parameters() -> None:
+    generator = RandomizationGeneratorConfig(
+        poisson_disk=RandomizationPoissonDiskConfig(
+            radius=0.2,
+            hypersphere="surface",
+            ncandidates=11,
+            optimization="random-cd",
+        )
+    )
+    candidate = unit_candidate(
+        rng=np.random.default_rng(7),
+        dimension=3,
+        generator=generator,
+        index=2,
+        candidate_count=4,
+    )
+    assert candidate.shape == (3,)
+    assert np.all((candidate >= 0.0) & (candidate <= 1.0))
+
+
+def test_poisson_disk_stream_preserves_intra_pool_spacing() -> None:
+    stream = PoissonDiskCandidateStream(
+        RandomizationPoissonDiskConfig(radius=0.2, ncandidates=11),
+        dimension=3,
+        sample_count=8,
+        seed=7,
+    )
+    samples = np.asarray([stream.next() for _ in range(8)])
+    distances = np.linalg.norm(samples[:, None, :] - samples[None, :, :], axis=2)
+    off_diagonal = distances[np.triu_indices(len(samples), k=1)]
+    assert np.all(off_diagonal >= 0.2 - 1e-12)
 
 
 def test_maximin_select_respects_existing_history() -> None:
@@ -88,12 +140,12 @@ def test_maximin_select_respects_existing_history() -> None:
     assert np.allclose(selected, [[0.9]])
 
 
-def test_canonical_failure_policy_is_validated() -> None:
+def test_canonical_generator_and_selector_are_validated() -> None:
     spec = RandomizationSpec(
         proposal=PoseRandomRange(x=(0.0, 1.0)),
         distribution=RandomizationDistributionConfig(
-            kind=RandomizationDistributionKind.SPACE_FILLING,
-            sequence=RandomizationSequenceKind.STRATIFIED,
+            generator=RandomizationGeneratorKind.LATIN_HYPERCUBE,
+            selector=RandomizationSelectorKind.MAXIMIN,
             candidate_count=8,
         ),
         failure=RandomizationFailureConfig(
@@ -102,11 +154,18 @@ def test_canonical_failure_policy_is_validated() -> None:
         ),
     )
     assert spec.failure.max_attempts == 3
-    with pytest.raises(ValueError, match="space_filling requires"):
-        RandomizationDistributionConfig(
-            kind=RandomizationDistributionKind.SPACE_FILLING,
-            sequence=RandomizationSequenceKind.IID,
-        )
+    assert spec.distribution.selector == RandomizationSelectorKind.MAXIMIN
+
+
+def test_first_feasible_allows_a_candidate_pool_without_changing_selector_scope() -> (
+    None
+):
+    distribution = RandomizationDistributionConfig(
+        generator=RandomizationGeneratorKind.HALTON,
+        selector=RandomizationSelectorKind.FIRST_FEASIBLE,
+        candidate_count=8,
+    )
+    assert distribution.candidate_count == 8
 
 
 def test_failure_error_contains_attempt_and_constraint_details() -> None:

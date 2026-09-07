@@ -643,30 +643,76 @@ PoseRandomizationSpec = Union[PoseRandomRange, PoseRandomizationConfig]
 """Legacy single- or multi-region pose randomization proposal."""
 
 
-class RandomizationDistributionKind(str, Enum):
-    """Distribution objective for a canonical randomization specification."""
-
-    UNIFORM_FEASIBLE = "uniform_feasible"
-    """Sample uniformly in the proposal conditioned on hard constraints."""
-
-    SPACE_FILLING = "space_filling"
-    """Prefer well-spaced samples across a batch or reset sequence."""
-
-
-class RandomizationSequenceKind(str, Enum):
-    """Candidate sequence used by the space-filling distribution."""
+class RandomizationGeneratorKind(str, Enum):
+    """Concrete candidate generator used by a randomization distribution."""
 
     IID = "iid"
-    """Independent pseudo-random candidates."""
+    """Independent pseudo-random candidates from NumPy's generator."""
 
-    STRATIFIED = "stratified"
-    """Stratified candidates over each active position axis."""
+    LATIN_HYPERCUBE = "latin_hypercube"
+    """Latin-hypercube candidates from SciPy's QMC implementation."""
 
-    LOW_DISCREPANCY = "low_discrepancy"
-    """Deterministic low-discrepancy candidates derived from the seed."""
+    HALTON = "halton"
+    """Halton low-discrepancy candidates from SciPy's QMC implementation."""
+
+    SOBOL = "sobol"
+    """Sobol low-discrepancy candidates from SciPy's QMC implementation."""
 
     POISSON_DISK = "poisson_disk"
-    """Candidates selected with a hard minimum distance when possible."""
+    """Poisson-disk candidates from SciPy's QMC implementation."""
+
+
+class RandomizationPoissonDiskConfig(BaseModel, frozen=True):
+    """Parameters for the SciPy Poisson-disk candidate generator.
+
+    The configuration is nested under ``distribution.generator.poisson_disk``
+    only when the default Poisson-disk parameters need to be overridden.
+    """
+
+    model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid")
+
+    radius: Optional[PositiveFloat] = None
+    """Minimum distance in the normalized unit-cube candidate space.
+
+    ``None`` derives a dimension-aware default from the candidate pool size.
+    This is distinct from ``distribution.min_distance``, which is the
+    project-level maximin spacing target in metres.
+    """
+
+    hypersphere: Literal["volume", "surface"] = "volume"
+    """Whether potential points are sampled inside or on the candidate sphere."""
+
+    ncandidates: PositiveInt = 30
+    """Number of Poisson-disk proposals considered per active point."""
+
+    optimization: Optional[Literal["random-cd", "lloyd"]] = None
+    """Optional SciPy post-processing optimization."""
+
+
+class RandomizationGeneratorConfig(BaseModel, frozen=True):
+    """Parameterized candidate generators keyed by their algorithm name."""
+
+    model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid")
+
+    poisson_disk: RandomizationPoissonDiskConfig
+    """SciPy Poisson-disk parameters."""
+
+
+RandomizationGeneratorInput = Union[
+    RandomizationGeneratorKind,
+    RandomizationGeneratorConfig,
+]
+"""Scalar generator name or a keyed parameterized generator."""
+
+
+class RandomizationSelectorKind(str, Enum):
+    """Candidate acceptance or selection policy."""
+
+    FIRST_FEASIBLE = "first_feasible"
+    """Accept the first candidate satisfying all hard constraints."""
+
+    MAXIMIN = "maximin"
+    """Select the current candidate farthest from accepted samples."""
 
 
 class RandomizationVisibilityGeometry(str, Enum):
@@ -771,44 +817,24 @@ class RandomizationConstraintConfig(BaseModel, frozen=True):
 
 
 class RandomizationDistributionConfig(BaseModel, frozen=True):
-    """Sampling objective and candidate sequence for one randomization target."""
+    """Candidate generator and selector for one randomization target."""
 
     model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid")
 
-    kind: RandomizationDistributionKind = RandomizationDistributionKind.UNIFORM_FEASIBLE
-    """Whether to preserve feasible-volume probability or maximize coverage."""
+    generator: RandomizationGeneratorInput = RandomizationGeneratorKind.IID
+    """Concrete candidate generator, optionally with Poisson-disk parameters."""
 
-    sequence: RandomizationSequenceKind = RandomizationSequenceKind.IID
-    """Candidate sequence used by the sampler."""
+    selector: RandomizationSelectorKind = RandomizationSelectorKind.FIRST_FEASIBLE
+    """Policy used to accept or choose generated feasible candidates."""
 
     region_weighting: Literal["equal", "volume"] = "volume"
     """How multiple proposal regions are selected for uniform sampling."""
 
-    candidate_count: PositiveInt = 64
-    """Maximum candidates considered for one target or joint sample."""
+    candidate_count: PositiveInt = 1
+    """Maximum candidate pool size considered for one target or joint sample."""
 
     min_distance: NonNegativeFloat = 0.0
-    """Optional spacing target for ``space_filling`` selection, in metres."""
-
-    @model_validator(mode="after")
-    def _validate_sequence(self) -> Self:
-        if (
-            self.kind == RandomizationDistributionKind.UNIFORM_FEASIBLE
-            and self.sequence != RandomizationSequenceKind.IID
-        ):
-            raise ValueError(
-                "uniform_feasible requires sequence='iid'; use space_filling "
-                "for stratified, low_discrepancy, or poisson_disk sampling"
-            )
-        if (
-            self.kind == RandomizationDistributionKind.SPACE_FILLING
-            and self.sequence == RandomizationSequenceKind.IID
-        ):
-            raise ValueError(
-                "space_filling requires a non-iid sequence such as 'stratified', "
-                "'low_discrepancy', or 'poisson_disk'"
-            )
-        return self
+    """Required spacing from accepted non-iid samples across resets, in metres."""
 
 
 class RandomizationFailureConfig(BaseModel, frozen=True):

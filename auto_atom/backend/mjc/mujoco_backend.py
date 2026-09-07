@@ -26,14 +26,18 @@ from ...framework import (
     PoseRandomRange,
     PoseReference,
     RandomizationConstraintConfig,
+    RandomizationGeneratorConfig,
+    RandomizationGeneratorKind,
     RandomizationInput,
+    RandomizationPoissonDiskConfig,
     RandomizationReference,
-    RandomizationSequenceKind,
+    RandomizationSelectorKind,
     RandomizationSpec,
     canonical_randomization_spec,
     pose_randomization_regions,
 )
 from ...randomization import (
+    PoissonDiskCandidateStream,
     RandomizationFailureError,
     RandomizationPlan,
     compile_randomization_plan,
@@ -1756,8 +1760,6 @@ class MujocoTaskBackend(SceneBackend):
         if len(regions) == 1:
             return regions[0]
         distribution = canonical.distribution
-        if distribution.kind.value == "space_filling":
-            return regions[candidate_index % len(regions)]
         if distribution.region_weighting == "volume":
             volumes = []
             for region in regions:
@@ -1819,6 +1821,41 @@ class MujocoTaskBackend(SceneBackend):
             label: set(dependencies)
             for label, dependencies in self._randomization_plan().dependencies.items()
         }
+
+    @staticmethod
+    def _distribution_uses_space_filling_history(distribution: Any) -> bool:
+        """Return whether a generator participates in cross-reset coverage.
+
+        ``selector`` is intentionally absent from this decision.  Selectors
+        operate on the current candidate group only; non-IID generators own
+        the persistent sequence semantics that make accepted samples from
+        earlier resets unavailable to later resets.
+        """
+        generator = getattr(distribution, "generator", RandomizationGeneratorKind.IID)
+        return generator != RandomizationGeneratorKind.IID
+
+    @staticmethod
+    def _history_clearance(vector: np.ndarray, history: list[np.ndarray]) -> float:
+        """Return distance from a candidate to its nearest accepted sample."""
+        if not history:
+            return float("inf")
+        points = np.vstack(history)
+        return float(
+            np.linalg.norm(
+                np.asarray(vector, dtype=np.float64) - points,
+                axis=1,
+            ).min()
+        )
+
+    def _record_space_filling_sample(
+        self,
+        history_key: Tuple[str, ...],
+        vector: np.ndarray,
+    ) -> None:
+        """Record only the pose selected/applied for a reset component."""
+        history = self._space_filling_history.get(history_key, [])
+        history = (history + [np.asarray(vector, dtype=np.float64).copy()])[-256:]
+        self._space_filling_history[history_key] = history
 
     def _randomization_order(self) -> List[str]:
         """Return randomization keys in dependency order (referenced first).
@@ -2228,9 +2265,31 @@ class MujocoTaskBackend(SceneBackend):
             and _MAX_COLLISION_REJECTION_ATTEMPTS != 100
         ):
             attempt_budget = _MAX_COLLISION_REJECTION_ATTEMPTS
-        space_filling = any(
-            action_specs[label].randomization.distribution.kind.value == "space_filling"
+        # Candidate generation owns cross-reset coverage.  The selector only
+        # decides how this reset's feasible candidate group is reduced to one
+        # sample; it must not decide whether accepted history is consulted.
+        history_enabled = any(
+            self._distribution_uses_space_filling_history(
+                action_specs[label].randomization.distribution
+            )
             for label in component
+        )
+        collect_candidate_group = any(
+            action_specs[label].randomization.distribution.selector
+            == RandomizationSelectorKind.MAXIMIN
+            for label in component
+        )
+        history_key = tuple(sorted(component))
+        history = self._space_filling_history.get(history_key, [])
+        history_min_distance = max(
+            (
+                float(action_specs[label].randomization.distribution.min_distance)
+                for label in component
+                if self._distribution_uses_space_filling_history(
+                    action_specs[label].randomization.distribution
+                )
+            ),
+            default=0.0,
         )
         candidate_limit = max(
             (
@@ -2243,6 +2302,26 @@ class MujocoTaskBackend(SceneBackend):
             tuple[Dict[str, PoseState], List[_PendingRandomizationAction], np.ndarray]
         ] = []
         stable_labels = {label: index for index, label in enumerate(sorted(component))}
+        poisson_streams: dict[str, PoissonDiskCandidateStream] = {}
+        for label in component:
+            distribution = action_specs[label].randomization.distribution
+            generator = distribution.generator
+            if isinstance(generator, RandomizationGeneratorConfig):
+                poisson_config = generator.poisson_disk
+            elif generator == RandomizationGeneratorKind.POISSON_DISK:
+                poisson_config = RandomizationPoissonDiskConfig()
+            else:
+                continue
+            poisson_streams[label] = PoissonDiskCandidateStream(
+                poisson_config,
+                dimension=6,
+                sample_count=attempt_budget,
+                seed=int(
+                    self._randomization_reset_index * 1_000_003
+                    + stable_labels[label]
+                    + env_index * 10_007
+                ),
+            )
 
         for attempt in range(attempt_budget):
             working_poses = dict(accepted_env_poses)
@@ -2263,6 +2342,7 @@ class MujocoTaskBackend(SceneBackend):
                         + attempt * 17
                         + stable_labels[action_label]
                     ),
+                    poisson_stream=poisson_streams.get(action_label),
                 )
                 for key, pose in sampled_poses.items():
                     working_poses[key] = pose
@@ -2374,14 +2454,8 @@ class MujocoTaskBackend(SceneBackend):
                         minimum_clearance,
                         float(report.minimum_clearance),
                     )
-            last_sampled_poses = env_sampled_poses
-            last_actions = env_actions
-            last_failure = failure
-            last_violations = violations
-            last_minimum_clearance = minimum_clearance
-            if failure is None:
-                if not space_filling:
-                    return env_sampled_poses, env_actions, None
+            vector: np.ndarray | None = None
+            if failure is None and (history_enabled or collect_candidate_group):
                 vector = np.concatenate(
                     [
                         np.asarray(
@@ -2395,6 +2469,35 @@ class MujocoTaskBackend(SceneBackend):
                         for label in sorted(component)
                     ]
                 )
+                if history_enabled:
+                    history_clearance = self._history_clearance(
+                        vector,
+                        history,
+                    )
+                    duplicate = history_clearance <= 1e-12
+                    if duplicate or history_clearance < history_min_distance:
+                        failure = (component[0], "history:min_distance")
+                        violations.append(f"{component[0]}:history:min_distance")
+                        required = max(history_min_distance, 1e-12)
+                        minimum_clearance = min(
+                            minimum_clearance,
+                            history_clearance - required,
+                        )
+
+            last_sampled_poses = env_sampled_poses
+            last_actions = env_actions
+            last_failure = failure
+            last_violations = violations
+            last_minimum_clearance = minimum_clearance
+            if failure is None:
+                if not collect_candidate_group:
+                    if history_enabled and vector is not None:
+                        self._record_space_filling_sample(history_key, vector)
+                    return env_sampled_poses, env_actions, None
+                if vector is None:
+                    raise RuntimeError(
+                        "Randomization candidate group was not vectorized"
+                    )
                 valid_candidates.append((env_sampled_poses, env_actions, vector))
                 if len(valid_candidates) >= candidate_limit:
                     break
@@ -2413,22 +2516,21 @@ class MujocoTaskBackend(SceneBackend):
 
         if valid_candidates:
             vectors = np.vstack([candidate[2] for candidate in valid_candidates])
-            history_key = tuple(sorted(component))
-            history = self._space_filling_history.get(history_key, [])
-            seed_points = np.vstack(history) if history else None
             distribution = action_specs[component[0]].randomization.distribution
             selected = maximin_select(
                 vectors,
                 count=1,
                 min_distance=float(distribution.min_distance),
-                seed_points=seed_points,
+                # History is prepared independently of the selector.  It is
+                # the scoring baseline for maximin within this reset's group.
+                seed_points=np.vstack(history) if history else None,
             )
             if len(selected) == 0:
                 selected = maximin_select(
                     vectors,
                     count=1,
                     min_distance=0.0,
-                    seed_points=seed_points,
+                    seed_points=np.vstack(history) if history else None,
                 )
             selected_index = int(
                 np.flatnonzero(np.all(np.isclose(vectors, selected[0]), axis=1))[0]
@@ -2436,8 +2538,8 @@ class MujocoTaskBackend(SceneBackend):
             chosen_poses, chosen_actions, chosen_vector = valid_candidates[
                 selected_index
             ]
-            history = (history + [chosen_vector])[-256:]
-            self._space_filling_history[history_key] = history
+            if history_enabled:
+                self._record_space_filling_sample(history_key, chosen_vector)
             return chosen_poses, chosen_actions, None
 
         if best_failure is not None:
@@ -2480,6 +2582,21 @@ class MujocoTaskBackend(SceneBackend):
                 diagnostics["violations"],
                 best_clearance,
             )
+            if history_enabled:
+                best_vector = np.concatenate(
+                    [
+                        np.asarray(
+                            next(
+                                action.pose
+                                for action in best_actions
+                                if action.label == label
+                            ).position[0],
+                            dtype=np.float64,
+                        )
+                        for label in sorted(component)
+                    ]
+                )
+                self._record_space_filling_sample(history_key, best_vector)
             return best_poses, best_actions, best_failure_reason
         return last_sampled_poses, last_actions, last_failure
 
@@ -2490,6 +2607,7 @@ class MujocoTaskBackend(SceneBackend):
         working_poses: Dict[str, PoseState],
         *,
         candidate_index: int = 0,
+        poisson_stream: PoissonDiskCandidateStream | None = None,
     ) -> tuple[Dict[str, PoseState], List[_PendingRandomizationAction]]:
         name = action_spec.owner
         if action_spec.kind == "unknown" or (
@@ -2521,6 +2639,7 @@ class MujocoTaskBackend(SceneBackend):
                 working_poses,
                 distribution=distribution,
                 sample_index=candidate_index,
+                poisson_stream=poisson_stream,
             )
             return {action_spec.label: sampled}, [
                 _PendingRandomizationAction(
@@ -2549,6 +2668,7 @@ class MujocoTaskBackend(SceneBackend):
                 working_poses,
                 distribution=distribution,
                 sample_index=candidate_index,
+                poisson_stream=poisson_stream,
             )
         elif action_spec.kind == "operator_eef":
             sampled = self._sample_operator_eef_pose_for_env(
@@ -2559,6 +2679,7 @@ class MujocoTaskBackend(SceneBackend):
                 working_poses,
                 distribution=distribution,
                 sample_index=candidate_index,
+                poisson_stream=poisson_stream,
             )
         else:
             raise ValueError(f"Unknown randomization action kind: {action_spec.kind}")
@@ -2586,6 +2707,7 @@ class MujocoTaskBackend(SceneBackend):
         *,
         distribution: Any = None,
         sample_index: int = 0,
+        poisson_stream: PoissonDiskCandidateStream | None = None,
     ) -> PoseState:
         default_pose = self._default_object_poses.get(
             name,
@@ -2604,6 +2726,7 @@ class MujocoTaskBackend(SceneBackend):
             reference_poses=reference_poses,
             distribution=distribution,
             sample_index=sample_index,
+            poisson_stream=poisson_stream,
         )
 
     def _sample_operator_base_pose_for_env(
@@ -2616,6 +2739,7 @@ class MujocoTaskBackend(SceneBackend):
         *,
         distribution: Any = None,
         sample_index: int = 0,
+        poisson_stream: PoissonDiskCandidateStream | None = None,
     ) -> PoseState:
         default_base = self._default_operator_base_poses.get(
             name,
@@ -2634,6 +2758,7 @@ class MujocoTaskBackend(SceneBackend):
             reference_poses=reference_poses,
             distribution=distribution,
             sample_index=sample_index,
+            poisson_stream=poisson_stream,
         )
 
     def _operator_default_eef_following_base(
@@ -2697,6 +2822,7 @@ class MujocoTaskBackend(SceneBackend):
         *,
         distribution: Any = None,
         sample_index: int = 0,
+        poisson_stream: PoissonDiskCandidateStream | None = None,
     ) -> PoseState:
         following_base_default, base_world = self._operator_default_eef_following_base(
             name,
@@ -2716,6 +2842,7 @@ class MujocoTaskBackend(SceneBackend):
                 0,
                 distribution=distribution,
                 sample_index=sample_index,
+                poisson_stream=poisson_stream,
             )
             return compose_pose(base_world, sampled_in_base)
 
@@ -2741,6 +2868,7 @@ class MujocoTaskBackend(SceneBackend):
             reference_poses=reference_poses,
             distribution=distribution,
             sample_index=sample_index,
+            poisson_stream=poisson_stream,
         )
 
     def _resolve_reference_poses_for_env(
@@ -2946,6 +3074,7 @@ class MujocoTaskBackend(SceneBackend):
         ] = None,
         distribution: Any = None,
         sample_index: int = 0,
+        poisson_stream: PoissonDiskCandidateStream | None = None,
     ) -> PoseState:
         base_pose = base_pose.broadcast_to(self.batch_size)
         pose_by_reference = {
@@ -2956,16 +3085,23 @@ class MujocoTaskBackend(SceneBackend):
         def _baseline(reference: Union[RandomizationReference, str]) -> PoseState:
             return pose_by_reference.get(reference, base_pose)
 
-        sequence = getattr(distribution, "sequence", RandomizationSequenceKind.IID)
-        candidate_count = int(getattr(distribution, "candidate_count", 64))
-        low_discrepancy_values = None
-        if sequence != RandomizationSequenceKind.IID:
-            low_discrepancy_values = unit_candidate(
+        generator = getattr(
+            distribution,
+            "generator",
+            RandomizationGeneratorKind.IID,
+        )
+        candidate_count = int(getattr(distribution, "candidate_count", 1))
+        qmc_values = None
+        if generator != RandomizationGeneratorKind.IID:
+            qmc_values = unit_candidate(
                 rng=self._rng,
                 dimension=6,
-                sequence=sequence,
+                generator=generator,
                 index=sample_index,
                 candidate_count=candidate_count,
+                min_distance=float(getattr(distribution, "min_distance", 0.0)),
+                seed=int(self._randomization_reset_index * 1_000_003 + sample_index),
+                poisson_stream=poisson_stream,
             )
 
         position = np.empty(3, dtype=np.float64)
@@ -2975,13 +3111,12 @@ class MujocoTaskBackend(SceneBackend):
             value = float(baseline.position[env_index, axis_index])
             rng_pair = rand_range.axis_range(axis_name)
             if rng_pair is not None:
-                if low_discrepancy_values is None:
+                if qmc_values is None:
                     sampled = float(self._rng.uniform(*rng_pair))
                 else:
                     sampled = float(
                         rng_pair[0]
-                        + low_discrepancy_values[axis_index]
-                        * (rng_pair[1] - rng_pair[0])
+                        + qmc_values[axis_index] * (rng_pair[1] - rng_pair[0])
                     )
                 if reference in (
                     RandomizationReference.ABSOLUTE_WORLD,
@@ -3014,13 +3149,12 @@ class MujocoTaskBackend(SceneBackend):
             value = float(baseline_rpy[axis_index])
             rng_pair = rand_range.axis_range(axis_name)
             if rng_pair is not None:
-                if low_discrepancy_values is None:
+                if qmc_values is None:
                     sampled = float(self._rng.uniform(*rng_pair))
                 else:
                     sampled = float(
                         rng_pair[0]
-                        + low_discrepancy_values[3 + axis_index]
-                        * (rng_pair[1] - rng_pair[0])
+                        + qmc_values[3 + axis_index] * (rng_pair[1] - rng_pair[0])
                     )
                 if reference in (
                     RandomizationReference.ABSOLUTE_WORLD,

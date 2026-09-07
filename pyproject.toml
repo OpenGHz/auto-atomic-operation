@@ -14,6 +14,7 @@ dependencies = [
   "hydra-core",
   "hydra-joblib-launcher>=1.2",
   "numpy",
+  "scipy",
   "pydantic>=2",
   "pydantic-settings>=2",
 ]
@@ -30,7 +31,6 @@ mujoco = ["mujoco >=3.4.0", "PyOpenGL_accelerate"]
 gs = [
   "gsplat",
   "torch",
-  "scipy",
   "plyfile",
   "natsort",
   "einops",

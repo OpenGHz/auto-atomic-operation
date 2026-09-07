@@ -22,10 +22,10 @@ from auto_atom.framework import (
     RandomizationFailureConfig,
     RandomizationFailureMode,
     RandomizationReference,
-    RandomizationSequenceKind,
     RandomizationSpec,
     RandomizationDistributionConfig,
-    RandomizationDistributionKind,
+    RandomizationGeneratorKind,
+    RandomizationSelectorKind,
 )
 from auto_atom.utils.pose import PoseState
 
@@ -396,10 +396,10 @@ def test_canonical_error_policy_raises_with_collision_diagnostics() -> None:
     assert diagnostics["attempts"][0]["minimum_clearance"] == pytest.approx(-0.1)
 
 
-def test_space_filling_reference_component_is_declaration_order_independent() -> None:
+def test_maximin_reference_component_is_declaration_order_independent() -> None:
     distribution = RandomizationDistributionConfig(
-        kind=RandomizationDistributionKind.SPACE_FILLING,
-        sequence=RandomizationSequenceKind.LOW_DISCREPANCY,
+        generator=RandomizationGeneratorKind.HALTON,
+        selector=RandomizationSelectorKind.MAXIMIN,
         candidate_count=4,
     )
 
@@ -430,6 +430,63 @@ def test_space_filling_reference_component_is_declaration_order_independent() ->
     second = run({"flower": flower, "vase": vase})
     assert np.allclose(first["vase"], second["vase"])
     assert np.allclose(first["flower"], second["flower"])
+
+
+def test_first_feasible_non_iid_generator_avoids_accepted_samples_across_resets() -> (
+    None
+):
+    distribution = RandomizationDistributionConfig(
+        generator=RandomizationGeneratorKind.HALTON,
+        selector=RandomizationSelectorKind.FIRST_FEASIBLE,
+        min_distance=0.01,
+    )
+    spec = RandomizationSpec(
+        proposal=PoseRandomRange(
+            reference=RandomizationReference.ABSOLUTE_WORLD,
+            x=(0.0, 1.0),
+        ),
+        distribution=distribution,
+    )
+    backend = _make_backend(
+        randomization={"vase": spec},
+        object_positions={"vase": (0.0, 0.0, 0.0)},
+    )
+
+    backend._randomization_reset_index = 1
+    backend._apply_randomization(np.asarray([True], dtype=bool))
+    first = backend.object_handlers["vase"].get_pose().position[0].copy()
+    backend._randomization_reset_index = 2
+    backend._apply_randomization(np.asarray([True], dtype=bool))
+    second = backend.object_handlers["vase"].get_pose().position[0].copy()
+
+    assert not np.allclose(first, second)
+    history = backend._space_filling_history[("vase",)]
+    assert len(history) == 2
+    assert np.allclose(history[0], first)
+    assert np.allclose(history[1], second)
+
+
+def test_maximin_records_only_the_selected_candidate_not_the_whole_group() -> None:
+    distribution = RandomizationDistributionConfig(
+        generator=RandomizationGeneratorKind.HALTON,
+        selector=RandomizationSelectorKind.MAXIMIN,
+        candidate_count=4,
+    )
+    spec = RandomizationSpec(
+        proposal=PoseRandomRange(
+            reference=RandomizationReference.ABSOLUTE_WORLD,
+            x=(0.0, 1.0),
+        ),
+        distribution=distribution,
+    )
+    backend = _make_backend(
+        randomization={"vase": spec},
+        object_positions={"vase": (0.0, 0.0, 0.0)},
+    )
+    backend._randomization_reset_index = 1
+    backend._apply_randomization(np.asarray([True], dtype=bool))
+
+    assert len(backend._space_filling_history[("vase",)]) == 1
 
 
 def test_legacy_single_range_and_multi_region_config_are_accepted() -> None:

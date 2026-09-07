@@ -309,7 +309,7 @@ The advanced form groups four responsibilities in one configuration object:
 | Field | Function | Supported contents |
 |-------|----------|--------------------|
 | `proposal` | Defines the candidate pose space. | One `PoseRandomRange`, or a `regions` list of ranges. |
-| `distribution` | Defines how candidates are generated and selected. | Sampling objective, candidate sequence, region weighting, candidate count, and spacing target. |
+| `distribution` | Defines how candidates are generated and selected. | Generator, selector, region weighting, candidate count, and spacing target. |
 | `constraints` | Defines conditions a candidate must satisfy. | Camera visibility and inter-object separation. |
 | `failure` | Defines what happens when no candidate satisfies the constraints within the attempt budget. | Failure mode and `max_attempts`. |
 
@@ -327,8 +327,8 @@ task:
         x: [0.25, 0.55]
         y: [-0.15, 0.15]
       distribution:
-        kind: space_filling
-        sequence: low_discrepancy
+        generator: sobol
+        selector: maximin
         candidate_count: 32
         min_distance: 0.04
       constraints:
@@ -356,11 +356,71 @@ The selected region supplies the active axis ranges, reference frame, and
 
 | Field | Function | Supported values | Default |
 |-------|----------|------------------|---------|
-| `kind` | Chooses the sampling objective. | `uniform_feasible`: draw from `proposal` and accept candidates satisfying the hard constraints; `space_filling`: generate a candidate pool and prefer samples far from previously selected samples. | `uniform_feasible` |
-| `sequence` | Chooses how candidate coordinates are generated. | `iid`: independent pseudo-random samples; `stratified`: samples distributed across axis strata; `low_discrepancy`: deterministic low-discrepancy sequence; `poisson_disk`: spacing-oriented sequence. `uniform_feasible` requires `iid`; `space_filling` requires one of the other three. | `iid` |
+| `generator` | Chooses the concrete candidate generation algorithm. | Scalar `iid`, `latin_hypercube`, `halton`, `sobol`, or `poisson_disk`; parameterized form `{poisson_disk: {...}}`. | `iid` |
+| `selector` | Chooses how the current reset's feasible candidate group is reduced to one sample. | `first_feasible`: accept the first feasible candidate in generation order; `maximin`: select the candidate farthest from accepted samples. | `first_feasible` |
 | `region_weighting` | Chooses how multiple regions in `proposal` participate in sampling. | `equal`: every region has equal proposal weight; `volume`: weight by the product of configured axis extents. | `volume` |
-| `candidate_count` | Limits the candidate pool considered for one target or joint component. | Positive integer. | `64` |
-| `min_distance` | Sets the desired distance from previously selected `space_filling` samples, in metres. | Non-negative number. | `0.0` |
+| `candidate_count` | Limits the candidate pool considered for one target or joint component. | Positive integer. With `first_feasible`, generation stops as soon as the first feasible candidate is found; with `maximin`, the feasible group is collected up to this limit. | `1` |
+| `min_distance` | Sets the required physical distance from accepted samples of a non-`iid` generator across resets. | Non-negative number. | `0.0` |
+
+The generator names are the algorithms, not a second family/category field.
+`halton` and `sobol` use SciPy's QMC implementations; `latin_hypercube` and
+`poisson_disk` likewise use SciPy's implementations. `maximin` is useful when
+`candidate_count` is greater than one; with `candidate_count: 1`, both selectors
+are equivalent because there is only one feasible candidate to choose. The
+generator, together with the accepted-sample history, determines coverage
+across resets. SciPy is a core project dependency for these generators
+and for the vectorized distance calculations used by maximin; the backend does
+not provide separate sampling implementations.
+
+`poisson_disk` exposes SciPy's algorithm parameters through a generator object
+when the defaults are not sufficient. The short form remains valid:
+
+```yaml
+distribution:
+  generator: poisson_disk
+```
+
+The parameterized form is:
+
+```yaml
+distribution:
+  generator:
+    poisson_disk:
+      radius: 0.5
+      hypersphere: volume   # or surface
+      ncandidates: 30
+      optimization: null    # or random-cd / lloyd
+```
+
+`radius` is the minimum distance in the normalized unit-cube candidate space;
+when omitted, the implementation derives a dimension-aware value from the
+requested candidate/attempt pool (rather than using SciPy's fixed `0.05`
+default, which can be impractical for six-dimensional poses). It is not the metre-valued
+`distribution.min_distance` used by `maximin`.
+`hypersphere` chooses whether SciPy proposes points inside the candidate sphere
+or on its surface. `ncandidates` controls proposals per active point and
+therefore density/performance. `optimization` is optional post-processing;
+SciPy does not guarantee that strict Poisson-disk properties are preserved after
+`random-cd` or `lloyd`.
+
+SciPy's `PoissonDisk` implementation is based on the classic Bridson algorithm:
+it keeps an active sample pool, proposes points around active samples, and uses
+a grid to accelerate neighborhood checks. The backend creates one generator per
+randomized action and reset component, generates that action's candidate pool in
+one call, and then feeds the pool through the shared feasibility and selection
+policies. This preserves Poisson-disk spacing within that generated pool; the
+project-level `maximin` policy and physical collision constraints remain
+independent layers. Rejected candidates are consumed only by the current reset
+and are not added to history; the selected candidate is recorded for later
+resets. For every non-`iid` generator, a later reset rejects an already
+accepted sample (and any candidate closer than `distribution.min_distance`).
+Thus `selector` never switches cross-reset history on or off: it only decides
+which member of the current feasible group is applied. `maximin` uses the
+history as its scoring baseline, while `first_feasible` keeps generation order;
+both selectors record only the selected candidate. `min_distance` is measured
+after the generator coordinates are mapped to the pose's physical position
+vector; the Poisson radius itself is the within-pool normalized-space
+guarantee.
 
 #### `constraints`: candidate feasibility
 
