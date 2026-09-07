@@ -18,6 +18,7 @@ from auto_atom.framework import (
     RandomizationGroupGeneratorKind,
     RandomizationPoissonDiskConfig,
     RandomizationSelectorKind,
+    RandomizationStrategy,
     RandomizationSpec,
 )
 from auto_atom.randomization import (
@@ -48,6 +49,40 @@ def test_compile_plan_groups_all_randomized_objects_for_separation() -> None:
     )
 
     assert plan.components == (("left", "middle", "right"),)
+
+
+def test_compile_plan_automatically_builds_rsa_component_for_overlapping_regions() -> (
+    None
+):
+    plan = compile_randomization_plan(
+        {
+            "left": PoseRandomRange(x=(0.0, 1.0)),
+            "right": PoseRandomRange(x=(0.5, 1.5)),
+        },
+        object_names={"left", "right"},
+        operator_names=set(),
+        strategy=RandomizationStrategy.RSA,
+    )
+
+    assert plan.components == (("left", "right"),)
+    assert len(plan.groups) == 1
+
+
+def test_compile_plan_joint_rejection_keeps_automatic_component_without_groups() -> (
+    None
+):
+    plan = compile_randomization_plan(
+        {
+            "left": PoseRandomRange(x=(0.0, 1.0)),
+            "right": PoseRandomRange(x=(0.5, 1.5)),
+        },
+        object_names={"left", "right"},
+        operator_names=set(),
+        strategy=RandomizationStrategy.JOINT_REJECTION,
+    )
+
+    assert plan.components == (("left", "right"),)
+    assert plan.groups == {}
 
 
 def test_compile_plan_keeps_operator_dependency_order() -> None:
@@ -195,26 +230,28 @@ def test_compile_plan_rejects_invalid_hard_sphere_rsa_groups(
         )
 
 
-def test_config_rejects_members_shared_by_hard_sphere_rsa_groups() -> None:
-    with pytest.raises(ValueError, match="appears in both"):
-        AutoAtomConfig.model_validate(
-            {
-                "stages": [],
-                "env_name": "randomization_test",
-                "randomization": {
-                    "large": {"x": [0.0, 1.0]},
-                    "small": {"x": [0.0, 1.0]},
-                    "third": {"x": [0.0, 1.0]},
-                },
-                "randomization_groups": {
-                    "first": _hard_sphere_group(["large", "small"]).model_dump(),
-                    "second": _hard_sphere_group(["small", "third"]).model_dump(),
-                },
-            }
-        )
+def test_config_selects_automatic_randomization_strategy() -> None:
+    config = AutoAtomConfig.model_validate(
+        {
+            "stages": [],
+            "env_name": "randomization_test",
+            "randomization_strategy": "joint_rejection",
+            "randomization": {
+                "large": {"x": [0.0, 1.0]},
+                "small": {"x": [0.0, 1.0]},
+            },
+        }
+    )
+
+    assert config.randomization_strategy.value == "joint_rejection"
+
+    default_config = AutoAtomConfig.model_validate(
+        {"stages": [], "env_name": "randomization_test"}
+    )
+    assert default_config.randomization_strategy == RandomizationStrategy.RSA
 
 
-def test_data_replay_disables_hard_sphere_rsa_groups() -> None:
+def test_data_replay_disables_object_randomization() -> None:
     config = DataReplayTaskFileConfig.model_validate(
         {
             "backend": "auto_atom.mock.build_mock_backend",
@@ -225,15 +262,12 @@ def test_data_replay_disables_hard_sphere_rsa_groups() -> None:
                     "large": {"x": [0.0, 1.0]},
                     "small": {"x": [0.0, 1.0]},
                 },
-                "randomization_groups": {
-                    "tabletop": _hard_sphere_group(["large", "small"]).model_dump(),
-                },
             },
         }
     )
 
     assert config.task.randomization == {}
-    assert config.task.randomization_groups == {}
+    assert config.task.randomization == {}
 
 
 def test_halton_candidates_are_deterministic_and_bounded() -> None:

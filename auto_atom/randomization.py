@@ -20,11 +20,14 @@ from .framework import (
     RandomizationGeneratorInput,
     RandomizationGeneratorKind,
     RandomizationGroupConfig,
+    RandomizationGroupDistributionConfig,
+    RandomizationGroupGeneratorKind,
     RandomizationInput,
     RandomizationPoissonDiskConfig,
     RandomizationReference,
     RandomizationSelectorKind,
     RandomizationSpec,
+    RandomizationStrategy,
     canonical_randomization_spec,
     pose_randomization_regions,
 )
@@ -158,14 +161,47 @@ def _references(spec: RandomizationSpec) -> Iterable[RandomizationReference | st
         yield from region.references()
 
 
+def _axis_interval(region: object, axis: str) -> tuple[float, float] | None:
+    """Return a proposal interval, or ``None`` when the axis is unconstrained."""
+    axis_range = getattr(region, "axis_range", None)
+    if axis_range is None:
+        return None
+    value = axis_range(axis)
+    if value is None:
+        return None
+    return float(value[0]), float(value[1])
+
+
+def _regions_can_overlap(left: RandomizationSpec, right: RandomizationSpec) -> bool:
+    """Conservatively detect whether two object proposal spaces can intersect."""
+    for left_region in pose_randomization_regions(left):
+        for right_region in pose_randomization_regions(right):
+            overlaps = True
+            for axis in ("x", "y", "z"):
+                left_interval = _axis_interval(left_region, axis)
+                right_interval = _axis_interval(right_region, axis)
+                if left_interval is None or right_interval is None:
+                    continue
+                if (
+                    left_interval[1] < right_interval[0]
+                    or right_interval[1] < left_interval[0]
+                ):
+                    overlaps = False
+                    break
+            if overlaps:
+                return True
+    return False
+
+
 def compile_randomization_plan(
     randomization: Mapping[str, RandomizationInput | OperatorRandomizationConfig],
     *,
     object_names: Set[str],
     operator_names: Set[str],
     randomization_groups: Mapping[str, RandomizationGroupConfig] | None = None,
+    strategy: RandomizationStrategy = RandomizationStrategy.RSA,
 ) -> RandomizationPlan:
-    """Compile randomization entries into a deterministic dependency graph."""
+    """Compile entries and automatically derive placement components."""
     actions: Dict[str, RandomizationAction] = {}
     declaration_order: List[str] = []
     for owner, value in randomization.items():
@@ -192,6 +228,8 @@ def compile_randomization_plan(
             )
             declaration_order.append(owner)
 
+    # Legacy groups are accepted only as an internal migration aid.  New
+    # callers rely on proposal-space overlap and constraints to derive them.
     groups = dict(randomization_groups or {})
     group_members: Dict[str, str] = {}
     for group_name, group in groups.items():
@@ -313,6 +351,16 @@ def compile_randomization_plan(
         for label in joint_objects[1:]:
             adjacency[anchor].add(label)
             adjacency[label].add(anchor)
+    object_actions = [
+        (label, action) for label, action in actions.items() if action.kind == "object"
+    ]
+    for index, (left_label, left_action) in enumerate(object_actions):
+        for right_label, right_action in object_actions[index + 1 :]:
+            if _regions_can_overlap(
+                left_action.randomization, right_action.randomization
+            ):
+                adjacency[left_label].add(right_label)
+                adjacency[right_label].add(left_label)
     for group in groups.values():
         anchor = group.members[0]
         for member in group.members[1:]:
@@ -353,6 +401,23 @@ def compile_randomization_plan(
                 f"Randomization group '{group_name}' must form an independent "
                 "component; remove reference or separation links to non-members"
             )
+
+    if strategy == RandomizationStrategy.RSA and not groups:
+        generated_groups: Dict[str, RandomizationGroupConfig] = {}
+        for component in components:
+            if len(component) < 2 or not all(
+                actions[label].kind == "object" for label in component
+            ):
+                continue
+            generated_groups[f"component:{','.join(component)}"] = (
+                RandomizationGroupConfig(
+                    members=list(component),
+                    distribution=RandomizationGroupDistributionConfig(
+                        generator=RandomizationGroupGeneratorKind.HARD_SPHERE_RSA,
+                    ),
+                )
+            )
+        groups = generated_groups
 
     return RandomizationPlan(
         actions=actions,

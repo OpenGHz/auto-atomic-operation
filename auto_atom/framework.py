@@ -740,6 +740,16 @@ class RandomizationFailureMode(str, Enum):
     """Apply the least-violating candidate and report diagnostics."""
 
 
+class RandomizationStrategy(str, Enum):
+    """Placement strategy used for one reset's randomized components."""
+
+    RSA = "rsa"
+    """Place independent objects sequentially and keep accepted members fixed."""
+
+    JOINT_REJECTION = "joint_rejection"
+    """Sample every component member together and reject the whole proposal on failure."""
+
+
 class RandomizationVisibilityConfig(BaseModel, frozen=True):
     """Keep an entity's support geometry inside a set of camera views."""
 
@@ -1492,10 +1502,8 @@ class AutoAtomConfig(BaseModel):
     The direct ``PoseRandomRange`` shorthand is rejected at sample time for
     operator entries.
     """
-    randomization_groups: Dict[str, RandomizationGroupConfig] = Field(
-        default_factory=dict
-    )
-    """Named joint object-placement distributions applied at reset."""
+    randomization_strategy: RandomizationStrategy = RandomizationStrategy.RSA
+    """Placement strategy shared by all automatically compiled randomization components."""
     camera_initial_pose: Dict[str, PoseOverrideConfig] = Field(default_factory=dict)
     """Per-camera initial pose overrides applied at each reset, before
     camera randomization records its defaults.
@@ -1544,7 +1552,6 @@ class AutoAtomConfig(BaseModel):
     @field_validator(
         "initial_pose",
         "randomization",
-        "randomization_groups",
         "camera_initial_pose",
         "camera_randomization",
         mode="before",
@@ -1594,26 +1601,6 @@ class AutoAtomConfig(BaseModel):
                     "regions are not supported for cameras"
                 )
         return value
-
-    @model_validator(mode="after")
-    def _validate_randomization_groups(self) -> Self:
-        """Ensure each configured entity belongs to at most one joint group."""
-        member_groups: Dict[str, str] = {}
-        for group_name, group in self.randomization_groups.items():
-            for member in group.members:
-                if member not in self.randomization:
-                    raise ValueError(
-                        f"randomization_groups[{group_name!r}] member {member!r} "
-                        "must also be declared in task.randomization"
-                    )
-                previous_group = member_groups.get(member)
-                if previous_group is not None:
-                    raise ValueError(
-                        f"randomization group member {member!r} appears in both "
-                        f"{previous_group!r} and {group_name!r}"
-                    )
-                member_groups[member] = group_name
-        return self
 
     """When True the first N resets cycle through extreme poses (each axis at its min/max, then all-min and all-max) before switching to random sampling.  Use this to verify that configured ranges are not too large."""
 

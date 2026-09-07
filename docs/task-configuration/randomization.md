@@ -638,12 +638,21 @@ Practical implications:
   carried child is allowed to remain inside/on its referenced parent as
   intended.
 
-### Joint hard-sphere placement
+### Automatic joint placement
 
-`task.randomization_groups` jointly places a set of independent object
-proposals. The first implemented group generator is `hard_sphere_rsa`: random
-sequential adsorption (RSA) with a bounding sphere per object. The sphere is
-the member proposal's existing `collision_radius`.
+The task no longer requires a user-maintained `randomization_groups` mapping.
+The compiler automatically joins reference-connected actions, actions with a
+separation constraint, and object proposals whose position regions can overlap.
+Use `task.randomization_strategy` to select the component policy:
+
+```yaml
+task:
+  randomization_strategy: rsa  # or joint_rejection
+```
+
+`rsa` is the default: random sequential adsorption with a bounding sphere per
+object. The sphere is each proposal's own `collision_radius`; it is not a single
+radius shared by the component.
 
 ```yaml
 task:
@@ -665,20 +674,13 @@ task:
       distribution:
         generator: poisson_disk
         min_distance: 0.04
-  randomization_groups:
-    tabletop:
-      members: [plate, cup]
-      distribution:
-        generator: hard_sphere_rsa
-        clearance: 0.01
-      failure:
-        mode: error
-        max_attempts: 100
+  randomization_strategy: rsa
 ```
 
-For each environment and reset, the backend shuffles `members` using the task
-seed. It keeps each accepted member fixed, then retries only the current member
-until its proposal is feasible. For members `i` and `j`, the accepted positions
+For each environment and reset, the backend shuffles independent ready members
+using the task seed while preserving dependency order. It keeps each accepted
+member fixed, then retries only the current member until its proposal is feasible.
+For members `i` and `j`, the accepted positions
 satisfy:
 
 ```text
@@ -691,26 +693,24 @@ remain its candidate source. In particular, a persistent `poisson_disk` stream
 continues to provide physical-space coverage across resets; RSA only decides
 whether a candidate is feasible relative to already placed group members.
 
-`clearance` applies between two group members. Objects outside the group still
-use the ordinary `collision_radius` rejection rule. Visibility constraints also
-remain hard constraints and can cause the current member to try another
-proposal.
+Pairwise `constraints.separated.min_distance` contributes additional clearance.
+Visibility constraints remain hard constraints and can cause the current member
+to try another proposal. With `joint_rejection`, the whole automatically derived
+component is discarded and sampled again when any member fails.
 
-The initial implementation accepts only object members with independent
-references (`relative` or an absolute reference), positive `collision_radius`
-in every region, and no `constraints.separated`. Members cannot appear in more
-than one group. Operators, named entity references, and mixing a group with a
-reference/separation-connected non-member are rejected during configuration
-compilation. A member must keep the default
-`distribution.selector: first_feasible`: RSA owns placement selection, so
-`maximin` is intentionally rejected instead of being ignored.
+RSA supports reference-connected object components, visibility and separation
+checks through the same shared constraint machinery. Operator actions remain
+the context for object sampling and are resolved before camera-aware checks.
+The component topology is an internal compiler result; declaration order does
+not define the spatial order.
 
-`failure.max_attempts` is the local budget for each member, not a whole-group
-restart budget. `mode: error` aborts reset with the failed member, attempted
-count, violated constraint, and minimum clearance. `mode: best_effort` keeps
-the least-violating local candidate and records the same details in reset
-diagnostics. It is intended for inspection, not for collision-free data
-collection.
+For `rsa`, `failure.max_attempts` is the local budget for each member. For
+`joint_rejection`, it is the component-attempt budget: one failed member causes
+the complete component proposal to be discarded and retried. `mode: error`
+aborts reset with the failed member, attempted count, violated constraint, and
+minimum clearance. `mode: best_effort` keeps the least-violating candidate and
+records the same details in reset diagnostics. It is intended for inspection,
+not for collision-free data collection.
 
 ## Per-Waypoint Randomization
 

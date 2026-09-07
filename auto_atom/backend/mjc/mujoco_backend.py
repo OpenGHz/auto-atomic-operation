@@ -34,6 +34,7 @@ from ...framework import (
     RandomizationReference,
     RandomizationSelectorKind,
     RandomizationSpec,
+    RandomizationStrategy,
     canonical_randomization_spec,
     pose_randomization_regions,
 )
@@ -1115,6 +1116,7 @@ class MujocoTaskBackend(SceneBackend):
         str,
         RandomizationInput | OperatorRandomizationConfig,
     ] = field(default_factory=dict)
+    randomization_strategy: RandomizationStrategy = RandomizationStrategy.RSA
     randomization_groups: Dict[str, RandomizationGroupConfig] = field(
         default_factory=dict
     )
@@ -1348,7 +1350,7 @@ class MujocoTaskBackend(SceneBackend):
             or self._default_camera_poses
         ):
             self._record_default_poses()
-        if self.randomization or self.randomization_groups or self.camera_randomization:
+        if self.randomization or self.camera_randomization:
             self._apply_randomization(mask)
         self.env.refresh_viewer()
 
@@ -1826,7 +1828,12 @@ class MujocoTaskBackend(SceneBackend):
             self.randomization,
             object_names=set(self.object_handlers),
             operator_names=set(self.operator_handlers),
-            randomization_groups=self.randomization_groups,
+            randomization_groups=(
+                self.randomization_groups
+                if self.randomization_strategy == RandomizationStrategy.RSA
+                else {}
+            ),
+            strategy=self.randomization_strategy,
         )
 
     def _randomization_dependencies(self) -> Dict[str, Set[str]]:
@@ -2227,6 +2234,10 @@ class MujocoTaskBackend(SceneBackend):
                 sampled_poses,
                 collision_participants,
                 hard_sphere_rsa_group=hard_sphere_group,
+                use_rsa=(
+                    self.randomization_strategy == RandomizationStrategy.RSA
+                    and len(object_component) > 1
+                ),
             )
             apply_actions(component_actions)
             sampled_poses.update(component_poses)
@@ -2266,6 +2277,7 @@ class MujocoTaskBackend(SceneBackend):
         accepted_sampled_poses: Dict[str, PoseState],
         accepted_participants: List[_CollisionParticipant],
         hard_sphere_rsa_group: tuple[str, RandomizationGroupConfig] | None = None,
+        use_rsa: bool = False,
     ) -> tuple[Dict[str, PoseState], List[_PendingRandomizationAction]]:
         key_buffers = {
             name: self._current_pose_for_randomization_key(name) for name in component
@@ -2276,7 +2288,7 @@ class MujocoTaskBackend(SceneBackend):
         for env_index, enabled in enumerate(env_mask):
             if not enabled:
                 continue
-            if hard_sphere_rsa_group is None:
+            if not use_rsa and hard_sphere_rsa_group is None:
                 env_sampled_poses, env_actions, failure = (
                     self._sample_component_for_env(
                         component,
@@ -2292,14 +2304,22 @@ class MujocoTaskBackend(SceneBackend):
                         env_index,
                         accepted_sampled_poses,
                         accepted_participants,
-                        group_name=hard_sphere_rsa_group[0],
-                        group=hard_sphere_rsa_group[1],
+                        group_name=(
+                            hard_sphere_rsa_group[0]
+                            if hard_sphere_rsa_group is not None
+                            else f"component:{','.join(component)}"
+                        ),
+                        group=(
+                            hard_sphere_rsa_group[1]
+                            if hard_sphere_rsa_group is not None
+                            else None
+                        ),
                     )
                 )
             if failure is not None:
                 logger = logging.getLogger(MujocoTaskBackend.__name__)
                 failed_label, blocking_label = failure
-                if hard_sphere_rsa_group is None:
+                if not use_rsa and hard_sphere_rsa_group is None:
                     logger.warning(
                         "Collision rejection exhausted for '%s' after %d attempts; "
                         "keeping the last overlapping sample against '%s'.",
@@ -2312,7 +2332,11 @@ class MujocoTaskBackend(SceneBackend):
                         "Hard-sphere RSA exhausted for '%s' after %d attempts; "
                         "keeping the best-effort sample against '%s'.",
                         failed_label,
-                        int(hard_sphere_rsa_group[1].failure.max_attempts),
+                        int(
+                            hard_sphere_rsa_group[1].failure.max_attempts
+                            if hard_sphere_rsa_group is not None
+                            else _MAX_COLLISION_REJECTION_ATTEMPTS
+                        ),
                         blocking_label,
                     )
 
@@ -2382,7 +2406,7 @@ class MujocoTaskBackend(SceneBackend):
         accepted_participants: List[_CollisionParticipant],
         *,
         group_name: str,
-        group: RandomizationGroupConfig,
+        group: RandomizationGroupConfig | None = None,
     ) -> tuple[
         Dict[str, PoseState],
         List[_PendingRandomizationAction],
@@ -2404,8 +2428,56 @@ class MujocoTaskBackend(SceneBackend):
         sampled_poses: Dict[str, PoseState] = {}
         actions: List[_PendingRandomizationAction] = []
         local_participants: List[_CollisionParticipant] = []
-        max_attempts = int(group.failure.max_attempts)
-        order = [str(value) for value in self._rng.permutation(component)]
+        dependencies = self._randomization_plan().dependencies
+        remaining = set(component)
+        order: list[str] = []
+        while remaining:
+            ready = [
+                label
+                for label in component
+                if label in remaining
+                and not (set(dependencies.get(label, ())) & remaining)
+            ]
+            if not ready:
+                raise ValueError(
+                    f"Circular randomization reference in RSA component {component!r}"
+                )
+            if len(ready) > 1 and hasattr(self._rng, "permutation"):
+                ready = [str(value) for value in self._rng.permutation(ready)]
+            order.extend(ready)
+            remaining.difference_update(ready)
+        configured_attempts = [
+            int(action_specs[label].randomization.failure.max_attempts)
+            for label in component
+        ]
+        max_attempts = (
+            int(group.failure.max_attempts)
+            if group is not None
+            else min(configured_attempts, default=_MAX_COLLISION_REJECTION_ATTEMPTS)
+        )
+        failure_mode = (
+            group.failure.mode.value
+            if group is not None
+            else (
+                "error"
+                if any(
+                    action_specs[label].randomization.failure.mode.value == "error"
+                    for label in component
+                )
+                else "best_effort"
+            )
+        )
+        pair_clearance = max(
+            (
+                float(
+                    action_specs[label].randomization.constraints.separated.min_distance
+                )
+                for label in component
+                if action_specs[label].randomization.constraints.separated is not None
+            ),
+            default=0.0,
+        )
+        selected_ancestors: Dict[str, Set[str]] = {}
         for member in order:
             action_spec = action_specs[member]
             best: tuple[float, PoseState, _PendingRandomizationAction, str] | None = (
@@ -2436,7 +2508,7 @@ class MujocoTaskBackend(SceneBackend):
                     )
                 candidate.ancestors = self._reference_ancestors(
                     candidate.references,
-                    {},
+                    selected_ancestors,
                 )
                 blocking = self._find_collision_participant(
                     owner_name=candidate.owner,
@@ -2454,20 +2526,31 @@ class MujocoTaskBackend(SceneBackend):
                         collision_radius=candidate.radius,
                         ancestors=candidate.ancestors,
                         collision_participants=local_participants,
-                        extra_clearance=float(group.distribution.clearance),
+                        extra_clearance=pair_clearance,
                     )
                 constraint_report: RandomizationConstraintReport | None = None
-                if (
-                    candidate.constraints is not None
-                    and candidate.constraints.visible_in is not None
+                if candidate.constraints is not None and (
+                    candidate.constraints.visible_in is not None
+                    or candidate.constraints.separated is not None
                 ):
                     candidate_poses_for_constraints = dict(working_poses)
                     candidate_poses_for_constraints.update(candidate_poses)
+                    candidate_poses_for_constraints[member] = candidate.pose
+                    candidate_constraint_ancestors = {
+                        participant.owner: self._collision_ancestors_for_env(
+                            participant.ancestors,
+                            env_index,
+                        )
+                        for participant in accepted_participants + local_participants
+                    }
+                    candidate_constraint_ancestors[candidate.owner] = set(
+                        candidate.ancestors
+                    )
                     constraint_report = self.evaluate_randomization_constraints(
                         candidate_poses_for_constraints,
                         env_index=env_index,
                         constraints=candidate.constraints,
-                        ancestors={candidate.owner: set(candidate.ancestors)},
+                        ancestors=candidate_constraint_ancestors,
                         target_names={candidate.owner},
                     )
                 violation = (
@@ -2496,11 +2579,7 @@ class MujocoTaskBackend(SceneBackend):
                         np.linalg.norm(candidate_pos - other_pos)
                         - candidate.radius
                         - self._collision_radius_for_env(blocking.radius, env_index)
-                        - (
-                            float(group.distribution.clearance)
-                            if local_blocking
-                            else 0.0
-                        )
+                        - (pair_clearance if local_blocking else 0.0)
                     )
                 elif constraint_report is not None and not constraint_report.valid:
                     clearance = float(constraint_report.minimum_clearance)
@@ -2522,6 +2601,9 @@ class MujocoTaskBackend(SceneBackend):
                         ancestors=set(candidate.ancestors),
                     )
                 )
+                selected_ancestors[member] = set(candidate.ancestors)
+                if candidate.kind in ("object", "operator_base"):
+                    selected_ancestors[candidate.owner] = set(candidate.ancestors)
                 sampled_poses.update(candidate_poses)
                 actions.append(candidate)
                 accepted = True
@@ -2538,17 +2620,21 @@ class MujocoTaskBackend(SceneBackend):
             _, best_pose, best_action, violation = best
             diagnostics = {
                 "group": group_name,
-                "generator": group.distribution.generator.value,
+                "generator": (
+                    group.distribution.generator.value
+                    if group is not None
+                    else "hard_sphere_rsa"
+                ),
                 "member": member,
                 "attempts": max_attempts,
                 "violations": [violation],
                 "minimum_clearance": best[0],
-                "mode": group.failure.mode.value,
+                "mode": failure_mode,
             }
             self._last_randomization_diagnostics.setdefault(env_index, []).append(
                 diagnostics
             )
-            if group.failure.mode.value == "error":
+            if failure_mode == "error":
                 raise RandomizationFailureError(
                     target=member,
                     attempts=max_attempts,
@@ -4092,7 +4178,7 @@ def build_mujoco_backend(
         operator_handlers=operator_handlers,
         object_handlers=object_handlers,
         randomization=dict(config.randomization),
-        randomization_groups=dict(config.randomization_groups),
+        randomization_strategy=config.randomization_strategy,
         camera_randomization=dict(config.camera_randomization),
         initial_poses=dict(config.initial_pose),
         camera_initial_poses=dict(config.camera_initial_pose),

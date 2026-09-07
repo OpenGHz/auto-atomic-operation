@@ -30,6 +30,7 @@ from auto_atom.framework import (
     RandomizationPoissonDiskConfig,
     RandomizationReference,
     RandomizationSelectorKind,
+    RandomizationStrategy,
     RandomizationSpec,
 )
 from auto_atom.randomization import RandomizationFailureError
@@ -144,6 +145,7 @@ def _make_backend(
     ],
     object_positions: Dict[str, tuple[float, float, float]],
     randomization_groups: Optional[Dict[str, RandomizationGroupConfig]] = None,
+    strategy: RandomizationStrategy = RandomizationStrategy.RSA,
 ) -> MujocoTaskBackend:
     object_handlers = {
         name: DummyObjectHandler(
@@ -160,6 +162,7 @@ def _make_backend(
         operator_handlers={},
         object_handlers=object_handlers,
         randomization=randomization,
+        randomization_strategy=strategy,
         randomization_groups=randomization_groups or {},
     )
     backend._default_object_poses = {
@@ -303,6 +306,7 @@ def test_collision_rejection_resamples_overlapping_objects() -> None:
             "vase": (0.0, 0.0, 0.0),
             "vase2": (0.0, 0.0, 0.0),
         },
+        strategy=RandomizationStrategy.RSA,
     )
     backend._rng = SequenceRNG([0.0, 0.0, 0.0, 0.0, 0.2, 0.0])
 
@@ -493,8 +497,9 @@ def test_collision_rejection_warns_after_attempts_exhausted(
             "vase": (0.0, 0.0, 0.0),
             "vase2": (0.0, 0.0, 0.0),
         },
+        strategy=RandomizationStrategy.JOINT_REJECTION,
     )
-    backend._rng = SequenceRNG([0.0] * 8)
+    backend._rng = SequenceRNG([0.0] * 12)
 
     with caplog.at_level(logging.WARNING):
         backend._apply_randomization(np.asarray([True], dtype=bool))
@@ -522,6 +527,7 @@ def test_canonical_error_policy_raises_with_collision_diagnostics() -> None:
     backend = _make_backend(
         randomization={"vase": canonical(), "vase2": canonical()},
         object_positions={"vase": (0.0, 0.0, 0.0), "vase2": (0.0, 0.0, 0.0)},
+        strategy=RandomizationStrategy.JOINT_REJECTION,
     )
     backend._rng = SequenceRNG([0.0] * 8)
 
