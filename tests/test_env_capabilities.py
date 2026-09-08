@@ -7,7 +7,7 @@ from typing import Any
 import numpy as np
 import pytest
 
-import auto_atom.runtime as runtime
+import auto_atom.contracts as contracts
 from auto_atom.config.task import TaskFileConfig
 from auto_atom.ipc.service import _default_action_applier as ipc_action_applier
 from auto_atom.mock import MockEnv, build_mock_backend
@@ -238,7 +238,7 @@ def test_capability_signature_accepts_the_framework_call_shape() -> None:
 def test_successful_capability_signature_validation_is_cached(monkeypatch) -> None:
     env = _KeywordMaskStepEnv()
     calls = 0
-    original = runtime._validate_environment_protocol_signatures
+    original = contracts._validate_environment_protocol_signatures
 
     def count_validation(*args: Any, **kwargs: Any) -> None:
         nonlocal calls
@@ -246,7 +246,7 @@ def test_successful_capability_signature_validation_is_cached(monkeypatch) -> No
         original(*args, **kwargs)
 
     monkeypatch.setattr(
-        runtime,
+        contracts,
         "_validate_environment_protocol_signatures",
         count_validation,
     )
