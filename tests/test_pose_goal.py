@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 from numpy.testing import assert_allclose
 
-from auto_atom.framework import AxisAlignmentDirection
+from auto_atom.config.orientation import AxisAlignmentDirection
 from auto_atom.pose_goal import (
     axis_alignment_error,
     normalize_axis,

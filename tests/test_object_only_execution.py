@@ -23,7 +23,8 @@ from omegaconf import OmegaConf
 
 from auto_atom.execution_config import prepare_task_config_for_instantiation
 from auto_atom.backend.mjc.mujoco_backend import MujocoObjectHandler
-from auto_atom.framework import ExecutionMode, ObjectMotionMode, TaskFileConfig
+from auto_atom.config.execution import ExecutionMode, ObjectMotionMode
+from auto_atom.config.task import TaskFileConfig
 from auto_atom.policy_eval import (
     ConfigDrivenDemoPolicy,
     PolicyActionFeedback,

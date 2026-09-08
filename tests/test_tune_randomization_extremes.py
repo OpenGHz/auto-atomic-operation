@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from auto_atom.framework import PoseRandomizationConfig, PoseRandomRange
+from auto_atom.config.randomization import PoseRandomizationConfig, PoseRandomRange
 from auto_atom.utils.pose import PoseState
 from examples.tune_randomization_extremes import (
     ExtremeCase,

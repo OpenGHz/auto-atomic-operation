@@ -1,14 +1,14 @@
 import pytest
 from pydantic import ValidationError
 
-from auto_atom.framework import (
+from auto_atom.config.motion import PoseControlConfig
+from auto_atom.config.orientation import (
     AxisAlignmentDirection,
     AxisAlignmentOrientationGoalConfig,
     AxisReference,
-    ControlledFrameKind,
     FixedOrientationGoalConfig,
-    PoseControlConfig,
 )
+from auto_atom.config.reference import ControlledFrameKind
 
 
 def _axis_alignment_goal() -> dict[str, object]:

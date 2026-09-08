@@ -1,34 +1,40 @@
 """Import-friendly runtime package for the Auto Atomic Operation framework."""
 
-from .config_loader import load_config, load_task_file, load_task_file_hydra
-from .execution_timeline import CompiledKeypoint, ExecutionTimeline
-from .framework import (
-    AutoAtomConfig,
-    AxisAlignmentDirection,
-    AxisAlignmentOrientationGoalConfig,
-    AxisReference,
-    ControlledFrameConfig,
-    ControlledFrameKind,
-    EefControlConfig,
+from auto_atom.config.execution import (
     ExecutionConfig,
     ExecutionMode,
-    FixedOrientationGoalConfig,
     IntervalSelectionConfig,
     KeypointSide,
     ObjectMotionExecutionConfig,
     ObjectMotionMode,
-    OperatorConfig,
-    OperatorInitialState,
-    OperatorRandomizationConfig,
-    OrientationGoalKind,
-    PoseAxisConfig,
+    TaskKeypointConfig,
+    TaskPhase,
+    UpdateBoundary,
+)
+from auto_atom.config.motion import (
+    EefControlConfig,
     PoseControlConfig,
+    StageConfig,
+    StageControlConfig,
+)
+from auto_atom.config.orientation import (
+    AxisAlignmentDirection,
+    AxisAlignmentOrientationGoalConfig,
+    AxisReference,
+    FixedOrientationGoalConfig,
+    OrientationGoalKind,
+    TargetAxisConfig,
+)
+from auto_atom.config.pose import (
+    PoseAxisConfig,
     PoseOrientationConfig,
     PoseOverrideConfig,
     PosePositionConfig,
+)
+from auto_atom.config.randomization import (
+    OperatorRandomizationConfig,
     PoseRandomizationConfig,
     PoseRandomRange,
-    PoseReference,
     RandomizationAxisConfig,
     RandomizationConstraintConfig,
     RandomizationDistributionConfig,
@@ -42,7 +48,6 @@ from .framework import (
     RandomizationGroupGeneratorKind,
     RandomizationInput,
     RandomizationPoissonDiskConfig,
-    RandomizationReference,
     RandomizationScopeConfig,
     RandomizationSelectorKind,
     RandomizationSeparationConfig,
@@ -51,15 +56,23 @@ from .framework import (
     RandomizationVisibilityConfig,
     RandomizationVisibilityGeometry,
     RandomizationVisibilityMode,
-    StageConfig,
-    StageControlConfig,
-    TargetAxisConfig,
-    TaskFileConfig,
-    TaskKeypointConfig,
-    TaskPhase,
-    UpdateBoundary,
     resolve_randomization_scope,
 )
+from auto_atom.config.reference import (
+    ControlledFrameConfig,
+    ControlledFrameKind,
+    PoseReference,
+    RandomizationReference,
+)
+from auto_atom.config.task import (
+    AutoAtomConfig,
+    OperatorConfig,
+    OperatorInitialState,
+    TaskFileConfig,
+)
+
+from .config_loader import load_config, load_task_file, load_task_file_hydra
+from .execution_timeline import CompiledKeypoint, ExecutionTimeline
 from .mock import MockOperatorHandler, MockSceneBackend
 from .policy_eval import ConfigDrivenDemoPolicy, PolicyEvaluator
 from .randomization import RandomizationFailureError

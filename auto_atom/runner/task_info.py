@@ -33,7 +33,7 @@ from pydantic import BaseModel
 from .common import get_config_dir
 
 # Human-readable phrasing for each operation, used to generate the workflow.
-# Keys match the values of ``auto_atom.framework.Operation``.
+# Keys match the values of ``auto_atom.config.operations.Operation``.
 _OPERATION_PHRASE = {
     "move": "move to {obj}",
     "grasp": "grasp {obj}",

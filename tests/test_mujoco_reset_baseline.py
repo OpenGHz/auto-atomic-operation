@@ -21,7 +21,7 @@ from auto_atom.basis.mjc.mujoco_basis import (
     OperatorBinding,
 )
 from auto_atom.basis.mjc.mujoco_env import UnifiedMujocoEnv
-from auto_atom.framework import PoseOverrideConfig
+from auto_atom.config.pose import PoseOverrideConfig
 from auto_atom.utils.pose import PoseState
 from auto_atom.scene_composition import SceneConfig
 

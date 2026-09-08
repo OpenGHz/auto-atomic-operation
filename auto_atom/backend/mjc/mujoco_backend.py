@@ -12,26 +12,22 @@ import mujoco
 import numpy as np
 from pydantic import BaseModel
 
-from ...basis.mjc.mujoco_env import BatchedUnifiedMujocoEnv, EnvConfig
-from ...framework import (
-    AutoAtomConfig,
+from auto_atom.config.motion import (
     EefControlConfig,
-    OperatorConfig,
-    OperatorInitialState,
-    OperatorRandomizationConfig,
     PlacedToleranceConfig,
     PoseControlConfig,
-    PoseOverrideConfig,
+)
+from auto_atom.config.pose import PoseOverrideConfig
+from auto_atom.config.randomization import (
+    OperatorRandomizationConfig,
     PoseRandomizationSpec,
     PoseRandomRange,
-    PoseReference,
     RandomizationConstraintConfig,
     RandomizationGeneratorConfig,
     RandomizationGeneratorKind,
     RandomizationGroupConfig,
     RandomizationInput,
     RandomizationPoissonDiskConfig,
-    RandomizationReference,
     RandomizationSelectorKind,
     RandomizationSpec,
     RandomizationStrategy,
@@ -39,6 +35,10 @@ from ...framework import (
     pose_randomization_regions,
     resolve_randomization_scope,
 )
+from auto_atom.config.reference import PoseReference, RandomizationReference
+from auto_atom.config.task import AutoAtomConfig, OperatorConfig, OperatorInitialState
+
+from ...basis.mjc.mujoco_env import BatchedUnifiedMujocoEnv, EnvConfig
 from ...randomization import (
     PoissonDiskCandidateStream,
     RandomizationFailureError,

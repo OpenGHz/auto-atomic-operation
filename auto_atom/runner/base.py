@@ -7,7 +7,7 @@ from typing import Optional
 
 import numpy as np
 
-from auto_atom.framework import TaskFileConfig
+from auto_atom.config.task import TaskFileConfig
 from auto_atom.runtime import EnvProtocol, TaskUpdate
 
 

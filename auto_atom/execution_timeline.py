@@ -14,30 +14,32 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Any, List, Mapping, Optional
 
+from auto_atom.config.execution import (
+    ExecutionMode,
+    IntervalSelectionConfig,
+    KeypointSide,
+    TaskKeypointConfig,
+    TaskPhase,
+    UpdateBoundary,
+)
+from auto_atom.config.motion import (
+    ArcControlConfig,
+    EefControlConfig,
+    PoseControlConfig,
+    StageConfig,
+    StageControlConfig,
+)
+from auto_atom.config.operations import Operation
+from auto_atom.config.primitives import Orientation
+from auto_atom.config.reference import ControlledFrameKind, PoseReference
+from auto_atom.config.task import _phase_waypoint_count
+
 from .execution_model import (
     ArcExecutionSnapshot,
     PrimitiveAction,
     StageExecutionPlan,
     _EnvUpdateEvent,
     _ResolvedTaskKeypoint,
-)
-from .framework import (
-    ArcControlConfig,
-    ControlledFrameKind,
-    EefControlConfig,
-    ExecutionMode,
-    IntervalSelectionConfig,
-    KeypointSide,
-    Operation,
-    Orientation,
-    PoseControlConfig,
-    PoseReference,
-    StageConfig,
-    StageControlConfig,
-    TaskKeypointConfig,
-    TaskPhase,
-    UpdateBoundary,
-    _phase_waypoint_count,
 )
 from .utils.pose import euler_to_quaternion
 

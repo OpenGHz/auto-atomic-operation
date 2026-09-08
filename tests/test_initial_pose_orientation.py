@@ -9,14 +9,14 @@ import numpy as np
 import pytest
 
 from auto_atom.backend.mjc.mujoco_backend import MujocoTaskBackend
-from auto_atom.framework import (
-    OperatorInitialState,
+from auto_atom.config.pose import (
     PoseAxisConfig,
     PoseOrientationConfig,
     PoseOverrideConfig,
     PosePositionConfig,
-    PoseReference,
 )
+from auto_atom.config.reference import PoseReference
+from auto_atom.config.task import OperatorInitialState
 from auto_atom.utils.pose import (
     PoseState,
     compose_pose,

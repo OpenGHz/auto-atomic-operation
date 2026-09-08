@@ -3,8 +3,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from auto_atom.framework import (
-    AutoAtomConfig,
+from auto_atom.config.randomization import (
     OperatorRandomizationConfig,
     PoseRandomRange,
     RandomizationConstraintConfig,
@@ -23,6 +22,7 @@ from auto_atom.framework import (
     RandomizationSpec,
     resolve_randomization_scope,
 )
+from auto_atom.config.task import AutoAtomConfig
 from auto_atom.randomization import (
     PoissonDiskCandidateStream,
     RandomizationFailureError,

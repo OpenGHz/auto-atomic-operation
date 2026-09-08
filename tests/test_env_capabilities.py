@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 
 import auto_atom.runtime as runtime
-from auto_atom.framework import TaskFileConfig
+from auto_atom.config.task import TaskFileConfig
 from auto_atom.ipc.service import _default_action_applier as ipc_action_applier
 from auto_atom.mock import MockEnv, build_mock_backend
 from auto_atom.policy_eval import PolicyEvaluator

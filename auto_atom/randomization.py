@@ -14,7 +14,7 @@ import numpy as np
 from scipy.spatial.distance import cdist
 from scipy.stats import qmc
 
-from .framework import (
+from auto_atom.config.randomization import (
     OperatorRandomizationConfig,
     RandomizationGeneratorConfig,
     RandomizationGeneratorInput,
@@ -24,13 +24,13 @@ from .framework import (
     RandomizationGroupGeneratorKind,
     RandomizationInput,
     RandomizationPoissonDiskConfig,
-    RandomizationReference,
     RandomizationSelectorKind,
     RandomizationSpec,
     RandomizationStrategy,
     canonical_randomization_spec,
     pose_randomization_regions,
 )
+from auto_atom.config.reference import RandomizationReference
 
 
 @dataclass(frozen=True)

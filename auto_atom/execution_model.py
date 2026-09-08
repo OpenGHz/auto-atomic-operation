@@ -14,16 +14,15 @@ from typing import Any, Dict, List, Optional, Protocol
 
 import numpy as np
 
-from .framework import (
-    EefControlConfig,
+from auto_atom.config.execution import (
     IntervalSelectionConfig,
-    PoseControlConfig,
-    Position,
-    StageConfig,
     TaskKeypointConfig,
     TaskPhase,
     UpdateBoundary,
 )
+from auto_atom.config.motion import EefControlConfig, PoseControlConfig, StageConfig
+from auto_atom.config.primitives import Position
+
 from .utils.pose import PoseState
 
 

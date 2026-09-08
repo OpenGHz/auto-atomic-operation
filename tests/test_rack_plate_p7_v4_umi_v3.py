@@ -9,7 +9,7 @@ import mujoco
 import numpy as np
 from hydra import compose, initialize_config_dir
 
-from auto_atom.framework import PoseReference
+from auto_atom.config.reference import PoseReference
 from auto_atom.runner.common import prepare_task_file
 from auto_atom.runtime import ComponentRegistry, TaskRunner
 

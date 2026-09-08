@@ -12,10 +12,9 @@ from auto_atom.backend.mjc.mujoco_backend import (
     MujocoTaskBackend,
     _CollisionParticipant,
 )
-from auto_atom.framework import (
-    AutoAtomConfig,
+from auto_atom.config.motion import PoseControlConfig
+from auto_atom.config.randomization import (
     OperatorRandomizationConfig,
-    PoseControlConfig,
     RandomizationConstraintConfig,
     PoseRandomizationConfig,
     PoseRandomRange,
@@ -29,11 +28,12 @@ from auto_atom.framework import (
     RandomizationGroupDistributionConfig,
     RandomizationGroupGeneratorKind,
     RandomizationPoissonDiskConfig,
-    RandomizationReference,
     RandomizationSelectorKind,
     RandomizationStrategy,
     RandomizationSpec,
 )
+from auto_atom.config.reference import RandomizationReference
+from auto_atom.config.task import AutoAtomConfig
 from auto_atom.randomization import RandomizationFailureError
 from auto_atom.utils.pose import PoseState
 

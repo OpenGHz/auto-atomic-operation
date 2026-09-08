@@ -13,7 +13,8 @@ from typing import Any
 import numpy as np
 import pytest
 
-from auto_atom.framework import ArcControlConfig, StageConfig, TaskFileConfig
+from auto_atom.config.motion import ArcControlConfig, StageConfig
+from auto_atom.config.task import TaskFileConfig
 from auto_atom.mock import MockObjectHandler
 from auto_atom.policy_eval import (
     ConfigDrivenDemoPolicy,

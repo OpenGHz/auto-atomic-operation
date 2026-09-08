@@ -7,6 +7,17 @@ from typing import Any, Callable, Dict, List, Optional
 
 import numpy as np
 
+from auto_atom.config.execution import TaskPhase
+from auto_atom.config.motion import PlacedToleranceConfig, PoseControlConfig
+from auto_atom.config.operations import (
+    OPERATION_CONDITIONS,
+    Operation,
+    OperationConditionType,
+    OperationConstraint,
+)
+from auto_atom.config.orientation import AxisAlignmentOrientationGoalConfig
+from auto_atom.config.reference import ControlledFrameKind
+
 from .execution_model import (
     ActiveStageState,
     ControlResult,
@@ -20,17 +31,6 @@ from .execution_model import (
     _EnvRuntimeState,
     _EnvUpdateEvent,
     _ResolvedTaskKeypoint,
-)
-from .framework import (
-    OPERATION_CONDITIONS,
-    AxisAlignmentOrientationGoalConfig,
-    ControlledFrameKind,
-    Operation,
-    OperationConditionType,
-    OperationConstraint,
-    PlacedToleranceConfig,
-    PoseControlConfig,
-    TaskPhase,
 )
 from .motion_goal import motion_goal_errors, resolve_object_motion_goal
 from .pose_goal import axis_alignment_error, resolve_axis_in_world

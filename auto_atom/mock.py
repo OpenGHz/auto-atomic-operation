@@ -7,12 +7,9 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 
-from .framework import (
-    AutoAtomConfig,
-    EefControlConfig,
-    OperatorConfig,
-    PoseControlConfig,
-)
+from auto_atom.config.motion import EefControlConfig, PoseControlConfig
+from auto_atom.config.task import AutoAtomConfig, OperatorConfig
+
 from .runtime import (
     ComponentRegistry,
     ContactObservation,

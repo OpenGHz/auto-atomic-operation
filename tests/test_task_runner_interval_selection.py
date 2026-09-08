@@ -6,14 +6,13 @@ import numpy as np
 import pytest
 from pydantic import ValidationError
 
-from auto_atom.framework import (
+from auto_atom.config.execution import (
     IntervalSelectionConfig,
-    PoseControlConfig,
-    StageConfig,
-    TaskFileConfig,
     TaskKeypointConfig,
     TaskPhase,
 )
+from auto_atom.config.motion import PoseControlConfig, StageConfig
+from auto_atom.config.task import TaskFileConfig
 from auto_atom.policy_eval import PolicyEvaluator
 from auto_atom.runner.common import ExampleLoopHooks, run_example_rounds
 from auto_atom.runtime import (

@@ -16,8 +16,8 @@ from hydra.utils import instantiate
 from omegaconf import DictConfig, ListConfig, OmegaConf
 from pydantic import BaseModel
 
+from auto_atom.config.task import TaskFileConfig
 from auto_atom.execution_config import prepare_task_config_for_instantiation
-from auto_atom.framework import TaskFileConfig
 from auto_atom.runtime import (
     ComponentRegistry,
     ExecutionRecord,

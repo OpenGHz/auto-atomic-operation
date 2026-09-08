@@ -206,7 +206,7 @@ def build_airbot_play_xf9600_backend(
     """Build a Mujoco backend with the AIRBOT Play analytical IK solver."""
     from auto_atom.backend.mjc.mujoco_backend import build_mujoco_backend
     from auto_atom.basis.mjc.mujoco_env import BatchedUnifiedMujocoEnv
-    from auto_atom.framework import AutoAtomConfig  # noqa: PLC0415
+    from auto_atom.config.task import AutoAtomConfig
     from auto_atom.runtime import ComponentRegistry  # noqa: PLC0415
 
     config = (

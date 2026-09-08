@@ -30,18 +30,15 @@ from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, OmegaConf
 
 from auto_atom.backend.mjc.mujoco_backend import MujocoTaskBackend
-from auto_atom.framework import (
-    AutoAtomConfig,
-    OperatorConfig,
-    OperatorInitialState,
+from auto_atom.config.pose import PoseOverrideConfig
+from auto_atom.config.randomization import (
     OperatorRandomizationConfig,
-    PoseOverrideConfig,
     PoseRandomizationSpec,
     PoseRandomRange,
-    PoseReference,
-    RandomizationReference,
     pose_randomization_regions,
 )
+from auto_atom.config.reference import PoseReference, RandomizationReference
+from auto_atom.config.task import AutoAtomConfig, OperatorConfig, OperatorInitialState
 from auto_atom.runner.common import get_config_dir, prepare_task_file
 from auto_atom.runtime import TaskRunner
 from auto_atom.utils.pose import (

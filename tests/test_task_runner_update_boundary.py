@@ -7,7 +7,7 @@ import pytest
 from omegaconf import OmegaConf
 from pydantic import ValidationError
 
-from auto_atom.framework import TaskFileConfig
+from auto_atom.config.task import TaskFileConfig
 from auto_atom.policy_eval import PolicyEvaluator
 from auto_atom.runner.common import ExampleLoopHooks, run_example_rounds
 from auto_atom.runtime import (

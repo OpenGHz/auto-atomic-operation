@@ -6,12 +6,8 @@ from typing import Optional
 import numpy as np
 import pytest
 
-from auto_atom.framework import (
-    AutoAtomConfig,
-    EefControlConfig,
-    PoseControlConfig,
-    TaskFileConfig,
-)
+from auto_atom.config.motion import EefControlConfig, PoseControlConfig
+from auto_atom.config.task import AutoAtomConfig, TaskFileConfig
 from auto_atom.backend.mjc.mujoco_backend import (
     MujocoObjectHandler,
     MujocoTaskBackend,

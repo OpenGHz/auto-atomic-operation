@@ -7,7 +7,7 @@ from collections.abc import Callable
 import numpy as np
 import pytest
 
-from auto_atom.framework import TaskFileConfig
+from auto_atom.config.task import TaskFileConfig
 from auto_atom.mock import MockObjectHandler
 from auto_atom.policy_eval import (
     ConfigDrivenDemoPolicy,

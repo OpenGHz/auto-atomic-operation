@@ -7,12 +7,8 @@ from copy import deepcopy
 import numpy as np
 import pytest
 
-from auto_atom.framework import (
-    EefControlConfig,
-    PoseControlConfig,
-    StageConfig,
-    TaskFileConfig,
-)
+from auto_atom.config.motion import EefControlConfig, PoseControlConfig, StageConfig
+from auto_atom.config.task import TaskFileConfig
 from auto_atom.mock import (
     MockObjectHandler,
     MockOperatorHandler,

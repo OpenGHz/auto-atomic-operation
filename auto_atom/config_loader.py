@@ -14,8 +14,9 @@ from typing import Any, Dict
 from hydra.utils import instantiate
 from omegaconf import DictConfig, ListConfig, OmegaConf
 
+from auto_atom.config.task import AutoAtomConfig, TaskFileConfig
+
 from .execution_config import prepare_task_config_for_instantiation
-from .framework import AutoAtomConfig, TaskFileConfig
 
 
 def to_plain(value: Any) -> Any:

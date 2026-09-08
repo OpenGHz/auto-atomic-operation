@@ -11,15 +11,14 @@ from typing import Any, Callable, Dict, List, Optional
 
 import numpy as np
 
+from auto_atom.config.execution import UpdateBoundary
+from auto_atom.config.motion import PoseControlConfig
+from auto_atom.config.operations import Operation
+from auto_atom.config.reference import ControlledFrameKind
+from auto_atom.config.task import TaskFileConfig
+
 from .config_loader import load_task_file
 from .execution_timeline import ExecutionTimeline
-from .framework import (
-    ControlledFrameKind,
-    Operation,
-    PoseControlConfig,
-    TaskFileConfig,
-    UpdateBoundary,
-)
 from .runtime import (
     ActiveStageState,
     ControlSignal,

@@ -12,15 +12,15 @@ from typing import Any, Optional
 
 import numpy as np
 
-from .execution_model import ResolvedMotionGoal, ResolvedObjectMotionGoal
-from .framework import (
+from auto_atom.config.motion import PoseControlConfig
+from auto_atom.config.orientation import (
     AxisAlignmentOrientationGoalConfig,
     AxisReference,
-    ControlledFrameKind,
     FixedOrientationGoalConfig,
-    PoseControlConfig,
-    PoseReference,
 )
+from auto_atom.config.reference import ControlledFrameKind, PoseReference
+
+from .execution_model import ResolvedMotionGoal, ResolvedObjectMotionGoal
 from .pose_goal import (
     axis_alignment_error,
     resolve_axis_alignment_orientation,

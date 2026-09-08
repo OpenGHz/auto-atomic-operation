@@ -10,7 +10,7 @@ import pytest
 
 from auto_atom.basis.mjc import mujoco_basis
 from auto_atom.basis.mjc.mujoco_basis import MujocoBasis, ViewerConfig
-from auto_atom.framework import TaskFileConfig
+from auto_atom.config.task import TaskFileConfig
 from auto_atom.policy_eval import PolicyEvaluator
 from auto_atom.runtime import ComponentRegistry, TaskRunner
 

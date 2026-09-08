@@ -3,7 +3,7 @@ from __future__ import annotations
 import numpy as np
 
 from auto_atom.execution_timeline import ExecutionTimeline
-from auto_atom.framework import TaskFileConfig
+from auto_atom.config.task import TaskFileConfig
 from auto_atom.policy_eval import ConfigDrivenDemoPolicy, PolicyEvaluator
 from auto_atom.runtime import ComponentRegistry, TaskFlowBuilder, TaskRunner
 

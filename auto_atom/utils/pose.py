@@ -7,17 +7,16 @@ from typing import Iterable, List, Mapping, Optional, Tuple, Union
 
 import numpy as np
 
-from ..framework import (
-    Orientation,
+from auto_atom.config.motion import PoseControlConfig
+from auto_atom.config.pose import (
     PoseAxisConfig,
-    PoseControlConfig,
     PoseOrientationConfig,
     PoseOverrideConfig,
     PosePositionConfig,
-    PoseReference,
-    Position,
-    Rotation,
 )
+from auto_atom.config.primitives import Orientation, Position, Rotation
+from auto_atom.config.reference import PoseReference
+
 from .transformations import (
     concatenate_matrices,
     euler_from_matrix,

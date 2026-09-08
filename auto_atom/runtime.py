@@ -29,6 +29,30 @@ from typing import (
 
 import numpy as np
 
+from auto_atom.config.execution import (
+    ExecutionMode,
+    IntervalSelectionConfig,
+    KeypointSide,
+    ObjectMotionMode,
+    TaskKeypointConfig,
+    TaskPhase,
+    UpdateBoundary,
+)
+from auto_atom.config.motion import EefControlConfig, PoseControlConfig
+from auto_atom.config.operations import Operation
+from auto_atom.config.orientation import (
+    AxisAlignmentOrientationGoalConfig,
+    AxisReference,
+    FixedOrientationGoalConfig,
+)
+from auto_atom.config.primitives import Position
+from auto_atom.config.reference import (
+    ControlledFrameKind,
+    PoseReference,
+    RandomizationReference,
+)
+from auto_atom.config.task import AutoAtomConfig, TaskFileConfig
+
 from .execution_model import (
     ActiveStageState,
     ArcExecutionSnapshot,
@@ -46,27 +70,6 @@ from .execution_model import (
     _ResolvedTaskKeypoint,
 )
 from .execution_timeline import TaskFlowBuilder
-from .framework import (
-    AutoAtomConfig,
-    AxisAlignmentOrientationGoalConfig,
-    AxisReference,
-    ControlledFrameKind,
-    EefControlConfig,
-    ExecutionMode,
-    FixedOrientationGoalConfig,
-    IntervalSelectionConfig,
-    KeypointSide,
-    ObjectMotionMode,
-    Operation,
-    PoseControlConfig,
-    PoseReference,
-    Position,
-    RandomizationReference,
-    TaskFileConfig,
-    TaskKeypointConfig,
-    TaskPhase,
-    UpdateBoundary,
-)
 from .motion_goal import (
     motion_goal_errors as _motion_goal_errors,
 )

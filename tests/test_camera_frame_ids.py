@@ -24,7 +24,7 @@ from auto_atom.basis.mjc.mujoco_env import (
     UnifiedMujocoEnv,
     create_image_data,
 )
-from auto_atom.framework import RandomizationConstraintConfig
+from auto_atom.config.randomization import RandomizationConstraintConfig
 from auto_atom.scene_composition import SceneConfig
 from auto_atom.utils.pose import PoseState
 

@@ -260,7 +260,7 @@ def build_franka_backend(
     """
     from auto_atom.backend.mjc.mujoco_backend import build_mujoco_backend
     from auto_atom.basis.mjc.mujoco_env import BatchedUnifiedMujocoEnv
-    from auto_atom.framework import AutoAtomConfig
+    from auto_atom.config.task import AutoAtomConfig
     from auto_atom.runtime import ComponentRegistry
 
     config = (

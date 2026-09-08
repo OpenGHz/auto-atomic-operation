@@ -9,7 +9,7 @@ if str(ROOT) not in sys.path:
 
 import pytest
 
-from auto_atom.framework import OperatorRandomizationConfig, PoseRandomRange
+from auto_atom.config.randomization import OperatorRandomizationConfig, PoseRandomRange
 from auto_atom.runner.common import prepare_task_file
 from auto_atom.runtime import ComponentRegistry, TaskRunner
 

@@ -11,7 +11,7 @@ from auto_atom.backend.mjc.mujoco_backend import (
     MujocoControlConfig,
     MujocoOperatorHandler,
 )
-from auto_atom.framework import PoseControlConfig
+from auto_atom.config.motion import PoseControlConfig
 from auto_atom.runtime import ControlSignal
 
 
