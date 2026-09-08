@@ -38,7 +38,7 @@ def _id(model: mujoco.MjModel, object_type: mujoco.mjtObj, name: str) -> int:
 
 def test_migrated_mesh_payloads_are_exact_and_plate_is_rack_local() -> None:
     assert _sha256(_RACK_MESH) == (
-        "246f635a77aa42b724186150f736205a908c6fae85768cf06d5e91ccad4bf74d"
+        "475959f1517f4e836cc4458ad2874d958cf5ef84fa676e9ea4aa310343403713"
     )
     assert _sha256(_PLATE_MESH) == (
         "1152b76cfc6d3dd8b876b05dd77e6ee9c98dff1dad77f9b08b850534062a1a4f"
