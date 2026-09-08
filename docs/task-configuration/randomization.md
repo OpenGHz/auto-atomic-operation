@@ -86,10 +86,11 @@ task_operators:
 
 task:
   randomization:
-    arm:
-      base:
-        x: [-0.015, 0.015]
-        y: [-0.015, 0.015]
+    entities:
+      arm:
+        base:
+          x: [-0.015, 0.015]
+          y: [-0.015, 0.015]
 ```
 
 An operator base (or EEF home pose) can instead be expressed relative to a
@@ -116,9 +117,10 @@ is meaningful for an EEF pose, not for the base itself.
 These initial-state overrides are applied before operator randomization
 defaults are recorded, so:
 
-- `task.randomization.arm.base` uses `initial_state.base_pose` as its baseline.
-- `task.randomization.arm.eef` uses `initial_state.eef_pose` as its home EEF
+- `task.randomization.entities.arm.base` uses `initial_state.base_pose` as its
   baseline.
+- `task.randomization.entities.arm.eef` uses `initial_state.eef_pose` as its
+  home EEF baseline.
 - `initial_state.eef` only sets the gripper/open-close control value; it does
   not change the pose randomization baseline.
 - If an operator `initial_state` field is omitted, the baseline falls back to
@@ -204,20 +206,37 @@ task:
     source_block:
       position: [0.1, 0.0, 0.078]      # new baseline
   randomization:
-    source_block:
-      x: [-0.03, 0.03]                  # jitters around x=0.1
-      y: [-0.03, 0.03]
+    entities:
+      source_block:
+        x: [-0.03, 0.03]                  # jitters around x=0.1
+        y: [-0.03, 0.03]
 ```
 
 ## Randomization YAML Configuration
 
-Add a `randomization` block under `task` in your YAML config.
-Keys are object or operator names.
+Add a `randomization` block under `task`. The block is a **scope container**
+with optional global defaults and a per-entity map:
+
+```yaml
+task:
+  randomization:
+    # Optional global defaults (inherited by bare entity ranges).
+    distribution: {...}    # generator / selector / spacing
+    constraints: {...}     # visible_in / separated / failure
+    entities:              # per-entity entries
+      <name>: ...
+```
+
+`entities` keys are object or operator names.
 
 - Objects take a direct per-axis range.
 - Operators must use the **nested form** with explicit `base:` and/or `eef:`
   sub-entries. The direct per-axis shorthand on an operator key is no longer
   supported and raises `TypeError` at sample time.
+
+Bare entity ranges inherit the scope-wide `distribution` and `constraints`
+defaults; an advanced `RandomizationSpec` is fully explicit. The placement
+`strategy` lives in `constraints.separated.strategy` and defaults to `rsa`.
 
 For a target whose valid workspace is disjoint, use
 `PoseRandomizationConfig`'s `regions` list. A direct per-axis range is the
@@ -236,20 +255,21 @@ task:
   seed: 42                     # episode randomization seed
   # randomization_debug: true  # see "Debug Mode" below
   randomization:
-    source_block:
-      x: [-0.03, 0.03]         # metres, world frame
-      y: [-0.03, 0.03]
-      # yaw: [-0.524, 0.524]   # radians
-      collision_radius: 0.04   # metres, for collision rejection
-    arm:
-      base:                    # randomize the operator's base
-        x: [-0.015, 0.015]
-        y: [-0.015, 0.015]
-        collision_radius: 0.15
-      eef:                     # ...and/or the home end-effector pose
-        x: [-0.01, 0.01]
-        y: [-0.01, 0.01]
-        z: [-0.005, 0.005]
+    entities:
+      source_block:
+        x: [-0.03, 0.03]         # metres, world frame
+        y: [-0.03, 0.03]
+        # yaw: [-0.524, 0.524]   # radians
+        collision_radius: 0.04   # metres, for collision rejection
+      arm:
+        base:                    # randomize the operator's base
+          x: [-0.015, 0.015]
+          y: [-0.015, 0.015]
+          collision_radius: 0.15
+        eef:                     # ...and/or the home end-effector pose
+          x: [-0.01, 0.01]
+          y: [-0.01, 0.01]
+          z: [-0.005, 0.005]
 ```
 
 ### Multiple disjoint regions
@@ -264,32 +284,33 @@ with holes are not represented.
 ```yaml
 task:
   randomization:
-    source_block:
-      regions:
-        # Left work area: relative to the block's default pose.
-        - x: [-0.30, -0.15]
-          y: [-0.10, 0.10]
-          reference: relative
-          collision_radius: 0.04
-        # Right work area: absolute world coordinates, with its own radius.
-        - x: [0.45, 0.60]
-          y: [0.20, 0.35]
-          reference: absolute_world
-          collision_radius: 0.06
-
-    arm:
-      eef:
+    entities:
+      source_block:
         regions:
-          - x: [0.20, 0.30]
-            y: [-0.10, 0.00]
-            z: [0.15, 0.20]
-            reference: absolute_base
-            collision_radius: 0.15
-          - x: [0.35, 0.45]
-            y: [0.05, 0.15]
-            z: [0.15, 0.20]
-            reference: absolute_base
-            collision_radius: 0.12
+          # Left work area: relative to the block's default pose.
+          - x: [-0.30, -0.15]
+            y: [-0.10, 0.10]
+            reference: relative
+            collision_radius: 0.04
+          # Right work area: absolute world coordinates, with its own radius.
+          - x: [0.45, 0.60]
+            y: [0.20, 0.35]
+            reference: absolute_world
+            collision_radius: 0.06
+
+      arm:
+        eef:
+          regions:
+            - x: [0.20, 0.30]
+              y: [-0.10, 0.00]
+              z: [0.15, 0.20]
+              reference: absolute_base
+              collision_radius: 0.15
+            - x: [0.35, 0.45]
+              y: [0.05, 0.15]
+              z: [0.15, 0.20]
+              reference: absolute_base
+              collision_radius: 0.12
 ```
 
 The same wrapper can be used under an operator's `base:` entry. Region
@@ -304,14 +325,18 @@ operator's nested `base`/`eef`) for disjoint entity workspaces.
 
 ### Advanced distribution and constraints
 
-The advanced form groups four responsibilities in one configuration object:
+The advanced per-entity form groups three responsibilities in one entry:
 
 | Field | Function | Supported contents |
 |-------|----------|--------------------|
 | `proposal` | Defines the candidate pose space. | One `PoseRandomRange`, or a `regions` list of ranges. |
 | `distribution` | Defines how candidates are generated and selected. | Generator, selector, region weighting, candidate count, and spacing target. |
-| `constraints` | Defines conditions a candidate must satisfy. | Camera visibility and inter-object separation. |
-| `failure` | Defines what happens when no candidate satisfies the constraints within the attempt budget. | Failure mode and `max_attempts`. |
+| `constraints` | Defines the feasibility conditions and the failure policy. | `visible_in`, `separated` (with `strategy`), and `failure` (mode + `max_attempts`). |
+
+The same two optional groups (`distribution` and `constraints`) may be declared
+**at the randomization scope** (siblings of `entities`) as global defaults;
+bare entity ranges inherit them. An entity that writes its own advanced entry
+is fully explicit and overrides the scope defaults.
 
 Use `proposal` alone when the pose space is all that needs to be described.
 Add the other fields when the sampling behavior, feasibility conditions, or
@@ -321,27 +346,28 @@ entries and to an operator's nested `base` / `eef` entries.
 ```yaml
 task:
   randomization:
-    source_block:
-      proposal:
-        reference: absolute_world
-        x: [0.25, 0.55]
-        y: [-0.15, 0.15]
-      distribution:
-        generator: sobol
-        selector: maximin
-        candidate_count: 32
-        spacing: 0.04
-      constraints:
-        visible_in:
-          cameras: all
-          geometry: bounding_sphere
-          margin_px: 8
-        separated:
-          scope: randomized
-          clearance: 0.01
-      failure:
-        mode: error
-        max_attempts: 64
+    entities:
+      source_block:
+        proposal:
+          reference: absolute_world
+          x: [0.25, 0.55]
+          y: [-0.15, 0.15]
+        distribution:
+          generator: sobol
+          selector: maximin
+          candidate_count: 32
+          spacing: 0.04
+        constraints:
+          visible_in:
+            cameras: all
+            geometry: bounding_sphere
+            margin_px: 8
+          separated:
+            scope: randomized
+            clearance: 0.01
+          failure:
+            mode: error
+            max_attempts: 64
 ```
 
 #### `proposal`: candidate pose space
@@ -432,10 +458,13 @@ guarantee for a multi-object scene.
 | `margin_px` | Reserves a margin from every image edge. | Non-negative integer pixels. | `0` |
 | `min_visible_fraction` | Sets the required rendered fraction for `mode: segmentation`. | Number in `[0, 1]`. | `0.0` |
 
-`separated` keeps entities apart:
+`separated` keeps entities apart. `separated` owns the placement `strategy`
+because strategy only affects member-vs-member placement (it is inert for
+`visible_in`, which is a single entity against fixed cameras):
 
 | Field | Function | Supported values | Default |
 |-------|----------|------------------|---------|
+| `strategy` | Placement/retry policy used to satisfy inter-entity separation. | `rsa`: place members sequentially and keep accepted members fixed; `joint_rejection`: sample the whole component and reject it on any failure. | `rsa` |
 | `scope` | Selects the set of possible collision partners. | `randomized`: other randomized objects; `scene`: all scene geometry supported by the backend. | `randomized` |
 | `geometry` | Selects the geometry used to measure separation. | `center`: entity reference points; `support`: backend-provided support geometry. | `support` |
 | `clearance` | Adds required surface clearance between the selected geometries. The enforced minimum center distance is `collision_radius_i + collision_radius_j + clearance`; size is carried by the radius terms, so clearance is a size-adaptive surface gap. | Non-negative number in metres. | `0.0` |
@@ -445,15 +474,20 @@ backend may provide a conservative geometry approximation or reject a geometry
 or visibility mode it cannot evaluate; backend-specific capability details are
 documented separately.
 
-#### `failure`: exhausted candidate search
+#### `constraints.failure`: exhausted candidate search
+
+`failure` lives under `constraints` (not as a top-level entity field) because it
+governs the feasibility/acceptance loop that tries to satisfy the collision /
+separation and visibility requirements within the retry budget.
 
 | Field | Function | Supported values | Default |
 |-------|----------|------------------|---------|
 | `mode` | Chooses the result when the attempt budget is exhausted. | `error`: abort reset and report the violated constraints; `best_effort`: apply the least-violating candidate and expose diagnostics in reset details. | `error` |
 | `max_attempts` | Limits the number of candidate attempts before applying `mode`. | Positive integer. | `100` |
 
-Best-effort diagnostics contain the attempt count, violated constraints, and
-minimum clearance.
+The default is fail-closed (`error`). `best_effort` is an opt-in diagnostic
+mode. Best-effort diagnostics contain the attempt count, violated constraints,
+and minimum clearance.
 
 ### Supported axes
 
@@ -489,25 +523,26 @@ Examples:
 ```yaml
 task:
   randomization:
-    # Place the cup anywhere in a world-frame rectangle on the table,
-    # keeping its default height and orientation
-    cup:
-      reference: absolute_world
-      x: [0.30, 0.50]
-      y: [-0.15, 0.15]
-      collision_radius: 0.04
+    entities:
+      # Place the cup anywhere in a world-frame rectangle on the table,
+      # keeping its default height and orientation
+      cup:
+        reference: absolute_world
+        x: [0.30, 0.50]
+        y: [-0.15, 0.15]
+        collision_radius: 0.04
 
-    # Small relative jitter of the arm base plus a home-EEF box expressed
-    # in that base frame. Operator randomization always uses this nested form.
-    arm:
-      base:
-        x: [-0.01, 0.01]
-        y: [-0.01, 0.01]
-      eef:
-        reference: absolute_base
-        x: [0.25, 0.35]
-        y: [-0.05, 0.05]
-        z: [0.20, 0.30]
+      # Small relative jitter of the arm base plus a home-EEF box expressed
+      # in that base frame. Operator randomization always uses this nested form.
+      arm:
+        base:
+          x: [-0.01, 0.01]
+          y: [-0.01, 0.01]
+        eef:
+          reference: absolute_base
+          x: [0.25, 0.35]
+          y: [-0.05, 0.05]
+          z: [0.20, 0.30]
 ```
 
 Entity-reference example (arrange_flowers: flower tracks vase):
@@ -515,18 +550,19 @@ Entity-reference example (arrange_flowers: flower tracks vase):
 ```yaml
 task:
   randomization:
-    vase:
-      reference: absolute_world
-      x: [0.22, 0.58]
-      y: [-0.32, 0.27]
-    flower:
-      reference: vase            # carry with vase, then jitter ±5mm
-      x: [-0.005, 0.005]
-      y: [-0.005, 0.005]
-    vase2:
-      reference: absolute_world
-      x: [0.22, 0.58]
-      y: [-0.32, 0.27]
+    entities:
+      vase:
+        reference: absolute_world
+        x: [0.22, 0.58]
+        y: [-0.32, 0.27]
+      flower:
+        reference: vase            # carry with vase, then jitter ±5mm
+        x: [-0.005, 0.005]
+        y: [-0.005, 0.005]
+      vase2:
+        reference: absolute_world
+        x: [0.22, 0.58]
+        y: [-0.32, 0.27]
 ```
 
 When `vase` moves from its default to a new position, the flower is "carried"
@@ -542,17 +578,18 @@ Operator-attribute reference example (objects drift with the arm's base):
 ```yaml
 task:
   randomization:
-    arm:
-      base:
-        x: [-0.05, 0.05]
-        y: [-0.05, 0.05]
-    vase:
-      reference: arm.base        # equivalent to `reference: arm`
-      x: [-0.005, 0.005]
-      y: [-0.005, 0.005]
-    gripper_hover: # rarely used
-      reference: arm.eef         # track the operator's home EEF instead
-      z: [-0.01, 0.01]
+    entities:
+      arm:
+        base:
+          x: [-0.05, 0.05]
+          y: [-0.05, 0.05]
+      vase:
+        reference: arm.base        # equivalent to `reference: arm`
+        x: [-0.005, 0.005]
+        y: [-0.005, 0.005]
+      gripper_hover: # rarely used
+        reference: arm.eef         # track the operator's home EEF instead
+        z: [-0.01, 0.01]
 ```
 
 The plain `reference: arm` form is equivalent to `arm.base`; write `arm.eef`
@@ -569,14 +606,15 @@ the expanded form owns a higher-priority reference:
 ```yaml
 task:
   randomization:
-    arm:
-      base:
-        reference: relative       # fallback for x/y/roll/pitch/yaw
-        x: [-0.01, 0.01]
-        y: [-0.01, 0.01]
-        z:
-          range: [-0.305, -0.295]
-          reference: absolute_world
+    entities:
+      arm:
+        base:
+          reference: relative       # fallback for x/y/roll/pitch/yaw
+          x: [-0.01, 0.01]
+          y: [-0.01, 0.01]
+          z:
+            range: [-0.305, -0.295]
+            reference: absolute_world
 ```
 
 Here `x` and `y` remain offsets from the base's effective initial pose, while
@@ -610,8 +648,10 @@ unnested "direct form") is rejected at sample time with a `TypeError`.
 
 Each entity has a `collision_radius` (default 0.05 m). After sampling, pairwise
 Euclidean distances are checked: if any two entities are closer than the sum of
-their radii, the sample is rejected and redrawn. After 100 failed attempts the
-last sample is applied with a warning.
+their radii, the sample is rejected and redrawn. After the retry budget
+(`constraints.failure.max_attempts`, default 100) is exhausted the failure
+policy applies — by default fail-closed `error`; opt into `best_effort` to keep
+the least-violating sample with a diagnostic.
 
 Entities linked by an entity-name reference chain are excluded from rejection
 against each other. This allows carried assemblies such as `flower -> vase` to
@@ -643,11 +683,15 @@ Practical implications:
 The task no longer requires a user-maintained `randomization_groups` mapping.
 The compiler automatically joins reference-connected actions, actions with a
 separation constraint, and object proposals whose position regions can overlap.
-Use `task.randomization_strategy` to select the component policy:
+Select the placement policy with `constraints.separated.strategy` on the
+randomization scope (default `rsa`):
 
 ```yaml
 task:
-  randomization_strategy: rsa  # or joint_rejection
+  randomization:
+    constraints:
+      separated:
+        strategy: rsa        # or joint_rejection
 ```
 
 `rsa` is the default: random sequential adsorption with a bounding sphere per
@@ -658,23 +702,23 @@ radius shared by the component.
 task:
   seed: 42
   randomization:
-    plate:
-      reference: absolute_world
-      x: [0.15, 0.55]
-      y: [-0.25, 0.25]
-      collision_radius: 0.11
-      distribution:
-        generator: poisson_disk
-        spacing: 0.04
-    cup:
-      reference: absolute_world
-      x: [0.15, 0.55]
-      y: [-0.25, 0.25]
-      collision_radius: 0.05
-      distribution:
-        generator: poisson_disk
-        spacing: 0.04
-  randomization_strategy: rsa
+    entities:
+      plate:
+        reference: absolute_world
+        x: [0.15, 0.55]
+        y: [-0.25, 0.25]
+        collision_radius: 0.11
+        distribution:
+          generator: poisson_disk
+          spacing: 0.04
+      cup:
+        reference: absolute_world
+        x: [0.15, 0.55]
+        y: [-0.25, 0.25]
+        collision_radius: 0.05
+        distribution:
+          generator: poisson_disk
+          spacing: 0.04
 ```
 
 For each environment and reset, the backend shuffles independent ready members
@@ -705,13 +749,13 @@ the context for object sampling and are resolved before camera-aware checks.
 The component topology is an internal compiler result; declaration order does
 not define the spatial order.
 
-For `rsa`, `failure.max_attempts` is the local budget for each member. For
-`joint_rejection`, it is the component-attempt budget: one failed member causes
-the complete component proposal to be discarded and retried. `mode: error`
-aborts reset with the failed member, attempted count, violated constraint, and
-minimum clearance. `mode: best_effort` keeps the least-violating candidate and
-records the same details in reset diagnostics. It is intended for inspection,
-not for collision-free data collection.
+For `rsa`, `constraints.failure.max_attempts` is the local budget for each
+member. For `joint_rejection`, it is the component-attempt budget: one failed
+member causes the complete component proposal to be discarded and retried.
+`mode: error` aborts reset with the failed member, attempted count, violated
+constraint, and minimum clearance. `mode: best_effort` keeps the
+least-violating candidate and records the same details in reset diagnostics. It
+is intended for inspection, not for collision-free data collection.
 
 ## Per-Waypoint Randomization
 

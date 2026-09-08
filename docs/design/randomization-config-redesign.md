@@ -6,18 +6,20 @@
 
 ## 实现状态（2026-09-08 更新）
 
-**已实现并验证（改名切片）**：`distribution.min_distance`→`spacing`、
-`separated.min_distance`→`clearance`、删除未接线的
-`RandomizationGroupDistributionConfig.clearance`。已同步
-`mujoco_backend.py` / `mujoco_basis.py` / `randomization.py` 与
-`randomization.md`，`tests/test_randomization_plan.py` 与
-`tests/test_randomization_collision.py` 定向测试通过。
-
-**仍未实现（容器化 / 语义归位，待单独推进）**：`task.randomization` 容器化
-（`distribution` / `constraints` / `entities` + 三级回落）、`failure` 归入
-`constraints`、`strategy` 迁入 `separated` 并支持逐组件独立、删除全局
-`randomization_strategy`。此部分牵动 `compile_randomization_plan`、
-`AutoAtomConfig` 与后端逐组件策略分发，需作为独立改动完成。
+**已实现并提交**：
+- 改名切片（提交 `d836161`）：`distribution.min_distance`→`spacing`、
+  `separated.min_distance`→`clearance`、删除未接线的
+  `RandomizationGroupDistributionConfig.clearance`。
+- 容器化切片（提交 `5626df0`）：`task.randomization` → `RandomizationScopeConfig`
+  {`distribution`、`constraints`、`entities`}；`resolve_randomization_scope` 三级回落
+  （实体显式 > scope 默认 > 内置）；`failure` 归入 `constraints.failure`；
+  `strategy` 归入 `separated.strategy`，删除 `AutoAtomConfig.randomization_strategy`；
+  采用**新语义**（默认 `failure=error`，去掉 legacy best_effort 特殊化）。同步后端工厂、
+  runtime / execution_config / data_replay、24 个 `aao_configs` 的 `entities` 包装、
+  相关测试与 `randomization.md` / `task_file_schema.md` / `ik_control.md` 文档。
+- **限制（已实现为单一有效策略）**：后端仍按单策略分发；scope/实体声明的
+  `separated.strategy` 若不一致会报错。**逐组件混合策略**（不同组件各用不同策略）
+  需另行改造后端分发，未实现。
 
 ## 动机与目标
 

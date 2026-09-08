@@ -404,7 +404,7 @@ arm `home_arm_qpos`。
 
 实际后果：YAML 中配置了不可达的 `initial_state.eef_pose` 不会再让程序崩溃，
 但日志里会出现该警告——看到这条 warning 时应当回到配置里收紧
-`task.randomization.arm.eef` 的范围或修正 `initial_state.eef_pose`，否则那一
+`task.randomization.entities.arm.eef` 的范围或修正 `initial_state.eef_pose`，否则那一
 帧的 home 位姿与配置不一致。
 
 ### 运行期 `move_to_pose` 中的 IK 失败处理
@@ -472,7 +472,7 @@ env.set_joint_limit_warning_enabled(True)
 
 ### 用途
 
-- 调 `task.randomization.arm.eef` 范围时，看哪些采样让 arm 顶到限位
+- 调 `task.randomization.entities.arm.eef` 范围时，看哪些采样让 arm 顶到限位
 - 调 `initial_state.base_pose` / `initial_state.eef_pose` 时，看 home 位姿是否
   靠近限位
 - 调 keyframe / `initial_joint_positions` 时，提前发现首步 IK 就贴近限位的情况
