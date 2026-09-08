@@ -206,6 +206,69 @@ def test_randomization_visibility_uses_rgb_depth_clip_intersection() -> None:
     assert report.violations == ("subject:outside_depth:camera",)
 
 
+def test_visible_in_resolves_geometry_and_camera_once_per_episode(
+    monkeypatch,
+) -> None:
+    """Bounding-sphere radius and camera model are cached per episode."""
+    model = mujoco.MjModel.from_xml_string(
+        """
+        <mujoco>
+          <statistic extent="2"/>
+          <visual><map znear="0.01" zfar="50"/></visual>
+          <worldbody>
+            <camera name="camera"/>
+            <body name="subject"><geom type="sphere" size="0.01"/></body>
+          </worldbody>
+        </mujoco>
+        """
+    )
+    data = mujoco.MjData(model)
+    mujoco.mj_forward(model, data)
+    env = MujocoBasis.__new__(MujocoBasis)
+    env.model = model
+    env.data = data
+    env._camera_ids = {"camera": 0}
+    env._camera_specs = {
+        "camera": CameraSpec(
+            name="camera",
+            rgb_clip_range_m=(0.5, 4.0),
+            depth_clip_range_m=(0.2, 5.0),
+        )
+    }
+    calls = {"geometry": 0, "camera": 0}
+
+    original_geometry = env.get_support_geometry
+
+    def counting_geometry(entity_name: str) -> object:
+        calls["geometry"] += 1
+        return original_geometry(entity_name)
+
+    original_camera = env.get_camera_model
+
+    def counting_camera(camera_name: str) -> object:
+        calls["camera"] += 1
+        return original_camera(camera_name)
+
+    monkeypatch.setattr(env, "get_support_geometry", counting_geometry)
+    monkeypatch.setattr(env, "get_camera_model", counting_camera)
+
+    pose = PoseState(
+        position=np.asarray([[0.0, 0.0, -2.0]], dtype=np.float64),
+        orientation=np.asarray([[0.0, 0.0, 0.0, 1.0]], dtype=np.float64),
+    )
+    constraints = RandomizationConstraintConfig(
+        visible_in={"cameras": ["camera"], "geometry": "bounding_sphere"}
+    )
+    for _ in range(3):
+        report = env.evaluate_randomization_constraints(
+            {"subject": pose},
+            constraints=constraints,
+        )
+    assert report.valid
+    # 3 candidate evaluations reuse the per-episode radius and camera model.
+    assert calls == {"geometry": 1, "camera": 1}
+
+
 def test_native_camera_uses_separate_rgb_and_depth_clip_scopes() -> None:
     cam_name = "camera"
     env = UnifiedMujocoEnv.__new__(UnifiedMujocoEnv)

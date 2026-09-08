@@ -65,6 +65,8 @@ class MujocoBasis:
             config = EnvConfig.model_validate(kwargs)
         self.config = config
         self._info = None
+        self._visible_radius_cache: Dict[str, float] = {}
+        self._visible_camera_cache: Dict[str, CameraModel] = {}
         self.scene_artifact = scene_artifact or (
             compile_scene(config.scene) if config.scene.layers else None
         )
@@ -823,6 +825,12 @@ class MujocoBasis:
     def reset(self) -> None:
         """Restore low-level state and notify higher-level wrappers."""
         self._reset_core()
+        visible_cache = getattr(self, "_visible_radius_cache", None)
+        if visible_cache is not None:
+            visible_cache.clear()
+        camera_cache = getattr(self, "_visible_camera_cache", None)
+        if camera_cache is not None:
+            camera_cache.clear()
         self._after_reset()
 
     def _snapshot_ctrl(self) -> None:
@@ -1107,6 +1115,45 @@ class MujocoBasis:
             )
         return SupportGeometry(center=center, radius=radius)
 
+    def _visible_camera_model(self, camera_name: str) -> CameraModel:
+        """Camera model for one ``visible_in`` camera, cached per episode.
+
+        Camera models (pose + clip near/far) are fixed for the whole feasibility
+        loop of a reset, so resolve each once instead of per candidate
+        evaluation. Cleared on each low-level ``reset`` so camera-pose
+        randomization is picked up.
+        """
+        cache = getattr(self, "_visible_camera_cache", None)
+        if cache is None:
+            cache = {}
+            self._visible_camera_cache = cache
+        cached = cache.get(camera_name)
+        if cached is not None:
+            return cached
+        model = self.get_camera_model(camera_name)
+        cache[camera_name] = model
+        return model
+
+    def _visible_radius(self, entity_name: str) -> float:
+        """Conservative support radius for one ``visible_in`` target entity.
+
+        The bounding-sphere radius is measured around the entity's own geom
+        centroid, so it is invariant to the proposed pose and only needs to be
+        resolved once per entity per episode. Caching it here avoids a full
+        ``mj_forward`` on every candidate evaluation inside the feasibility
+        loop. The cache is cleared on each low-level ``reset``.
+        """
+        cache = getattr(self, "_visible_radius_cache", None)
+        if cache is None:
+            cache = {}
+            self._visible_radius_cache = cache
+        cached = cache.get(entity_name)
+        if cached is not None:
+            return cached
+        radius = float(self.get_support_geometry(entity_name).radius)
+        cache[entity_name] = radius
+        return radius
+
     def evaluate_randomization_constraints(
         self,
         candidate_poses: Mapping[str, PoseState],
@@ -1147,45 +1194,70 @@ class MujocoBasis:
                     if name in target_names
                 }
             )
+            # Camera models and projection constants depend only on the camera
+            # (fixed for the whole evaluation) — resolve them once instead of
+            # once per (entity, camera) pair.
+            camera_data = []
+            for camera_name in cameras:
+                camera = self._visible_camera_model(camera_name)
+                cam_pos = np.asarray(camera.pose.position[0], dtype=np.float64)
+                rotation = np.asarray(
+                    quaternion_to_rotation_matrix(camera.pose.orientation[0]),
+                    dtype=np.float64,
+                )
+                half_fovy = camera.fovy_radians / 2.0
+                half_fovx = np.arctan(
+                    np.tan(half_fovy) * (camera.width / camera.height)
+                )
+                camera_data.append(
+                    (
+                        camera_name,
+                        cam_pos,
+                        rotation,
+                        camera.width * 0.5 / np.tan(half_fovx),
+                        camera.height * 0.5 / np.tan(half_fovy),
+                        float(camera.width),
+                        float(camera.height),
+                        float(camera.near),
+                        float(camera.far),
+                        float(visible.margin_px),
+                    )
+                )
+            use_bounding_sphere = visible.geometry.value == "bounding_sphere"
             for entity_name, pose in visibility_candidates.items():
-                geometry = self.get_support_geometry(entity_name)
-                delta = np.asarray(pose.position[0], dtype=np.float64) - geometry.center
-                # The support sphere follows the proposed pose translation.
+                # The support sphere follows the proposed pose translation. Its
+                # radius is pose-invariant (measured around the entity's own
+                # centroid), so cache it per episode instead of re-running
+                # ``mj_forward`` for every candidate.
                 center = np.asarray(pose.position[0], dtype=np.float64)
                 radius = (
-                    0.0
-                    if visible.geometry.value == "center"
-                    else float(geometry.radius)
+                    self._visible_radius(entity_name) if use_bounding_sphere else 0.0
                 )
-                for camera_name in cameras:
-                    camera = self.get_camera_model(camera_name)
-                    cam_pos = camera.pose.position[0]
-                    rotation = np.asarray(
-                        quaternion_to_rotation_matrix(camera.pose.orientation[0]),
-                        dtype=np.float64,
-                    )
+                for (
+                    camera_name,
+                    cam_pos,
+                    rotation,
+                    scale_x,
+                    scale_y,
+                    cam_width,
+                    cam_height,
+                    near,
+                    far,
+                    margin,
+                ) in camera_data:
                     # MuJoCo camera x-axis is right, y-axis up, z-axis backward.
                     camera_point = rotation.T @ (center - cam_pos)
                     depth = -float(camera_point[2])
-                    half_fovy = camera.fovy_radians / 2.0
-                    half_fovx = np.arctan(
-                        np.tan(half_fovy) * (camera.width / camera.height)
-                    )
                     depth_margin = radius / max(depth, 1e-9)
-                    px = camera.width * 0.5 + camera_point[0] / max(depth, 1e-9) * (
-                        camera.width * 0.5 / np.tan(half_fovx)
-                    )
-                    py = camera.height * 0.5 - camera_point[1] / max(depth, 1e-9) * (
-                        camera.height * 0.5 / np.tan(half_fovy)
-                    )
-                    margin = float(visible.margin_px)
-                    if depth <= camera.near + radius or depth >= camera.far - radius:
+                    px = cam_width * 0.5 + camera_point[0] / max(depth, 1e-9) * scale_x
+                    py = cam_height * 0.5 - camera_point[1] / max(depth, 1e-9) * scale_y
+                    if depth <= near + radius or depth >= far - radius:
                         violations.append(f"{entity_name}:outside_depth:{camera_name}")
                     if (
-                        px - depth_margin * camera.width < margin
-                        or px + depth_margin * camera.width > camera.width - margin
-                        or py - depth_margin * camera.height < margin
-                        or py + depth_margin * camera.height > camera.height - margin
+                        px - depth_margin * cam_width < margin
+                        or px + depth_margin * cam_width > cam_width - margin
+                        or py - depth_margin * cam_height < margin
+                        or py + depth_margin * cam_height > cam_height - margin
                     ):
                         violations.append(f"{entity_name}:outside_view:{camera_name}")
 
