@@ -76,8 +76,9 @@ int(np.int32(3)) in {int(...), int(...)}                                     # T
 
 ## 未做 / 后续机会
 
-- **复制式 batch 的多线程 step**：实测 `mj_step` 释放 GIL，B 个独立 model/data
-  多线程 step 加速 B=2 ~2×、B=4 ~4×、B=8 ~5×，与顺序结果位级一致（详见仓库
-  记忆 `/memories/repo/mujoco-perf.md`）。这是应用层优化、与 MuJoCo 版本无关，
-  未在本升级内实现。
+- ~~**复制式 batch 的多线程 step**~~：**已实现**（`EnvConfig.parallel_batch_step`，
+  见 [parallel_batch_step.md](parallel_batch_step.md)）。实测 `mj_step` 释放 GIL，
+  B 个独立 model/data 多线程 step 加速 B=5 ~2×、B=8 ~2.6×（重负载更接近 4×），
+  与顺序结果位级一致。仅覆盖整批推进路径（PolicyEvaluator/data_replay/sim_loop）；
+  TaskRunner 逐 env 执行不在此开关范围。
 - Flex/软体、PID/dcmotor、surfacevel/adhesion：未来任务类型扩展时按需引入。
