@@ -55,24 +55,25 @@ env:
 
 task:
   randomization:
-    arm:
-      eef:
-        collision_radius: 0.0
-    vase:
-      x: [0.50, 0.54]
-      y: [0.20, 0.25]
-      collision_radius: 0.025
-      reference: absolute_world
-    flower:
-      x: [-0.00, 0.00]
-      y: [-0.00, 0.00]
-      collision_radius: 0.025
-      reference: vase
-    vase2:
-      x: [0.45, 0.50]
-      y: [0.1, 0.13]
-      collision_radius: 0.015
-      reference: absolute_world
+    entities:
+      arm:
+        eef:
+          collision_radius: 0.0
+      vase:
+        x: [0.50, 0.54]
+        y: [0.20, 0.25]
+        collision_radius: 0.025
+        reference: absolute_world
+      flower:
+        x: [-0.00, 0.00]
+        y: [-0.00, 0.00]
+        collision_radius: 0.025
+        reference: vase
+      vase2:
+        x: [0.45, 0.50]
+        y: [0.1, 0.13]
+        collision_radius: 0.015
+        reference: absolute_world
 
   stages:
     - name: pick_flower

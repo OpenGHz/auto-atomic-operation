@@ -16,6 +16,7 @@ from auto_atom.framework import (
     AutoAtomConfig,
     OperatorRandomizationConfig,
     PoseControlConfig,
+    RandomizationConstraintConfig,
     PoseRandomizationConfig,
     PoseRandomRange,
     RandomizationAxisConfig,
@@ -473,21 +474,28 @@ def test_collision_rejection_warns_after_attempts_exhausted(
         "_MAX_COLLISION_REJECTION_ATTEMPTS",
         3,
     )
+
+    # Explicit best-effort failure keeps the last overlapping sample with a
+    # warning. The default failure policy is fail-closed ``error`` (new
+    # semantics); best-effort is an opt-in diagnostic mode.
+    def best_effort() -> RandomizationSpec:
+        return RandomizationSpec(
+            proposal=PoseRandomRange(
+                reference=RandomizationReference.ABSOLUTE_WORLD,
+                x=(0.0, 0.0),
+                y=(0.0, 0.0),
+                collision_radius=0.05,
+            ),
+            constraints=RandomizationConstraintConfig(
+                failure=RandomizationFailureConfig(
+                    mode=RandomizationFailureMode.BEST_EFFORT,
+                    max_attempts=3,
+                )
+            ),
+        )
+
     backend = _make_backend(
-        randomization={
-            "vase": PoseRandomRange(
-                reference=RandomizationReference.ABSOLUTE_WORLD,
-                x=(0.0, 0.0),
-                y=(0.0, 0.0),
-                collision_radius=0.05,
-            ),
-            "vase2": PoseRandomRange(
-                reference=RandomizationReference.ABSOLUTE_WORLD,
-                x=(0.0, 0.0),
-                y=(0.0, 0.0),
-                collision_radius=0.05,
-            ),
-        },
+        randomization={"vase": best_effort(), "vase2": best_effort()},
         object_positions={
             "vase": (0.0, 0.0, 0.0),
             "vase2": (0.0, 0.0, 0.0),
@@ -513,9 +521,11 @@ def test_canonical_error_policy_raises_with_collision_diagnostics() -> None:
                 y=(0.0, 0.0),
                 collision_radius=0.05,
             ),
-            failure=RandomizationFailureConfig(
-                mode=RandomizationFailureMode.ERROR,
-                max_attempts=2,
+            constraints=RandomizationConstraintConfig(
+                failure=RandomizationFailureConfig(
+                    mode=RandomizationFailureMode.ERROR,
+                    max_attempts=2,
+                )
             ),
         )
 
@@ -671,15 +681,18 @@ def test_legacy_single_range_and_multi_region_config_are_accepted() -> None:
             "stages": [],
             "env_name": "randomization_test",
             "randomization": {
-                "legacy": legacy_range.model_dump(),
-                "multi": multi_region.model_dump(),
+                "entities": {
+                    "legacy": legacy_range.model_dump(),
+                    "multi": multi_region.model_dump(),
+                }
             },
         }
     )
 
-    assert isinstance(config.randomization["legacy"], PoseRandomRange)
-    assert isinstance(config.randomization["multi"], PoseRandomizationConfig)
-    assert len(config.randomization["multi"].regions) == 2
+    entities = config.randomization.entities
+    assert isinstance(entities["legacy"], PoseRandomRange)
+    assert isinstance(entities["multi"], PoseRandomizationConfig)
+    assert len(entities["multi"].regions) == 2
 
 
 def test_empty_randomization_regions_are_rejected() -> None:
@@ -693,26 +706,28 @@ def test_operator_nested_randomization_strips_hydra_null_switches() -> None:
             "stages": [],
             "env_name": "randomization_test",
             "randomization": {
-                "arm": {
-                    "base": {
-                        "regions": None,
-                        "x": [0.1, 0.2],
-                    },
-                    "eef": {
-                        "x": None,
-                        "regions": [
-                            {
-                                "x": [0.3, 0.4],
-                                "y": None,
-                            }
-                        ],
-                    },
+                "entities": {
+                    "arm": {
+                        "base": {
+                            "regions": None,
+                            "x": [0.1, 0.2],
+                        },
+                        "eef": {
+                            "x": None,
+                            "regions": [
+                                {
+                                    "x": [0.3, 0.4],
+                                    "y": None,
+                                }
+                            ],
+                        },
+                    }
                 }
             },
         }
     )
 
-    arm = config.randomization["arm"]
+    arm = config.randomization.entities["arm"]
     assert isinstance(arm, OperatorRandomizationConfig)
     assert isinstance(arm.base, PoseRandomRange)
     assert arm.base.x == (0.1, 0.2)

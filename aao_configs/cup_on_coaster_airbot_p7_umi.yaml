@@ -49,24 +49,25 @@ env:
 
 task:
   randomization:
-    cup:
-      x: [-0.1, 0.0]
-      y: [-0.3, 0.05]
-      collision_radius: 0.04
-      reference: arm.base
-    coaster:
-      x: [-0.1, 0.0]
-      y: [-0.1, 0.25]
-      collision_radius: 0.04
-      reference: arm.base
-    arm:
-      base:
-        x: [-0.15, 0.1]
-        y: [-0.2, 0.08]
-      # eef:
-      #   x: [-0.03, 0.07]
-      #   y: [-0.15, 0.20]
-      #   z: [-0.005, 0.005]
+    entities:
+      cup:
+        x: [-0.1, 0.0]
+        y: [-0.3, 0.05]
+        collision_radius: 0.04
+        reference: arm.base
+      coaster:
+        x: [-0.1, 0.0]
+        y: [-0.1, 0.25]
+        collision_radius: 0.04
+        reference: arm.base
+      arm:
+        base:
+          x: [-0.15, 0.1]
+          y: [-0.2, 0.08]
+        # eef:
+        #   x: [-0.03, 0.07]
+        #   y: [-0.15, 0.20]
+        #   z: [-0.005, 0.005]
 
   stages:
     - name: pick_cup

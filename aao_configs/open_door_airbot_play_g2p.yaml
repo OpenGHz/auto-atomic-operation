@@ -79,26 +79,27 @@ env:
 task:
   # This task is sensitive to base placement, so keep base randomization tight.
   randomization:
-    arm:
-      # Pull the base back from the door by 0–10 cm. The original
-      # [0.01, 0.10] biased it toward the door, which combined with
-      # the ~22 mm handle plate in front of the grasp site to put the
-      # gripper fingers inside the plate before pre_move 1 even
-      # finished. Always-negative x keeps the arm safely in front of
-      # the obstacle while still inside the joint reach envelope.
-      base:
-        x: [ -0.10, 0.0 ]
-        y: [ -0.1, 0.10 ]
-        z: [ -0.1, 0.10 ]
-      # Don't pre-extend the EEF toward the door — keep a symmetric
-      # range so IK still gets warm-up variety without a forward bias.
-      eef:
-        x: [ -0.05, 0.05 ]
-        y: [ -0.1, 0.10 ]
-        z: [ 0.05, 0.15 ]
-        # roll: [-0.005, 0.005]
-        # pitch: [-0.005, 0.005]
-        # yaw: [-0.005, 0.005]
+    entities:
+      arm:
+        # Pull the base back from the door by 0–10 cm. The original
+        # [0.01, 0.10] biased it toward the door, which combined with
+        # the ~22 mm handle plate in front of the grasp site to put the
+        # gripper fingers inside the plate before pre_move 1 even
+        # finished. Always-negative x keeps the arm safely in front of
+        # the obstacle while still inside the joint reach envelope.
+        base:
+          x: [ -0.10, 0.0 ]
+          y: [ -0.1, 0.10 ]
+          z: [ -0.1, 0.10 ]
+        # Don't pre-extend the EEF toward the door — keep a symmetric
+        # range so IK still gets warm-up variety without a forward bias.
+        eef:
+          x: [ -0.05, 0.05 ]
+          y: [ -0.1, 0.10 ]
+          z: [ 0.05, 0.15 ]
+          # roll: [-0.005, 0.005]
+          # pitch: [-0.005, 0.005]
+          # yaw: [-0.005, 0.005]
   stages:
     - name: grasp_and_open
       object: handle_body_phys

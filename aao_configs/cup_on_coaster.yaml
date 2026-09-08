@@ -17,16 +17,17 @@ env:
 
 task:
   randomization:
-    cup:
-      x: [0.2, 0.5]
-      y: [-0.32, 0.25]
-      collision_radius: 0.04
-      reference: absolute_world
-    coaster:
-      x: [0.2, 0.5]
-      y: [-0.32, 0.25]
-      collision_radius: 0.04
-      reference: absolute_world
+    entities:
+      cup:
+        x: [0.2, 0.5]
+        y: [-0.32, 0.25]
+        collision_radius: 0.04
+        reference: absolute_world
+      coaster:
+        x: [0.2, 0.5]
+        y: [-0.32, 0.25]
+        collision_radius: 0.04
+        reference: absolute_world
   stages:
     - name: pick_cup
       object: cup

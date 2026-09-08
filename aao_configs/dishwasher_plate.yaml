@@ -56,7 +56,8 @@ task:
       position: [-0.450, -0.360, 0.223671074]
       orientation: [0.0, 0.0, 0.0, 1.0]
   randomization:
-    arm: null
+    entities:
+      arm: null
   stages:
     - name: pick_plate
       object: plate2

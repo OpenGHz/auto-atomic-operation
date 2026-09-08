@@ -3303,7 +3303,7 @@ class TaskRunner:
                 names_in_order.append(stage.object)
                 seen_names.add(stage.object)
 
-        for name in context.config.randomization:
+        for name in context.config.randomization.entities:
             if name not in seen_names:
                 names_in_order.append(name)
                 seen_names.add(name)
@@ -3399,7 +3399,7 @@ def _collect_reset_details(
     context: ExecutionContext,
 ) -> Dict[str, Any]:
     initial_poses: Dict[str, Any] = {}
-    for name in context.config.randomization:
+    for name in context.config.randomization.entities:
         object_handler: Optional[ObjectHandler]
         try:
             object_handler = context.backend.get_object_handler(name)

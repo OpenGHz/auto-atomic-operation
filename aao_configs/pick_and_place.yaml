@@ -30,11 +30,12 @@ task:
   # source_block has a free joint so its x/y and yaw are randomised.
   # target_pedestal is a static body (no free joint) — omit it here.
   randomization:
-    source_block:
-      x: [-0.03, 0.03]
-      y: [-0.03, 0.03]
-      # yaw: [-0.524, 0.524]   # ±30°
-      collision_radius: 0.04
+    entities:
+      source_block:
+        x: [-0.03, 0.03]
+        y: [-0.03, 0.03]
+        # yaw: [-0.524, 0.524]   # ±30°
+        collision_radius: 0.04
   stages:
     - name: pick_source
       object: source_block

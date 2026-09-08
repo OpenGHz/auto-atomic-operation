@@ -69,7 +69,8 @@ env:
 task:
   seed: 7
   randomization:
-    arm: null
+    entities:
+      arm: null
   stages:
     - name: pick_plate
       object: object

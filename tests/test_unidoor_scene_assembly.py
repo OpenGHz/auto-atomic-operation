@@ -1089,8 +1089,8 @@ def test_demo_final_approach_targets_the_explicit_grasp_site() -> None:
     assert base_pose.orientation.roll == pytest.approx(0.0)
     assert base_pose.orientation.pitch == pytest.approx(1.5707963267948966)
     assert base_pose.orientation.yaw == pytest.approx(0.0)
-    assert config.task.randomization.arm.get("base") is None
-    assert config.task.randomization.arm.eef is not None
+    assert config.task.randomization.entities.arm.get("base") is None
+    assert config.task.randomization.entities.arm.eef is not None
     assert "eef" not in pick_stage.param
     assert pull_stage.name == "pull_handle"
     assert pull_stage.operation == "pull"

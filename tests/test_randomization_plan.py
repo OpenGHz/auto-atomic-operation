@@ -17,9 +17,11 @@ from auto_atom.framework import (
     RandomizationGroupDistributionConfig,
     RandomizationGroupGeneratorKind,
     RandomizationPoissonDiskConfig,
+    RandomizationScopeConfig,
     RandomizationSelectorKind,
     RandomizationStrategy,
     RandomizationSpec,
+    resolve_randomization_scope,
 )
 from auto_atom.randomization import (
     PoissonDiskCandidateStream,
@@ -233,20 +235,23 @@ def test_config_selects_automatic_randomization_strategy() -> None:
         {
             "stages": [],
             "env_name": "randomization_test",
-            "randomization_strategy": "joint_rejection",
             "randomization": {
-                "large": {"x": [0.0, 1.0]},
-                "small": {"x": [0.0, 1.0]},
+                "constraints": {"separated": {"strategy": "joint_rejection"}},
+                "entities": {
+                    "large": {"x": [0.0, 1.0]},
+                    "small": {"x": [0.0, 1.0]},
+                },
             },
         }
     )
-
-    assert config.randomization_strategy.value == "joint_rejection"
+    _, strategy = resolve_randomization_scope(config.randomization)
+    assert strategy == RandomizationStrategy.JOINT_REJECTION
 
     default_config = AutoAtomConfig.model_validate(
         {"stages": [], "env_name": "randomization_test"}
     )
-    assert default_config.randomization_strategy == RandomizationStrategy.RSA
+    _, default_strategy = resolve_randomization_scope(default_config.randomization)
+    assert default_strategy == RandomizationStrategy.RSA
 
 
 def test_data_replay_disables_object_randomization() -> None:
@@ -257,15 +262,93 @@ def test_data_replay_disables_object_randomization() -> None:
                 "env_name": "randomization_test",
                 "stages": [],
                 "randomization": {
-                    "large": {"x": [0.0, 1.0]},
-                    "small": {"x": [0.0, 1.0]},
+                    "entities": {
+                        "large": {"x": [0.0, 1.0]},
+                        "small": {"x": [0.0, 1.0]},
+                    },
                 },
             },
         }
     )
 
-    assert config.task.randomization == {}
-    assert config.task.randomization == {}
+    assert config.task.randomization.entities == {}
+    assert config.task.randomization.entities == {}
+
+
+def test_scope_defaults_inherited_and_strategy_resolved() -> None:
+    scope = RandomizationScopeConfig(
+        distribution=RandomizationDistributionConfig(
+            generator=RandomizationGeneratorKind.SOBOL,
+            spacing=0.05,
+        ),
+        constraints=RandomizationConstraintConfig(
+            separated={
+                "clearance": 0.02,
+                "strategy": "joint_rejection",
+            },
+            failure=RandomizationFailureConfig(max_attempts=7),
+        ),
+        entities={
+            # Bare range inherits scope distribution/constraints/failure.
+            "cup": {"x": [0.0, 1.0], "collision_radius": 0.05},
+            # Advanced spec is fully explicit; its own constraints/failure win.
+            "advanced": RandomizationSpec(
+                proposal=PoseRandomRange(x=(0.0, 1.0)),
+                distribution=RandomizationDistributionConfig(
+                    generator=RandomizationGeneratorKind.IID
+                ),
+                constraints=RandomizationConstraintConfig(
+                    visible_in={"cameras": "all"}
+                ),
+            ),
+            # Operator with a bare base range inherits scope defaults too.
+            "arm": OperatorRandomizationConfig(
+                base=PoseRandomRange(x=(0.0, 1.0)),
+                eef=None,
+            ),
+        },
+    )
+
+    resolved, strategy = resolve_randomization_scope(scope)
+    assert strategy == RandomizationStrategy.JOINT_REJECTION
+
+    cup = resolved["cup"]
+    assert isinstance(cup, RandomizationSpec)
+    assert cup.distribution.generator == RandomizationGeneratorKind.SOBOL
+    assert cup.distribution.spacing == 0.05
+    assert cup.constraints.separated is not None
+    assert cup.constraints.separated.clearance == 0.02
+    assert cup.constraints.failure.max_attempts == 7
+
+    advanced = resolved["advanced"]
+    assert isinstance(advanced, RandomizationSpec)
+    assert advanced.distribution.generator == RandomizationGeneratorKind.IID
+    assert advanced.constraints.visible_in is not None
+    assert advanced.constraints.separated is None
+    assert advanced.constraints.failure.max_attempts == 100
+
+    arm = resolved["arm"]
+    assert isinstance(arm, OperatorRandomizationConfig)
+    assert isinstance(arm.base, RandomizationSpec)
+    assert arm.base.distribution.spacing == 0.05
+    assert arm.base.constraints.separated is not None
+    assert arm.base.constraints.failure.max_attempts == 7
+
+
+def test_scope_rejects_conflicting_entity_separated_strategy() -> None:
+    scope = RandomizationScopeConfig(
+        constraints=RandomizationConstraintConfig(separated={"strategy": "rsa"}),
+        entities={
+            "cup": RandomizationSpec(
+                proposal=PoseRandomRange(x=(0.0, 1.0)),
+                constraints=RandomizationConstraintConfig(
+                    separated={"strategy": "joint_rejection"}
+                ),
+            ),
+        },
+    )
+    with pytest.raises(ValueError, match="one placement strategy"):
+        resolve_randomization_scope(scope)
 
 
 def test_halton_candidates_are_deterministic_and_bounded() -> None:
@@ -356,12 +439,14 @@ def test_canonical_generator_and_selector_are_validated() -> None:
             selector=RandomizationSelectorKind.MAXIMIN,
             candidate_count=8,
         ),
-        failure=RandomizationFailureConfig(
-            mode=RandomizationFailureMode.ERROR,
-            max_attempts=3,
+        constraints=RandomizationConstraintConfig(
+            failure=RandomizationFailureConfig(
+                mode=RandomizationFailureMode.ERROR,
+                max_attempts=3,
+            )
         ),
     )
-    assert spec.failure.max_attempts == 3
+    assert spec.constraints.failure.max_attempts == 3
     assert spec.distribution.selector == RandomizationSelectorKind.MAXIMIN
 
 

@@ -93,7 +93,7 @@ def prepare_task_config_for_instantiation(cfg: DictConfig) -> DictConfig:
     OmegaConf.update(prepared, "task_operators", {}, merge=False, force_add=True)
     _drop_owned_mapping_entries(
         prepared,
-        "task.randomization",
+        "task.randomization.entities",
         operator_names,
     )
     _drop_owned_mapping_entries(

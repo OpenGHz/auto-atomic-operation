@@ -26,16 +26,18 @@ def _load_task_file(overrides: list[str] | None = None):
 
 def main() -> None:
     task_file = _load_task_file()
-    task_file.task.randomization["arm"] = OperatorRandomizationConfig.model_validate(
-        {
-            "base": {
-                "x": [0.012, 0.012],
-                "y": [-0.007, -0.007],
-            },
-            "eef": {
-                "z": [0.02, 0.02],
-            },
-        }
+    task_file.task.randomization.entities["arm"] = (
+        OperatorRandomizationConfig.model_validate(
+            {
+                "base": {
+                    "x": [0.012, 0.012],
+                    "y": [-0.007, -0.007],
+                },
+                "eef": {
+                    "z": [0.02, 0.02],
+                },
+            }
+        )
     )
     runner = TaskRunner().from_config(task_file)
 
@@ -69,7 +71,7 @@ def main() -> None:
 
 def test_direct_operator_randomization_rejected() -> None:
     task_file = _load_task_file()
-    task_file.task.randomization["arm"] = PoseRandomRange.model_validate(
+    task_file.task.randomization.entities["arm"] = PoseRandomRange.model_validate(
         {
             "x": [0.01, 0.01],
             "y": [0.0, 0.0],
@@ -86,7 +88,7 @@ def test_direct_operator_randomization_rejected() -> None:
 
 def test_initial_poses_without_randomization() -> None:
     task_file = _load_task_file()
-    task_file.task.randomization = {}
+    task_file.task.randomization.entities = {}
     runner = TaskRunner().from_config(task_file)
 
     try:

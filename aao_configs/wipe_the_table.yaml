@@ -11,25 +11,26 @@ env:
 
 task:
   randomization:
-    arm:
-      eef:
-        x: [-0.3, 0.35]
-        y: [-0.32, 0.10]
-        z: [0.05, 0.1]
-        collision_radius: 0.15
-    blue_duck:
-      x: [0.2, 0.7]
-      y: [0.05, 0.30]
-      collision_radius: 0.04
-      reference: absolute_world
-    # chicken_doll:
-    #   x: [-0.01, 0.01]
-    #   y: [-0.01, 0.01]
-    #   collision_radius: 0.05
-    # transparent_tape_paper:
-    #   x: [-0.01, 0.01]
-    #   y: [-0.01, 0.01]
-    #   collision_radius: 0.05
+    entities:
+      arm:
+        eef:
+          x: [-0.3, 0.35]
+          y: [-0.32, 0.10]
+          z: [0.05, 0.1]
+          collision_radius: 0.15
+      blue_duck:
+        x: [0.2, 0.7]
+        y: [0.05, 0.30]
+        collision_radius: 0.04
+        reference: absolute_world
+      # chicken_doll:
+      #   x: [-0.01, 0.01]
+      #   y: [-0.01, 0.01]
+      #   collision_radius: 0.05
+      # transparent_tape_paper:
+      #   x: [-0.01, 0.01]
+      #   y: [-0.01, 0.01]
+      #   collision_radius: 0.05
   stages:
     # Stage 1: Pick blue duck
     # blue_duck col half-height=0.026, center z=0.12

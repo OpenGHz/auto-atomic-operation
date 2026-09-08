@@ -151,9 +151,11 @@ def test_object_only_hydra_preparation_removes_operator_owned_composition() -> N
             "task_operators": {"arm": {}, "second_arm": {}},
             "task": {
                 "randomization": {
-                    "arm": {"eef": {"x": [-0.1, 0.1]}},
-                    "second_arm": {"eef": {"x": [-0.1, 0.1]}},
-                    "item": {"x": [-0.01, 0.01]},
+                    "entities": {
+                        "arm": {"eef": {"x": [-0.1, 0.1]}},
+                        "second_arm": {"eef": {"x": [-0.1, 0.1]}},
+                        "item": {"x": [-0.01, 0.01]},
+                    }
                 },
                 "camera_randomization": {
                     "wrist_cam": {"x": [-0.1, 0.1]},
@@ -171,7 +173,7 @@ def test_object_only_hydra_preparation_removes_operator_owned_composition() -> N
     assert list(prepared.env.enabled_sensors) == ["camera"]
     assert prepared.env.operators == {}
     assert prepared.task_operators == {}
-    assert set(prepared.task.randomization) == {"item"}
+    assert set(prepared.task.randomization.entities) == {"item"}
     assert set(prepared.task.camera_randomization) == {"head_cam"}
     # The preparation boundary must not mutate Hydra's source tree.
     assert OmegaConf.to_container(raw, resolve=False) == original

@@ -51,11 +51,12 @@ env:
 
 task:
   randomization:
-    blue_duck:
-      x: [0.56, 0.64]
-      y: [0.1, 0.2]
-      collision_radius: 0.04
-      reference: absolute_world
+    entities:
+      blue_duck:
+        x: [0.56, 0.64]
+        y: [0.1, 0.2]
+        collision_radius: 0.04
+        reference: absolute_world
 
   stages:
     - name: pick_blue_duck

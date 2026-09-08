@@ -37,6 +37,7 @@ from ...framework import (
     RandomizationStrategy,
     canonical_randomization_spec,
     pose_randomization_regions,
+    resolve_randomization_scope,
 )
 from ...randomization import (
     PoissonDiskCandidateStream,
@@ -2447,7 +2448,7 @@ class MujocoTaskBackend(SceneBackend):
             order.extend(ready)
             remaining.difference_update(ready)
         configured_attempts = [
-            int(action_specs[label].randomization.failure.max_attempts)
+            int(action_specs[label].randomization.constraints.failure.max_attempts)
             for label in component
         ]
         max_attempts = (
@@ -2461,7 +2462,8 @@ class MujocoTaskBackend(SceneBackend):
             else (
                 "error"
                 if any(
-                    action_specs[label].randomization.failure.mode.value == "error"
+                    action_specs[label].randomization.constraints.failure.mode.value
+                    == "error"
                     for label in component
                 )
                 else "best_effort"
@@ -2686,7 +2688,7 @@ class MujocoTaskBackend(SceneBackend):
         ] = None
         action_specs = self._randomization_action_specs()
         configured_attempts = [
-            int(action_specs[label].randomization.failure.max_attempts)
+            int(action_specs[label].randomization.constraints.failure.max_attempts)
             for label in component
         ]
         attempt_budget = min(
@@ -2968,7 +2970,8 @@ class MujocoTaskBackend(SceneBackend):
             error_actions = [
                 action_specs[label]
                 for label in component
-                if action_specs[label].randomization.failure.mode.value == "error"
+                if action_specs[label].randomization.constraints.failure.mode.value
+                == "error"
             ]
             diagnostics = {
                 "labels": list(component),
@@ -4124,10 +4127,11 @@ def build_mujoco_backend(
         return False
 
     _rand_candidate_names: set = set()
-    for rand_name in config.randomization:
+    randomization_entities = config.randomization.entities
+    for rand_name in randomization_entities:
         if rand_name not in operator_handlers:
             _rand_candidate_names.add(rand_name)
-    for rand_range in config.randomization.values():
+    for rand_range in randomization_entities.values():
         refs: list = []
         if isinstance(rand_range, OperatorRandomizationConfig):
             if rand_range.base is not None:
@@ -4171,12 +4175,16 @@ def build_mujoco_backend(
             freejoint_name=freejoint_name,
         )
 
+    resolved_randomization, resolved_strategy = resolve_randomization_scope(
+        config.randomization
+    )
+
     backend = MujocoTaskBackend(
         env=env,
         operator_handlers=operator_handlers,
         object_handlers=object_handlers,
-        randomization=dict(config.randomization),
-        randomization_strategy=config.randomization_strategy,
+        randomization=resolved_randomization,
+        randomization_strategy=resolved_strategy,
         camera_randomization=dict(config.camera_randomization),
         initial_poses=dict(config.initial_pose),
         camera_initial_poses=dict(config.camera_initial_pose),

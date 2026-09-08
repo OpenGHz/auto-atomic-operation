@@ -24,10 +24,11 @@ env:
 
 task:
   randomization:
-    source_block:
-      x: [-0.03, 0.03]
-      y: [-0.03, 0.03]
-      collision_radius: 0.04
+    entities:
+      source_block:
+        x: [-0.03, 0.03]
+        y: [-0.03, 0.03]
+        collision_radius: 0.04
   stages:
     - name: pick_source
       object: source_block

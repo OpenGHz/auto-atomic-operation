@@ -55,11 +55,12 @@ env:
 
 task:
   randomization:
-    button_pink:
-      x: [0.49, 0.57]
-      y: [0.09, 0.16]
-      reference: absolute_world
-      collision_radius: 0.05
+    entities:
+      button_pink:
+        x: [0.49, 0.57]
+        y: [0.09, 0.16]
+        reference: absolute_world
+        collision_radius: 0.05
 
   stages:
     - name: press_pink_button

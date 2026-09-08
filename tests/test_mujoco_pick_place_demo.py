@@ -19,7 +19,7 @@ def test_franka_task_uses_stable_closed_loop_setup() -> None:
         cfg = compose(config_name="pick_and_place_franka")
 
     assert cfg.task_operators.arm.ik.joint_control_mode == "per_step_ik"
-    eef_randomization = cfg.task.randomization.arm.eef
+    eef_randomization = cfg.task.randomization.entities.arm.eef
     assert list(eef_randomization.x) == [0.0, 0.0]
     assert list(eef_randomization.y) == [0.0, 0.0]
     assert list(eef_randomization.z) == [0.0, 0.0]

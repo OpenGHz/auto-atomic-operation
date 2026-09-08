@@ -427,7 +427,7 @@ class DataReplayTaskFileConfig(TaskFileConfig):
     def _disable_object_randomization(self):
         # Clear object/operator randomization for exact trajectory reproduction.
         # camera_randomization is a separate AutoAtomConfig field and is preserved.
-        self.task.randomization.clear()
+        self.task.randomization.entities.clear()
         return self
 
 

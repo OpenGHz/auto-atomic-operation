@@ -59,18 +59,19 @@ env:
 
 task:
   randomization:
-    arm:
-      eef:
-        x: [ -0.0, 0.0 ]
-        y: [ -0.0, 0.0 ]
-        z: [ -0.0, 0.0 ]
-        collision_radius: 0.15
-      # eef:
-      #   x: null
-      #   y: null
-      #   z: null
-      #   collision_radius: 0.15
-      # base:
-      #   x: [-0.1, 0.1]
-      #   y: [-0.1, 0.1]
-      #   yaw: [-0.2, 0.2]
+    entities:
+      arm:
+        eef:
+          x: [ -0.0, 0.0 ]
+          y: [ -0.0, 0.0 ]
+          z: [ -0.0, 0.0 ]
+          collision_radius: 0.15
+        # eef:
+        #   x: null
+        #   y: null
+        #   z: null
+        #   collision_radius: 0.15
+        # base:
+        #   x: [-0.1, 0.1]
+        #   y: [-0.1, 0.1]
+        #   yaw: [-0.2, 0.2]

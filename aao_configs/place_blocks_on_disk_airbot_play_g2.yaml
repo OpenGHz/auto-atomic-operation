@@ -96,67 +96,68 @@ task:
       position: [0.40, 0.08, 0.2325]
       orientation: [0.0, 0.0, 0.70710678, 0.70710678]
   randomization:
-    # The disk is a collision-rejection participant, not a randomized target.
-    # 0.11 m disk radius + 0.02 m cube radius keeps every spawned cube at
-    # least 2 cm outside the physical tray edge.
-    disk:
-      collision_radius: 0.11
-    cube_blue:
-      x: [-0.012, 0.012]
-      y: [-0.012, 0.012]
-      yaw: [-0.1745, 0.1745]
-      collision_radius: 0.02
-    cube_orange:
-      x: [-0.012, 0.012]
-      y: [-0.012, 0.012]
-      yaw: [-0.1745, 0.1745]
-      collision_radius: 0.02
-    cube_yellow:
-      x: [-0.012, 0.012]
-      y: [-0.012, 0.012]
-      yaw: [-0.1745, 0.1745]
-      collision_radius: 0.02
-    cube_blue_2:
-      x: [-0.012, 0.012]
-      y: [-0.012, 0.012]
-      yaw: [-0.1745, 0.1745]
-      collision_radius: 0.02
-    cube_yellow_2:
-      x: [-0.012, 0.012]
-      y: [-0.012, 0.012]
-      yaw: [-0.1745, 0.1745]
-      collision_radius: 0.02
-    cube_orange_2:
-      x: [-0.012, 0.012]
-      y: [-0.012, 0.012]
-      yaw: [-0.1745, 0.1745]
-      collision_radius: 0.02
-    cube_blue_3:
-      x: [-0.012, 0.012]
-      y: [-0.012, 0.012]
-      yaw: [-0.1745, 0.1745]
-      collision_radius: 0.02
-    cube_yellow_3:
-      x: [-0.012, 0.012]
-      y: [-0.012, 0.012]
-      yaw: [-0.1745, 0.1745]
-      collision_radius: 0.02
-    cube_orange_3:
-      x: [-0.012, 0.012]
-      y: [-0.012, 0.012]
-      yaw: [-0.1745, 0.1745]
-      collision_radius: 0.02
-    cube_blue_4:
-      x: [-0.012, 0.012]
-      y: [-0.012, 0.012]
-      yaw: [-0.1745, 0.1745]
-      collision_radius: 0.02
-    # Override the broad inherited EEF jitter: it conflicts with collision
-    # rejection at the cube. Camera, object, visual, and dynamics variation
-    # below provide the sim-to-real coverage for this task.
-    arm:
-      eef:
-        collision_radius: 0.0
+    entities:
+      # The disk is a collision-rejection participant, not a randomized target.
+      # 0.11 m disk radius + 0.02 m cube radius keeps every spawned cube at
+      # least 2 cm outside the physical tray edge.
+      disk:
+        collision_radius: 0.11
+      cube_blue:
+        x: [-0.012, 0.012]
+        y: [-0.012, 0.012]
+        yaw: [-0.1745, 0.1745]
+        collision_radius: 0.02
+      cube_orange:
+        x: [-0.012, 0.012]
+        y: [-0.012, 0.012]
+        yaw: [-0.1745, 0.1745]
+        collision_radius: 0.02
+      cube_yellow:
+        x: [-0.012, 0.012]
+        y: [-0.012, 0.012]
+        yaw: [-0.1745, 0.1745]
+        collision_radius: 0.02
+      cube_blue_2:
+        x: [-0.012, 0.012]
+        y: [-0.012, 0.012]
+        yaw: [-0.1745, 0.1745]
+        collision_radius: 0.02
+      cube_yellow_2:
+        x: [-0.012, 0.012]
+        y: [-0.012, 0.012]
+        yaw: [-0.1745, 0.1745]
+        collision_radius: 0.02
+      cube_orange_2:
+        x: [-0.012, 0.012]
+        y: [-0.012, 0.012]
+        yaw: [-0.1745, 0.1745]
+        collision_radius: 0.02
+      cube_blue_3:
+        x: [-0.012, 0.012]
+        y: [-0.012, 0.012]
+        yaw: [-0.1745, 0.1745]
+        collision_radius: 0.02
+      cube_yellow_3:
+        x: [-0.012, 0.012]
+        y: [-0.012, 0.012]
+        yaw: [-0.1745, 0.1745]
+        collision_radius: 0.02
+      cube_orange_3:
+        x: [-0.012, 0.012]
+        y: [-0.012, 0.012]
+        yaw: [-0.1745, 0.1745]
+        collision_radius: 0.02
+      cube_blue_4:
+        x: [-0.012, 0.012]
+        y: [-0.012, 0.012]
+        yaw: [-0.1745, 0.1745]
+        collision_radius: 0.02
+      # Override the broad inherited EEF jitter: it conflicts with collision
+      # rejection at the cube. Camera, object, visual, and dynamics variation
+      # below provide the sim-to-real coverage for this task.
+      arm:
+        eef:
+          collision_radius: 0.0
   camera_randomization:
     env1_cam:
       x: [-0.015, 0.015]

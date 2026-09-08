@@ -43,6 +43,7 @@ from .framework import (
     RandomizationInput,
     RandomizationPoissonDiskConfig,
     RandomizationReference,
+    RandomizationScopeConfig,
     RandomizationSelectorKind,
     RandomizationSeparationConfig,
     RandomizationSpec,
@@ -57,6 +58,7 @@ from .framework import (
     TaskKeypointConfig,
     TaskPhase,
     UpdateBoundary,
+    resolve_randomization_scope,
 )
 from .mock import MockOperatorHandler, MockSceneBackend
 from .policy_eval import ConfigDrivenDemoPolicy, PolicyEvaluator

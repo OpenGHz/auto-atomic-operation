@@ -796,6 +796,15 @@ class RandomizationSeparationConfig(BaseModel, frozen=True):
 
     model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid")
 
+    strategy: RandomizationStrategy = RandomizationStrategy.RSA
+    """Placement strategy used to satisfy inter-entity separation.
+
+    ``rsa`` places members sequentially and keeps accepted members fixed;
+    ``joint_rejection`` samples the whole component together and rejects it on
+    any failure. Strategy is a property of the separation/acceptance mechanism,
+    not of ``visible_in`` (which never retries across members).
+    """
+
     scope: Literal["randomized", "scene"] = "randomized"
     """Check only randomized participants or all backend-supported scene geometry."""
 
@@ -812,8 +821,31 @@ class RandomizationSeparationConfig(BaseModel, frozen=True):
     """Use center distances or backend support geometry."""
 
 
+class RandomizationFailureConfig(BaseModel, frozen=True):
+    """Failure policy and budget for constrained randomization.
+
+    ``failure`` governs the feasibility/acceptance loop: what happens when no
+    candidate satisfies the collision/separation or visibility requirements
+    within ``max_attempts``. It therefore lives under ``constraints``.
+    """
+
+    model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid")
+
+    mode: RandomizationFailureMode = RandomizationFailureMode.ERROR
+    """Fail closed or apply a best-effort candidate with a diagnostic."""
+
+    max_attempts: PositiveInt = 100
+    """Maximum candidate attempts before applying the failure policy."""
+
+
 class RandomizationConstraintConfig(BaseModel, frozen=True):
-    """Optional hard constraints applied to sampled pose candidates."""
+    """Hard constraints applied to sampled pose candidates.
+
+    A constraint set carries the optional visibility / separation requirements
+    plus the ``failure`` policy for the feasibility loop that tries to satisfy
+    them (including the always-on bounding-sphere separation between randomized
+    participants).
+    """
 
     model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid")
 
@@ -821,7 +853,15 @@ class RandomizationConstraintConfig(BaseModel, frozen=True):
     """Require the target entity to remain inside the selected camera views."""
 
     separated: Optional[RandomizationSeparationConfig] = None
-    """Require clearance from other randomized entities or the scene."""
+    """Require clearance from other randomized entities or the scene.
+
+    ``separated.strategy`` selects the placement/retry policy used to satisfy
+    inter-entity separation. This constraint (not ``visible_in``) owns
+    ``strategy`` because strategy only affects member-vs-member placement.
+    """
+
+    failure: RandomizationFailureConfig = RandomizationFailureConfig()
+    """Behavior when the constrained proposal is infeasible or exhausted."""
 
 
 class RandomizationDistributionConfig(BaseModel, frozen=True):
@@ -848,18 +888,6 @@ class RandomizationDistributionConfig(BaseModel, frozen=True):
     over the proposal volume and across resets). It is not a clearance and does
     not participate in collision or separation checks.
     """
-
-
-class RandomizationFailureConfig(BaseModel, frozen=True):
-    """Failure policy and budget for constrained randomization."""
-
-    model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid")
-
-    mode: RandomizationFailureMode = RandomizationFailureMode.ERROR
-    """Fail closed or apply a best-effort candidate with a diagnostic."""
-
-    max_attempts: PositiveInt = 100
-    """Maximum candidate attempts before applying the failure policy."""
 
 
 class RandomizationGroupGeneratorKind(str, Enum):
@@ -919,10 +947,12 @@ class RandomizationSpec(BaseModel, frozen=True):
     """Distribution objective for accepted candidates."""
 
     constraints: RandomizationConstraintConfig = RandomizationConstraintConfig()
-    """Visibility and separation constraints evaluated by the backend."""
+    """Visibility, separation, and failure policy evaluated by the backend.
 
-    failure: RandomizationFailureConfig = RandomizationFailureConfig()
-    """Behavior when the constrained proposal is infeasible or exhausted."""
+    ``failure`` lives under ``constraints`` because it governs the feasibility
+    loop that tries to satisfy the collision/separation and visibility
+    requirements within the retry budget.
+    """
 
 
 RandomizationInput = Union[PoseRandomizationSpec, RandomizationSpec]
@@ -935,11 +965,11 @@ def canonical_randomization_spec(spec: RandomizationInput) -> RandomizationSpec:
         return spec
     # Preserve the historical equal-probability region mixture for legacy
     # ``PoseRandomizationConfig`` values. New canonical specs default to
-    # proposal-volume weighting for uniform-feasible sampling.
+    # proposal-volume weighting for uniform-feasible sampling. Failure policy
+    # uses the new fail-closed semantics (``error``) via ``constraints``.
     return RandomizationSpec(
         proposal=spec,
         distribution=RandomizationDistributionConfig(region_weighting="equal"),
-        failure=RandomizationFailureConfig(mode=RandomizationFailureMode.BEST_EFFORT),
     )
 
 
@@ -1250,6 +1280,119 @@ class OperatorRandomizationConfig(BaseModel):
     """Optional single- or multi-region randomization for the end effector."""
 
 
+class RandomizationScopeConfig(BaseModel):
+    """Container for global randomization defaults and per-entity entries.
+
+    This is the value of ``task.randomization``. It groups three orthogonal
+    concerns:
+
+    * ``distribution`` — the global default candidate-generation settings.
+      Bare entity ranges that do not configure their own ``distribution``
+      inherit this default.
+    * ``constraints`` — the global default feasibility settings (visibility,
+      separation, failure policy, and the placement ``separated.strategy``).
+      Bare entity ranges inherit this default.
+    * ``entities`` — the per-entity entries (objects, or operators with
+      ``base`` / ``eef``). Advanced ``RandomizationSpec`` entries are fully
+      explicit and override the scope defaults entirely.
+    """
+
+    model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid")
+
+    distribution: RandomizationDistributionConfig = RandomizationDistributionConfig()
+    """Global default distribution inherited by bare entity ranges."""
+
+    constraints: RandomizationConstraintConfig = RandomizationConstraintConfig()
+    """Global default constraints (visible_in / separated / failure) inherited
+    by bare entity ranges, including the placement strategy."""
+
+    entities: Dict[
+        str,
+        Union[RandomizationInput, OperatorRandomizationConfig],
+    ] = Field(default_factory=dict)
+    """Per-entity randomization entries."""
+
+
+def _scope_apply_defaults(
+    value: RandomizationInput,
+    scope: RandomizationScopeConfig,
+    *,
+    name: str,
+    strategy: RandomizationStrategy,
+) -> RandomizationInput:
+    """Give a bare proposal the scope's defaults, or validate an advanced spec.
+
+    Legacy ``PoseRandomRange`` / ``PoseRandomizationConfig`` inputs carry no
+    distribution/constraints of their own and therefore inherit the scope-wide
+    defaults. An advanced ``RandomizationSpec`` is fully explicit; its declared
+    ``separated.strategy`` must agree with the effective scope strategy because
+    the backend applies one placement strategy per plan.
+    """
+    if isinstance(value, RandomizationSpec):
+        declared = (
+            value.constraints.separated.strategy
+            if value.constraints.separated is not None
+            else None
+        )
+        if declared is not None and declared != strategy:
+            raise ValueError(
+                f"Randomization '{name}' declares "
+                f"constraints.separated.strategy={declared.value!r} which differs "
+                f"from the scope strategy {strategy.value!r}. The backend applies "
+                "one placement strategy per randomization plan."
+            )
+        return value
+    return RandomizationSpec(
+        proposal=value,
+        distribution=scope.distribution,
+        constraints=scope.constraints,
+    )
+
+
+def resolve_randomization_scope(
+    scope: RandomizationScopeConfig,
+) -> Tuple[
+    Dict[str, Union[RandomizationInput, OperatorRandomizationConfig]],
+    RandomizationStrategy,
+]:
+    """Expand a randomization scope into per-entity entries plus the strategy.
+
+    Bare object ranges and bare operator ``base`` / ``eef`` ranges inherit the
+    scope-wide ``distribution`` and ``constraints`` defaults (three-level
+    fallback: entity explicit > scope default > built-in default). The returned
+    mapping is consumed by :func:`compile_randomization_plan` and the backends.
+    """
+    strategy = (
+        scope.constraints.separated.strategy
+        if scope.constraints.separated is not None
+        else RandomizationStrategy.RSA
+    )
+    resolved: Dict[str, Union[RandomizationInput, OperatorRandomizationConfig]] = {}
+    for name, value in scope.entities.items():
+        if isinstance(value, OperatorRandomizationConfig):
+            resolved[name] = OperatorRandomizationConfig(
+                base=(
+                    _scope_apply_defaults(
+                        value.base, scope, name=name, strategy=strategy
+                    )
+                    if value.base is not None
+                    else None
+                ),
+                eef=(
+                    _scope_apply_defaults(
+                        value.eef, scope, name=name, strategy=strategy
+                    )
+                    if value.eef is not None
+                    else None
+                ),
+            )
+            continue
+        resolved[name] = _scope_apply_defaults(
+            value, scope, name=name, strategy=strategy
+        )
+    return resolved, strategy
+
+
 class PoseAxisConfig(BaseModel, frozen=True):
     """One absolute pose component with an optional reference override."""
 
@@ -1501,22 +1644,21 @@ class AutoAtomConfig(BaseModel):
     """Per-object initial pose overrides applied after the backend reset and
     before randomization. Keys are logical object names exposed by the selected
     backend."""
-    randomization: Dict[
-        str,
-        Union[RandomizationInput, OperatorRandomizationConfig],
-    ] = {}
-    """Per-entity pose randomization applied at each reset.
+    randomization: RandomizationScopeConfig = Field(
+        default_factory=RandomizationScopeConfig
+    )
+    """Global randomization scope applied at each reset.
 
-    Objects accept either a direct ``PoseRandomRange`` or a
-    ``PoseRandomizationConfig`` containing one or more disjoint regions.
+    The scope groups the global default ``distribution`` / ``constraints`` and
+    the per-entity ``entities`` map. Objects accept either a direct
+    ``PoseRandomRange`` or an advanced ``RandomizationSpec``. Operators use
+    ``OperatorRandomizationConfig`` with explicit ``base`` and/or ``eef``
+    sub-entries.
 
-    Operators must use ``OperatorRandomizationConfig`` with explicit
-    ``base`` and/or ``eef`` sub-entries. Each sub-entry accepts either form.
-    The direct ``PoseRandomRange`` shorthand is rejected at sample time for
-    operator entries.
+    Bare entity ranges inherit the scope-wide ``distribution`` and
+    ``constraints`` defaults; advanced specs are fully explicit. The placement
+    strategy lives in ``constraints.separated.strategy``.
     """
-    randomization_strategy: RandomizationStrategy = RandomizationStrategy.RSA
-    """Placement strategy shared by all automatically compiled randomization components."""
     camera_initial_pose: Dict[str, PoseOverrideConfig] = Field(default_factory=dict)
     """Per-camera initial pose overrides applied at each reset, before
     camera randomization records its defaults.

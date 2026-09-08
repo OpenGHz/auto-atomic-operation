@@ -17,18 +17,19 @@ env:
 
 task:
   randomization:
-    button_blue:
-      x: [-0.01, 0.01]
-      y: [-0.01, 0.01]
-      collision_radius: 0.05
-    button_green:
-      x: [-0.01, 0.01]
-      y: [-0.01, 0.01]
-      collision_radius: 0.05
-    button_pink:
-      x: [-0.01, 0.01]
-      y: [-0.01, 0.01]
-      collision_radius: 0.05
+    entities:
+      button_blue:
+        x: [-0.01, 0.01]
+        y: [-0.01, 0.01]
+        collision_radius: 0.05
+      button_green:
+        x: [-0.01, 0.01]
+        y: [-0.01, 0.01]
+        collision_radius: 0.05
+      button_pink:
+        x: [-0.01, 0.01]
+        y: [-0.01, 0.01]
+        collision_radius: 0.05
   stages:
     # Stage 1: Press blue button
     # button_blue center z=0.08, cylinder top z=0.10

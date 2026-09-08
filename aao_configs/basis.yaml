@@ -71,12 +71,13 @@ task:
   env_name: ${task_name}
   seed: 42
   randomization:
-    arm:
-      eef:
-        x: [-0.3, 0.35]
-        y: [-0.32, 0.10]
-        z: [-0.0, 0.2]
-        collision_radius: 0.15
+    entities:
+      arm:
+        eef:
+          x: [-0.3, 0.35]
+          y: [-0.32, 0.10]
+          z: [-0.0, 0.2]
+          collision_radius: 0.15
   # camera_randomization:
   #   env0_cam:
   #     reference: absolute_world
