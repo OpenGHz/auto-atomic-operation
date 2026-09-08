@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from types import SimpleNamespace
 from typing import Dict, Iterable, Optional
 
 import numpy as np
@@ -1644,3 +1645,118 @@ def test_operator_base_and_eef_select_regions_independently() -> None:
         handler.get_end_effector_pose().position[0],
         [1.6, 2.0, 0.4],
     )
+
+
+def _fake_visible_camera(
+    pos: tuple[float, float, float] = (0.0, 0.0, 0.0),
+    *,
+    near: float = 0.1,
+    far: float = 10.0,
+) -> SimpleNamespace:
+    """Identity-looking camera: x right, y up, forward along -z."""
+    return SimpleNamespace(
+        pose=PoseState(
+            position=np.asarray([list(pos)], dtype=np.float64),
+            orientation=np.asarray([[0.0, 0.0, 0.0, 1.0]], dtype=np.float64),
+        ),
+        width=640,
+        height=480,
+        fovy_radians=float(np.radians(60.0)),
+        near=near,
+        far=far,
+    )
+
+
+def test_camera_frustum_disjoint_box_geometry() -> None:
+    disjoint = MujocoTaskBackend._camera_frustum_disjoint_box
+    # A box squarely in front of the camera is not disjoint.
+    assert not disjoint(
+        _fake_visible_camera((0.0, 0.0, 0.0)),
+        np.asarray([-0.1, -0.1, -2.1]),
+        np.asarray([0.1, 0.1, -1.9]),
+    )
+    # Behind the near plane (z_cam > -near).
+    assert disjoint(
+        _fake_visible_camera((0.0, 0.0, 0.0)),
+        np.asarray([-0.1, -0.1, 0.4]),
+        np.asarray([0.1, 0.1, 0.6]),
+    )
+    # Beyond the far plane.
+    assert disjoint(
+        _fake_visible_camera((0.0, 0.0, 0.0)),
+        np.asarray([-0.1, -0.1, -12.0]),
+        np.asarray([0.1, 0.1, -11.0]),
+    )
+    # Wholly to the right / left of the horizontal FOV.
+    assert disjoint(
+        _fake_visible_camera((0.0, 0.0, 0.0)),
+        np.asarray([2.0, -0.1, -2.1]),
+        np.asarray([2.2, 0.1, -1.9]),
+    )
+    assert disjoint(
+        _fake_visible_camera((0.0, 0.0, 0.0)),
+        np.asarray([-2.2, -0.1, -2.1]),
+        np.asarray([-2.0, 0.1, -1.9]),
+    )
+
+
+def _visible_in_backend(
+    monkeypatch,
+    camera_pos: tuple[float, float, float],
+) -> MujocoTaskBackend:
+    backend = _make_backend(
+        randomization={
+            "vase": RandomizationSpec(
+                proposal=PoseRandomRange(
+                    reference=RandomizationReference.ABSOLUTE_WORLD,
+                    x=(0.0, 0.1),
+                    y=(-0.1, 0.1),
+                    collision_radius=0.05,
+                ),
+                distribution=RandomizationDistributionConfig(),
+                constraints=RandomizationConstraintConfig(
+                    visible_in={"cameras": ["camera"], "geometry": "center"},
+                ),
+            ),
+        },
+        object_positions={"vase": (0.0, 0.0, 0.0)},
+    )
+    monkeypatch.setattr(
+        backend,
+        "get_camera_model",
+        lambda camera_name, env_index=0: _fake_visible_camera(camera_pos),
+    )
+    return backend
+
+
+def test_visible_in_empty_intersection_fails_fast_before_attempts(
+    monkeypatch,
+) -> None:
+    # The camera looks from (0, 0, -2) along -z; the vase's absolute box sits
+    # around z = 0, i.e. entirely behind the camera → deterministic infeasible.
+    backend = _visible_in_backend(monkeypatch, camera_pos=(0.0, 0.0, -2.0))
+    with pytest.raises(RandomizationFailureError) as excinfo:
+        backend._preflight_deterministic_visibility_infeasibility(
+            backend._randomization_action_specs(),
+            np.asarray([True], dtype=bool),
+        )
+    assert excinfo.value.target == "vase"
+    assert excinfo.value.attempts == 0
+    assert excinfo.value.violations == ("vase:outside_view:camera",)
+
+    diagnostics = backend.get_randomization_diagnostics(0)
+    assert diagnostics["attempts"][-1]["attempts"] == 0
+    assert diagnostics["attempts"][-1]["violations"] == ["vase:outside_view:camera"]
+
+
+def test_visible_in_intersecting_region_skips_deterministic_short_circuit(
+    monkeypatch,
+) -> None:
+    # Camera at (0, 0, 2) sees the vase's world box around z = 0 → no empty
+    # intersection, so the pre-flight passes without raising.
+    backend = _visible_in_backend(monkeypatch, camera_pos=(0.0, 0.0, 2.0))
+    backend._preflight_deterministic_visibility_infeasibility(
+        backend._randomization_action_specs(),
+        np.asarray([True], dtype=bool),
+    )
+    assert backend.get_randomization_diagnostics(0) == {}
