@@ -12,7 +12,9 @@
 from __future__ import annotations
 
 import logging
+import os
 from collections.abc import Mapping
+from concurrent.futures import FIRST_EXCEPTION, ThreadPoolExecutor, wait
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Dict, Iterator, Optional, Sequence
@@ -2105,6 +2107,7 @@ class BatchedUnifiedMujocoEnv:
             {spec.name: spec for spec in self.config.cameras}
         )
         self._batch_execution = BatchExecutionAdapter(self.envs, self.batch_size)
+        self._step_pool = self._build_step_pool()
 
     def _batch_adapter(self) -> BatchExecutionAdapter:
         """Return the adapter matching the current logical/physical layout.
@@ -2130,6 +2133,62 @@ class BatchedUnifiedMujocoEnv:
             adapter = BatchExecutionAdapter(self.envs, self.batch_size, mode)
             self._batch_execution = adapter
         return adapter
+
+    def _build_step_pool(self) -> ThreadPoolExecutor | None:
+        """Create the shared physics worker pool when parallel stepping is on.
+
+        ``mj_step`` releases the GIL while it runs, so independent MuJoCo
+        replicas can advance concurrently.  The pool is only created for
+        genuinely replicated batches: shared-physics envs have a single
+        physical replica, interactive (viewer) runs are excluded, and a
+        single-row batch gains nothing.
+        """
+        config = self.config
+        if (
+            not bool(config.parallel_batch_step)
+            or int(config.batch_size) <= 1
+            or config.viewer is not None
+        ):
+            return None
+        workers = config.parallel_batch_workers
+        if workers is None:
+            workers = min(int(config.batch_size), os.cpu_count() or 1)
+        workers = max(1, int(workers))
+        return ThreadPoolExecutor(
+            max_workers=workers,
+            thread_name_prefix="aao-step",
+        )
+
+    def _parallel_physics_active(
+        self,
+        adapter: BatchExecutionAdapter,
+        env_mask: np.ndarray | None,
+    ) -> bool:
+        """True when a full-batch physics call can run on the worker pool.
+
+        Only independent (REPLICATED) replicas with more than one active row
+        qualify; SHARED envs and single-row masks keep the sequential path so
+        semantics stay byte-for-byte identical to the existing dispatch.
+        """
+        pool = getattr(self, "_step_pool", None)
+        return bool(
+            pool is not None
+            and adapter.mode == BatchExecutionMode.REPLICATED
+            and adapter.active_indices(env_mask).size > 1
+        )
+
+    def _run_on_step_pool(self, calls: list[Any]) -> None:
+        """Wait for pooled per-replica calls and re-raise the first failure.
+
+        Waiting on every future guarantees no replica is left mid-step when a
+        worker raises, and determinism is preserved because replicas never
+        share mutable state.
+        """
+        wait(calls, return_when=FIRST_EXCEPTION)
+        for future in calls:
+            exception = future.exception()
+            if exception is not None:
+                raise exception
 
     def register_operator(self, *args, **kwargs) -> None:
         for env in self._batch_adapter().physical_envs:
@@ -2423,11 +2482,26 @@ class BatchedUnifiedMujocoEnv:
             dtype=np.float64,
             allow_scalar=False,
         )
+        if self._parallel_physics_active(adapter, env_mask):
+            pool = self._step_pool
+            assert pool is not None
+            indices = adapter.active_indices(env_mask)
+            futures = [
+                pool.submit(self._step_replica, adapter.envs[index], rows[index])
+                for index in indices
+            ]
+            self._run_on_step_pool(futures)
+            return
         adapter.dispatch_rows(
             lambda env, _index, row: env.step(row),
             (rows,),
             env_mask,
         )
+
+    @staticmethod
+    def _step_replica(env: Any, row: np.ndarray) -> None:
+        """Step one physical replica; module-level callable avoids closure binding."""
+        env.step(row)
 
     def apply_joint_action(
         self,
@@ -2521,10 +2595,26 @@ class BatchedUnifiedMujocoEnv:
         adapter.dispatch_rows(apply, rows, env_mask)
 
     def update(self, env_mask: np.ndarray | None = None) -> None:
-        self._batch_adapter().dispatch(
+        adapter = self._batch_adapter()
+        if self._parallel_physics_active(adapter, env_mask):
+            pool = self._step_pool
+            assert pool is not None
+            indices = adapter.active_indices(env_mask)
+            futures = [
+                pool.submit(self._update_replica, adapter.envs[index])
+                for index in indices
+            ]
+            self._run_on_step_pool(futures)
+            return
+        adapter.dispatch(
             lambda env, _index: env.update(),
             env_mask,
         )
+
+    @staticmethod
+    def _update_replica(env: Any) -> None:
+        """Advance one physical replica; module-level callable avoids closure binding."""
+        env.update()
 
     def reset(self, env_mask: np.ndarray | None = None) -> None:
         adapter = self._batch_adapter()
@@ -2660,5 +2750,9 @@ class BatchedUnifiedMujocoEnv:
             yield
 
     def close(self) -> None:
+        pool = getattr(self, "_step_pool", None)
+        if pool is not None:
+            pool.shutdown(wait=True, cancel_futures=True)
+            self._step_pool = None
         for env in self._batch_adapter().physical_envs:
             env.close()

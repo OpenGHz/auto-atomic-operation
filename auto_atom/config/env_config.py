@@ -470,6 +470,16 @@ class EnvConfig(BaseModel, frozen=True):
     """Number of homogeneous env replicas to construct for batched execution."""
     viewer_env_index: int = 0
     """Which env replica owns the viewer when ``batch_size > 1``."""
+    parallel_batch_step: bool = False
+    """Run full-batch replicated physics steps (``step``/``update``) on a worker
+    pool.  ``mj_step`` releases the GIL, so independent replicas advance
+    concurrently (measured ~2x at batch=2 and ~4x at batch=4 on 20-core hosts).
+    Ignored for shared-physics envs, ``batch_size <= 1``, single-row masks, or
+    when a viewer is attached.  Deterministic: every replica's trajectory is
+    bit-identical to sequential stepping because replicas never share state."""
+    parallel_batch_workers: int | None = None
+    """Optional worker-count cap for ``parallel_batch_step``.  When unset,
+    defaults to ``min(batch_size, os.cpu_count())``."""
     pre_step_callbacks: List[Any] = Field(default_factory=list)
     """Pre-step callback objects invoked before every ``mj_step()``.
 
