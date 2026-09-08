@@ -43,7 +43,7 @@ stages:
 - `rotation`: 可选的 rpy Euler 角（extrinsic XYZ, 即 `axes="sxyz"`），与 `orientation` 二选一
 - 四元数本身没有内旋/外旋之分，它直接编码旋转矩阵
 
-**文件**: `auto_atom/framework.py` — `PoseControlConfig`
+**文件**: `auto_atom/config/motion.py` — `PoseControlConfig`
 
 ## 2. 朝向解析
 

@@ -181,10 +181,13 @@ task:
 ## 实施轮次（每轮独立提交）
 
 - R1：本文档（钉死方案）。
-- R2：`framework.py` schema 重构 —— 容器（`distribution` / `constraints` /
-  `entities`）、`min_distance`→`spacing`、`separated.min_distance`→`clearance`、
+- R2：schema 重构 —— 容器（`distribution` / `constraints` / `entities`）、
+  `min_distance`→`spacing`、`separated.min_distance`→`clearance`、
   `separated.strategy`、删 `randomization_strategy`、三级回落。
-- R3：后端读取与逐组件策略分发（`mujoco_backend.py` / `mujoco_basis.py`）。
+  （注：原 `framework.py` 已拆分为 `auto_atom/config/` 子包，schema 类按域
+  分布于 `config/randomization.py` / `config/motion.py` / `config/task.py` 等。）
+- R3：后端读取与逐组件策略分发（`mujoco_backend.py` / `mujoco_basis.py`；
+  后端无关契约在 `auto_atom/contracts.py`）。
 - R4：重写 `docs/task-configuration/randomization.md`。
 - R5：测试迁移与新增（结构解析、改名键、覆盖回落、visible_in 空交集诊断、
   逐组件策略），用受限 runner 跑通。

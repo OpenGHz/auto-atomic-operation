@@ -146,7 +146,7 @@ Stage grasp_and_open (operation=push, object=handle_body_phys)
 | 安全停止 | 数值、关节限位、环境碰撞、非法指接触、hub contact policy 均可进入失败路径；push 当前为 `immediate_failure` | 通用 handler 有 IK timeout、接触/夹爪检查，但当前 Stage 没有把门机构安全事件和力阈值纳入成功契约 |
 | 时间步 | 配置 `sim_dt=0.001`、`control_decimation=10`、solver iterations=30，控制频率约 100 Hz | `sim_freq=1000`、`update_freq=100`，运行时把 timestep 设为 0.001、每次 update 做 10 个物理子步；源 `demo.xml` 仍声明 `iterations=5` | 名义控制 cadence 接近，但 solver/接触参数和场景 XML 不同，不能据此认为动力学等价 |
 
-证据：Praxis `configs/open_room_door_push.yaml:21-27,87-107,165-217`、`configs/profiles/tasks/unidoor_lever_55x47_right_push_p7_staged.yaml:18-24`、`src/praxis/backends/unilab.py:836-1057,1059-1471`；AAO `aao_configs/open_door_p7_v3_umi_v3.yaml:29-104`、`auto_atom/basis/mjc/mujoco_basis.py:349-369`。
+证据：Praxis `configs/open_room_door_push.yaml:21-27,87-107,165-217`、`configs/profiles/tasks/unidoor_lever_55x47_right_push_p7_staged.yaml:18-24`、`src/praxis/backends/unilab.py:836-1057,1059-1471`；AAO `aao_configs/open_door_p7_v3_umi_v3.yaml:29-104`、`auto_atom/config/env_config.py`（`OperatorBinding`/`EnvConfig`）。
 
 ### 4.3 成功判定与失败语义
 
@@ -177,7 +177,7 @@ latch release < clearance <= target < settle_end
 - 条件在所有 primitive 完成后的 Stage 末尾检查，不是“把手移动 1 cm 就立即结束”；
 - 没有显式门角目标、解锁→clearance 顺序、settle hold、rebound gate、计划松爪或回 home 检查。
 
-因此 AAO 的“成功”更准确地说是“配置动作执行完且把手物体发生了足够位移”，不是“门按指定机构事件完整打开”。证据：`auto_atom/framework.py:38-43,94-100`、`auto_atom/stage_execution.py:470-491,802-843`、`auto_atom/runtime.py:624-641`。
+因此 AAO 的“成功”更准确地说是“配置动作执行完且把手物体发生了足够位移”，不是“门按指定机构事件完整打开”。证据：`auto_atom/config/operations.py`（`Operation`/`OPERATION_CONDITIONS`）、`auto_atom/stage_execution.py`（`check_stage_condition`）、`auto_atom/runtime.py`（`TaskRunner._run_stage_action`）。
 
 ### 4.4 传感器、记录与闭环 policy
 
@@ -296,6 +296,6 @@ Praxis 数字证据见 `third_party/praxis/docs/STATUS.md:66-98`。历史 M1/30�
 ## 8. 主要证据索引
 
 - AAO 任务与基础配置：`aao_configs/open_door_p7_v3_umi_v3.yaml`、`aao_configs/basis_p7_v3_umi_v3.yaml`、`aao_configs/common_vars.yaml`。
-- AAO 执行与判定：`auto_atom/runtime.py`、`auto_atom/stage_execution.py`、`auto_atom/framework.py`、`auto_atom/callbacks/door_latch.py`、`auto_atom/backend/mjc/mujoco_backend.py`。
+- AAO 执行与判定：`auto_atom/runtime.py`、`auto_atom/contracts.py`、`auto_atom/stage_execution.py`、`auto_atom/config/operations.py`、`auto_atom/config/motion.py`、`auto_atom/callbacks/door_latch.py`、`auto_atom/backend/mjc/mujoco_backend.py`。
 - Praxis 当前入口与状态：`third_party/praxis/configs/unidoor_lever_right_push_p7_staged.yaml`、`third_party/praxis/configs/profiles/tasks/unidoor_lever_55x47_right_push_p7_staged.yaml`、`third_party/praxis/docs/STATUS.md`、`third_party/praxis/docs/PLAN.md`。
 - Praxis 执行与验证：`third_party/praxis/src/praxis/state_machine.py`、`third_party/praxis/src/praxis/verification.py`、`third_party/praxis/src/praxis/backends/unilab.py`、`third_party/praxis/src/praxis/recording.py`。

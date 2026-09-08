@@ -66,7 +66,7 @@ task_operators:
 
 ## Step 1 — Implement the basis environment
 
-Create a self-contained environment class under `auto_atom/basis/`. It should only depend on the simulator SDK and general utilities — **not** on `auto_atom.runtime` or `auto_atom.framework`.
+Create a self-contained environment class under `auto_atom/basis/`. It should only depend on the simulator SDK and general utilities — **not** on `auto_atom.runtime` or `auto_atom.config`.
 
 ```
 auto_atom/
@@ -211,7 +211,7 @@ auto_atom/
 # auto_atom/backend/my_backend/my_backend.py
 from dataclasses import dataclass
 import numpy as np
-from auto_atom.runtime import ObjectHandler
+from auto_atom.contracts import ObjectHandler
 from auto_atom.utils.pose import PoseState
 from auto_atom.basis.my_env import MyEnv
 
@@ -255,8 +255,9 @@ The operator is called once per control loop tick. Each method advances the acti
 
 ```python
 import numpy as np
-from auto_atom.runtime import ControlResult, ControlSignal, ObjectHandler, OperatorHandler
-from auto_atom.framework import EefControlConfig, PoseControlConfig
+from auto_atom.contracts import ObjectHandler, OperatorHandler
+from auto_atom.config.motion import EefControlConfig, PoseControlConfig
+from auto_atom.runtime import ControlResult, ControlSignal
 from auto_atom.utils.pose import PoseState
 from auto_atom.basis.my_env import MyEnv
 
@@ -337,8 +338,8 @@ separate field such as `body_name`.
 
 ```python
 import numpy as np
-from auto_atom.runtime import SceneBackend, OperatorHandler, ObjectHandler
-from auto_atom.framework import AutoAtomConfig
+from auto_atom.config.task import AutoAtomConfig
+from auto_atom.contracts import OperatorHandler, SceneBackend
 from auto_atom.basis.my_env import MyEnv
 
 
@@ -482,8 +483,9 @@ The factory is called by the framework after Hydra has instantiated and register
 
 ```python
 from typing import Any
+from auto_atom.config.task import AutoAtomConfig, OperatorConfig
+from auto_atom.contracts import SceneBackend
 from auto_atom.runtime import ComponentRegistry
-from auto_atom.framework import AutoAtomConfig, OperatorConfig
 from auto_atom.basis.my_env import MyEnv
 
 

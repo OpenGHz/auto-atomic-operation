@@ -509,5 +509,5 @@ flowchart TD
 
 - `auto_atom/backend/mjc/mujoco_backend.py`
 - `auto_atom/runtime.py`
-- `auto_atom/framework.py`
+- `auto_atom/config/motion.py`
 - `docs/mujoco-backend/mujoco_backend_conditions.md`
