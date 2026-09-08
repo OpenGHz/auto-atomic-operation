@@ -2469,14 +2469,6 @@ class MujocoTaskBackend(SceneBackend):
                 else "best_effort"
             )
         )
-        pair_clearance = max(
-            (
-                float(action_specs[label].randomization.constraints.separated.clearance)
-                for label in component
-                if action_specs[label].randomization.constraints.separated is not None
-            ),
-            default=0.0,
-        )
         selected_ancestors: Dict[str, Set[str]] = {}
         for member in order:
             action_spec = action_specs[member]
@@ -2519,6 +2511,11 @@ class MujocoTaskBackend(SceneBackend):
                     collision_participants=accepted_participants,
                 )
                 if blocking is None:
+                    # Always-on hard-sphere collision uses the radius sum only.
+                    # Optional ``separated`` clearance is enforced exactly once
+                    # below through evaluate_randomization_constraints (which
+                    # uses real support geometry), never folded into the radius
+                    # collision test.
                     blocking = self._find_collision_participant(
                         owner_name=candidate.owner,
                         env_index=env_index,
@@ -2526,7 +2523,6 @@ class MujocoTaskBackend(SceneBackend):
                         collision_radius=candidate.radius,
                         ancestors=candidate.ancestors,
                         collision_participants=local_participants,
-                        extra_clearance=pair_clearance,
                     )
                 constraint_report: RandomizationConstraintReport | None = None
                 if candidate.constraints is not None and (
@@ -2572,14 +2568,10 @@ class MujocoTaskBackend(SceneBackend):
                     other_pos = np.asarray(
                         blocking.pose.position[other_row], dtype=np.float64
                     )
-                    local_blocking = any(
-                        blocking is participant for participant in local_participants
-                    )
                     clearance = float(
                         np.linalg.norm(candidate_pos - other_pos)
                         - candidate.radius
                         - self._collision_radius_for_env(blocking.radius, env_index)
-                        - (pair_clearance if local_blocking else 0.0)
                     )
                 elif constraint_report is not None and not constraint_report.valid:
                     clearance = float(constraint_report.minimum_clearance)

@@ -171,8 +171,9 @@ task:
 - `visible_in` 交集为空 → 判定不可行并给诊断、不进入 attempt 循环。
 - `collision_radius: auto`（随缩放几何推导 + margin），见
   `geometry-randomization-design.md` §5.5。
-- RSA 路径 `separated` 重复执行收敛（`separated` 单一走
-  `evaluate_randomization_constraints`，删除折入 `extra_clearance` 的段落）。
+- ~~RSA 路径 `separated` 重复执行收敛~~（**已完成**：`separated` 单一走
+  `evaluate_randomization_constraints`，删除 RSA 中折入 `extra_clearance` 的
+  `pair_clearance` 段落；always-on 半径碰撞仅用半径和）。
 
 ## 实施轮次（每轮独立提交）
 
