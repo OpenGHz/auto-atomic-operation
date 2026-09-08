@@ -294,7 +294,7 @@ def test_batched_environment_compiles_one_artifact_for_replicas(
         return original(config)
 
     monkeypatch.setattr(mujoco_env_module, "compile_scene", counting_compile)
-    from auto_atom.basis.mjc.mujoco_basis import EnvConfig
+    from auto_atom.config.env_config import EnvConfig
     from auto_atom.basis.mjc.mujoco_env import BatchedUnifiedMujocoEnv
 
     env = BatchedUnifiedMujocoEnv(

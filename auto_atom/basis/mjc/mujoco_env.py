@@ -26,7 +26,8 @@ from auto_atom.basis.mjc.batch_execution import (
     BatchExecutionMode,
 )
 from auto_atom.basis.mjc.camera_noise import CameraNoiseProcessor
-from auto_atom.basis.mjc.mujoco_basis import (
+from auto_atom.basis.mjc.mujoco_basis import MujocoBasis
+from auto_atom.config.env_config import (
     CameraCalibrationConfig,
     CameraExtrinsicsConfig,
     CameraNoiseConfig,
@@ -34,7 +35,6 @@ from auto_atom.basis.mjc.mujoco_basis import (
     DataType,
     DepthNoiseConfig,
     EnvConfig,
-    MujocoBasis,
     NoiseDistributionConfig,
     OperatorBinding,
     RGBNoiseConfig,

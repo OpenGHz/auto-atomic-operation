@@ -284,7 +284,7 @@ def test_capture_observation_obs_action_consistent(cfg: dict) -> None:
     if not cfg["scene_xml"].exists():
         pytest.skip(f"Scene XML not found: {cfg['scene_xml']}")
 
-    from auto_atom.basis.mjc.mujoco_basis import EnvConfig, DataType
+    from auto_atom.config.env_config import EnvConfig, DataType
     from auto_atom.basis.mjc.mujoco_env import UnifiedMujocoEnv
 
     operators, eef_key_fragment = _framework_operator_config(cfg)
@@ -381,7 +381,7 @@ def test_apply_joint_action_round_trip(cfg: dict) -> None:
     if not cfg["scene_xml"].exists():
         pytest.skip(f"Scene XML not found: {cfg['scene_xml']}")
 
-    from auto_atom.basis.mjc.mujoco_basis import EnvConfig, DataType
+    from auto_atom.config.env_config import EnvConfig, DataType
     from auto_atom.basis.mjc.mujoco_env import UnifiedMujocoEnv
 
     operators, eef_key_fragment = _framework_operator_config(cfg)
@@ -566,7 +566,7 @@ def test_framework_with_finger_distance_mapper() -> None:
     if not scene.exists():
         pytest.skip(f"Scene XML not found: {scene}")
 
-    from auto_atom.basis.mjc.mujoco_basis import EnvConfig, DataType
+    from auto_atom.config.env_config import EnvConfig, DataType
     from auto_atom.basis.mjc.mujoco_env import UnifiedMujocoEnv
     from auto_atom.mappers.finger_distance import FingerDistanceMapper
 

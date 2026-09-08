@@ -20,7 +20,7 @@ from auto_atom.basis.mjc.gs_mujoco_env import (
     _sample_combinations,
     _sample_env_background_indices,
 )
-from auto_atom.basis.mjc.mujoco_basis import CameraSpec
+from auto_atom.config.env_config import CameraSpec
 from auto_atom.basis.mjc.mujoco_env import BatchedUnifiedMujocoEnv, UnifiedMujocoEnv
 
 

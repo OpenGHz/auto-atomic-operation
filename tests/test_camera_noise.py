@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 
 from auto_atom.basis.mjc.camera_noise import CameraNoiseProcessor
-from auto_atom.basis.mjc.mujoco_basis import (
+from auto_atom.config.env_config import (
     CameraNoiseConfig,
     CameraSpec,
     DepthNoiseConfig,

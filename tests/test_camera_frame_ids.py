@@ -11,14 +11,14 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from auto_atom.basis.mjc.mujoco_basis import (
+from auto_atom.config.env_config import (
     CameraCalibrationConfig,
     CameraExtrinsicsConfig,
     CameraSpec,
     DataType,
     EnvConfig,
-    MujocoBasis,
 )
+from auto_atom.basis.mjc.mujoco_basis import MujocoBasis
 from auto_atom.basis.mjc.mujoco_env import (
     KeyCreator,
     UnifiedMujocoEnv,

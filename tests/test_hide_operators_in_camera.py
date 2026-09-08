@@ -5,7 +5,8 @@ import mujoco
 import numpy as np
 from hydra import compose, initialize_config_dir
 
-from auto_atom.basis.mjc.mujoco_basis import EnvConfig, MujocoBasis
+from auto_atom.config.env_config import EnvConfig
+from auto_atom.basis.mjc.mujoco_basis import MujocoBasis
 from auto_atom.scene_composition import (
     MjcfLayerConfig,
     SceneConfig,

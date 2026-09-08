@@ -13,13 +13,8 @@ from auto_atom.backend.mjc.mujoco_backend import (
     MujocoTaskBackend,
 )
 from auto_atom.backend.mjc.mujoco_backend import MujocoObjectHandler
-from auto_atom.basis.mjc.mujoco_basis import (
-    CameraSpec,
-    DataType,
-    EnvConfig,
-    MujocoBasis,
-    OperatorBinding,
-)
+from auto_atom.config.env_config import CameraSpec, DataType, EnvConfig, OperatorBinding
+from auto_atom.basis.mjc.mujoco_basis import MujocoBasis
 from auto_atom.basis.mjc.mujoco_env import UnifiedMujocoEnv
 from auto_atom.config.pose import PoseOverrideConfig
 from auto_atom.utils.pose import PoseState

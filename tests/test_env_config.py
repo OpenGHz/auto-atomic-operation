@@ -1,7 +1,7 @@
 import pytest
 from pydantic import ValidationError
 
-from auto_atom.basis.mjc.mujoco_basis import EnvConfig
+from auto_atom.config.env_config import EnvConfig
 
 
 _SCENE = {"base": "assets/xmls/scenes/press_three_buttons/demo.xml"}
