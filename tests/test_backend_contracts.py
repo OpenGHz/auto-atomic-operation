@@ -211,19 +211,20 @@ def test_mujoco_backend_observes_named_operator_contacts() -> None:
         <mujoco>
           <option gravity="0 0 0"/>
           <worldbody>
-            <body name="operator_root">
-              <freejoint/>
-              <geom name="finger_geom" type="sphere" size="0.1"
-                    margin="0.02" gap="0.018"/>
+              <body name="operator_root">
+                <freejoint/>
+                <!-- MuJoCo 3.12 conversion: margin_new=0.02-0.018. -->
+                <geom name="finger_geom" type="sphere" size="0.1"
+                    margin="0.002" gap="0.018"/>
             </body>
             <body name="door_panel">
               <freejoint/>
               <geom name="door_geom" type="box" size="0.1 0.1 0.1"/>
             </body>
-            <body name="nearby_panel" pos="0.225 0 0">
+            <body name="nearby_panel" pos="0.215 0 0">
               <freejoint/>
               <geom name="nearby_geom" type="box" size="0.1 0.1 0.1"
-                    margin="0.02" gap="0.018"/>
+                    margin="0.002" gap="0.018"/>
             </body>
           </worldbody>
         </mujoco>
@@ -269,6 +270,64 @@ def test_mujoco_backend_observes_named_operator_contacts() -> None:
     assert contact.normal_force_n >= 0.0
     assert backend.is_operator_contacting("arm", "door").tolist() == [True]
     assert backend.is_operator_contacting("arm", "nearby").tolist() == [False]
+
+
+def test_mujoco_backend_preserves_multiple_multiccd_contacts() -> None:
+    """MuJoCo 3.12 may emit several active contacts for one geom pair."""
+    mujoco = pytest.importorskip("mujoco")
+    major, minor, *_ = (int(part) for part in mujoco.__version__.split("."))
+    if (major, minor) < (3, 8):
+        pytest.skip("multiple CCD contacts require MuJoCo >= 3.8")
+    model = mujoco.MjModel.from_xml_string(
+        """
+        <mujoco>
+          <option gravity="0 0 0"/>
+          <worldbody>
+            <body name="operator_root">
+              <freejoint/>
+              <geom name="operator_box" type="box" size="0.1 0.1 0.1"/>
+            </body>
+            <body name="target_panel">
+              <freejoint/>
+              <geom name="target_box" type="box" size="0.1 0.1 0.1"/>
+            </body>
+          </worldbody>
+        </mujoco>
+        """
+    )
+    data = mujoco.MjData(model)
+    mujoco.mj_forward(model, data)
+    env = SimpleNamespace(
+        batch_size=1,
+        envs=[SimpleNamespace(model=model, data=data)],
+    )
+    operator_body_id = mujoco.mj_name2id(
+        model,
+        mujoco.mjtObj.mjOBJ_BODY,
+        "operator_root",
+    )
+    operator = SimpleNamespace(
+        get_operator_body_ids=lambda _model: frozenset({operator_body_id}),
+    )
+    target = MujocoObjectHandler(
+        name="target",
+        env=env,
+        body_name="target_panel",
+    )
+    backend = MujocoTaskBackend(
+        env=env,
+        operator_handlers={"arm": operator},
+        object_handlers={"target": target},
+    )
+
+    contacts = backend.get_operator_contacts("arm", 0)
+
+    assert contacts is not None
+    assert len(contacts) >= 2
+    assert {(contact.operator_geom, contact.other_geom) for contact in contacts} == {
+        ("operator_box", "target_box")
+    }
+    assert all(contact.normal_force_n is not None for contact in contacts)
 
 
 def test_mujoco_backend_validates_rigid_named_frame_ownership() -> None:

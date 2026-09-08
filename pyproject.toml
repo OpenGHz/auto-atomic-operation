@@ -27,7 +27,7 @@ aao-info = "auto_atom.runner.task_info:main"
 aao-unidoor-sweep = "auto_atom.runner.unidoor_sweep:main"
 
 [project.optional-dependencies]
-mujoco = ["mujoco >=3.4.0", "PyOpenGL_accelerate"]
+mujoco = ["mujoco >=3.12.0,<3.13.0", "PyOpenGL_accelerate"]
 gs = [
   "gsplat",
   "torch",
