@@ -35,8 +35,10 @@ from auto_atom.basis.mjc.mujoco_basis import (
     DepthNoiseConfig,
     EnvConfig,
     MujocoBasis,
+    NoiseDistributionConfig,
     OperatorBinding,
     RGBNoiseConfig,
+    TemporalNoiseConfig,
     ViewerConfig,
 )
 from auto_atom.runtime import (
@@ -64,6 +66,8 @@ __all__ = [
     "CameraExtrinsicsConfig",
     "RGBNoiseConfig",
     "DepthNoiseConfig",
+    "NoiseDistributionConfig",
+    "TemporalNoiseConfig",
     "CameraNoiseConfig",
     "CameraSpec",
     "ViewerConfig",
@@ -303,45 +307,52 @@ class UnifiedMujocoEnv(MujocoBasis):
         initialized yet.
         """
         states = getattr(self, "_operator_states", None)
-        if not states:
-            return
-        for state in states.values():
-            if state.baseline_base_pos is not None:
-                state.base_pos = state.baseline_base_pos.copy()
-            if state.baseline_base_quat is not None:
-                state.base_quat = state.baseline_base_quat.copy()
-            if state.baseline_tool_offset_pos is not None:
-                state.tool_offset_pos = state.baseline_tool_offset_pos.copy()
-            if state.baseline_tool_offset_quat is not None:
-                state.tool_offset_quat = state.baseline_tool_offset_quat.copy()
-            if state.baseline_home_arm_qpos is not None:
-                state.home_arm_qpos = state.baseline_home_arm_qpos.copy()
-            elif state.joint_mode:
-                state.home_arm_qpos = None
-            if state.baseline_home_mocap_pos is not None:
-                state.home_mocap_pos = state.baseline_home_mocap_pos.copy()
-            if state.baseline_home_mocap_quat is not None:
-                state.home_mocap_quat = state.baseline_home_mocap_quat.copy()
-            if state.baseline_home_ctrl is not None:
-                state.home_ctrl = state.baseline_home_ctrl.copy()
+        if states:
+            for state in states.values():
+                if state.baseline_base_pos is not None:
+                    state.base_pos = state.baseline_base_pos.copy()
+                if state.baseline_base_quat is not None:
+                    state.base_quat = state.baseline_base_quat.copy()
+                if state.baseline_tool_offset_pos is not None:
+                    state.tool_offset_pos = state.baseline_tool_offset_pos.copy()
+                if state.baseline_tool_offset_quat is not None:
+                    state.tool_offset_quat = state.baseline_tool_offset_quat.copy()
+                if state.baseline_home_arm_qpos is not None:
+                    state.home_arm_qpos = state.baseline_home_arm_qpos.copy()
+                elif state.joint_mode:
+                    state.home_arm_qpos = None
+                if state.baseline_home_mocap_pos is not None:
+                    state.home_mocap_pos = state.baseline_home_mocap_pos.copy()
+                if state.baseline_home_mocap_quat is not None:
+                    state.home_mocap_quat = state.baseline_home_mocap_quat.copy()
+                if state.baseline_home_ctrl is not None:
+                    state.home_ctrl = state.baseline_home_ctrl.copy()
 
-            # Targets/plans are derived from the restored tool offset and must
-            # not retain a previous episode's waypoint or interpolation state.
-            state.target_pos_in_base = state.tool_offset_pos.copy()
-            state.target_quat_in_base = state.tool_offset_quat.copy()
-            state.planned_joint_start_qpos = (
-                state.home_arm_qpos.copy() if state.home_arm_qpos is not None else None
-            )
-            state.planned_joint_target_qpos = (
-                state.home_arm_qpos.copy() if state.home_arm_qpos is not None else None
-            )
-            state.planned_joint_progress = 1
-            state.planned_joint_steps_total = 1
-            state.planned_target_pos_in_base = state.tool_offset_pos.copy()
-            state.planned_target_quat_in_base = state.tool_offset_quat.copy()
-            state.ik_failure_streak = 0
-            if state.arm_joint_limit_warned is not None:
-                state.arm_joint_limit_warned.fill(0)
+                # Targets/plans are derived from the restored tool offset and must
+                # not retain a previous episode's waypoint or interpolation state.
+                state.target_pos_in_base = state.tool_offset_pos.copy()
+                state.target_quat_in_base = state.tool_offset_quat.copy()
+                state.planned_joint_start_qpos = (
+                    state.home_arm_qpos.copy()
+                    if state.home_arm_qpos is not None
+                    else None
+                )
+                state.planned_joint_target_qpos = (
+                    state.home_arm_qpos.copy()
+                    if state.home_arm_qpos is not None
+                    else None
+                )
+                state.planned_joint_progress = 1
+                state.planned_joint_steps_total = 1
+                state.planned_target_pos_in_base = state.tool_offset_pos.copy()
+                state.planned_target_quat_in_base = state.tool_offset_quat.copy()
+                state.ik_failure_streak = 0
+                if state.arm_joint_limit_warned is not None:
+                    state.arm_joint_limit_warned.fill(0)
+
+        processor = getattr(self, "_camera_noise_processor", None)
+        if processor is not None:
+            processor.reset()
 
     def set_joint_limit_warning_enabled(self, enabled: bool) -> None:
         """Enable/disable the IK joint-limit-proximity warning (default off).
@@ -2436,10 +2447,18 @@ class BatchedUnifiedMujocoEnv:
         )
 
     def reset(self, env_mask: np.ndarray | None = None) -> None:
-        self._batch_adapter().dispatch(
+        adapter = self._batch_adapter()
+        mask = adapter.normalize_mask(env_mask)
+        adapter.dispatch(
             lambda env, _index: env.reset(),
-            env_mask,
+            mask,
         )
+        processor = getattr(self, "_camera_noise_processor", None)
+        if processor is not None:
+            if env_mask is None:
+                processor.reset()
+            else:
+                processor.reset(np.flatnonzero(mask))
 
     def set_interest_objects_and_operations(
         self,

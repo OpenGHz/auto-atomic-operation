@@ -76,11 +76,35 @@ env:
           gaussian_std: 0.01
           shot_noise_scale: 5000.0
           dropout_probability: 0.001
+          exposure: 1.0
+          gain: 1.0
+          quantization_levels: 256
+          illumination_std: 0.01
+          gain_std: 0.01
+          distribution:
+            kind: gaussian
+          temporal:
+            jitter_std: 0.0
+            ar1_coefficient: 0.0
+            drift_std: 0.0
+            drift_decay: 1.0
         depth:
           gaussian_std_m: 0.001
           relative_std: 0.001
+          bias_m: 0.0
+          bias_distance_power: 1.0
+          scale: 1.0
+          resolution_reference: [640, 480]
+          resolution_power: 1.0
           quantization_step_m: 0.001
-          dropout_probability: 0.01
+          invalid_probability: 0.01
+          distribution:
+            kind: gaussian
+          temporal:
+            jitter_std: 0.0
+            ar1_coefficient: 0.0
+            drift_std: 0.0
+            drift_decay: 1.0
       calibration:
         projection: mujoco_perspective
         fovy_deg: 102.89
@@ -97,13 +121,20 @@ optional; when either is omitted, that output stream preserves the XML scene's
 clipping behavior.
 
 The optional `noise.rgb` and `noise.depth` blocks model sensor noise
-independently. RGB noise uses normalized-domain Gaussian noise, optional
-Poisson shot noise, and per-pixel dropout; output remains `uint8` in
-`[0, 255]`. Depth noise uses fixed and distance-relative Gaussian terms,
-optional quantization, and dropout; only finite positive depth is perturbed,
-and values outside `depth_clip_range_m` are returned as zero. Omitting either
-block leaves that stream unchanged. Noise is applied after Native/GS rendering
-and batch expansion, while masks and heat maps remain clean supervision data.
+independently. RGB supports normalized-domain Gaussian or Student-t noise,
+optional Poisson shot noise, exposure/gain, frame-level illumination/gain,
+quantization, and per-pixel dropout; output remains `uint8` in `[0, 255]`.
+Depth supports scale, distance-dependent bias, fixed and distance-relative
+noise, Gaussian or Student-t noise, quantization, invalid probability, and
+frame-level temporal terms. When `resolution_reference` is set,
+`resolution_power` scales the bias, additive error, scale error `(scale - 1)`,
+and invalid probability according to the actual rendered pixel count; leaving
+it unset preserves resolution-independent behavior. Only finite positive depth
+is perturbed, and values outside `depth_clip_range_m` are returned as zero.
+`dropout_probability` remains
+accepted as an input alias for `invalid_probability`. Omitting either block
+leaves that stream unchanged. Noise is applied after Native/GS rendering and
+batch expansion, while masks and heat maps remain clean supervision data.
 
 ## Minimal task file
 

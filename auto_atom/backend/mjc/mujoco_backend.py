@@ -1335,7 +1335,7 @@ class MujocoTaskBackend(SceneBackend):
         mask = self._normalize_mask(env_mask)
         self._randomization_reset_index += 1
         self._last_randomization_diagnostics.clear()
-        self.env.reset(mask)
+        self.env.reset(env_mask)
         for operator in self.operator_handlers.values():
             operator.home(mask)
         if self.initial_poses:

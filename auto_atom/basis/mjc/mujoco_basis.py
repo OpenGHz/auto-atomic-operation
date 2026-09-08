@@ -31,12 +31,14 @@ from typing import (
 import mujoco
 import numpy as np
 from pydantic import (
+    AliasChoices,
     BaseModel,
     ConfigDict,
     Field,
     ImportString,
     NonNegativeFloat,
     PositiveFloat,
+    PositiveInt,
     field_serializer,
     field_validator,
     model_validator,
@@ -129,6 +131,58 @@ class RGBNoiseConfig(BaseModel, frozen=True):
     """Optional Poisson shot-noise scale in normalized RGB units."""
     dropout_probability: float = Field(default=0.0, ge=0.0, le=1.0)
     """Independent per-pixel dropout probability."""
+    exposure: NonNegativeFloat = 1.0
+    """Static exposure multiplier applied before RGB noise."""
+    gain: NonNegativeFloat = 1.0
+    """Static sensor gain multiplier applied before RGB noise."""
+    quantization_levels: PositiveInt | None = None
+    """Optional number of normalized RGB intervals used for quantization."""
+    illumination_std: NonNegativeFloat = 0.0
+    """Per-capture low-frequency illumination multiplier standard deviation."""
+    gain_std: NonNegativeFloat = 0.0
+    """Per-capture low-frequency gain multiplier standard deviation."""
+    distribution: "NoiseDistributionConfig" = Field(
+        default_factory=lambda: NoiseDistributionConfig()
+    )
+    """Distribution used for additive Gaussian or heavy-tailed RGB noise."""
+    temporal: "TemporalNoiseConfig" = Field(
+        default_factory=lambda: TemporalNoiseConfig()
+    )
+    """Low-cost frame-level temporal jitter, AR(1), and drift parameters."""
+
+
+class NoiseDistributionConfig(BaseModel, frozen=True):
+    """Distribution parameters shared by one RGB or depth stream."""
+
+    model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid")
+
+    kind: Literal["gaussian", "student_t"] = "gaussian"
+    """Additive noise distribution."""
+    degrees_of_freedom: PositiveFloat = 5.0
+    """Student-t degrees of freedom; values above two have finite variance."""
+
+    @model_validator(mode="after")
+    def validate_degrees_of_freedom(self) -> "NoiseDistributionConfig":
+        if self.kind == "student_t" and self.degrees_of_freedom <= 2.0:
+            raise ValueError(
+                "student_t degrees_of_freedom must be greater than 2 for finite variance"
+            )
+        return self
+
+
+class TemporalNoiseConfig(BaseModel, frozen=True):
+    """Low-cost frame-level temporal correlation parameters."""
+
+    model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid")
+
+    jitter_std: NonNegativeFloat = 0.0
+    """Stationary standard deviation of the frame-level AR(1) offset."""
+    ar1_coefficient: float = Field(default=0.0, ge=-1.0, le=1.0)
+    """AR(1) coefficient for the frame-level offset."""
+    drift_std: NonNegativeFloat = 0.0
+    """Standard deviation of each slowly changing drift innovation."""
+    drift_decay: float = Field(default=1.0, ge=0.0, le=1.0)
+    """Retention factor applied to the previous drift value."""
 
 
 class DepthNoiseConfig(BaseModel, frozen=True):
@@ -140,10 +194,39 @@ class DepthNoiseConfig(BaseModel, frozen=True):
     """Fixed Gaussian depth-noise standard deviation in metres."""
     relative_std: NonNegativeFloat = 0.0
     """Distance-proportional depth-noise coefficient."""
+    bias_m: float = 0.0
+    """Signed depth-bias coefficient in metres, scaled by ``distance**bias_distance_power``."""
+    bias_distance_power: NonNegativeFloat = 0.0
+    """Exponent used to scale ``bias_m`` with the original measured distance."""
+    scale: PositiveFloat = 1.0
+    """Multiplicative depth scale applied before additive noise."""
+    resolution_reference: Tuple[PositiveInt, PositiveInt] | None = None
+    """Reference ``[width, height]`` for resolution-scaled depth errors."""
+    resolution_power: float = 0.0
+    """Exponent for ``(reference_pixels / actual_pixels)`` applied to depth errors."""
     quantization_step_m: PositiveFloat | None = None
     """Optional positive depth quantization step in metres."""
-    dropout_probability: float = Field(default=0.0, ge=0.0, le=1.0)
-    """Independent per-pixel dropout probability for valid depth pixels."""
+    invalid_probability: float = Field(
+        default=0.0,
+        ge=0.0,
+        le=1.0,
+        validation_alias=AliasChoices("invalid_probability", "dropout_probability"),
+    )
+    """Independent probability of invalidating a valid depth pixel."""
+    distribution: NoiseDistributionConfig = Field(
+        default_factory=NoiseDistributionConfig
+    )
+    """Distribution used for additive depth noise."""
+    temporal: TemporalNoiseConfig = Field(default_factory=TemporalNoiseConfig)
+    """Low-cost frame-level temporal jitter, AR(1), and drift parameters."""
+
+    @model_validator(mode="after")
+    def validate_bias(self) -> "DepthNoiseConfig":
+        if not math.isfinite(self.bias_m):
+            raise ValueError("depth bias_m must be finite")
+        if not math.isfinite(self.resolution_power):
+            raise ValueError("depth resolution_power must be finite")
+        return self
 
 
 class CameraNoiseConfig(BaseModel, frozen=True):
@@ -155,6 +238,12 @@ class CameraNoiseConfig(BaseModel, frozen=True):
     """RGB noise configuration; omitted to leave RGB unchanged."""
     depth: DepthNoiseConfig | None = None
     """Depth noise configuration; omitted to leave depth unchanged."""
+
+
+# The RGB model is declared before the shared nested models for readability of
+# the public camera configuration.  Resolve its forward references once all
+# nested models are available so YAML dictionaries validate normally.
+RGBNoiseConfig.model_rebuild()
 
 
 class CameraSpec(BaseModel, frozen=True):
