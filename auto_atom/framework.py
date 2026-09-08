@@ -587,7 +587,19 @@ class PoseRandomRange(BaseModel, frozen=True):
     then apply the per-axis ranges as relative offsets on top. A plain
     operator name is equivalent to ``"<operator>.base"``."""
     collision_radius: float = 0.05
-    """Approximate bounding radius used for pairwise collision rejection (metres)."""
+    """Bounding radius used for pairwise collision rejection (metres).
+
+    * ``> 0``: explicit radius.
+    * ``0``: exempt — the entity does not participate in collision rejection.
+    * ``< 0`` (convention ``-1``): ``auto`` — the backend derives a
+      conservative radius from the entity's support geometry, plus
+      ``collision_margin``. The magnitude is ignored; any negative value
+      means ``auto``.
+    """
+
+    collision_margin: NonNegativeFloat = 0.0
+    """Extra clearance (metres) added to the auto-derived radius when
+    ``collision_radius < 0``."""
 
     @field_validator("reference", mode="before")
     @classmethod

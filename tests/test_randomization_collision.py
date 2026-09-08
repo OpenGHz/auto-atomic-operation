@@ -544,6 +544,63 @@ def test_canonical_error_policy_raises_with_collision_diagnostics() -> None:
     assert diagnostics["attempts"][0]["minimum_clearance"] == pytest.approx(-0.1)
 
 
+def test_auto_collision_radius_resolves_from_support_geometry(
+    monkeypatch,
+) -> None:
+    backend = _make_backend(
+        randomization={
+            "vase": RandomizationSpec(
+                proposal=PoseRandomRange(
+                    reference=RandomizationReference.ABSOLUTE_WORLD,
+                    x=(0.0, 0.3),
+                    collision_radius=-1,
+                    collision_margin=0.01,
+                ),
+            ),
+        },
+        object_positions={"vase": (0.0, 0.0, 0.0)},
+    )
+
+    class _Geometry:
+        radius = 0.12
+
+    def _stub_geometry(owner, env_index: int = 0):
+        return _Geometry()
+
+    monkeypatch.setattr(backend, "get_support_geometry", _stub_geometry)
+
+    auto = backend._auto_collision_radius(kind="object", owner="vase", env_index=0)
+    assert auto == 0.12
+    # Auto + margin.
+    resolved = backend._resolve_collision_radius(
+        kind="object",
+        owner="vase",
+        env_index=0,
+        spec_radius=-1.0,
+        margin=0.01,
+    )
+    assert resolved == 0.13
+    # Explicit > 0 passes through; 0 stays exempt.
+    assert (
+        backend._resolve_collision_radius(
+            kind="object", owner="vase", env_index=0, spec_radius=0.04, margin=0.0
+        )
+        == 0.04
+    )
+    assert (
+        backend._resolve_collision_radius(
+            kind="object", owner="vase", env_index=0, spec_radius=0.0, margin=0.0
+        )
+        == 0.0
+    )
+    # Support geometry is queried once and cached per (entity, env).
+    backend._auto_collision_radius(kind="object", owner="vase", env_index=0)
+    assert backend._auto_radius_cache[("vase", 0)] == 0.12
+
+    with pytest.raises(NotImplementedError, match="operator"):
+        backend._auto_collision_radius(kind="operator_base", owner="arm", env_index=0)
+
+
 def test_maximin_reference_component_is_declaration_order_independent() -> None:
     distribution = RandomizationDistributionConfig(
         generator=RandomizationGeneratorKind.HALTON,

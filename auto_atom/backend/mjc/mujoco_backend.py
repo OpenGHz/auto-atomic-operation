@@ -1146,6 +1146,11 @@ class MujocoTaskBackend(SceneBackend):
         repr=False,
         default_factory=dict,
     )
+    _auto_radius_cache: Dict[Tuple[str, int], float] = field(
+        init=False,
+        repr=False,
+        default_factory=dict,
+    )
     _default_object_poses: Dict[str, PoseState] = field(
         init=False, repr=False, default_factory=dict
     )
@@ -3062,7 +3067,13 @@ class MujocoTaskBackend(SceneBackend):
                     owner=name,
                     label=action_spec.label,
                     pose=sampled,
-                    radius=float(selected_range.collision_radius),
+                    radius=self._resolve_collision_radius(
+                        kind=action_spec.kind,
+                        owner=name,
+                        env_index=env_index,
+                        spec_radius=float(selected_range.collision_radius),
+                        margin=float(selected_range.collision_margin),
+                    ),
                     references=selected_range.references(),
                     constraints=action_spec.randomization.constraints,
                 )
@@ -3107,7 +3118,13 @@ class MujocoTaskBackend(SceneBackend):
                 owner=name,
                 label=action_spec.label,
                 pose=sampled,
-                radius=float(selected_range.collision_radius),
+                radius=self._resolve_collision_radius(
+                    kind=action_spec.kind,
+                    owner=name,
+                    env_index=env_index,
+                    spec_radius=float(selected_range.collision_radius),
+                    margin=float(selected_range.collision_margin),
+                ),
                 references=selected_range.references(),
                 constraints=action_spec.randomization.constraints,
             )
@@ -3477,6 +3494,43 @@ class MujocoTaskBackend(SceneBackend):
                 return ancestors[0]
             return ancestors[env_index]
         return ancestors
+
+    def _resolve_collision_radius(
+        self,
+        *,
+        kind: str,
+        owner: str,
+        env_index: int,
+        spec_radius: float,
+        margin: float = 0.0,
+    ) -> float:
+        """Resolve a region's ``collision_radius`` for one environment.
+
+        Positive values are used verbatim; ``0`` stays exempt; a negative value
+        requests ``auto`` and resolves to the entity's conservative
+        support-geometry radius plus ``collision_margin`` (cached per
+        entity/environment).
+        """
+        radius = float(spec_radius)
+        if radius >= 0.0:
+            return radius
+        auto = self._auto_collision_radius(kind=kind, owner=owner, env_index=env_index)
+        return auto + float(margin)
+
+    def _auto_collision_radius(self, *, kind: str, owner: str, env_index: int) -> float:
+        """Return the backend-derived conservative radius for one entity."""
+        if kind != "object":
+            raise NotImplementedError(
+                f"collision_radius auto is not yet supported for operator "
+                f"'{owner}' ({kind}); use an explicit radius or 0 to exempt."
+            )
+        key = (owner, env_index)
+        cached = self._auto_radius_cache.get(key)
+        if cached is None:
+            geometry = self.get_support_geometry(owner, env_index)
+            cached = float(geometry.radius)
+            self._auto_radius_cache[key] = cached
+        return cached
 
     def _sample_random_pose_single(
         self,

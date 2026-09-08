@@ -351,6 +351,50 @@ def test_scope_rejects_conflicting_entity_separated_strategy() -> None:
         resolve_randomization_scope(scope)
 
 
+def test_collision_radius_negative_marks_auto_and_margin_parseable() -> None:
+    rng = PoseRandomRange(
+        x=(0.0, 1.0),
+        collision_radius=-1,
+        collision_margin=0.01,
+    )
+    assert rng.collision_radius == -1
+    assert rng.collision_margin == 0.01
+    # 0 stays the explicit "exempt" marker and >0 the explicit radius.
+    assert PoseRandomRange(x=(0.0, 1.0), collision_radius=0.0).collision_radius == 0.0
+    assert PoseRandomRange(x=(0.0, 1.0), collision_radius=0.04).collision_radius == 0.04
+
+
+def test_hard_sphere_group_accepts_auto_radius_but_rejects_exempt_member() -> None:
+    plan = compile_randomization_plan(
+        {
+            "large": PoseRandomRange(
+                x=(0.0, 1.0),
+                collision_radius=0.10,
+            ),
+            "small": PoseRandomRange(
+                x=(0.0, 1.0),
+                collision_radius=-1,
+                collision_margin=0.005,
+            ),
+        },
+        object_names={"large", "small"},
+        operator_names=set(),
+        randomization_groups={"tabletop": _hard_sphere_group(["large", "small"])},
+    )
+    assert set(plan.groups) == {"tabletop"}
+
+    with pytest.raises(ValueError, match="exempt"):
+        compile_randomization_plan(
+            {
+                "large": PoseRandomRange(x=(0.0, 1.0), collision_radius=0.10),
+                "small": PoseRandomRange(x=(0.0, 1.0), collision_radius=0.0),
+            },
+            object_names={"large", "small"},
+            operator_names=set(),
+            randomization_groups={"tabletop": _hard_sphere_group(["large", "small"])},
+        )
+
+
 def test_halton_candidates_are_deterministic_and_bounded() -> None:
     first = unit_candidate(
         rng=np.random.default_rng(7),

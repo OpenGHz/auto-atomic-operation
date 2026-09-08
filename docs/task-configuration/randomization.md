@@ -653,6 +653,19 @@ their radii, the sample is rejected and redrawn. After the retry budget
 policy applies — by default fail-closed `error`; opt into `best_effort` to keep
 the least-violating sample with a diagnostic.
 
+`collision_radius` takes three kinds of values:
+
+| Value | Meaning |
+|-------|---------|
+| `> 0` | Explicit radius in metres (default `0.05`). |
+| `0` | Exempt — the entity does not participate in collision rejection. |
+| `< 0` (convention `-1`) | `auto` — the backend derives a conservative radius from the entity's support geometry. The magnitude is ignored. |
+
+For `auto`, an optional `collision_margin` adds extra metres on top of the
+derived radius. `auto` is currently implemented for objects; using it on an
+operator `base` / `eef` entry raises `NotImplementedError` (use an explicit
+radius or `0` there for now).
+
 Entities linked by an entity-name reference chain are excluded from rejection
 against each other. This allows carried assemblies such as `flower -> vase` to
 move together while still rejecting overlap against unrelated randomized

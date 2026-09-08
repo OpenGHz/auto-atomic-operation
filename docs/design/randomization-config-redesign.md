@@ -169,8 +169,11 @@ task:
 ## 后续增强（本轮不做，记录为 TODO）
 
 - `visible_in` 交集为空 → 判定不可行并给诊断、不进入 attempt 循环。
-- `collision_radius: auto`（随缩放几何推导 + margin），见
-  `geometry-randomization-design.md` §5.5。
+- `collision_radius: auto`（对象级已实现：`collision_radius<0` 标记 auto +
+  `collision_margin`；后端 `_resolve_collision_radius` 走 `get_support_geometry`
+  并缓存。`0` 仍为豁免、`>0` 显式）。**operator base/eef 的 auto 未实现**：需将
+  operator 的命名 body/子树解析到几何，当前对 operator 的 auto 标记会抛
+  `NotImplementedError`（提示改用显式半径或 0）。
 - ~~RSA 路径 `separated` 重复执行收敛~~（**已完成**：`separated` 单一走
   `evaluate_randomization_constraints`，删除 RSA 中折入 `extra_clearance` 的
   `pair_clearance` 段落；always-on 半径碰撞仅用半径和）。

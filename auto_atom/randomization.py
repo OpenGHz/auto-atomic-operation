@@ -274,10 +274,11 @@ def compile_randomization_plan(
             for region_index, region in enumerate(
                 pose_randomization_regions(action.randomization)
             ):
-                if float(region.collision_radius) <= 0.0:
+                if float(region.collision_radius) == 0.0:
                     raise ValueError(
                         f"Randomization group '{group_name}' member '{member}' "
-                        f"region {region_index} requires collision_radius > 0"
+                        f"region {region_index} requires collision_radius > 0 "
+                        "or an auto radius (< 0); 0 (exempt) has no radius to place"
                     )
                 named_references = [
                     reference
