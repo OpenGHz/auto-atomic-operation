@@ -20,6 +20,10 @@
 - **限制（已实现为单一有效策略）**：后端仍按单策略分发；scope/实体声明的
   `separated.strategy` 若不一致会报错。**逐组件混合策略**（不同组件各用不同策略）
   需另行改造后端分发，未实现。
+- **auto collision_radius 扩展到 operator**（提交 `a91b12f`）：base=root body 自身
+  footprint、eef=eef site body 子树（详见文末"已记录的后续增强"）。
+- **visible_in 确定性判空**（提交 `add77d2`）：范围盒与相机视锥整体不相交时
+  `mode=error` 直接以 `attempts=0` 失败并诊断，不再烧 `max_attempts`。
 
 ## 动机与目标
 
@@ -166,17 +170,25 @@ task:
 
 `camera_randomization` 保持**扁平独立**：相机无分布/碰撞语义，不纳入本结构。
 
-## 后续增强（本轮不做，记录为 TODO）
+## 已记录的后续增强（进度追踪）
 
-- `visible_in` 交集为空 → 判定不可行并给诊断、不进入 attempt 循环。
-- `collision_radius: auto`（对象级已实现：`collision_radius<0` 标记 auto +
-  `collision_margin`；后端 `_resolve_collision_radius` 走 `get_support_geometry`
-  并缓存。`0` 仍为豁免、`>0` 显式）。**operator base/eef 的 auto 未实现**：需将
-  operator 的命名 body/子树解析到几何，当前对 operator 的 auto 标记会抛
-  `NotImplementedError`（提示改用显式半径或 0）。
-- ~~RSA 路径 `separated` 重复执行收敛~~（**已完成**：`separated` 单一走
-  `evaluate_randomization_constraints`，删除 RSA 中折入 `extra_clearance` 的
-  `pair_clearance` 段落；always-on 半径碰撞仅用半径和）。
+- ~~`visible_in` 交集为空 → 判定不可行并给诊断、不进入 attempt 循环~~（**已完成**，
+  提交 `add77d2`）：`MujocoTaskBackend._camera_frustum_disjoint_box` 做保守
+  AABB×视锥判空；`_preflight_deterministic_visibility_infeasibility` 在对象采样前、
+  `mode=error` 时对可见性范围内置判定为空的 region 直接抛 `RandomizationFailureError`
+  （`attempts=0`）并写入诊断。**覆盖边界**：仅支持 `absolute_world` / `relative`
+  （相对固定默认位姿）的世界轴对齐位置盒；实体跟踪引用、`segmentation`、
+  `scene` 分离等仍走原 attempt 循环。
+- ~~`collision_radius: auto`（对象 + operator base/eef）~~（**已完成**：
+  - 对象级（提交 `ba6fd80`）：`collision_radius<0` 标记 auto + `collision_margin`；
+    后端 `_resolve_collision_radius` 走 `get_support_geometry` 并永久缓存。`0` 仍为
+    豁免、`>0` 显式。
+  - operator base/eef（提交 `a91b12f`）：语义为 base→operator **root body 自身
+    几何**（底座/支架 footprint，非整臂子树）；eef→**eef site 所在 body 的子树**
+    （含夹爪/手指，随开合构型变化）。`UnifiedMujocoEnv.get_operator_support_geometry`
+    按当前构型测量；radius 缓存 key 含 kind，`_apply_randomization` 每 episode 丢弃
+    operator 项（构型相关），对象项保持长期缓存。mocap 夹爪的 base（root 无几何）
+    解析为 0（视为豁免）。）
 
 ## 实施轮次（每轮独立提交）
 

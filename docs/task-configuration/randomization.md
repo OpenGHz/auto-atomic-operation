@@ -458,10 +458,19 @@ guarantee for a multi-object scene.
 | `margin_px` | Reserves a margin from every image edge. | Non-negative integer pixels. | `0` |
 | `min_visible_fraction` | Sets the required rendered fraction for `mode: segmentation`. | Number in `[0, 1]`. | `0.0` |
 
+**Deterministic empty intersection (fail fast).** `visible_in` depends only on
+fixed cameras plus the entity's own geometry, so when the entity's whole
+sampling region can be shown to lie outside a required camera's frustum, no
+attempt can ever succeed. For world-axis-aligned position regions
+(`absolute_world`, or `relative` to a fixed default pose) the backend detects
+this *before* the retry loop and, under `failure.mode: error`, fails immediately
+with `attempts=0` and an `outside_view` diagnostic instead of exhausting
+`max_attempts`. Entity-tracked or otherwise frame-dependent references cannot
+be bounded this way and fall back to the normal retry loop.
+
 `separated` keeps entities apart. `separated` owns the placement `strategy`
 because strategy only affects member-vs-member placement (it is inert for
 `visible_in`, which is a single entity against fixed cameras):
-
 | Field | Function | Supported values | Default |
 |-------|----------|------------------|---------|
 | `strategy` | Placement/retry policy used to satisfy inter-entity separation. | `rsa`: place members sequentially and keep accepted members fixed; `joint_rejection`: sample the whole component and reject it on any failure. | `rsa` |
@@ -662,9 +671,16 @@ the least-violating sample with a diagnostic.
 | `< 0` (convention `-1`) | `auto` — the backend derives a conservative radius from the entity's support geometry. The magnitude is ignored. |
 
 For `auto`, an optional `collision_margin` adds extra metres on top of the
-derived radius. `auto` is currently implemented for objects; using it on an
-operator `base` / `eef` entry raises `NotImplementedError` (use an explicit
-radius or `0` there for now).
+derived radius. `auto` semantics by participant:
+
+- **object**: radius covering the object body's geoms around its own center.
+- **operator `base`**: radius of the operator's **root/base body footprint**
+  (geoms on the mount body only, not the arm subtree). A mount body with no
+  geoms resolves to `0.0` (effectively exempt).
+- **operator `eef`**: radius of the **end-effector assembly** — geoms under the
+  body that owns the EEF site (gripper/fingers), measured around the EEF site.
+  This varies with gripper open/close and is resolved per episode against the
+  home configuration.
 
 Entities linked by an entity-name reference chain are excluded from rejection
 against each other. This allows carried assemblies such as `flower -> vase` to
