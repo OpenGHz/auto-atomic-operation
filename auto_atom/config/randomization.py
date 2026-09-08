@@ -152,6 +152,19 @@ class PoseRandomRange(BaseModel, frozen=True):
       conservative radius from the entity's support geometry, plus
       ``collision_margin``. The magnitude is ignored; any negative value
       means ``auto``.
+
+    ``auto`` semantics by participant:
+
+    * **object**: radius covering the object body's geoms around its own
+      geometric center.
+    * **operator ``base``**: radius of the operator's **root/base body
+      footprint** — geoms attached to the mount body only (not the arm
+      subtree). A mount body with no geoms resolves to radius ``0.0``
+      (effectively exempt).
+    * **operator ``eef``**: radius of the **end-effector assembly** — geoms
+      under the body owning the EEF site (gripper/fingers), measured around
+      the EEF site. This varies with gripper open/close, so it is resolved
+      per episode against the home configuration.
     """
 
     collision_margin: NonNegativeFloat = 0.0

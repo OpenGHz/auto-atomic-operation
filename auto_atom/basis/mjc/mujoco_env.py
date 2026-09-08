@@ -283,6 +283,7 @@ class UnifiedMujocoEnv(MujocoBasis):
     ):
         super().__init__(config, scene_artifact=scene_artifact, **kwargs)
         self._operator_states: dict[str, _OperatorState] = {}
+        self._body_subtree_cache: dict[tuple[int, int], frozenset] = {}
         self._key_creator = KeyCreator(self.config.structured)
         self._camera_noise_processor = CameraNoiseProcessor(
             {spec.name: spec for spec in self.config.cameras}
@@ -578,6 +579,85 @@ class UnifiedMujocoEnv(MujocoBasis):
             raise ValueError(
                 f"Operator '{op_name}' not registered. Call register_operator first."
             )
+
+    def _subtree_body_ids(self, root_body_id: int) -> frozenset[int]:
+        """Return the body ID subtree rooted at ``root_body_id`` (inclusive).
+        Cached per (model, root) because topology is static."""
+        model_id = id(self.model)
+        key = (model_id, int(root_body_id))
+        cached = self._body_subtree_cache.get(key)
+        if cached is not None:
+            return cached
+        ids: set[int] = {int(root_body_id)}
+        for body_id in range(1, self.model.nbody):
+            ancestor_id = body_id
+            while ancestor_id > 0:
+                if ancestor_id == root_body_id:
+                    ids.add(body_id)
+                    break
+                ancestor_id = int(self.model.body_parentid[ancestor_id])
+        result = frozenset(ids)
+        self._body_subtree_cache[key] = result
+        return result
+
+    def get_operator_support_geometry(
+        self,
+        operator_name: str,
+        *,
+        part: str,
+    ) -> SupportGeometry:
+        """Conservative support sphere for one operator region at its reference
+        point, at the current configuration (``mj_forward`` first).
+
+        * ``base``: the operator's **root/base body footprint** — geoms attached
+          to ``root_body`` only, measured around the base frame origin. This is
+          the mount/pedestal footprint, not the whole arm.
+        * ``eef``: the **end-effector assembly** — geoms under the body that
+          owns the EEF site (gripper/fingers), measured around the EEF site.
+          This varies with gripper open/close, so callers should not cache it
+          across episodes.
+
+        Returns radius 0.0 when the region has no geoms (the base part is then
+        effectively exempt from collision rejection).
+        """
+        state = self._get_op(operator_name)
+        if part == "base":
+            root_body_id = mujoco.mj_name2id(
+                self.model, mujoco.mjtObj.mjOBJ_BODY, state.root_body_name
+            )
+            if root_body_id < 0:
+                raise KeyError(
+                    f"Operator '{operator_name}' root body "
+                    f"'{state.root_body_name}' not found."
+                )
+            center = self.data.xpos[root_body_id]
+            geom_ids = [
+                geom_id
+                for geom_id in range(self.model.ngeom)
+                if int(self.model.geom_bodyid[geom_id]) == root_body_id
+            ]
+        elif part == "eef":
+            site_id = mujoco.mj_name2id(
+                self.model, mujoco.mjtObj.mjOBJ_SITE, state.eef_site_name
+            )
+            if site_id < 0:
+                raise KeyError(
+                    f"Operator '{operator_name}' EEF site "
+                    f"'{state.eef_site_name}' not found."
+                )
+            subtree = self._subtree_body_ids(int(self.model.site_bodyid[site_id]))
+            center = self.data.site_xpos[site_id]
+            geom_ids = [
+                geom_id
+                for geom_id in range(self.model.ngeom)
+                if int(self.model.geom_bodyid[geom_id]) in subtree
+            ]
+        else:
+            raise ValueError(
+                f"Unknown operator geometry part {part!r}; expected 'base' or 'eef'."
+            )
+        mujoco.mj_forward(self.model, self.data)
+        return self._support_geometry_of_geoms(geom_ids, center)
 
     # ==================================================================
     # Frame conversion

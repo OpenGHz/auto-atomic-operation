@@ -593,12 +593,44 @@ def test_auto_collision_radius_resolves_from_support_geometry(
         )
         == 0.0
     )
-    # Support geometry is queried once and cached per (entity, env).
+    # Support geometry is queried once and cached per (kind, entity, env).
     backend._auto_collision_radius(kind="object", owner="vase", env_index=0)
-    assert backend._auto_radius_cache[("vase", 0)] == 0.12
+    assert backend._auto_radius_cache[("object", "vase", 0)] == 0.12
 
-    with pytest.raises(NotImplementedError, match="operator"):
+    # Operator base/eef auto resolves via its own geometry seam (stubbed here)
+    # and caches under the operator-kind key, still adding ``collision_margin``.
+    operator_radius = {"base": 0.07, "eef": 0.21}
+
+    class _OperatorRadius:
+        def __init__(self, radius: float) -> None:
+            self.radius = radius
+
+    def _stub_operator_geometry(
+        operator_name: str,
+        part: str,
+        env_index: int = 0,
+    ) -> _OperatorRadius:
+        return _OperatorRadius(operator_radius[part])
+
+    monkeypatch.setattr(
+        backend,
+        "get_operator_support_geometry",
+        _stub_operator_geometry,
+    )
+
+    assert (
         backend._auto_collision_radius(kind="operator_base", owner="arm", env_index=0)
+        == 0.07
+    )
+    assert backend._resolve_collision_radius(
+        kind="operator_eef",
+        owner="arm",
+        env_index=0,
+        spec_radius=-1.0,
+        margin=0.02,
+    ) == pytest.approx(0.23)
+    assert backend._auto_radius_cache[("operator_base", "arm", 0)] == 0.07
+    assert backend._auto_radius_cache[("operator_eef", "arm", 0)] == 0.21
 
 
 def test_maximin_reference_component_is_declaration_order_independent() -> None:

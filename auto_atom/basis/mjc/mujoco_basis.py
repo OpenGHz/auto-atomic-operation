@@ -1050,6 +1050,31 @@ class MujocoBasis:
             far=far_m,
         )
 
+    def _support_geometry_of_geoms(
+        self,
+        geom_ids: List[int],
+        center: np.ndarray,
+    ) -> SupportGeometry:
+        """Conservative sphere over ``geom_ids`` measured around ``center``.
+
+        ``center`` is the reference point a randomization participant uses
+        (the operator base origin for ``base``, the EEF site for ``eef``), so
+        the returned radius is exactly how far each geom surface can extend
+        beyond that point — making the pairwise ``center-distance >= r_i + r_j``
+        test exact rather than approximate. Callers run ``mj_forward`` first so
+        ``geom_xpos`` is current.
+        """
+        center = np.asarray(center, dtype=np.float64)
+        radius = 0.0
+        for geom_id in geom_ids:
+            geom_center = np.asarray(self.data.geom_xpos[geom_id], dtype=np.float64)
+            size = np.asarray(self.model.geom_size[geom_id], dtype=np.float64)
+            geom_radius = float(np.linalg.norm(size))
+            radius = max(
+                radius, float(np.linalg.norm(geom_center - center)) + geom_radius
+            )
+        return SupportGeometry(center=center, radius=radius)
+
     def get_support_geometry(self, entity_name: str) -> SupportGeometry:
         """Return a conservative sphere around the named body's current geoms."""
         body_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, entity_name)

@@ -1144,7 +1144,7 @@ class MujocoTaskBackend(SceneBackend):
         repr=False,
         default_factory=dict,
     )
-    _auto_radius_cache: Dict[Tuple[str, int], float] = field(
+    _auto_radius_cache: Dict[Tuple[Any, ...], float] = field(
         init=False,
         repr=False,
         default_factory=dict,
@@ -1285,6 +1285,36 @@ class MujocoTaskBackend(SceneBackend):
             0 if bool(getattr(self.env, "_share_physics", False)) else env_index
         )
         return self.env.envs[physical_index].get_support_geometry(handler.body_name)
+
+    def get_operator_support_geometry(
+        self,
+        operator_name: str,
+        part: str,
+        env_index: int = 0,
+    ) -> SupportGeometry:
+        """Return one operator region's conservative support geometry.
+
+        ``part`` is ``"base"`` (root/base body footprint) or ``"eef"`` (the
+        EEF assembly under the body owning the EEF site, measured around the
+        site). The result reflects the current episode configuration, so
+        callers must not cache it across resets.
+        """
+        if not 0 <= env_index < self.batch_size:
+            raise IndexError(
+                f"env_index must be in [0, {self.batch_size}), got {env_index}"
+            )
+        if operator_name not in self.operator_handlers:
+            known = ", ".join(sorted(self.operator_handlers)) or "<empty>"
+            raise KeyError(
+                f"Unknown operator '{operator_name}'. Known operators: {known}"
+            )
+        physical_index = (
+            0 if bool(getattr(self.env, "_share_physics", False)) else env_index
+        )
+        return self.env.envs[physical_index].get_operator_support_geometry(
+            operator_name,
+            part=part,
+        )
 
     def evaluate_randomization_constraints(
         self,
@@ -2162,6 +2192,15 @@ class MujocoTaskBackend(SceneBackend):
         return compose_pose(delta, default_pose)
 
     def _apply_randomization(self, env_mask: np.ndarray) -> None:
+        # Operator auto radii depend on the episode's configuration (base/EFF
+        # geometry follows the home state just applied); drop operator entries
+        # each episode and re-resolve, while object auto radii (static
+        # geometry) stay cached.
+        self._auto_radius_cache = {
+            key: value
+            for key, value in self._auto_radius_cache.items()
+            if key[0] == "object"
+        }
         self._validate_randomization_configuration()
         plan = self._randomization_plan()
         order = list(plan.order)
@@ -3516,18 +3555,30 @@ class MujocoTaskBackend(SceneBackend):
         return auto + float(margin)
 
     def _auto_collision_radius(self, *, kind: str, owner: str, env_index: int) -> float:
-        """Return the backend-derived conservative radius for one entity."""
-        if kind != "object":
-            raise NotImplementedError(
-                f"collision_radius auto is not yet supported for operator "
-                f"'{owner}' ({kind}); use an explicit radius or 0 to exempt."
-            )
-        key = (owner, env_index)
+        """Return the backend-derived conservative radius for one entity.
+
+        Objects resolve to their own support geometry (static, so cached for
+        the backend lifetime). Operator ``base``/``eef`` regions resolve to
+        their region footprint (see ``get_operator_support_geometry``); because
+        that geometry follows the episode's configuration it is re-resolved
+        each reset (``_apply_randomization`` drops operator entries).
+        """
+        key = (kind, owner, env_index)
         cached = self._auto_radius_cache.get(key)
-        if cached is None:
+        if cached is not None:
+            return cached
+        if kind == "object":
             geometry = self.get_support_geometry(owner, env_index)
-            cached = float(geometry.radius)
-            self._auto_radius_cache[key] = cached
+        elif kind in ("operator_base", "operator_eef"):
+            part = "base" if kind == "operator_base" else "eef"
+            geometry = self.get_operator_support_geometry(owner, part, env_index)
+        else:
+            raise KeyError(
+                f"Unknown randomization kind {kind!r} for auto collision_radius "
+                f"of '{owner}'."
+            )
+        cached = float(geometry.radius)
+        self._auto_radius_cache[key] = cached
         return cached
 
     def _sample_random_pose_single(

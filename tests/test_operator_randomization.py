@@ -103,7 +103,48 @@ def test_initial_poses_without_randomization() -> None:
         runner.close()
 
 
+def test_operator_auto_collision_radius_resolves_from_real_geometry() -> None:
+    """Auto base/eef radii derive from real model geometry at reset."""
+    task_file = _load_task_file()
+    task_file.task.randomization.entities = {
+        "arm": OperatorRandomizationConfig.model_validate(
+            {
+                "base": {
+                    "x": [0.012, 0.012],
+                    "y": [-0.007, -0.007],
+                    "collision_radius": -1,
+                },
+                "eef": {
+                    "x": [0.0, 0.0],
+                    "y": [0.0, 0.0],
+                    "z": [0.0, 0.0],
+                    "collision_radius": -1,
+                    "collision_margin": 0.005,
+                },
+            }
+        )
+    }
+    runner = TaskRunner().from_config(task_file)
+    try:
+        backend = runner._context.backend
+        update = runner.reset()
+        details = update.details[0]["initial_poses"]["arm"]
+        assert "base_pose" in details
+        assert "eef_pose" in details
+        base_auto = backend._auto_radius_cache[("operator_base", "arm", 0)]
+        eef_auto = backend._auto_radius_cache[("operator_eef", "arm", 0)]
+        # pick_and_place's ``arm`` is a mocap gripper whose root body
+        # (robotiq_interface) carries no geoms → base footprint is 0 (exempt).
+        assert base_auto == 0.0
+        # The EEF assembly (gripper/fingers under robotiq_base) has real geoms
+        # around the EEF site → a positive conservative radius plus margin.
+        assert eef_auto > 0.05
+    finally:
+        runner.close()
+
+
 if __name__ == "__main__":
     main()
     test_direct_operator_randomization_rejected()
     test_initial_poses_without_randomization()
+    test_operator_auto_collision_radius_resolves_from_real_geometry()
