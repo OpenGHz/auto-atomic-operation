@@ -37,6 +37,16 @@ from auto_atom.config.randomization import (
 )
 from auto_atom.config.reference import PoseReference, RandomizationReference
 from auto_atom.config.task import AutoAtomConfig, OperatorConfig, OperatorInitialState
+from auto_atom.contracts import (
+    CameraModel,
+    ContactObservation,
+    IKSolver,
+    ObjectHandler,
+    OperatorHandler,
+    RandomizationConstraintReport,
+    SceneBackend,
+    SupportGeometry,
+)
 
 from ...basis.mjc.mujoco_env import BatchedUnifiedMujocoEnv, EnvConfig
 from ...randomization import (
@@ -47,19 +57,7 @@ from ...randomization import (
     maximin_select,
     unit_candidate,
 )
-from ...runtime import (
-    CameraModel,
-    ComponentRegistry,
-    ContactObservation,
-    ControlResult,
-    ControlSignal,
-    IKSolver,
-    ObjectHandler,
-    OperatorHandler,
-    RandomizationConstraintReport,
-    SceneBackend,
-    SupportGeometry,
-)
+from ...runtime import ComponentRegistry, ControlResult, ControlSignal
 from ...utils.pose import (
     PoseState,
     compose_pose,

@@ -41,12 +41,12 @@ from auto_atom.config.env_config import (
     TemporalNoiseConfig,
     ViewerConfig,
 )
-from auto_atom.runtime import (
+from auto_atom.contracts import (
     CameraModel,
-    ComponentRegistry,
     RandomizationConstraintReport,
     SupportGeometry,
 )
+from auto_atom.runtime import ComponentRegistry
 from auto_atom.scene_composition import SceneArtifact, compile_scene
 from auto_atom.utils.pose import PoseState, quaternion_from_matrix_3x3
 from auto_atom.utils.transformations import (
@@ -57,7 +57,7 @@ from auto_atom.utils.transformations import (
 )
 
 if TYPE_CHECKING:
-    from auto_atom.runtime import IKSolver
+    from auto_atom.contracts import IKSolver
 
 # Re-export config classes so existing imports and Hydra _target_ references work.
 __all__ = [

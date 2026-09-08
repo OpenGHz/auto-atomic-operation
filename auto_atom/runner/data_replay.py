@@ -25,16 +25,15 @@ import numpy as np
 from pydantic import BaseModel, ConfigDict, Field, NonNegativeFloat, model_validator
 
 from auto_atom.config.task import TaskFileConfig
-from auto_atom.policy_eval import PolicyEvaluator
-from auto_atom.runtime import (
+from auto_atom.contracts import (
     EnvProtocol,
-    ExecutionContext,
     JointActionEnvProtocol,
     KinematicPoseActionEnvProtocol,
     StepEnvProtocol,
-    TaskUpdate,
     require_env_capability,
 )
+from auto_atom.policy_eval import PolicyEvaluator
+from auto_atom.runtime import ExecutionContext, TaskUpdate
 
 from .base import RunnerBase
 from .mcap_sources import (

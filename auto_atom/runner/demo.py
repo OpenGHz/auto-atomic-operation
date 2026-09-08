@@ -9,11 +9,8 @@ import hydra
 from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig
 
-from auto_atom.runtime import (
-    ObservationEnvProtocol,
-    TaskRunner,
-    require_env_capability,
-)
+from auto_atom.contracts import ObservationEnvProtocol, require_env_capability
+from auto_atom.runtime import TaskRunner
 
 from .common import (
     ExampleLoopHooks,

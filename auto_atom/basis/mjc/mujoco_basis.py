@@ -32,7 +32,7 @@ from pydantic import PositiveFloat
 from auto_atom.basis.mjc.model_initialization import apply_initial_joint_positions
 from auto_atom.basis.mjc.tactile.tactile_sensor import TactileSensorManager
 from auto_atom.config.env_config import DataType, EnvConfig
-from auto_atom.runtime import (
+from auto_atom.contracts import (
     CameraModel,
     RandomizationConstraintReport,
     SupportGeometry,

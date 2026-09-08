@@ -16,25 +16,30 @@ from auto_atom.config.motion import PoseControlConfig
 from auto_atom.config.operations import Operation
 from auto_atom.config.reference import ControlledFrameKind
 from auto_atom.config.task import TaskFileConfig
+from auto_atom.contracts import (
+    EnvProtocol,
+    InfoEnvProtocol,
+    ObjectHandler,
+    ObservationEnvProtocol,
+    OperatorHandler,
+    SceneBackend,
+    SimulationLoopEnvProtocol,
+    _teardown_backend_after_initialization_failure,
+    construct_scene_backend,
+    require_env_capability,
+)
 
 from .config_loader import load_task_file
 from .execution_timeline import ExecutionTimeline
 from .runtime import (
     ActiveStageState,
     ControlSignal,
-    EnvProtocol,
     ExecutionContext,
     ExecutionRecord,
     ExecutionSummary,
     GraspBinding,
-    InfoEnvProtocol,
-    ObjectHandler,
-    ObservationEnvProtocol,
-    OperatorHandler,
     PrimitiveAction,
     ResolvedMotionGoal,
-    SceneBackend,
-    SimulationLoopEnvProtocol,
     StageExecutionPlan,
     StageExecutionStatus,
     TaskFlowBuilder,
@@ -43,9 +48,6 @@ from .runtime import (
     _build_execution_summary,
     _collect_reset_details,
     _EnvRuntimeState,
-    _teardown_backend_after_initialization_failure,
-    construct_scene_backend,
-    require_env_capability,
 )
 from .stage_execution import PolicyStageFeedback, StageExecution
 

@@ -8,7 +8,8 @@ from typing import Optional
 import numpy as np
 
 from auto_atom.config.task import TaskFileConfig
-from auto_atom.runtime import EnvProtocol, TaskUpdate
+from auto_atom.contracts import EnvProtocol
+from auto_atom.runtime import TaskUpdate
 
 
 class RunnerBase(ABC):

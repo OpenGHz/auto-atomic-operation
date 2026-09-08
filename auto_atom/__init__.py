@@ -70,6 +70,24 @@ from auto_atom.config.task import (
     OperatorInitialState,
     TaskFileConfig,
 )
+from auto_atom.contracts import (
+    CameraModel,
+    EnvProtocol,
+    IKSolver,
+    InfoEnvProtocol,
+    JointActionEnvProtocol,
+    KinematicPoseActionEnvProtocol,
+    ObjectHandler,
+    ObservationEnvProtocol,
+    OperatorHandler,
+    PoseActionEnvProtocol,
+    RandomizationConstraintEnvProtocol,
+    RandomizationConstraintReport,
+    SimulationLoopEnvProtocol,
+    StepEnvProtocol,
+    SupportGeometry,
+    require_env_capability,
+)
 
 from .config_loader import load_config, load_task_file, load_task_file_hydra
 from .execution_timeline import CompiledKeypoint, ExecutionTimeline
@@ -86,37 +104,21 @@ from .runner.data_replay import (
 )
 from .runner.replay_recording import ReplayTimeline, ReplayTrajectory
 from .runtime import (
-    CameraModel,
     ComponentRegistry,
     ControlResult,
     ControlSignal,
-    EnvProtocol,
     ExecutionContext,
     ExecutionRecord,
     ExecutionSummary,
     GraspBinding,
-    IKSolver,
-    InfoEnvProtocol,
-    JointActionEnvProtocol,
-    KinematicPoseActionEnvProtocol,
-    ObjectHandler,
     ObjectOnlyOperatorHandler,
-    ObservationEnvProtocol,
-    OperatorHandler,
-    PoseActionEnvProtocol,
     PrimitiveAction,
-    RandomizationConstraintEnvProtocol,
-    RandomizationConstraintReport,
     ResolvedMotionGoal,
     ResolvedObjectMotionGoal,
-    SimulationLoopEnvProtocol,
     StageExecutionStatus,
-    StepEnvProtocol,
-    SupportGeometry,
     TaskFlowBuilder,
     TaskRunner,
     TaskUpdate,
-    require_env_capability,
 )
 from .utils.pose import PoseState
 

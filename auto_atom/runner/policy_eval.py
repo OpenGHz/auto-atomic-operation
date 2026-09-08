@@ -10,12 +10,12 @@ import numpy as np
 from hydra.utils import instantiate
 from omegaconf import DictConfig
 
-from auto_atom.policy_eval import ConfigDrivenDemoPolicy, PolicyEvaluator
-from auto_atom.runtime import (
+from auto_atom.contracts import (
     ObservationEnvProtocol,
     StepEnvProtocol,
     require_env_capability,
 )
+from auto_atom.policy_eval import ConfigDrivenDemoPolicy, PolicyEvaluator
 
 from .common import (
     ExampleLoopHooks,

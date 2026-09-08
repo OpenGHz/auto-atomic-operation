@@ -12,15 +12,17 @@ from auto_atom.backend.mjc.mujoco_backend import (
     MujocoObjectHandler,
     MujocoTaskBackend,
 )
-from auto_atom.runtime import (
+from auto_atom.contracts import (
     ContactObservation,
-    ControlResult,
-    ControlSignal,
     EnvProtocol,
     ObjectHandler,
     OperatorHandler,
-    PoseState,
     SceneBackend,
+)
+from auto_atom.runtime import (
+    ControlResult,
+    ControlSignal,
+    PoseState,
     TaskFlowBuilder,
     TaskRunner,
 )

@@ -21,9 +21,9 @@ from auto_atom.policy_eval import (
     PolicyActionFeedback,
     PolicyEvaluator,
 )
+from auto_atom.contracts import ContactObservation
 from auto_atom.runtime import (
     ComponentRegistry,
-    ContactObservation,
     ControlResult,
     ControlSignal,
     PrimitiveAction,

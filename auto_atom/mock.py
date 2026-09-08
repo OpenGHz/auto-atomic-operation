@@ -9,17 +9,14 @@ import numpy as np
 
 from auto_atom.config.motion import EefControlConfig, PoseControlConfig
 from auto_atom.config.task import AutoAtomConfig, OperatorConfig
-
-from .runtime import (
-    ComponentRegistry,
+from auto_atom.contracts import (
     ContactObservation,
-    ControlResult,
-    ControlSignal,
     ObjectHandler,
     OperatorHandler,
-    PoseState,
     SceneBackend,
 )
+
+from .runtime import ComponentRegistry, ControlResult, ControlSignal, PoseState
 
 
 @dataclass
