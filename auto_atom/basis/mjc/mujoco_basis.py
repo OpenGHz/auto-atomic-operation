@@ -782,7 +782,7 @@ class MujocoBasis:
         in equilibrium.
         """
         for i in range(self.model.neq):
-            if self.model.eq_type[i] != mujoco.mjtEq.mjEQ_WELD:
+            if int(self.model.eq_type[i]) != int(mujoco.mjtEq.mjEQ_WELD):
                 continue
             b1 = int(self.model.eq_obj1id[i])
             b2 = int(self.model.eq_obj2id[i])

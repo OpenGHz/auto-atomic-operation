@@ -83,10 +83,13 @@ class DoorLatchCallback:
             (door_id, self.config.door_joint),
             (handle_id, self.config.handle_joint),
         ):
-            joint_type = model.jnt_type[joint_id]
+            # MuJoCo >= 3.8 exposes ``mjt*`` members as pybind11 enums whose
+            # set membership / equality against numpy scalars is unreliable.
+            # Compare through explicit ``int()``.
+            joint_type = int(model.jnt_type[joint_id])
             if joint_type not in {
-                mujoco.mjtJoint.mjJNT_HINGE,
-                mujoco.mjtJoint.mjJNT_SLIDE,
+                int(mujoco.mjtJoint.mjJNT_HINGE),
+                int(mujoco.mjtJoint.mjJNT_SLIDE),
             }:
                 raise ValueError(
                     f"DoorLatchCallback: joint '{name}' must be hinge or slide."
@@ -102,7 +105,7 @@ class DoorLatchCallback:
                 "DoorLatchCallback: equality constraint "
                 f"'{self.config.lock_constraint}' not found."
             )
-        if model.eq_type[constraint_id] != mujoco.mjtEq.mjEQ_JOINT:
+        if int(model.eq_type[constraint_id]) != int(mujoco.mjtEq.mjEQ_JOINT):
             raise ValueError(
                 "DoorLatchCallback: lock_constraint must be a joint equality."
             )
