@@ -1,0 +1,184 @@
+# Randomization 配置重构方案（提案，尚未实现）
+
+> 本文是**提案**，描述计划中的配置结构，尚未实现。实现完成后按
+> AGENTS.md 约定，将稳定用法迁移回 `docs/task-configuration/randomization.md`
+> 并删除本文的"提案"声明。
+
+## 实现状态（2026-09-08 更新）
+
+**已实现并验证（改名切片）**：`distribution.min_distance`→`spacing`、
+`separated.min_distance`→`clearance`、删除未接线的
+`RandomizationGroupDistributionConfig.clearance`。已同步
+`mujoco_backend.py` / `mujoco_basis.py` / `randomization.py` 与
+`randomization.md`，`tests/test_randomization_plan.py` 与
+`tests/test_randomization_collision.py` 定向测试通过。
+
+**仍未实现（容器化 / 语义归位，待单独推进）**：`task.randomization` 容器化
+（`distribution` / `constraints` / `entities` + 三级回落）、`failure` 归入
+`constraints`、`strategy` 迁入 `separated` 并支持逐组件独立、删除全局
+`randomization_strategy`。此部分牵动 `compile_randomization_plan`、
+`AutoAtomConfig` 与后端逐组件策略分发，需作为独立改动完成。
+
+## 动机与目标
+
+1. **消除 `min_distance` 歧义**：同一个名字在代码里承担两种不同语义，需拆成
+   语义明确的字段。
+2. **去掉逐实体样板**：`distribution` / `constraints` / `failure` 需要"全局默认 +
+   逐实体覆盖"，避免在多个实体下重复写同一段配置。
+3. **`visible_in` 从"重试式 rejection"转为"范围约束"**：优先要求用户把范围
+   保守缩进可见区内部，而不是靠 `max_attempts` 搜索。
+4. **`strategy` / `failure` 支持逐约束、逐实体独立**，而不是全局唯一一个。
+
+## 三种"距离/尺寸"语义（贯穿全文，务必区分）
+
+| 概念 | 字段 | 语义 | 是否随尺寸 |
+|------|------|------|-----------|
+| 采样间距 | `distribution.spacing`（原 `min_distance`） | 单实体采样流覆盖/间距（Poisson 半径、跨 reset 历史） | 通常逐实体设 |
+| 表面净空 | `separated.clearance`（原 `min_distance`） | 实体表面间要求的净空 | 否（尺寸由半径项承担） |
+| 尺寸代理 | `collision_radius` | 包围球近似半径 | 是 |
+
+碰撞判定的实际最小中心距：
+
+```text
+||p_i - p_j|| >= collision_radius_i + collision_radius_j + separated.clearance
+```
+
+`distribution.spacing` **不参与**碰撞判定，也不保证多物体场景不碰撞（采样流是
+单实体的，生成阶段不感知其它物体）。
+
+## 核心分层：生成 vs 可行性（正交两轴）
+
+| 层 | 字段 | 是否始终生效 |
+|----|------|------------|
+| **生成**（怎么提候选） | `distribution` | 可选，默认 iid |
+| **可行性**（候选如何成为可行布局） | `constraints` | **始终生效**（内置半径分离承载） |
+
+`constraints` 进一步分两类：
+
+| 子类 | 内容 | 说明 |
+|------|------|------|
+| 可选硬要求 | `visible_in` / `separated` | 叠加在机制之上 |
+| 接受机制 | `separated.strategy`、`constraints.failure` | **始终生效** |
+
+### 为什么 `strategy` / `failure` 不游离在外
+
+RSA / joint_rejection（`strategy`）与 `max_attempts`（`failure`）作用于那条
+**始终存在的半径分离**（随机参与者只要 `collision_radius > 0` 就两两避碰），
+不依赖用户是否显式写 `separated` / `visible_in`。因此它们必须"始终有个家"——
+通过在**全局默认 `constraints`** 中始终携带一份带默认 `strategy` 与 `failure`
+的 `separated` 来实现。这样"没写 separated 时 RSA 仍在跑"就有了确定的承载点。
+
+## 最终配置结构
+
+```yaml
+task:
+  randomization:
+    # —— 全局默认（entities 未写对应字段时回落）——
+    distribution:               # 生成
+      generator: iid
+      selector: first_feasible
+      candidate_count: 1
+      spacing: 0.0              # 原 distribution.min_distance
+
+    constraints:                # 可行性（始终存在，承载 always-on 机制）
+      failure:                  # 可行性搜索预算耗尽时怎么办
+        mode: error             # error | best_effort
+        max_attempts: 100
+      separated:                # 分离要求（默认存在 → strategy 有固定家）
+        strategy: rsa           # rsa | joint_rejection（原 randomization_strategy）
+        scope: randomized       # randomized | scene
+        clearance: 0.0          # 原 separated.min_distance
+      visible_in: null          # 可选，默认无
+
+    # —— 逐实体（物体 或 operator 的 base/eef）——
+    entities:
+      plate:
+        reference: absolute_world
+        x: [0.15, 0.55]
+        collision_radius: 0.11
+        # 省略 distribution / constraints → 全部回落全局默认
+
+      source_block:
+        reference: absolute_world
+        x: [0.25, 0.55]
+        y: [-0.15, 0.15]
+        collision_radius: 0.04
+        distribution:           # 实体级覆盖（整块替换 distribution）
+          generator: poisson_disk
+          spacing: 0.04
+        constraints:            # 实体级覆盖（按子字段合并）
+          separated:
+            strategy: joint_rejection   # 本实体组件用 joint 策略
+            clearance: 0.02
+          visible_in:
+            cameras: all
+            geometry: bounding_sphere
+            margin_px: 8
+
+      arm:                      # operator 嵌套不变
+        base: { ... }
+        eef: { ... }
+```
+
+## 覆盖规则（三级回落，在 spec 规范化一处实现）
+
+1. **实体级**：实体写了 `distribution` / `constraints` 的哪个子字段，覆盖全局对应
+   项；没写的继承全局。
+2. **全局默认**：`randomization.distribution` / `randomization.constraints`。
+3. **内置默认**：两者都未配时回落代码内置默认（等同现 `RandomizationDistributionConfig()`
+   与 `RandomizationSeparationConfig()`）。
+
+`constraints` 的实体覆盖是**按 `separated` / `visible_in` / `failure` 子字段合并**，
+避免"覆盖一个丢掉另一个"。`distribution` 与 `constraints.failure` 为整块替换。
+
+## `strategy` 逐组件独立的影响
+
+`separated.strategy`（rsa / joint_rejection）支持逐实体/逐组件独立。当前后端
+只支持**单一全局策略**（`randomization_strategy` 默认 RSA，joint 走另一条
+`_sample_component_for_env` 路径）。放开为逐组件策略后：
+
+- 组件分发需携带"该组件用哪种策略"；
+- 同一 reset 里可能混合 rsa 与 joint_rejection 组件；
+- `AutoAtomConfig.randomization_strategy` 旧字段删除，语义迁移到全局默认
+  `constraints.separated.strategy`。
+
+## `visible_in` 语义：保守内缩（首选），非重试式 rejection
+
+- `visible_in` 的可满足集**只依赖固定相机 + 实体自身几何**，不依赖其它随机成员，
+  因此是**固定几何集合**，可在"选范围"时就前置约束。
+- **首选做法（保守内缩）**：用户把 `proposal` / `regions` 缩进可见区内部，使
+  采样天然可见，`visible_in` 永不触发拒绝。
+- 交集为空 = **确定性不可行**：正确响应是放宽范围 / 调相机，**不该烧
+  `max_attempts`**。
+- 由于 `proposal` 只支持轴对齐盒、可见区一般非轴对齐，只能保守内缩进一个
+  安全盒（配置纪律，非自动计算）。
+
+### 失败/重试语义分层（文档须讲清）
+
+| 约束 | 可重试？ | 失败本质 |
+|------|---------|---------|
+| collision / `separated` | 是（可行性依赖其它成员落点，随机条件性） | 随机搜索未命中 |
+| `visible_in` | 交集非空=搜索；**交集为空=无用** | 范围内确定性不可行 |
+
+## 相机随机化
+
+`camera_randomization` 保持**扁平独立**：相机无分布/碰撞语义，不纳入本结构。
+
+## 后续增强（本轮不做，记录为 TODO）
+
+- `visible_in` 交集为空 → 判定不可行并给诊断、不进入 attempt 循环。
+- `collision_radius: auto`（随缩放几何推导 + margin），见
+  `geometry-randomization-design.md` §5.5。
+- RSA 路径 `separated` 重复执行收敛（`separated` 单一走
+  `evaluate_randomization_constraints`，删除折入 `extra_clearance` 的段落）。
+
+## 实施轮次（每轮独立提交）
+
+- R1：本文档（钉死方案）。
+- R2：`framework.py` schema 重构 —— 容器（`distribution` / `constraints` /
+  `entities`）、`min_distance`→`spacing`、`separated.min_distance`→`clearance`、
+  `separated.strategy`、删 `randomization_strategy`、三级回落。
+- R3：后端读取与逐组件策略分发（`mujoco_backend.py` / `mujoco_basis.py`）。
+- R4：重写 `docs/task-configuration/randomization.md`。
+- R5：测试迁移与新增（结构解析、改名键、覆盖回落、visible_in 空交集诊断、
+  逐组件策略），用受限 runner 跑通。

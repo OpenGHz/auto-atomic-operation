@@ -33,7 +33,7 @@ from auto_atom.runner.data_replay import DataReplayTaskFileConfig
 
 def test_compile_plan_groups_all_randomized_objects_for_separation() -> None:
     separation = RandomizationConstraintConfig(
-        separated={"min_distance": 0.02},
+        separated={"clearance": 0.02},
     )
     plan = compile_randomization_plan(
         {
@@ -105,7 +105,6 @@ def test_compile_plan_keeps_operator_dependency_order() -> None:
 def _hard_sphere_group(
     members: list[str],
     *,
-    clearance: float = 0.0,
     mode: RandomizationFailureMode = RandomizationFailureMode.ERROR,
     max_attempts: int = 100,
 ) -> RandomizationGroupConfig:
@@ -113,14 +112,13 @@ def _hard_sphere_group(
         members=members,
         distribution=RandomizationGroupDistributionConfig(
             generator=RandomizationGroupGeneratorKind.HARD_SPHERE_RSA,
-            clearance=clearance,
         ),
         failure=RandomizationFailureConfig(mode=mode, max_attempts=max_attempts),
     )
 
 
 def test_compile_plan_connects_hard_sphere_rsa_group_members() -> None:
-    group = _hard_sphere_group(["large", "small"], clearance=0.01)
+    group = _hard_sphere_group(["large", "small"])
 
     plan = compile_randomization_plan(
         {
@@ -187,7 +185,7 @@ def test_compile_plan_connects_hard_sphere_rsa_group_members() -> None:
                 "large": RandomizationSpec(
                     proposal=PoseRandomRange(x=(0.0, 1.0), collision_radius=0.10),
                     constraints=RandomizationConstraintConfig(
-                        separated={"min_distance": 0.01}
+                        separated={"clearance": 0.01}
                     ),
                 ),
                 "small": PoseRandomRange(x=(0.0, 1.0), collision_radius=0.05),

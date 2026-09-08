@@ -1736,7 +1736,7 @@ class MujocoBasis:
                         float(np.linalg.norm(left_center - right_center))
                         - left_geometry.radius
                         - right_geometry.radius
-                        - float(separated.min_distance)
+                        - float(separated.clearance)
                     )
                     minimum_clearance = min(minimum_clearance, clearance)
                     if clearance < 0.0:

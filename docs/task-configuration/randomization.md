@@ -330,7 +330,7 @@ task:
         generator: sobol
         selector: maximin
         candidate_count: 32
-        min_distance: 0.04
+        spacing: 0.04
       constraints:
         visible_in:
           cameras: all
@@ -338,7 +338,7 @@ task:
           margin_px: 8
         separated:
           scope: randomized
-          min_distance: 0.01
+          clearance: 0.01
       failure:
         mode: error
         max_attempts: 64
@@ -360,7 +360,7 @@ The selected region supplies the active axis ranges, reference frame, and
 | `selector` | Chooses how the current reset's feasible candidate group is reduced to one sample. | `first_feasible`: accept the first feasible candidate in generation order; `maximin`: select the candidate farthest from accepted samples. | `first_feasible` |
 | `region_weighting` | Chooses how multiple regions in `proposal` participate in sampling. | `equal`: every region has equal proposal weight; `volume`: weight by the product of configured axis extents. | `volume` |
 | `candidate_count` | Limits the candidate pool considered for one target or joint component. | Positive integer. With `first_feasible`, generation stops as soon as the first feasible candidate is found; with `maximin`, the feasible group is collected up to this limit. | `1` |
-| `min_distance` | Sets the physical position spacing for Poisson disk and accepted-sample history across resets. | Non-negative number. | `0.0` |
+| `spacing` | Sets the sampling spacing for Poisson disk and accepted-sample history across resets. This is a per-entity stream property (sample coverage), not a clearance and not a collision test. | Non-negative number. | `0.0` |
 
 The generator names are the algorithms, not a second family/category field.
 `halton` and `sobol` use SciPy's QMC implementations; `latin_hypercube` and
@@ -373,7 +373,7 @@ and for the vectorized distance calculations used by maximin; the backend does
 not provide separate sampling implementations.
 
 `poisson_disk` uses the physical proposal ranges and
-`distribution.min_distance` directly. The short form is normally sufficient:
+`distribution.spacing` directly. The short form is normally sufficient:
 
 ```yaml
 distribution:
@@ -391,11 +391,11 @@ distribution:
       optimization: null    # or random-cd
 ```
 
-For Poisson disk, `distribution.min_distance` is the minimum distance in the
+For Poisson disk, `distribution.spacing` is the minimum sampling distance in the
 same physical units as the active position axes (metres for task poses). The
 backend passes the proposal's lower and upper position bounds to SciPy, so no
 unit-cube conversion or simulator-specific scale factor is exposed. A positive
-`min_distance` is required. Orientation axes are sampled by a separate
+`spacing` is required. Orientation axes are sampled by a separate
 low-discrepancy stream and are not mixed into the metre-valued distance.
 `hypersphere` chooses whether SciPy proposes points inside the candidate sphere
 or on its surface. `ncandidates` controls proposals per active point and
@@ -438,7 +438,7 @@ guarantee for a multi-object scene.
 |-------|----------|------------------|---------|
 | `scope` | Selects the set of possible collision partners. | `randomized`: other randomized objects; `scene`: all scene geometry supported by the backend. | `randomized` |
 | `geometry` | Selects the geometry used to measure separation. | `center`: entity reference points; `support`: backend-provided support geometry. | `support` |
-| `min_distance` | Adds required clearance between the selected geometries. | Non-negative number in metres. | `0.0` |
+| `clearance` | Adds required surface clearance between the selected geometries. The enforced minimum center distance is `collision_radius_i + collision_radius_j + clearance`; size is carried by the radius terms, so clearance is a size-adaptive surface gap. | Non-negative number in metres. | `0.0` |
 
 The configuration defines these semantics independently of any simulator. A
 backend may provide a conservative geometry approximation or reject a geometry
@@ -665,7 +665,7 @@ task:
       collision_radius: 0.11
       distribution:
         generator: poisson_disk
-        min_distance: 0.04
+        spacing: 0.04
     cup:
       reference: absolute_world
       x: [0.15, 0.55]
@@ -673,7 +673,7 @@ task:
       collision_radius: 0.05
       distribution:
         generator: poisson_disk
-        min_distance: 0.04
+        spacing: 0.04
   randomization_strategy: rsa
 ```
 
@@ -693,10 +693,11 @@ remain its candidate source. In particular, a persistent `poisson_disk` stream
 continues to provide physical-space coverage across resets; RSA only decides
 whether a candidate is feasible relative to already placed group members.
 
-Pairwise `constraints.separated.min_distance` contributes additional clearance.
-Visibility constraints remain hard constraints and can cause the current member
-to try another proposal. With `joint_rejection`, the whole automatically derived
-component is discarded and sampled again when any member fails.
+Pairwise `constraints.separated.clearance` contributes additional surface
+clearance. Visibility constraints remain hard constraints and can cause the
+current member to try another proposal. With `joint_rejection`, the whole
+automatically derived component is discarded and sampled again when any member
+fails.
 
 RSA supports reference-connected object components, visibility and separation
 checks through the same shared constraint machinery. Operator actions remain

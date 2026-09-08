@@ -799,8 +799,14 @@ class RandomizationSeparationConfig(BaseModel, frozen=True):
     scope: Literal["randomized", "scene"] = "randomized"
     """Check only randomized participants or all backend-supported scene geometry."""
 
-    min_distance: NonNegativeFloat = 0.0
-    """Additional required clearance in metres."""
+    clearance: NonNegativeFloat = 0.0
+    """Required surface clearance in metres between the selected geometries.
+
+    The actual enforced minimum center distance is
+    ``collision_radius_i + collision_radius_j + clearance``. Object size is
+    carried by the radius terms, so ``clearance`` is a pure surface gap and is
+    size-adaptive by construction.
+    """
 
     geometry: Literal["center", "support"] = "support"
     """Use center distances or backend support geometry."""
@@ -835,8 +841,13 @@ class RandomizationDistributionConfig(BaseModel, frozen=True):
     candidate_count: PositiveInt = 1
     """Maximum candidate pool size considered for one target or joint sample."""
 
-    min_distance: NonNegativeFloat = 0.0
-    """Physical position spacing in metres for Poisson and history coverage."""
+    spacing: NonNegativeFloat = 0.0
+    """Sampling spacing in metres for Poisson and cross-reset history coverage.
+
+    This is a per-entity stream property (how spread out consecutive samples are
+    over the proposal volume and across resets). It is not a clearance and does
+    not participate in collision or separation checks.
+    """
 
 
 class RandomizationFailureConfig(BaseModel, frozen=True):
@@ -866,8 +877,10 @@ class RandomizationGroupDistributionConfig(BaseModel, frozen=True):
     generator: RandomizationGroupGeneratorKind
     """Joint placement algorithm applied after member proposals generate candidates."""
 
-    clearance: NonNegativeFloat = 0.0
-    """Additional pairwise surface clearance in metres between group members."""
+    # NOTE: the historical ``clearance`` field on this model was never read by
+    # the placement math (member spacing comes from
+    # ``RandomizationSeparationConfig.clearance``) and has been removed as a
+    # redundant, unwired duplicate.
 
 
 class RandomizationGroupConfig(BaseModel, frozen=True):

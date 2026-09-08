@@ -174,7 +174,6 @@ def _make_backend(
 def _hard_sphere_group(
     members: list[str],
     *,
-    clearance: float = 0.0,
     mode: RandomizationFailureMode = RandomizationFailureMode.ERROR,
     max_attempts: int = 100,
 ) -> RandomizationGroupConfig:
@@ -182,7 +181,6 @@ def _hard_sphere_group(
         members=members,
         distribution=RandomizationGroupDistributionConfig(
             generator=RandomizationGroupGeneratorKind.HARD_SPHERE_RSA,
-            clearance=clearance,
         ),
         failure=RandomizationFailureConfig(mode=mode, max_attempts=max_attempts),
     )
@@ -206,7 +204,6 @@ def test_hard_sphere_rsa_resamples_locally_with_heterogeneous_radii() -> None:
         randomization_groups={
             "tabletop": _hard_sphere_group(
                 ["large", "small"],
-                clearance=0.02,
                 max_attempts=2,
             )
         },
@@ -219,7 +216,7 @@ def test_hard_sphere_rsa_resamples_locally_with_heterogeneous_radii() -> None:
     large = backend.object_handlers["large"].get_pose().position[0]
     small = backend.object_handlers["small"].get_pose().position[0]
     assert rng.permutation_inputs == [("large", "small")]
-    assert np.linalg.norm(large - small) >= 0.10 + 0.05 + 0.02
+    assert np.linalg.norm(large - small) >= 0.10 + 0.05
     assert np.allclose(small, [0.18, 0.0, 0.0])
 
 
@@ -241,7 +238,6 @@ def test_hard_sphere_rsa_error_reports_an_infeasible_member() -> None:
         randomization_groups={
             "tabletop": _hard_sphere_group(
                 ["large", "small"],
-                clearance=0.02,
                 max_attempts=2,
             )
         },
@@ -270,7 +266,6 @@ def test_hard_sphere_rsa_best_effort_records_diagnostics() -> None:
         randomization_groups={
             "tabletop": _hard_sphere_group(
                 ["large", "small"],
-                clearance=0.02,
                 mode=RandomizationFailureMode.BEST_EFFORT,
                 max_attempts=1,
             )
@@ -581,7 +576,7 @@ def test_first_feasible_non_iid_generator_avoids_accepted_samples_across_resets(
     distribution = RandomizationDistributionConfig(
         generator=RandomizationGeneratorKind.HALTON,
         selector=RandomizationSelectorKind.FIRST_FEASIBLE,
-        min_distance=0.01,
+        spacing=0.01,
     )
     spec = RandomizationSpec(
         proposal=PoseRandomRange(
@@ -614,7 +609,7 @@ def test_poisson_disk_uses_physical_bounds_across_resets() -> None:
         generator=RandomizationGeneratorConfig(
             poisson_disk=RandomizationPoissonDiskConfig(ncandidates=20)
         ),
-        min_distance=0.2,
+        spacing=0.2,
     )
     spec = RandomizationSpec(
         proposal=PoseRandomRange(

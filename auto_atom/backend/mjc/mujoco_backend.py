@@ -1903,11 +1903,11 @@ class MujocoTaskBackend(SceneBackend):
         )
         if not position_axes:
             return None
-        min_distance = float(getattr(distribution, "min_distance", 0.0))
-        if min_distance <= 0.0:
+        spacing = float(getattr(distribution, "spacing", 0.0))
+        if spacing <= 0.0:
             raise ValueError(
                 f"Poisson-disk randomization '{action_spec.label}' requires "
-                "distribution.min_distance > 0"
+                "distribution.spacing > 0"
             )
         lower_bounds = tuple(
             float(rand_range.axis_range(axis)[0]) for axis in position_axes
@@ -1968,7 +1968,7 @@ class MujocoTaskBackend(SceneBackend):
             position_axes,
             lower_bounds,
             upper_bounds,
-            min_distance,
+            spacing,
             tuple(reference_context),
             poisson_config.hypersphere,
             int(poisson_config.ncandidates),
@@ -1984,7 +1984,7 @@ class MujocoTaskBackend(SceneBackend):
                 poisson_config,
                 lower_bounds=lower_bounds,
                 upper_bounds=upper_bounds,
-                radius=min_distance,
+                radius=spacing,
                 seed=int((self.random_seed or 0) + env_index * 10_007 + label_seed),
             )
             self._poisson_streams[key] = stream
@@ -2469,9 +2469,7 @@ class MujocoTaskBackend(SceneBackend):
         )
         pair_clearance = max(
             (
-                float(
-                    action_specs[label].randomization.constraints.separated.min_distance
-                )
+                float(action_specs[label].randomization.constraints.separated.clearance)
                 for label in component
                 if action_specs[label].randomization.constraints.separated is not None
             ),
@@ -2721,7 +2719,7 @@ class MujocoTaskBackend(SceneBackend):
         history = self._space_filling_history.get(history_key, [])
         history_min_distance = max(
             (
-                float(action_specs[label].randomization.distribution.min_distance)
+                float(action_specs[label].randomization.distribution.spacing)
                 for label in component
                 if self._distribution_uses_space_filling_history(
                     action_specs[label].randomization.distribution
@@ -2936,7 +2934,7 @@ class MujocoTaskBackend(SceneBackend):
             selected = maximin_select(
                 vectors,
                 count=1,
-                min_distance=float(distribution.min_distance),
+                min_distance=float(distribution.spacing),
                 # History is prepared independently of the selector.  It is
                 # the scoring baseline for maximin within this reset's group.
                 seed_points=np.vstack(history) if history else None,

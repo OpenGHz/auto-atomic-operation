@@ -105,7 +105,7 @@ class PoissonDiskCandidateStream:
             raise ValueError("Poisson-disk position bounds must have positive extent")
         if radius <= 0.0:
             raise ValueError(
-                "Poisson-disk randomization requires distribution.min_distance > 0"
+                "Poisson-disk randomization requires distribution.spacing > 0"
             )
         if config.optimization == "lloyd":
             raise ValueError(
@@ -132,7 +132,7 @@ class PoissonDiskCandidateStream:
         except MemoryError as exc:
             raise ValueError(
                 "Poisson-disk radius is too small for the physical proposal "
-                "space; increase the proposal extent or reduce min_distance."
+                "space; increase the proposal extent or reduce spacing."
             ) from exc
 
     def next(self) -> np.ndarray:
@@ -141,7 +141,7 @@ class PoissonDiskCandidateStream:
         if len(sample) == 0:
             raise ValueError(
                 "Poisson-disk proposal space is exhausted; reduce "
-                "distribution.min_distance or enlarge the physical range."
+                "distribution.spacing or enlarge the physical range."
             )
         return np.asarray(sample[0], dtype=np.float64).copy()
 
