@@ -101,7 +101,12 @@ def test_plate_pad_contact_uses_xf9600_priority_parameters() -> None:
     assert matching_contacts, "expected a generated plate-pad contact"
     for contact in matching_contacts:
         assert contact.dim == 4
-        assert contact.dist == pytest.approx(-0.001, abs=1.0e-12)
+        # Intended penetration is 1 mm (dist == -0.001).  MuJoCo 3.12's convex
+        # collision computes the contact distance with ~1e-9 floating-point
+        # noise (observed 5.8e-10), so the historical 1e-12 exactness bound is
+        # no longer achievable; 1e-6 keeps the 1 mm intent tight while
+        # tolerating solver-level noise.
+        assert contact.dist == pytest.approx(-0.001, abs=1.0e-6)
         # A 4D contact uses two sliding directions plus one torsional
         # direction.  The final two stored coefficients retain rolling values
         # even though condim=4 does not activate those directions.
