@@ -4490,17 +4490,15 @@ def build_mujoco_backend(
             body_name=body_name,
         )
 
-    resolved_randomization, resolved_strategy = resolve_randomization_scope(
-        config.randomization
-    )
+    resolved_scope = resolve_randomization_scope(config.randomization)
 
     backend = MujocoTaskBackend(
         env=env,
         operator_handlers=operator_handlers,
         object_handlers=object_handlers,
-        randomization=resolved_randomization,
-        randomization_strategy=resolved_strategy,
-        camera_randomization=dict(config.randomization.cameras),
+        randomization=dict(resolved_scope.entities),
+        randomization_strategy=resolved_scope.strategy,
+        camera_randomization=dict(resolved_scope.cameras),
         initial_poses=dict(config.initial_pose),
         camera_initial_poses=dict(config.camera_initial_pose),
         operator_initial_states={

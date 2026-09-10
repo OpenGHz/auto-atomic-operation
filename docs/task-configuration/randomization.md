@@ -240,9 +240,11 @@ Bare entity ranges inherit the scope-wide `distribution` and `constraints`
 defaults; an advanced `RandomizationSpec` is fully explicit. The placement
 `strategy` lives in `constraints.separated.strategy` and defaults to `rsa`.
 
-`cameras` is a separate kind of entry, grouped here for cohesion only. Camera
-entries never inherit `distribution` / `constraints`, because cameras have no
-distribution, collision, or separation semantics.
+`cameras` is a separate kind of entry, grouped here for cohesion. Camera
+entries inherit the scope-wide `distribution` (a pose-stream property) but
+never `constraints`, because cameras have no separation, visibility, or
+feasibility-loop semantics. Declaring `constraints` on a camera entry is
+rejected rather than silently ignored.
 
 For a target whose valid workspace is disjoint, use
 `PoseRandomizationConfig`'s `regions` list. A direct per-axis range is the
@@ -889,10 +891,13 @@ Camera viewpoint randomization is configured under
 selected backend. Each entry is a `PoseRandomRange` with the same axis fields
 as entity randomization.
 
-`cameras` is a peer of `entities` inside the randomization scope, provided for
-grouping only: cameras have no distribution, collision, or separation
-semantics, so entries never inherit the scope-level `distribution` /
-`constraints` defaults.
+`cameras` is a peer of `entities` inside the randomization scope. Camera pose
+sampling is a pose stream, so entries inherit the scope-wide `distribution`
+(generator, selector, spacing, candidate pool) exactly like bare entity ranges.
+They never inherit `constraints` — cameras have no separation, collision, or
+visibility semantics — and declaring `constraints` on a camera entry is
+rejected. Only `relative` (default) and `absolute_world` reference modes are
+supported.
 
 ```yaml
 task:

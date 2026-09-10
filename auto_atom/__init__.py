@@ -56,6 +56,7 @@ from auto_atom.config.randomization import (
     RandomizationVisibilityConfig,
     RandomizationVisibilityGeometry,
     RandomizationVisibilityMode,
+    ResolvedRandomizationScope,
     resolve_randomization_scope,
 )
 from auto_atom.config.reference import (

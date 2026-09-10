@@ -1,5 +1,6 @@
 """randomization configuration models (split from the former auto_atom.framework monolith)."""
 
+from dataclasses import dataclass
 from enum import Enum
 from typing import Dict, List, Literal, Optional, Tuple, Union
 
@@ -575,26 +576,28 @@ class OperatorRandomizationConfig(BaseModel):
 
 
 class RandomizationScopeConfig(BaseModel):
-    """Container for global randomization defaults and per-entity entries.
+    """Container for global randomization defaults and the target maps.
 
-    This is the value of ``task.randomization``. It groups three orthogonal
+    This is the value of ``task.randomization``. It groups four orthogonal
     concerns:
 
     * ``distribution`` — the global default candidate-generation settings.
-      Bare entity ranges that do not configure their own ``distribution``
-      inherit this default.
+      Bare ``entities`` and ``cameras`` ranges inherit this default.
     * ``constraints`` — the global default feasibility settings (visibility,
       separation, failure policy, and the placement ``separated.strategy``).
-      Bare entity ranges inherit this default.
+      Only bare ``entities`` ranges inherit this default: cameras own no
+      separation, visibility, or feasibility-loop semantics.
     * ``entities`` — the per-entity entries (objects, or operators with
       ``base`` / ``eef``). Advanced ``RandomizationSpec`` entries are fully
       explicit and override the scope defaults entirely.
+    * ``cameras`` — the per-camera entries. They inherit ``distribution`` (how
+      the pose stream is generated) but never ``constraints``.
     """
 
     model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid")
 
     distribution: RandomizationDistributionConfig = RandomizationDistributionConfig()
-    """Global default distribution inherited by bare entity ranges."""
+    """Global default distribution inherited by bare entity and camera ranges."""
 
     constraints: RandomizationConstraintConfig = RandomizationConstraintConfig()
     """Global default constraints (visible_in / separated / failure) inherited
@@ -615,11 +618,13 @@ class RandomizationScopeConfig(BaseModel):
     Keys are logical camera names exposed by the selected backend. Each entry
     is a ``PoseRandomRange`` controlling which axes are randomized and how.
 
-    Cameras have no distribution / collision / separation semantics, so they do
-    **not** inherit the scope ``distribution`` / ``constraints`` defaults; this
-    field is a peer of ``entities`` for grouping only. Only ``relative``
-    (default) and ``absolute_world`` reference modes are supported;
-    ``absolute_base`` and entity-name references are rejected.
+    Cameras sample a pose stream but own no separation / visibility /
+    feasibility semantics. They therefore inherit the scope-wide
+    ``distribution`` (generator, selector, spacing, candidate pool) but never
+    ``constraints``; declaring ``constraints`` on a camera entry is rejected
+    rather than silently ignored. Only ``relative`` (default) and
+    ``absolute_world`` reference modes are supported; ``absolute_base`` and
+    entity-name references are rejected.
 
     Example YAML::
 
@@ -638,48 +643,75 @@ class RandomizationScopeConfig(BaseModel):
 
     @field_validator("cameras", mode="after")
     @classmethod
-    def _reject_camera_region_wrappers(
+    def _validate_camera_entries(
         cls,
         value: Dict[str, Union[PoseRandomRange, RandomizationSpec]],
     ) -> Dict[str, Union[PoseRandomRange, RandomizationSpec]]:
         for name, spec in value.items():
-            if isinstance(spec, RandomizationSpec) and isinstance(
-                spec.proposal, PoseRandomizationConfig
+            if isinstance(spec, PoseRandomizationConfig) or (
+                isinstance(spec, RandomizationSpec)
+                and isinstance(spec.proposal, PoseRandomizationConfig)
             ):
                 raise ValueError(
                     f"cameras[{name!r}] accepts one PoseRandomRange; "
                     "regions are not supported for cameras"
                 )
-            if isinstance(spec, PoseRandomizationConfig):
+            if isinstance(spec, RandomizationSpec) and (
+                spec.constraints != RandomizationConstraintConfig()
+            ):
                 raise ValueError(
-                    f"cameras[{name!r}] accepts one PoseRandomRange; "
-                    "regions are not supported for cameras"
+                    f"cameras[{name!r}] must not declare constraints; cameras "
+                    "have no separation, visibility, or feasibility-loop "
+                    "semantics (only the scope-wide distribution is inherited)"
                 )
         return value
 
 
-def _scope_apply_defaults(
+@dataclass(frozen=True)
+class ResolvedRandomizationScope:
+    """A randomization scope expanded against its own defaults.
+
+    ``entities`` and ``cameras`` hold the same shape as the scope maps, but
+    every bare range is already wrapped into a ``RandomizationSpec`` carrying
+    the defaults it inherits. ``strategy`` is the effective separation strategy
+    the backend must apply.
+    """
+
+    entities: Dict[str, Union[RandomizationInput, OperatorRandomizationConfig]]
+    """Resolved per-entity entries with scope defaults applied."""
+
+    cameras: Dict[str, RandomizationInput]
+    """Resolved per-camera entries with the scope distribution applied."""
+
+    strategy: RandomizationStrategy
+    """Effective separation strategy for this scope."""
+
+
+def _apply_scope_defaults(
     value: RandomizationInput,
-    scope: RandomizationScopeConfig,
     *,
     name: str,
-    strategy: RandomizationStrategy,
+    distribution: RandomizationDistributionConfig,
+    constraints: Optional[RandomizationConstraintConfig],
+    strategy: Optional[RandomizationStrategy],
 ) -> RandomizationInput:
-    """Give a bare proposal the scope's defaults, or validate an advanced spec.
+    """Give a bare proposal the given defaults, or validate an advanced spec.
 
     Legacy ``PoseRandomRange`` / ``PoseRandomizationConfig`` inputs carry no
     distribution/constraints of their own and therefore inherit the scope-wide
-    defaults. An advanced ``RandomizationSpec`` is fully explicit; its declared
-    ``separated.strategy`` must agree with the effective scope strategy because
-    the backend applies one placement strategy per plan.
+    defaults. An advanced ``RandomizationSpec`` is fully explicit and is
+    returned unchanged.
+
+    ``constraints`` / ``strategy`` are ``None`` for targets that own no
+    separation semantics (cameras). Such targets are exempt from the strategy
+    agreement check, which exists only because the backend applies one
+    placement strategy per randomization plan.
     """
     if isinstance(value, RandomizationSpec):
-        declared = (
-            value.constraints.separated.strategy
-            if value.constraints.separated is not None
-            else None
-        )
-        if declared is not None and declared != strategy:
+        if strategy is None or value.constraints.separated is None:
+            return value
+        declared = value.constraints.separated.strategy
+        if declared != strategy:
             raise ValueError(
                 f"Randomization '{name}' declares "
                 f"constraints.separated.strategy={declared.value!r} which differs "
@@ -689,23 +721,24 @@ def _scope_apply_defaults(
         return value
     return RandomizationSpec(
         proposal=value,
-        distribution=scope.distribution,
-        constraints=scope.constraints,
+        distribution=distribution,
+        constraints=(
+            constraints if constraints is not None else RandomizationConstraintConfig()
+        ),
     )
 
 
 def resolve_randomization_scope(
     scope: RandomizationScopeConfig,
-) -> Tuple[
-    Dict[str, Union[RandomizationInput, OperatorRandomizationConfig]],
-    RandomizationStrategy,
-]:
-    """Expand a randomization scope into per-entity entries plus the strategy.
+) -> ResolvedRandomizationScope:
+    """Expand a randomization scope into resolved targets plus the strategy.
 
     Bare object ranges and bare operator ``base`` / ``eef`` ranges inherit the
     scope-wide ``distribution`` and ``constraints`` defaults (three-level
-    fallback: entity explicit > scope default > built-in default). The returned
-    mapping is consumed by :func:`compile_randomization_plan` and the backends.
+    fallback: target explicit > scope default > built-in default). Bare camera
+    ranges inherit only ``distribution``: cameras have no separation,
+    visibility, or feasibility-loop semantics, so their ``constraints`` stays at
+    the built-in default. The result is consumed by the backends.
     """
     strategy = (
         scope.constraints.separated.strategy
@@ -717,22 +750,48 @@ def resolve_randomization_scope(
         if isinstance(value, OperatorRandomizationConfig):
             resolved[name] = OperatorRandomizationConfig(
                 base=(
-                    _scope_apply_defaults(
-                        value.base, scope, name=name, strategy=strategy
+                    _apply_scope_defaults(
+                        value.base,
+                        name=name,
+                        distribution=scope.distribution,
+                        constraints=scope.constraints,
+                        strategy=strategy,
                     )
                     if value.base is not None
                     else None
                 ),
                 eef=(
-                    _scope_apply_defaults(
-                        value.eef, scope, name=name, strategy=strategy
+                    _apply_scope_defaults(
+                        value.eef,
+                        name=name,
+                        distribution=scope.distribution,
+                        constraints=scope.constraints,
+                        strategy=strategy,
                     )
                     if value.eef is not None
                     else None
                 ),
             )
             continue
-        resolved[name] = _scope_apply_defaults(
-            value, scope, name=name, strategy=strategy
+        resolved[name] = _apply_scope_defaults(
+            value,
+            name=name,
+            distribution=scope.distribution,
+            constraints=scope.constraints,
+            strategy=strategy,
         )
-    return resolved, strategy
+    cameras = {
+        name: _apply_scope_defaults(
+            value,
+            name=name,
+            distribution=scope.distribution,
+            constraints=None,
+            strategy=None,
+        )
+        for name, value in scope.cameras.items()
+    }
+    return ResolvedRandomizationScope(
+        entities=resolved,
+        cameras=cameras,
+        strategy=strategy,
+    )

@@ -244,14 +244,18 @@ def test_config_selects_automatic_randomization_strategy() -> None:
             },
         }
     )
-    _, strategy = resolve_randomization_scope(config.randomization)
-    assert strategy == RandomizationStrategy.JOINT_REJECTION
+    assert (
+        resolve_randomization_scope(config.randomization).strategy
+        == RandomizationStrategy.JOINT_REJECTION
+    )
 
     default_config = AutoAtomConfig.model_validate(
         {"stages": [], "env_name": "randomization_test"}
     )
-    _, default_strategy = resolve_randomization_scope(default_config.randomization)
-    assert default_strategy == RandomizationStrategy.RSA
+    assert (
+        resolve_randomization_scope(default_config.randomization).strategy
+        == RandomizationStrategy.RSA
+    )
 
 
 def test_data_replay_disables_object_randomization() -> None:
@@ -309,8 +313,9 @@ def test_scope_defaults_inherited_and_strategy_resolved() -> None:
         },
     )
 
-    resolved, strategy = resolve_randomization_scope(scope)
-    assert strategy == RandomizationStrategy.JOINT_REJECTION
+    resolved_scope = resolve_randomization_scope(scope)
+    assert resolved_scope.strategy == RandomizationStrategy.JOINT_REJECTION
+    resolved = resolved_scope.entities
 
     cup = resolved["cup"]
     assert isinstance(cup, RandomizationSpec)
@@ -349,6 +354,96 @@ def test_scope_rejects_conflicting_entity_separated_strategy() -> None:
     )
     with pytest.raises(ValueError, match="one placement strategy"):
         resolve_randomization_scope(scope)
+
+
+def test_cameras_inherit_scope_distribution_but_not_constraints() -> None:
+    scope = RandomizationScopeConfig(
+        distribution=RandomizationDistributionConfig(
+            generator=RandomizationGeneratorKind.SOBOL,
+            spacing=0.05,
+        ),
+        constraints=RandomizationConstraintConfig(
+            separated={"clearance": 0.02, "strategy": "joint_rejection"},
+            failure=RandomizationFailureConfig(max_attempts=7),
+        ),
+        cameras={"head_cam": PoseRandomRange(x=(0.0, 1.0))},
+    )
+
+    resolved = resolve_randomization_scope(scope)
+    assert resolved.strategy == RandomizationStrategy.JOINT_REJECTION
+
+    camera = resolved.cameras["head_cam"]
+    assert isinstance(camera, RandomizationSpec)
+    # ``distribution`` is a pose-stream property, so cameras inherit it.
+    assert camera.distribution.generator == RandomizationGeneratorKind.SOBOL
+    assert camera.distribution.spacing == 0.05
+    # ``constraints`` is entity-only: separation / visibility / failure have no
+    # camera meaning, so the built-in defaults stay in place.
+    assert camera.constraints.separated is None
+    assert camera.constraints.visible_in is None
+    assert camera.constraints.failure.max_attempts == 100
+
+
+def test_camera_advanced_spec_keeps_its_own_distribution() -> None:
+    scope = RandomizationScopeConfig(
+        distribution=RandomizationDistributionConfig(
+            generator=RandomizationGeneratorKind.SOBOL
+        ),
+        cameras={
+            "head_cam": RandomizationSpec(
+                proposal=PoseRandomRange(x=(0.0, 1.0)),
+                distribution=RandomizationDistributionConfig(
+                    generator=RandomizationGeneratorKind.IID
+                ),
+            )
+        },
+    )
+
+    camera = resolve_randomization_scope(scope).cameras["head_cam"]
+    assert isinstance(camera, RandomizationSpec)
+    assert camera.distribution.generator == RandomizationGeneratorKind.IID
+
+
+def test_cameras_reject_declared_constraints() -> None:
+    with pytest.raises(ValueError, match="must not declare constraints"):
+        RandomizationScopeConfig(
+            cameras={
+                "head_cam": RandomizationSpec(
+                    proposal=PoseRandomRange(x=(0.0, 1.0)),
+                    constraints=RandomizationConstraintConfig(
+                        visible_in={"cameras": "all"}
+                    ),
+                )
+            }
+        )
+
+    with pytest.raises(ValueError, match="must not declare constraints"):
+        RandomizationScopeConfig(
+            cameras={
+                "head_cam": RandomizationSpec(
+                    proposal=PoseRandomRange(x=(0.0, 1.0)),
+                    constraints=RandomizationConstraintConfig(
+                        failure=RandomizationFailureConfig(max_attempts=3)
+                    ),
+                )
+            }
+        )
+
+
+def test_camera_entries_skip_the_scope_strategy_agreement_check() -> None:
+    scope = RandomizationScopeConfig(
+        constraints=RandomizationConstraintConfig(
+            separated={"strategy": "joint_rejection"}
+        ),
+        entities={"cup": PoseRandomRange(x=(0.0, 1.0))},
+        cameras={"head_cam": PoseRandomRange(x=(0.0, 1.0))},
+    )
+
+    resolved = resolve_randomization_scope(scope)
+    assert resolved.strategy == RandomizationStrategy.JOINT_REJECTION
+    camera = resolved.cameras["head_cam"]
+    assert isinstance(camera, RandomizationSpec)
+    assert camera.constraints.separated is None
 
 
 def test_collision_radius_negative_marks_auto_and_margin_parseable() -> None:

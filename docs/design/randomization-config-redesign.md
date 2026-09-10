@@ -11,8 +11,8 @@
   `separated.min_distance`→`clearance`、删除未接线的
   `RandomizationGroupDistributionConfig.clearance`。
 - 容器化切片（提交 `5626df0`）：`task.randomization` → `RandomizationScopeConfig`
-  {`distribution`、`constraints`、`entities`}；`resolve_randomization_scope` 三级回落
-  （实体显式 > scope 默认 > 内置）；`failure` 归入 `constraints.failure`；
+  {`distribution`、`constraints`、`entities`、`cameras`}；`resolve_randomization_scope` 三级回落
+  （目标显式 > scope 默认 > 内置）；`failure` 归入 `constraints.failure`；
   `strategy` 归入 `separated.strategy`，删除 `AutoAtomConfig.randomization_strategy`；
   采用**新语义**（默认 `failure=error`，去掉 legacy best_effort 特殊化）。同步后端工厂、
   runtime / execution_config / data_replay、24 个 `aao_configs` 的 `entities` 包装、
@@ -24,6 +24,12 @@
   footprint、eef=eef site body 子树（详见文末"已记录的后续增强"）。
 - **visible_in 确定性判空**（提交 `add77d2`）：范围盒与相机视锥整体不相交时
   `mode=error` 直接以 `attempts=0` 失败并诊断，不再烧 `max_attempts`。
+- **相机随机化并入容器**（提交 `61bafb5`）：`task.camera_randomization` →
+  `task.randomization.cameras`，删除顶层字段（无兼容入口）。
+- **相机继承 `distribution`**：`cameras` 条目与实体一样继承 scope 的
+  `distribution`；`constraints` 为实体专属，相机显式声明会被拒绝。
+  `resolve_randomization_scope` 改为返回 `ResolvedRandomizationScope`
+  （`entities` / `cameras` / `strategy`），三级回落对两类目标共用同一实现。
 
 ## 动机与目标
 
@@ -171,17 +177,23 @@ task:
 `camera_randomization` 已并入作用域容器，作为 `randomization` 下与 `entities`
 同级的 `cameras` 映射（不再有顶层 `task.camera_randomization`）。
 
-归并的仅是**位置**，不是**语义**：相机无分布/碰撞/分离语义，因此
-`cameras` 条目**不继承** scope 的 `distribution` / `constraints`，只是与
-实体随机化共用同一个容器以提高配置连贯性。
+归并的仅是**位置**，不是**语义**：
+
+- `distribution` 描述"位姿流怎么生成"（generator / selector / spacing / 候选池），
+  相机也在采样位姿流，因此 `cameras` 条目与实体一样**继承** scope 的
+  `distribution`（含三级回落）。
+- `constraints`（`visible_in` / `separated` / `failure`）是实体专属语义，相机没有
+  碰撞几何、不能作为可见性约束目标、也没有可行性重试循环，因此相机**不继承**
+  `constraints`；在相机条目上显式声明 `constraints` 会被**拒绝**（fail-closed），
+  而不是静默忽略。
 
 ```yaml
 task:
   randomization:
-    distribution: {...}     # 仅实体继承
+    distribution: {...}     # 实体与相机共同继承
     constraints: {...}      # 仅实体继承
     entities: {...}
-    cameras: {...}          # 独立语义，共享容器
+    cameras: {...}          # 继承 distribution，拒绝 constraints
 ```
 
 ## 已记录的后续增强（进度追踪）
@@ -218,5 +230,8 @@ task:
 - R5：测试迁移与新增（结构解析、改名键、覆盖回落、visible_in 空交集诊断、
   逐组件策略），用受限 runner 跑通。
 - R6：`camera_randomization` → `randomization.cameras`（顶层字段删除，无兼容
-  入口）。仅搬移容器位置，相机条目仍不继承 scope 的 `distribution` /
-  `constraints`。
+  入口）。仅搬移容器位置。
+- R7：相机条目继承 scope 的 `distribution`（位姿流属性），不继承 `constraints`
+  （实体专属），显式声明 `constraints` 的相机条目直接报错。
+  `resolve_randomization_scope` 改为返回 `ResolvedRandomizationScope`
+  （`entities` / `cameras` / `strategy`）。
