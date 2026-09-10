@@ -1,11 +1,29 @@
 # 以物体为参考的相机（Object-Referenced Camera）设计
 
-> **状态：提案，尚未实现。**
+> **状态：轮 1（配置与挂载）已实现；物体系随机化、`visible_in` 边界、GS/批量仍为"提案，尚未实现"。**
 >
-> 本文只描述方案与接入点，未落地任何代码。实现完成后按 AGENTS.md 约定，把稳定用法迁移到
+> 已实现部分的稳定用法，在后续轮次完成后按 AGENTS.md 约定迁移到
 > `docs/task-configuration/task_file_schema.md`（`env.cameras` 字段语义）与
 > `docs/task-configuration/randomization.md`（`camera_initial_pose` / `randomization.cameras`），
 > 并同步 `docs/mujoco-backend/initialization_randomization.md`，然后删除本文件的"提案"声明。
+
+## 实现状态
+
+**已实现（轮 1）**：
+
+- `CameraSpec.role` 新增 `object`，并 fail-closed 校验 `is_static` 互斥
+  （`auto_atom/config/env_config.py`）；
+- `MujocoBasis._mount_object_cameras`：解析 `parent_frame`（同名 site → 同名 body → `<name>_gs`
+  body）、重定父 `model.cam_bodyid`、记录 `_camera_mount_bodies` 并提供 `object_camera_names`；
+- baseline 重捕获拆为 `MujocoBasis._capture_camera_baselines()`，不再依赖
+  `_apply_camera_calibrations` 的提前返回（无 calibration 时也记录挂载偏移）；
+- `MujocoTaskBackend._validate_camera_initial_pose_ownership`：构造期拒绝指向 object 相机的
+  `camera_initial_pose` 条目（§3.2）；
+- 测试：`tests/test_object_referenced_camera.py`（挂载、跟随不变相对位姿、extrinsics 物体系语义、
+  site/`_gs` 解析、world body 与未解析报错、`is_static` 与 `camera_initial_pose` fail-closed）。
+
+**未实现（轮 2–5）**：object_only 全链路贯通、物体系随机化路径、`visible_in` 边界、
+GS / 批量 / 性能。
 
 ## 1. 背景与问题
 
@@ -234,7 +252,7 @@ object 相机改为局部偏移后不再依赖该顺序，但该槽位需要按 
 
 | 轮次 | 内容 | 验证 |
 | --- | --- | --- |
-| 1 | `CameraSpec.role` 与校验（挂载目标解析、`is_static`、`camera_initial_pose` 互斥）；`MujocoBasis` 挂载 + baseline 重捕获 | 挂载后 `cam_bodyid` 与局部偏移正确；`reset()` 后保持；缺失物体报错 |
+| 1 | ✅ 已实现：`CameraSpec.role` 与校验（挂载目标解析、`is_static`、`camera_initial_pose` 互斥）；`MujocoBasis` 挂载 + baseline 重捕获 | 挂载后 `cam_bodyid` 与局部偏移正确；`reset()` 后保持；缺失物体报错 |
 | 2 | 跟随链路贯通：object_only 配置 → prepare → 构造 → `apply_object_pose` 全程验证相对位姿恒定 | 新增/扩展 `tests/test_object_only_execution.py` 等 |
 | 3 | 物体系随机化路径（沿用 `randomization.cameras` 与 scope `distribution` 继承）+ 参考系校验 | 相对位姿随 reset 变化；`absolute_world`/实体引用报错 |
 | 4 | `visible_in` 边界 + 文档迁移（`task_file_schema.md`、`randomization.md`、`initialization_randomization.md`） | 文档与测试同步 |

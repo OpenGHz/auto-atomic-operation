@@ -217,9 +217,17 @@ class CameraSpec(BaseModel, frozen=True):
 
     name: str
     """The camera name as defined in the Mujoco model."""
-    role: Literal["scene", "operator"] = "scene"
-    """Semantic ownership used to remove operator-mounted cameras together
-    with an operator-only scene layer."""
+    role: Literal["scene", "operator", "object"] = "scene"
+    """Semantic ownership of the camera.
+
+    ``scene`` and ``operator`` separate scene camera streams from those mounted
+    on an operator, so ``execution.mode=object_only`` can drop the
+    operator-owned ones together with the operator layer.  ``object`` marks a
+    camera rigidly mounted on a scene object: it survives object-only execution
+    and follows the reference object's motion.  ``parent_frame`` names that
+    object (as a site or body); when empty, the mount frame is auto-detected
+    from the camera's MJCF parent body.
+    """
     width: int = 640
     """The rendered image width in pixels."""
     height: int = 480
@@ -262,7 +270,11 @@ class CameraSpec(BaseModel, frozen=True):
     is_static: bool = False
     """Whether this camera's GS background is rendered once and cached (static)
     or re-rendered every frame (dynamic).  Set to ``False`` for moving cameras
-    such as hand-mounted cameras whose viewpoint changes each timestep."""
+    such as hand-mounted cameras whose viewpoint changes each timestep.
+
+    Cameras with ``role='object'`` move with their reference object, so they
+    must stay dynamic; a cached background would go stale on the first motion.
+    """
 
     @property
     def has_native_output(self) -> bool:
@@ -277,6 +289,17 @@ class CameraSpec(BaseModel, frozen=True):
             or self.enable_mask
             or self.enable_heat_map
         )
+
+    @model_validator(mode="after")
+    def validate_object_mount(self) -> "CameraSpec":
+        if self.role == "object" and self.is_static:
+            raise ValueError(
+                f"Camera '{self.name}': is_static=True cannot be combined with "
+                "role='object' — an object-mounted camera moves with its reference "
+                "object, so a once-rendered background would go stale. Set "
+                "is_static=False."
+            )
+        return self
 
     @model_validator(mode="after")
     def validate_clip_ranges(self) -> "CameraSpec":

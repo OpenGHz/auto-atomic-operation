@@ -1131,6 +1131,33 @@ class MujocoTaskBackend(SceneBackend):
         if set_noise_seed is not None:
             set_noise_seed(self.random_seed)
         self._validate_initial_joint_position_ownership()
+        self._validate_camera_initial_pose_ownership()
+
+    def _validate_camera_initial_pose_ownership(self) -> None:
+        """Reject ``camera_initial_pose`` entries on object-mounted cameras.
+
+        An object camera's pose *is* its install offset in the reference
+        object's frame, and that lives in model-level state
+        (``env.cameras[].calibration.extrinsics`` or the MJCF ``cam_pos`` /
+        ``cam_quat``) which ``reset()`` restores.  A per-reset override could
+        express the same value through a second, implicit precedence order, so
+        the two are mutually exclusive: fail at construction instead.
+        """
+        if not self.camera_initial_poses:
+            return
+        envs = getattr(self.env, "envs", ())
+        if not envs:
+            return
+        mounted = getattr(envs[0], "object_camera_names", frozenset())
+        offending = sorted(set(self.camera_initial_poses).intersection(mounted))
+        if offending:
+            raise ValueError(
+                f"camera_initial_pose entries {offending} target object-mounted "
+                "cameras (role='object'). Such a camera's pose is its install "
+                "offset relative to the reference object: configure it in the "
+                "camera's calibration.extrinsics (or the MJCF cam_pos/cam_quat) "
+                "and randomize it through task.randomization.cameras instead."
+            )
 
     def _validate_initial_joint_position_ownership(self) -> None:
         """Reject duplicate env/operator definitions for arm home joints.

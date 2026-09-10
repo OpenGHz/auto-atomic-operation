@@ -161,6 +161,12 @@ class MujocoBasis:
         self._camera_specs = {c.name: c for c in config.cameras}
         self._renderers: Dict[str, mujoco.Renderer] = {}
         self._camera_ids = {}
+        # Object-mounted cameras: the camera follows the reference object body
+        # because MuJoCo derives cam_xpos/cam_xmat from cam_bodyid each forward
+        # pass. Tracked so the rest of the stack can tell a moving camera from a
+        # fixed one without re-deriving it from the model.
+        self._object_camera_names: set[str] = set()
+        self._camera_mount_bodies: dict[str, int] = {}
         self._renderer_scene_option = mujoco.MjvOption()
         self._renderer_scene_option.sitegroup[:] = 0
         self._interest_object_operations: dict[str, str] = {}
@@ -201,12 +207,20 @@ class MujocoBasis:
                 self._camera_frame_site_ids[name] = site_id
         for name, spec in self._camera_specs.items():
             if spec.parent_frame:
-                entry = self._resolve_frame(spec.parent_frame)
+                entry = self._resolve_mount_frame(
+                    spec.parent_frame,
+                    object_role=spec.role == "object",
+                )
                 if entry is None:
                     raise ValueError(
                         f"Camera '{name}': parent_frame '{spec.parent_frame}' not found as site or body."
                     )
                 self._camera_parent_frame[name] = entry
+
+        # Mount object cameras before the auto-detected reference frames are
+        # derived, so a camera without an explicit parent_frame resolves to the
+        # object body it was just attached to.
+        self._mount_object_cameras()
 
         # Per-operator sensor IDs resolved from config (-1 when not specified).
         self._imu_ids: dict[str, dict[str, int]] = {}
@@ -261,6 +275,7 @@ class MujocoBasis:
                     )
 
         self._apply_camera_calibrations()
+        self._capture_camera_baselines()
 
         self._tactile_manager = None
         if (
@@ -508,6 +523,94 @@ class MujocoBasis:
             return ("body", int(body_id), name)
         return None
 
+    def _resolve_mount_frame(
+        self,
+        name: str,
+        *,
+        object_role: bool = False,
+    ) -> tuple[str, int, str] | None:
+        """Resolve a camera reference name to the site or body it names.
+
+        ``object_role`` additionally accepts an object's MuJoCo body name when
+        the declared name is the logical one (``cup`` -> ``cup_gs``), matching
+        how objects are discovered.  Resolving the general case is left alone so
+        existing cameras keep their exact frame semantics.
+        """
+        entry = self._resolve_frame(name)
+        if entry is not None or not object_role:
+            return entry
+        gs_name = f"{name}_gs"
+        body_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, gs_name)
+        if body_id >= 0:
+            return ("body", int(body_id), gs_name)
+        return None
+
+    def _frame_body_id(self, frame: tuple[str, int, str]) -> int:
+        """Return the body a frame moves with: a site's owning body, or itself."""
+        kind, frame_id, _name = frame
+        if kind == "body":
+            return int(frame_id)
+        return int(self.model.site_bodyid[frame_id])
+
+    def _mount_object_cameras(self) -> None:
+        """Rigidly attach ``role: object`` cameras to their reference object.
+
+        MuJoCo derives ``cam_xpos``/``cam_xmat`` from ``cam_bodyid`` on every
+        forward pass, so re-parenting the camera is what makes it follow the
+        object: writing the object's freejoint or body pose moves the camera
+        with it — no per-step work and no tracking loop.  The camera's local
+        pose keeps its usual meaning too: it stays the install offset expressed
+        in the mount frame, so ``calibration.extrinsics`` and the MJCF
+        ``cam_pos``/``cam_quat`` are read relative to the reference object.
+        """
+        for name, spec in self._camera_specs.items():
+            if spec.role != "object":
+                continue
+            cam_id = self._camera_ids.get(name)
+            if cam_id is None:
+                continue
+            frame = self._camera_parent_frame.get(name)
+            body_id = (
+                self._frame_body_id(frame)
+                if frame is not None
+                else int(self.model.cam_bodyid[cam_id])
+            )
+            if body_id == 0:
+                raise ValueError(
+                    f"Camera '{name}': role='object' cameras must be mounted on a "
+                    "scene body, but the resolved mount frame is the world body. "
+                    "Set parent_frame to the reference object (site or body), or "
+                    "declare the camera under that body in the MJCF."
+                )
+            self.model.cam_bodyid[cam_id] = body_id
+            self._camera_mount_bodies[name] = body_id
+            self._object_camera_names.add(name)
+            body_name = mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_BODY, body_id)
+            self.get_logger().info(
+                f"Camera '{name}' mounted on object body '{body_name}'"
+            )
+
+    @property
+    def object_camera_names(self) -> frozenset[str]:
+        """Names of the cameras rigidly mounted on a scene object."""
+        return frozenset(self._object_camera_names)
+
+    def _capture_camera_baselines(self) -> None:
+        """Record the camera extrinsics ``reset()`` restores.
+
+        Captured after mounting and calibration, so a mounted camera's baseline
+        is its install offset in the reference object's frame.  This is kept
+        separate from ``_apply_camera_calibrations`` because that method returns
+        early when no camera declares a calibration, which must not leave a
+        mounted camera's offset unrecorded.
+        """
+        self._model_cam_pos_baseline = np.asarray(
+            self.model.cam_pos, dtype=np.float64
+        ).copy()
+        self._model_cam_quat_baseline = np.asarray(
+            self.model.cam_quat, dtype=np.float64
+        ).copy()
+
     def _frame_pose_world(
         self, frame: tuple[str, int, str]
     ) -> tuple[np.ndarray, np.ndarray]:
@@ -525,7 +628,12 @@ class MujocoBasis:
         )
 
     def _apply_camera_calibrations(self) -> None:
-        """Apply YAML camera calibration before capturing reset baselines."""
+        """Apply YAML camera calibration to the composed model.
+
+        Poses given as ``calibration.extrinsics`` are expressed in the camera's
+        ``parent_frame`` and written back as the attached body's local offsets.
+        Baselines are captured by :meth:`_capture_camera_baselines` afterwards.
+        """
         calibrations = {
             name: spec.calibration
             for name, spec in self._camera_specs.items()
@@ -596,13 +704,6 @@ class MujocoBasis:
             mujoco.mju_mulQuat(local_quat, inverse_body_quat, world_quat_wxyz)
             self.model.cam_quat[cam_id] = local_quat
             mujoco.mj_forward(self.model, self.data)
-
-        self._model_cam_pos_baseline = np.asarray(
-            self.model.cam_pos, dtype=np.float64
-        ).copy()
-        self._model_cam_quat_baseline = np.asarray(
-            self.model.cam_quat, dtype=np.float64
-        ).copy()
 
     def _sensor_id(self, name: str) -> int:
         sid = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_SENSOR, name)
