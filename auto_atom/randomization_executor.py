@@ -36,6 +36,7 @@ import numpy as np
 from auto_atom.config.randomization import (
     RandomizationConstraintConfig,
     RandomizationFailureConfig,
+    RandomizationGroupConfig,
     RandomizationSelectorKind,
     RandomizationSpec,
 )
@@ -97,6 +98,8 @@ class RandomizationHost(Protocol):
     def operator_names(self) -> Container[str]: ...
 
     def action_specs(self) -> Mapping[str, RandomizationAction]: ...
+
+    def action_dependencies(self) -> Mapping[str, Set[str]]: ...
 
     def sample_target(
         self,
@@ -505,3 +508,256 @@ class RandomizationExecutor:
                 self._record_history(history_key, best_vector)
             return best_poses, best_actions, best_failure_reason
         return last_sampled_poses, last_actions, last_failure
+
+    def sample_hard_sphere_rsa_component_for_env(
+        self,
+        component: List[str],
+        env_index: int,
+        accepted_sampled_poses: Dict[str, PoseState],
+        accepted_participants: List[CollisionParticipant],
+        *,
+        group_name: str,
+        group: RandomizationGroupConfig | None = None,
+    ) -> tuple[
+        Dict[str, PoseState],
+        List[PendingRandomizationAction],
+        Optional[tuple[str, str]],
+    ]:
+        """Place group members sequentially with heterogeneous hard spheres.
+
+        RSA is deliberately local: a rejected proposal is discarded, while
+        already accepted members remain fixed for the current reset.  Member
+        order is independently shuffled for every environment/reset, so the
+        YAML declaration order does not become a spatial bias.
+        """
+        action_specs = self._host.action_specs()
+        accepted_env_poses = {
+            name: pose.select(env_index)
+            for name, pose in accepted_sampled_poses.items()
+        }
+        working_poses = dict(accepted_env_poses)
+        sampled_poses: Dict[str, PoseState] = {}
+        actions: List[PendingRandomizationAction] = []
+        local_participants: List[CollisionParticipant] = []
+        dependencies = self._host.action_dependencies()
+        remaining = set(component)
+        order: list[str] = []
+        while remaining:
+            ready = [
+                label
+                for label in component
+                if label in remaining
+                and not (set(dependencies.get(label, ())) & remaining)
+            ]
+            if not ready:
+                raise ValueError(
+                    f"Circular randomization reference in RSA component {component!r}"
+                )
+            rng = self._host.randomization_rng
+            if len(ready) > 1 and hasattr(rng, "permutation"):
+                ready = [str(value) for value in rng.permutation(ready)]
+            order.extend(ready)
+            remaining.difference_update(ready)
+        configured_attempts = [
+            int(action_specs[label].randomization.constraints.failure.max_attempts)
+            for label in component
+        ]
+        max_attempts = (
+            int(group.failure.max_attempts)
+            if group is not None
+            else min(configured_attempts, default=DEFAULT_ATTEMPT_BUDGET)
+        )
+        failure_mode = (
+            group.failure.mode.value
+            if group is not None
+            else (
+                "error"
+                if any(
+                    action_specs[label].randomization.constraints.failure.mode.value
+                    == "error"
+                    for label in component
+                )
+                else "best_effort"
+            )
+        )
+        selected_ancestors: Dict[str, Set[str]] = {}
+        for member in order:
+            action_spec = action_specs[member]
+            best: tuple[float, PoseState, PendingRandomizationAction, str] | None = None
+            accepted = False
+            for attempt in range(max_attempts):
+                candidate_poses, candidate_actions = self._host.sample_target(
+                    action_spec,
+                    env_index,
+                    working_poses,
+                    candidate_index=(
+                        self._host.randomization_reset_index * 1009
+                        + attempt * 17
+                        + sum(ord(c) for c in member)
+                    ),
+                )
+                candidate = next(
+                    (item for item in candidate_actions if item.label == member),
+                    None,
+                )
+                if candidate is None:
+                    raise RuntimeError(
+                        f"Randomization group '{group_name}' member '{member}' "
+                        "did not produce a candidate"
+                    )
+                candidate.ancestors = reference_ancestors(
+                    candidate.references,
+                    selected_ancestors,
+                    operator_names=self._host.operator_names,
+                )
+                blocking = find_collision_participant(
+                    owner_name=candidate.owner,
+                    env_index=env_index,
+                    candidate_pose=candidate.pose,
+                    collision_radius=candidate.radius,
+                    ancestors=candidate.ancestors,
+                    collision_participants=accepted_participants,
+                )
+                if blocking is None:
+                    # Always-on hard-sphere collision uses the radius sum only.
+                    # Optional ``separated`` clearance is enforced exactly once
+                    # below through evaluate_randomization_constraints (which
+                    # uses real support geometry), never folded into the radius
+                    # collision test.
+                    blocking = find_collision_participant(
+                        owner_name=candidate.owner,
+                        env_index=env_index,
+                        candidate_pose=candidate.pose,
+                        collision_radius=candidate.radius,
+                        ancestors=candidate.ancestors,
+                        collision_participants=local_participants,
+                    )
+                constraint_report: RandomizationConstraintReport | None = None
+                if candidate.constraints is not None and (
+                    candidate.constraints.visible_in is not None
+                    or candidate.constraints.separated is not None
+                ):
+                    candidate_poses_for_constraints = dict(working_poses)
+                    candidate_poses_for_constraints.update(candidate_poses)
+                    candidate_poses_for_constraints[member] = candidate.pose
+                    candidate_constraint_ancestors = {
+                        participant.owner: resolve_collision_ancestors(
+                            participant.ancestors,
+                            env_index,
+                        )
+                        for participant in accepted_participants + local_participants
+                    }
+                    candidate_constraint_ancestors[candidate.owner] = set(
+                        candidate.ancestors
+                    )
+                    constraint_report = self._host.evaluate_constraints(
+                        candidate_poses_for_constraints,
+                        env_index=env_index,
+                        constraints=candidate.constraints,
+                        ancestors=candidate_constraint_ancestors,
+                        target_names={candidate.owner},
+                    )
+                violation = (
+                    f"{candidate.label}:collides:{blocking.label}"
+                    if blocking is not None
+                    else (
+                        constraint_report.violations[0]
+                        if constraint_report is not None and not constraint_report.valid
+                        else ""
+                    )
+                )
+                candidate_row = 0 if candidate.pose.batch_size == 1 else env_index
+                candidate_pos = np.asarray(
+                    candidate.pose.position[candidate_row], dtype=np.float64
+                )
+                clearance = float("inf")
+                if blocking is not None:
+                    other_row = 0 if blocking.pose.batch_size == 1 else env_index
+                    other_pos = np.asarray(
+                        blocking.pose.position[other_row], dtype=np.float64
+                    )
+                    clearance = float(
+                        np.linalg.norm(candidate_pos - other_pos)
+                        - candidate.radius
+                        - resolve_collision_radius(blocking.radius, env_index)
+                    )
+                elif constraint_report is not None and not constraint_report.valid:
+                    clearance = float(constraint_report.minimum_clearance)
+                if best is None or clearance > best[0]:
+                    best = (clearance, candidate.pose, candidate, violation)
+                if blocking is not None or (
+                    constraint_report is not None and not constraint_report.valid
+                ):
+                    continue
+                candidate_poses.update({member: candidate.pose})
+                working_poses.update(candidate_poses)
+                candidate.ancestors = set(candidate.ancestors)
+                local_participants.append(
+                    CollisionParticipant(
+                        owner=candidate.owner,
+                        label=candidate.label,
+                        pose=candidate.pose,
+                        radius=candidate.radius,
+                        ancestors=set(candidate.ancestors),
+                    )
+                )
+                selected_ancestors[member] = set(candidate.ancestors)
+                if candidate.kind in ("object", "operator_base"):
+                    selected_ancestors[candidate.owner] = set(candidate.ancestors)
+                sampled_poses.update(candidate_poses)
+                actions.append(candidate)
+                accepted = True
+                break
+            if accepted:
+                continue
+            if best is None:
+                raise RandomizationFailureError(
+                    target=member,
+                    attempts=max_attempts,
+                    violations=[f"{member}:no_candidate"],
+                    minimum_clearance=float("-inf"),
+                )
+            _, best_pose, best_action, violation = best
+            diagnostics = {
+                "group": group_name,
+                "generator": (
+                    group.distribution.generator.value
+                    if group is not None
+                    else "hard_sphere_rsa"
+                ),
+                "member": member,
+                "attempts": max_attempts,
+                "violations": [violation],
+                "minimum_clearance": best[0],
+                "mode": failure_mode,
+            }
+            self._host.record_randomization_diagnostics(env_index, diagnostics)
+            if failure_mode == "error":
+                raise RandomizationFailureError(
+                    target=member,
+                    attempts=max_attempts,
+                    violations=diagnostics["violations"],
+                    minimum_clearance=best[0],
+                )
+            self._logger.warning(
+                "Hard-sphere RSA exhausted for '%s' after %d attempts; keeping "
+                "the best-effort sample. violations=%s minimum_clearance=%s",
+                member,
+                max_attempts,
+                diagnostics["violations"],
+                best[0],
+            )
+            working_poses[member] = best_pose
+            sampled_poses[member] = best_pose
+            best_action.ancestors = set(best_action.ancestors)
+            local_participants.append(
+                CollisionParticipant(
+                    owner=best_action.owner,
+                    label=best_action.label,
+                    pose=best_action.pose,
+                    radius=best_action.radius,
+                    ancestors=set(best_action.ancestors),
+                )
+            )
+            actions.append(best_action)
+        return sampled_poses, actions, None
