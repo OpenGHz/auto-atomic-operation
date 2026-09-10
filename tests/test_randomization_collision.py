@@ -8,7 +8,6 @@ from typing import Dict, Iterable, Optional
 import numpy as np
 import pytest
 
-import auto_atom.backend.mjc.mujoco_backend as mujoco_backend_module
 from auto_atom.backend.mjc.mujoco_backend import MujocoTaskBackend
 from auto_atom.randomization import CollisionParticipant
 from auto_atom.config.motion import PoseControlConfig
@@ -464,16 +463,7 @@ def test_direct_operator_multi_region_randomization_raises_type_error() -> None:
         backend._apply_randomization(np.asarray([True], dtype=bool))
 
 
-def test_collision_rejection_warns_after_attempts_exhausted(
-    monkeypatch,
-    caplog,
-) -> None:
-    monkeypatch.setattr(
-        mujoco_backend_module,
-        "_MAX_COLLISION_REJECTION_ATTEMPTS",
-        3,
-    )
-
+def test_collision_rejection_warns_after_attempts_exhausted(caplog) -> None:
     # Explicit best-effort failure keeps the last overlapping sample with a
     # warning. The default failure policy is fail-closed ``error`` (new
     # semantics); best-effort is an opt-in diagnostic mode.
@@ -696,7 +686,7 @@ def test_first_feasible_non_iid_generator_avoids_accepted_samples_across_resets(
     second = backend.object_handlers["vase"].get_pose().position[0].copy()
 
     assert not np.allclose(first, second)
-    history = backend._space_filling_history[("vase",)]
+    history = backend.randomization_executor.history[("vase",)]
     assert len(history) == 2
     assert np.allclose(history[0], first)
     assert np.allclose(history[1], second)
@@ -729,7 +719,7 @@ def test_poisson_disk_uses_physical_bounds_across_resets() -> None:
     assert 0.0 <= first <= 1.0
     assert 0.0 <= second <= 1.0
     assert abs(first - second) >= 0.2 - 1e-12
-    assert len(backend._space_filling_history[("vase",)]) == 2
+    assert len(backend.randomization_executor.history[("vase",)]) == 2
 
 
 def test_maximin_records_only_the_selected_candidate_not_the_whole_group() -> None:
@@ -752,7 +742,7 @@ def test_maximin_records_only_the_selected_candidate_not_the_whole_group() -> No
     backend._randomization_reset_index = 1
     backend._apply_randomization(np.asarray([True], dtype=bool))
 
-    assert len(backend._space_filling_history[("vase",)]) == 1
+    assert len(backend.randomization_executor.history[("vase",)]) == 1
 
 
 def test_legacy_single_range_and_multi_region_config_are_accepted() -> None:
@@ -1737,7 +1727,7 @@ def test_visible_in_empty_intersection_fails_fast_before_attempts(
     backend = _visible_in_backend(monkeypatch, camera_pos=(0.0, 0.0, -2.0))
     with pytest.raises(RandomizationFailureError) as excinfo:
         backend._preflight_deterministic_visibility_infeasibility(
-            backend._randomization_action_specs(),
+            backend._randomization_plan().actions,
             np.asarray([True], dtype=bool),
         )
     assert excinfo.value.target == "vase"
@@ -1756,7 +1746,7 @@ def test_visible_in_intersecting_region_skips_deterministic_short_circuit(
     # intersection, so the pre-flight passes without raising.
     backend = _visible_in_backend(monkeypatch, camera_pos=(0.0, 0.0, 2.0))
     backend._preflight_deterministic_visibility_infeasibility(
-        backend._randomization_action_specs(),
+        backend._randomization_plan().actions,
         np.asarray([True], dtype=bool),
     )
     assert backend.get_randomization_diagnostics(0) == {}

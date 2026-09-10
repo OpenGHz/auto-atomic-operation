@@ -582,7 +582,9 @@ def maximin_select(
     return points[np.asarray(selected, dtype=np.int64)]
 
 
-_RandomizationAncestors = Union[Set[str], List[Set[str]]]
+RandomizationAncestors = Union[Set[str], List[Set[str]]]
+"""A reference-ancestor set shared by all environments, or one per
+environment (auto-resolved operator radii and per-env ancestry differ)."""
 
 
 @dataclass
@@ -598,7 +600,7 @@ class CollisionParticipant:
     label: str
     pose: PoseState
     radius: Union[float, np.ndarray]
-    ancestors: _RandomizationAncestors = field(default_factory=set)
+    ancestors: RandomizationAncestors = field(default_factory=set)
 
 
 def resolve_collision_radius(radius: Union[float, np.ndarray], env_index: int) -> float:
@@ -614,7 +616,7 @@ def resolve_collision_radius(radius: Union[float, np.ndarray], env_index: int) -
 
 
 def resolve_collision_ancestors(
-    ancestors: _RandomizationAncestors,
+    ancestors: RandomizationAncestors,
     env_index: int,
 ) -> Set[str]:
     """Resolve scalar or batched reference ancestors for one environment."""
