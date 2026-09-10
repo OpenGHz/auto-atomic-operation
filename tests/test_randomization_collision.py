@@ -942,7 +942,9 @@ def test_camera_and_waypoint_randomization_reject_regions() -> None:
             {
                 "stages": [],
                 "env_name": "randomization_test",
-                "camera_randomization": {"camera": {"regions": [{"x": [0.0, 1.0]}]}},
+                "randomization": {
+                    "cameras": {"camera": {"regions": [{"x": [0.0, 1.0]}]}}
+                },
             }
         )
 

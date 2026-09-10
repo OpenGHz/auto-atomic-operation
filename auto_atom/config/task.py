@@ -23,12 +23,7 @@ from auto_atom.config.execution import (
 from auto_atom.config.motion import StageConfig
 from auto_atom.config.operations import Operation
 from auto_atom.config.pose import PoseOverrideConfig
-from auto_atom.config.randomization import (
-    PoseRandomizationConfig,
-    PoseRandomRange,
-    RandomizationScopeConfig,
-    RandomizationSpec,
-)
+from auto_atom.config.randomization import RandomizationScopeConfig
 
 
 class AutoAtomConfig(BaseModel):
@@ -51,15 +46,17 @@ class AutoAtomConfig(BaseModel):
     )
     """Global randomization scope applied at each reset.
 
-    The scope groups the global default ``distribution`` / ``constraints`` and
-    the per-entity ``entities`` map. Objects accept either a direct
-    ``PoseRandomRange`` or an advanced ``RandomizationSpec``. Operators use
-    ``OperatorRandomizationConfig`` with explicit ``base`` and/or ``eef``
-    sub-entries.
+    The scope groups the global default ``distribution`` / ``constraints``,
+    the per-entity ``entities`` map and the per-camera ``cameras`` map.
+    Objects accept either a direct ``PoseRandomRange`` or an advanced
+    ``RandomizationSpec``. Operators use ``OperatorRandomizationConfig`` with
+    explicit ``base`` and/or ``eef`` sub-entries.
 
     Bare entity ranges inherit the scope-wide ``distribution`` and
     ``constraints`` defaults; advanced specs are fully explicit. The placement
-    strategy lives in ``constraints.separated.strategy``.
+    strategy lives in ``constraints.separated.strategy``. Camera entries never
+    inherit those defaults because cameras have no distribution or collision
+    semantics.
     """
     camera_initial_pose: Dict[str, PoseOverrideConfig] = Field(default_factory=dict)
     """Per-camera initial pose overrides applied at each reset, before
@@ -77,40 +74,12 @@ class AutoAtomConfig(BaseModel):
             position: [2.4, 0.6, -0.1]
             orientation: [-0.5, 0.5, 0.5, 0.5]   # xyzw
     """
-    camera_randomization: Dict[
-        str,
-        Union[PoseRandomRange, RandomizationSpec],
-    ] = Field(default_factory=dict)
-    """Per-camera pose randomization applied at each reset.
-
-    Keys are logical camera names exposed by the selected backend. Each entry
-    is a ``PoseRandomRange`` controlling which axes are randomized and how.
-
-    Only ``relative`` (default) and ``absolute_world`` reference modes are
-    supported.  ``absolute_base`` and entity-name references are rejected
-    because cameras have no operator base frame and do not participate in
-    entity dependency ordering.
-
-    Example YAML::
-
-        camera_randomization:
-          env1_cam:
-            x: [-0.05, 0.05]
-            y: [-0.05, 0.05]
-            pitch: [-0.1, 0.1]
-          env0_cam:
-            reference: absolute_world
-            x: [0.8, 1.0]
-            y: [-0.1, 0.1]
-            z: [0.4, 0.6]
-    """
     randomization_debug: bool = False
 
     @field_validator(
         "initial_pose",
         "randomization",
         "camera_initial_pose",
-        "camera_randomization",
         mode="before",
     )
     @classmethod
@@ -137,27 +106,6 @@ class AutoAtomConfig(BaseModel):
             return value
 
         return _strip(v)
-
-    @field_validator("camera_randomization", mode="after")
-    @classmethod
-    def _reject_camera_region_wrappers(
-        cls,
-        value: Dict[str, Union[PoseRandomRange, RandomizationSpec]],
-    ) -> Dict[str, Union[PoseRandomRange, RandomizationSpec]]:
-        for name, spec in value.items():
-            if isinstance(spec, RandomizationSpec) and isinstance(
-                spec.proposal, PoseRandomizationConfig
-            ):
-                raise ValueError(
-                    f"camera_randomization[{name!r}] accepts one PoseRandomRange; "
-                    "regions are not supported for cameras"
-                )
-            if isinstance(spec, PoseRandomizationConfig):
-                raise ValueError(
-                    f"camera_randomization[{name!r}] accepts one PoseRandomRange; "
-                    "regions are not supported for cameras"
-                )
-        return value
 
     """When True the first N resets cycle through extreme poses (each axis at its min/max, then all-min and all-max) before switching to random sampling.  Use this to verify that configured ranges are not too large."""
 

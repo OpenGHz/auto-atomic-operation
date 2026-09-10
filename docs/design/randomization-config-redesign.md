@@ -168,7 +168,21 @@ task:
 
 ## 相机随机化
 
-`camera_randomization` 保持**扁平独立**：相机无分布/碰撞语义，不纳入本结构。
+`camera_randomization` 已并入作用域容器，作为 `randomization` 下与 `entities`
+同级的 `cameras` 映射（不再有顶层 `task.camera_randomization`）。
+
+归并的仅是**位置**，不是**语义**：相机无分布/碰撞/分离语义，因此
+`cameras` 条目**不继承** scope 的 `distribution` / `constraints`，只是与
+实体随机化共用同一个容器以提高配置连贯性。
+
+```yaml
+task:
+  randomization:
+    distribution: {...}     # 仅实体继承
+    constraints: {...}      # 仅实体继承
+    entities: {...}
+    cameras: {...}          # 独立语义，共享容器
+```
 
 ## 已记录的后续增强（进度追踪）
 
@@ -193,7 +207,7 @@ task:
 ## 实施轮次（每轮独立提交）
 
 - R1：本文档（钉死方案）。
-- R2：schema 重构 —— 容器（`distribution` / `constraints` / `entities`）、
+- R2：schema 重构 —— 容器（`distribution` / `constraints` / `entities` / `cameras`）、
   `min_distance`→`spacing`、`separated.min_distance`→`clearance`、
   `separated.strategy`、删 `randomization_strategy`、三级回落。
   （注：原 `framework.py` 已拆分为 `auto_atom/config/` 子包，schema 类按域
@@ -203,3 +217,6 @@ task:
 - R4：重写 `docs/task-configuration/randomization.md`。
 - R5：测试迁移与新增（结构解析、改名键、覆盖回落、visible_in 空交集诊断、
   逐组件策略），用受限 runner 跑通。
+- R6：`camera_randomization` → `randomization.cameras`（顶层字段删除，无兼容
+  入口）。仅搬移容器位置，相机条目仍不继承 scope 的 `distribution` /
+  `constraints`。

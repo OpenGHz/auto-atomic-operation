@@ -4500,7 +4500,7 @@ def build_mujoco_backend(
         object_handlers=object_handlers,
         randomization=resolved_randomization,
         randomization_strategy=resolved_strategy,
-        camera_randomization=dict(config.camera_randomization),
+        camera_randomization=dict(config.randomization.cameras),
         initial_poses=dict(config.initial_pose),
         camera_initial_poses=dict(config.camera_initial_pose),
         operator_initial_states={

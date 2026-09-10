@@ -271,9 +271,8 @@ The following optional fields live under `task`:
 | --- | --- |
 | `seed` | Episode randomization seed; defaults to `0`. |
 | `initial_pose` | Per-object `PoseOverrideConfig` values applied after backend reset and before randomization. |
-| `randomization` | A `RandomizationScopeConfig` container: global default `distribution` / `constraints` plus a per-entity `entities` map. Object entries accept a direct pose range or an advanced spec; operator entries use nested `base` and/or `eef` blocks. The placement strategy is `constraints.separated.strategy` (default `rsa`). |
+| `randomization` | A `RandomizationScopeConfig` container: global default `distribution` / `constraints` plus a per-entity `entities` map and a per-camera `cameras` map. Object entries accept a direct pose range or an advanced spec; operator entries use nested `base` and/or `eef` blocks; camera entries accept a direct pose range and never inherit the scope defaults. The placement strategy is `constraints.separated.strategy` (default `rsa`). |
 | `camera_initial_pose` | Per-camera `PoseOverrideConfig` values applied after backend reset and before camera randomization. |
-| `camera_randomization` | Per-camera relative or absolute-world pose ranges. |
 | `randomization_debug` | Cycles through configured extrema before ordinary random sampling when enabled. |
 
 Operator home joints, base/EEF poses, camera fields, pose references, region

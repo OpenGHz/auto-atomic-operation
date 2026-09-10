@@ -98,7 +98,7 @@ def prepare_task_config_for_instantiation(cfg: DictConfig) -> DictConfig:
     )
     _drop_owned_mapping_entries(
         prepared,
-        "task.camera_randomization",
+        "task.randomization.cameras",
         removed_camera_names,
     )
     return prepared

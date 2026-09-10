@@ -215,7 +215,7 @@ task:
 ## Randomization YAML Configuration
 
 Add a `randomization` block under `task`. The block is a **scope container**
-with optional global defaults and a per-entity map:
+with optional global defaults and per-kind maps:
 
 ```yaml
 task:
@@ -225,6 +225,8 @@ task:
     constraints: {...}     # visible_in / separated / failure
     entities:              # per-entity entries
       <name>: ...
+    cameras:               # per-camera entries (see "Camera Pose Randomization")
+      <camera>: ...
 ```
 
 `entities` keys are object or operator names.
@@ -237,6 +239,10 @@ task:
 Bare entity ranges inherit the scope-wide `distribution` and `constraints`
 defaults; an advanced `RandomizationSpec` is fully explicit. The placement
 `strategy` lives in `constraints.separated.strategy` and defaults to `rsa`.
+
+`cameras` is a separate kind of entry, grouped here for cohesion only. Camera
+entries never inherit `distribution` / `constraints`, because cameras have no
+distribution, collision, or separation semantics.
 
 For a target whose valid workspace is disjoint, use
 `PoseRandomizationConfig`'s `regions` list. A direct per-axis range is the
@@ -868,7 +874,8 @@ the camera should be calibrated from another element exposed by the backend.
 Semantics:
 
 - Overrides are applied at each `reset()` **before** camera randomization
-  records its defaults, so `camera_randomization` with `reference: relative`
+  records its defaults, so `task.randomization.cameras` entries with
+  `reference: relative`
   jitters around the overridden pose rather than the backend's unmodified
   reset pose.
 - Named references are resolved once per environment during reset. They
@@ -877,24 +884,31 @@ Semantics:
 
 ## Camera Pose Randomization
 
-Camera viewpoint randomization is configured under `task.camera_randomization`.
-Keys are logical camera names exposed by the selected backend. Each entry is a
-`PoseRandomRange` with the same axis fields as entity randomization.
+Camera viewpoint randomization is configured under
+`task.randomization.cameras`. Keys are logical camera names exposed by the
+selected backend. Each entry is a `PoseRandomRange` with the same axis fields
+as entity randomization.
+
+`cameras` is a peer of `entities` inside the randomization scope, provided for
+grouping only: cameras have no distribution, collision, or separation
+semantics, so entries never inherit the scope-level `distribution` /
+`constraints` defaults.
 
 ```yaml
 task:
-  camera_randomization:
-    env1_cam:
-      x: [-0.05, 0.05]       # metres, jitter around default position
-      y: [-0.05, 0.05]
-      z: [-0.02, 0.02]
-      pitch: [-0.1, 0.1]     # radians
-      yaw: [-0.1, 0.1]
-    env0_cam:
-      reference: absolute_world
-      x: [0.8, 1.0]
-      y: [-0.1, 0.1]
-      z: [0.4, 0.6]
+  randomization:
+    cameras:
+      env1_cam:
+        x: [-0.05, 0.05]       # metres, jitter around default position
+        y: [-0.05, 0.05]
+        z: [-0.02, 0.02]
+        pitch: [-0.1, 0.1]     # radians
+        yaw: [-0.1, 0.1]
+      env0_cam:
+        reference: absolute_world
+        x: [0.8, 1.0]
+        y: [-0.1, 0.1]
+        z: [0.4, 0.6]
 ```
 
 ### Reference modes

@@ -456,8 +456,8 @@ override `get_element_pose()` so the runner can resolve that frame's world pose.
 
 ### Initialization and randomization responsibility
 
-The shared `AutoAtomConfig` fields `initial_pose`, `randomization`,
-`camera_initial_pose`, and `camera_randomization`, together with
+The shared `AutoAtomConfig` fields `initial_pose`, `randomization` (including
+`randomization.cameras`) and `camera_initial_pose`, together with
 `task_operators.*.initial_state`, have backend-independent meanings defined in
 [Scene Initialization & Randomization](../task-configuration/randomization.md).
 The backend owns the mechanics that realize those meanings in simulator or
@@ -510,10 +510,11 @@ def build_my_backend(
             "initial_pose",
             "randomization",
             "camera_initial_pose",
-            "camera_randomization",
         )
         if getattr(config, field)
     ]
+    if config.randomization.cameras:
+        unsupported.append("randomization.cameras")
     if any(operator.initial_state is not None for operator in operator_configs):
         unsupported.append("task_operators.*.initial_state")
     if unsupported:

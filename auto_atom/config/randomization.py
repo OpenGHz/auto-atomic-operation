@@ -606,6 +606,57 @@ class RandomizationScopeConfig(BaseModel):
     ] = Field(default_factory=dict)
     """Per-entity randomization entries."""
 
+    cameras: Dict[
+        str,
+        Union[PoseRandomRange, RandomizationSpec],
+    ] = Field(default_factory=dict)
+    """Per-camera pose randomization entries.
+
+    Keys are logical camera names exposed by the selected backend. Each entry
+    is a ``PoseRandomRange`` controlling which axes are randomized and how.
+
+    Cameras have no distribution / collision / separation semantics, so they do
+    **not** inherit the scope ``distribution`` / ``constraints`` defaults; this
+    field is a peer of ``entities`` for grouping only. Only ``relative``
+    (default) and ``absolute_world`` reference modes are supported;
+    ``absolute_base`` and entity-name references are rejected.
+
+    Example YAML::
+
+        randomization:
+          cameras:
+            env1_cam:
+              x: [-0.05, 0.05]
+              y: [-0.05, 0.05]
+              pitch: [-0.1, 0.1]
+            env0_cam:
+              reference: absolute_world
+              x: [0.8, 1.0]
+              y: [-0.1, 0.1]
+              z: [0.4, 0.6]
+    """
+
+    @field_validator("cameras", mode="after")
+    @classmethod
+    def _reject_camera_region_wrappers(
+        cls,
+        value: Dict[str, Union[PoseRandomRange, RandomizationSpec]],
+    ) -> Dict[str, Union[PoseRandomRange, RandomizationSpec]]:
+        for name, spec in value.items():
+            if isinstance(spec, RandomizationSpec) and isinstance(
+                spec.proposal, PoseRandomizationConfig
+            ):
+                raise ValueError(
+                    f"cameras[{name!r}] accepts one PoseRandomRange; "
+                    "regions are not supported for cameras"
+                )
+            if isinstance(spec, PoseRandomizationConfig):
+                raise ValueError(
+                    f"cameras[{name!r}] accepts one PoseRandomRange; "
+                    "regions are not supported for cameras"
+                )
+        return value
+
 
 def _scope_apply_defaults(
     value: RandomizationInput,

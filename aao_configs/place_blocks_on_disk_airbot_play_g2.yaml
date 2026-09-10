@@ -158,14 +158,14 @@ task:
       arm:
         eef:
           collision_radius: 0.0
-  camera_randomization:
-    env1_cam:
-      x: [-0.015, 0.015]
-      y: [-0.015, 0.015]
-      z: [-0.01, 0.01]
-      roll: [-0.035, 0.035]
-      pitch: [-0.035, 0.035]
-      yaw: [-0.035, 0.035]
+    cameras:
+      env1_cam:
+        x: [-0.015, 0.015]
+        y: [-0.015, 0.015]
+        z: [-0.01, 0.01]
+        roll: [-0.035, 0.035]
+        pitch: [-0.035, 0.035]
+        yaw: [-0.035, 0.035]
   stages:
     # One round places all ten 2.5 cm cubes in a 4-3-3 layout on the disk.
     - &pick_cube

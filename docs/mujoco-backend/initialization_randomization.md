@@ -13,7 +13,7 @@ only documents MuJoCo bindings and implementation behavior.
   are supported.
 - `task_operators` keys resolve through MuJoCo operator handlers and their
   configured actuator, root-body, base-frame, and EEF bindings.
-- `task.camera_initial_pose` and `task.camera_randomization` keys are MuJoCo
+- `task.camera_initial_pose` and `task.randomization.cameras` keys are MuJoCo
   camera names from the composed model.
 - Named pose references may resolve to a site, body, geom, or joint in the
   composed model. Names include any prefix introduced while attaching an MJCF
