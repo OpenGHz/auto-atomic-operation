@@ -216,7 +216,7 @@ object 相机改为局部偏移后不再依赖该顺序，但该槽位需要按 
 
 ### 6.3 输出与观测链路
 
-- `get_camera_reset_poses` / `get_camera_model` / `get_info` 外参仍返回**世界位姿**（由
+- `get_camera_poses` / `get_camera_model` / `get_info` 外参仍返回**世界位姿**（由
   `cam_xpos` / `cam_xmat` 推导）；object 相机的值变为**动态**，消费方（IPC / 评测 / 数据采集）
   不得在 reset 后缓存外参张量，须每帧读取。
 - `mask` / `heat_map` / `mask_objects`、`hide_operators_in_camera`、`enabled_sensors` 语义不变。

@@ -284,6 +284,17 @@ task:
     base/eef 采样、Poisson 流缓存、自动碰撞半径（含 per-episode 缓存策略）、
     配置校验、确定性可见性预检、模板位姿缓冲，全部搬入执行器。
   - 后端删除约 900 行随机化逻辑，只留下能力方法。
+- **R-D4（已完成）**：运行时契约（`SceneBackend`）同步去随机化命名 ——
+  `get_random_generator()` 并入 host 已用的 `rng`（一个名字一个概念，
+  runtime 直接读 `backend.rng`）；`get_camera_reset_poses` →
+  `get_camera_poses`、`get_randomization_diagnostics` →
+  `get_reset_diagnostics`、`evaluate_randomization_constraints` →
+  `evaluate_pose_constraints`。同时删掉后端为 host 协议额外准备的
+  `evaluate_constraints` 转发层：两者签名完全相同，host 协议直接复用
+  `evaluate_pose_constraints`。
+  另外把后端模块级的 `_randomization_references` 移到共享层，成为
+  `declared_randomization_references`（读一份 randomization 配置里声明了哪些
+  实体引用，供工厂在计划存在之前发现"只因被引用才出现的对象"）。
 - **R-D3（已完成）**：能力命名去随机化词汇 —— `rng` / `seed` /
   `episode_index`、`record_reset_diagnostics`、
   `set_target_pose(kind, owner, pose, env_mask)`（取代
@@ -295,6 +306,8 @@ env_index`、`+ attempt*17 + sum(ord(c))`）、`env_mask` 与 per-component 批�
 写回语义逐字保留，否则 reset 复现性会漂。
 
 ### 迁移后的职责边界
+
+> 说明：下文所列的后端接口名是 R-D3/R-D4 之后的最终命名。
 
 后端（`RandomizationHost`）只剩**能力**，每个成员都是"读/写某个场景事实"，
 没有一个知道"随机化"是什么：
@@ -320,7 +333,7 @@ env_index`、`+ attempt*17 + sum(ord(c))`）、`env_mask` 与 per-component 批�
 2. **策略不再是后端字段**：生效策略来自配置 → 计划，后端既不声明也不传递它。
 
 仍留在后端命名里的随机化词汇只剩 `SceneBackend` 的**运行时契约**
-（`get_random_generator`、`get_camera_reset_poses`、`get_randomization_diagnostics`、
-`evaluate_randomization_constraints`）：它们是 runner 向"当前后端"索要随机源、
+（`SceneBackend.rng`、`get_camera_poses`、`get_reset_diagnostics`、
+`evaluate_pose_constraints`）：它们是 runner 向"当前后端"索要随机源、
 相机位姿快照与失败诊断的入口，属于跨模块公开协议而非后端内部实现语义，
 改名要连带 runner、mock 后端与 `SceneBackend` 协议一起动，因此单独评估。

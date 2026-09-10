@@ -1112,7 +1112,7 @@ class MujocoBasis:
             )
         return SupportGeometry(center=center, radius=radius)
 
-    def evaluate_randomization_constraints(
+    def evaluate_pose_constraints(
         self,
         candidate_poses: Mapping[str, PoseState],
         *,

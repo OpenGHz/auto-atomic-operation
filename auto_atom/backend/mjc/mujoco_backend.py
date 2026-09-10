@@ -20,10 +20,7 @@ from auto_atom.config.motion import (
 from auto_atom.config.pose import PoseOverrideConfig
 from auto_atom.config.randomization import (
     OperatorRandomizationConfig,
-    PoseRandomizationSpec,
-    RandomizationConstraintConfig,
     ResolvedRandomizationConfig,
-    pose_randomization_regions,
 )
 from auto_atom.config.reference import PoseReference, RandomizationReference
 from auto_atom.config.task import AutoAtomConfig, OperatorConfig, OperatorInitialState
@@ -39,11 +36,11 @@ from auto_atom.contracts import (
 )
 
 from ...basis.mjc.mujoco_env import BatchedUnifiedMujocoEnv, EnvConfig
-from ...randomization import parse_entity_reference
-from ...randomization_executor import (
-    PendingRandomizationAction,
-    RandomizationExecutor,
+from ...randomization import (
+    declared_randomization_references,
+    parse_entity_reference,
 )
+from ...randomization_executor import RandomizationExecutor
 from ...runtime import ComponentRegistry, ControlResult, ControlSignal
 from ...utils.pose import (
     PoseState,
@@ -106,16 +103,6 @@ def _mujoco_element_name(
 ) -> str:
     name = mujoco.mj_id2name(model, object_type, element_id)
     return name if name is not None else f"{fallback_prefix}#{element_id}"
-
-
-def _randomization_references(
-    spec: PoseRandomizationSpec,
-) -> tuple[Union[RandomizationReference, str], ...]:
-    """Return every reference declared by a randomization spec."""
-    references: list[Union[RandomizationReference, str]] = []
-    for region in pose_randomization_regions(spec):
-        references.extend(region.references())
-    return tuple(dict.fromkeys(references))
 
 
 def _stateful_pose_indices(
@@ -1205,10 +1192,7 @@ class MujocoTaskBackend(SceneBackend):
         e = self.env.envs[0]
         return e.model.opt.timestep * e._n_substeps
 
-    def get_random_generator(self) -> np.random.Generator:
-        return self._rng
-
-    def get_camera_reset_poses(self, env_index: int) -> Dict[str, PoseState]:
+    def get_camera_poses(self, env_index: int) -> Dict[str, PoseState]:
         if not 0 <= env_index < self.batch_size:
             raise IndexError(
                 f"env_index must be in [0, {self.batch_size}), got {env_index}"
@@ -1221,7 +1205,7 @@ class MujocoTaskBackend(SceneBackend):
                 continue
         return poses
 
-    def get_randomization_diagnostics(self, env_index: int = 0) -> Dict[str, Any]:
+    def get_reset_diagnostics(self, env_index: int = 0) -> Dict[str, Any]:
         """Return diagnostics from the most recent constrained reset."""
         if not 0 <= env_index < self.batch_size:
             raise IndexError(
@@ -1287,7 +1271,7 @@ class MujocoTaskBackend(SceneBackend):
             part=part,
         )
 
-    def evaluate_randomization_constraints(
+    def evaluate_pose_constraints(
         self,
         candidate_poses: Mapping[str, PoseState],
         *,
@@ -1315,7 +1299,7 @@ class MujocoTaskBackend(SceneBackend):
                 for name, values in ancestors.items()
                 if name in self.object_handlers
             }
-        return self.env.envs[physical_index].evaluate_randomization_constraints(
+        return self.env.envs[physical_index].evaluate_pose_constraints(
             mapped_poses,
             constraints=constraints,
             ancestors=mapped_ancestors,
@@ -1871,24 +1855,6 @@ class MujocoTaskBackend(SceneBackend):
         else:
             raise ValueError(f"Unknown target part '{kind}' for '{owner}'.")
 
-    def evaluate_constraints(
-        self,
-        candidate_poses: Mapping[str, PoseState],
-        *,
-        env_index: int = 0,
-        constraints: Optional[RandomizationConstraintConfig] = None,
-        ancestors: Optional[Mapping[str, Set[str]]] = None,
-        target_names: Optional[Set[str]] = None,
-    ) -> RandomizationConstraintReport:
-        """Evaluate hard constraints for a candidate set."""
-        return self.evaluate_randomization_constraints(
-            candidate_poses,
-            env_index=env_index,
-            constraints=constraints,
-            ancestors=ancestors,
-            target_names=target_names,
-        )
-
     def record_reset_diagnostics(
         self,
         env_index: int,
@@ -2401,11 +2367,11 @@ def build_mujoco_backend(
         refs: list = []
         if isinstance(rand_range, OperatorRandomizationConfig):
             if rand_range.base is not None:
-                refs.extend(_randomization_references(rand_range.base))
+                refs.extend(declared_randomization_references(rand_range.base))
             if rand_range.eef is not None:
-                refs.extend(_randomization_references(rand_range.eef))
+                refs.extend(declared_randomization_references(rand_range.eef))
         else:
-            refs.extend(_randomization_references(rand_range))
+            refs.extend(declared_randomization_references(rand_range))
         for ref in refs:
             if isinstance(ref, str) and not isinstance(ref, RandomizationReference):
                 if ref not in operator_handlers:

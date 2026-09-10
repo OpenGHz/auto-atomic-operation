@@ -1086,7 +1086,7 @@ class TaskRunner:
         BASE`` and use ``absolute_world`` (or ``relative``) in the
         waypoint's ``randomization``.
         """
-        backend_rng = context.backend.get_random_generator()
+        backend_rng = context.backend.rng
         rng = backend_rng if backend_rng is not None else context.random_generator
         for action in actions:
             if action.kind != "pose" or action.pose is None:
@@ -2531,7 +2531,7 @@ class TaskRunner:
 
         camera_poses = {
             name: self._serialize_pose(pose)
-            for name, pose in context.backend.get_camera_reset_poses(env_index).items()
+            for name, pose in context.backend.get_camera_poses(env_index).items()
         }
         if camera_poses:
             initial_poses["_cameras"] = camera_poses
@@ -2539,9 +2539,9 @@ class TaskRunner:
         details: Dict[str, Any] = {}
         if initial_poses:
             details["initial_poses"] = initial_poses
-        randomization = context.backend.get_randomization_diagnostics(env_index)
-        if randomization:
-            details["randomization"] = randomization
+        reset_diagnostics = context.backend.get_reset_diagnostics(env_index)
+        if reset_diagnostics:
+            details["randomization"] = reset_diagnostics
         if not details:
             return {}
         return details

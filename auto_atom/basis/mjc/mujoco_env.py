@@ -2712,7 +2712,7 @@ class BatchedUnifiedMujocoEnv:
             lambda env: env.get_support_geometry(entity_name)
         )[0]
 
-    def evaluate_randomization_constraints(
+    def evaluate_pose_constraints(
         self,
         candidate_poses: Mapping[str, PoseState],
         *,
@@ -2728,7 +2728,7 @@ class BatchedUnifiedMujocoEnv:
         physical_index = (
             0 if self._batch_adapter().mode == BatchExecutionMode.SHARED else env_index
         )
-        return self.envs[physical_index].evaluate_randomization_constraints(
+        return self.envs[physical_index].evaluate_pose_constraints(
             candidate_poses,
             env_index=0,
             constraints=constraints,

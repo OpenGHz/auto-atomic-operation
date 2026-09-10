@@ -188,6 +188,21 @@ class PoissonDiskCandidateStream:
         return np.asarray(sample[0], dtype=np.float64).copy()
 
 
+def declared_randomization_references(
+    spec: PoseRandomizationSpec,
+) -> tuple[RandomizationReference | str, ...]:
+    """Return every reference one randomization spec declares, de-duplicated.
+
+    Used when a task's config must be expanded *before* a plan exists — most
+    notably to discover objects that only appear because a randomization entry
+    references them.
+    """
+    references: list[RandomizationReference | str] = []
+    for region in pose_randomization_regions(spec):
+        references.extend(region.references())
+    return tuple(dict.fromkeys(references))
+
+
 def parse_entity_reference(reference: str) -> tuple[str, str | None]:
     """Split an entity-name reference into ``(name, attribute)``.
 

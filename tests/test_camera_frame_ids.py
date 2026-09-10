@@ -190,7 +190,7 @@ def test_randomization_visibility_uses_rgb_depth_clip_intersection() -> None:
         )
     }
 
-    report = env.evaluate_randomization_constraints(
+    report = env.evaluate_pose_constraints(
         {
             "subject": PoseState(
                 position=np.asarray([[0.0, 0.0, -4.5]], dtype=np.float64),
@@ -260,7 +260,7 @@ def test_visible_in_resolves_geometry_and_camera_once_per_episode(
         visible_in={"cameras": ["camera"], "geometry": "bounding_sphere"}
     )
     for _ in range(3):
-        report = env.evaluate_randomization_constraints(
+        report = env.evaluate_pose_constraints(
             {"subject": pose},
             constraints=constraints,
         )

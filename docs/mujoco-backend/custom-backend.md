@@ -492,7 +492,7 @@ A backend therefore only implements `RandomizationHost`
 | Pose read/write | `live_pose(label)`, `baseline_pose(label)`, `get_camera_pose()`, `set_camera_pose()`, `set_target_pose(kind, owner, pose, env_mask)` |
 | Geometry and cameras | `get_support_geometry()`, `get_operator_support_geometry()`, `camera_names()`, `get_camera_model()` |
 | Randomness source | `rng`, `seed`, `episode_index` |
-| Reporting | `evaluate_constraints()`, `record_reset_diagnostics()` |
+| Reporting | `evaluate_pose_constraints()`, `record_reset_diagnostics()` |
 
 Note what is *not* on that list: no plan, no strategy, no sampler, no
 per-camera randomization hook, no auto-radius resolution, no preflight. The

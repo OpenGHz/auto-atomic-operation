@@ -205,7 +205,7 @@ class _RecordingHost:
         self.applied.append(label)
         self.poses[label] = pose
 
-    def evaluate_constraints(self, candidate_poses, **kwargs):
+    def evaluate_pose_constraints(self, candidate_poses, **kwargs):
         return RandomizationConstraintReport(valid=True)
 
     def record_reset_diagnostics(self, env_index, diagnostics) -> None:

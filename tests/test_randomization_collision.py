@@ -297,7 +297,7 @@ def test_hard_sphere_rsa_best_effort_records_diagnostics() -> None:
 
     backend.randomization_executor.apply_randomization(np.asarray([True], dtype=bool))
 
-    diagnostics = backend.get_randomization_diagnostics()
+    diagnostics = backend.get_reset_diagnostics()
     assert diagnostics["attempts"][0]["group"] == "tabletop"
     assert diagnostics["attempts"][0]["member"] == "small"
     assert diagnostics["attempts"][0]["mode"] == "best_effort"
@@ -567,7 +567,7 @@ def test_canonical_error_policy_raises_with_collision_diagnostics() -> None:
             np.asarray([True], dtype=bool)
         )
 
-    diagnostics = backend.get_randomization_diagnostics(0)
+    diagnostics = backend.get_reset_diagnostics(0)
     assert diagnostics["attempts"][0]["attempts"] == 2
     assert diagnostics["attempts"][0]["minimum_clearance"] == pytest.approx(-0.1)
 
@@ -1858,7 +1858,7 @@ def test_visible_in_empty_intersection_fails_fast_before_attempts(
     assert excinfo.value.attempts == 0
     assert excinfo.value.violations == ("vase:outside_view:camera",)
 
-    diagnostics = backend.get_randomization_diagnostics(0)
+    diagnostics = backend.get_reset_diagnostics(0)
     assert diagnostics["attempts"][-1]["attempts"] == 0
     assert diagnostics["attempts"][-1]["violations"] == ["vase:outside_view:camera"]
 
@@ -1872,4 +1872,4 @@ def test_visible_in_intersecting_region_skips_deterministic_short_circuit(
     backend.randomization_executor.run_visibility_preflight(
         np.asarray([True], dtype=bool)
     )
-    assert backend.get_randomization_diagnostics(0) == {}
+    assert backend.get_reset_diagnostics(0) == {}

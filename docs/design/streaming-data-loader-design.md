@@ -59,7 +59,7 @@
 | `ExecutionRecord` | stage 级事件流（成功/失败原因、操作、目标物体） | `auto_atom/execution_model.py` |
 | `ConfigDrivenDemoPolicy` + `PolicyEvaluator` | 唯一生产者路径：demo 与 `TaskRunner` 有 parity 测试保证一致 | `auto_atom/policy_eval.py`、`tests/test_demo_eval_parity.py` |
 | `_collect_reset_details` | reset 后的初始场景真值（物体/操作器/相机位姿） | `auto_atom/runtime.py` |
-| `get_randomization_diagnostics(env_index)` | 本次 reset 实际采样出的偏移（场景级 ground truth） | `auto_atom/backend/mjc/mujoco_backend.py` |
+| `get_reset_diagnostics(env_index)` | 本次 reset 实际采样出的偏移（场景级 ground truth） | `auto_atom/backend/mjc/mujoco_backend.py` |
 | `BatchExecutionAdapter` + REPLICATED replica pool | 进程内批内并行 | `auto_atom/basis/mjc/batch_execution.py`、`env.parallel_batch_step` |
 | `auto_atom.ipc`（rpyc） | 跨进程/跨机：仿真留在 server，客户端只消费序列化 dict | `auto_atom/ipc/` |
 

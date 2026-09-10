@@ -192,15 +192,17 @@ class RandomizationHost(Protocol):
         """
         ...
 
-    def evaluate_constraints(
+    def evaluate_pose_constraints(
         self,
         candidate_poses: Mapping[str, PoseState],
         *,
-        env_index: int,
-        constraints: Optional[RandomizationConstraintConfig],
-        ancestors: Optional[Mapping[str, RandomizationAncestors]],
-        target_names: Optional[Any],
-    ) -> RandomizationConstraintReport: ...
+        env_index: int = 0,
+        constraints: Optional[RandomizationConstraintConfig] = None,
+        ancestors: Optional[Mapping[str, RandomizationAncestors]] = None,
+        target_names: Optional[Any] = None,
+    ) -> RandomizationConstraintReport:
+        """Evaluate the hard pose constraints for a candidate set."""
+        ...
 
     def record_reset_diagnostics(
         self,
@@ -1088,7 +1090,7 @@ class RandomizationExecutor:
                         if action.kind == "object" and action.owner in candidate_poses
                     }
                 )
-                report = self._host.evaluate_constraints(
+                report = self._host.evaluate_pose_constraints(
                     candidate_poses,
                     env_index=env_index,
                     constraints=constraints,
@@ -1358,7 +1360,7 @@ class RandomizationExecutor:
                 if blocking is None:
                     # Always-on hard-sphere collision uses the radius sum only.
                     # Optional ``separated`` clearance is enforced exactly once
-                    # below through evaluate_randomization_constraints (which
+                    # below through evaluate_pose_constraints (which
                     # uses real support geometry), never folded into the radius
                     # collision test.
                     blocking = find_collision_participant(
@@ -1387,7 +1389,7 @@ class RandomizationExecutor:
                     candidate_constraint_ancestors[candidate.owner] = set(
                         candidate.ancestors
                     )
-                    constraint_report = self._host.evaluate_constraints(
+                    constraint_report = self._host.evaluate_pose_constraints(
                         candidate_poses_for_constraints,
                         env_index=env_index,
                         constraints=candidate.constraints,

@@ -339,7 +339,7 @@ class RandomizationConstraintEnvProtocol(EnvProtocol, Protocol):
 
     def get_support_geometry(self, entity_name: str) -> SupportGeometry: ...
 
-    def evaluate_randomization_constraints(
+    def evaluate_pose_constraints(
         self,
         candidate_poses: Mapping[str, PoseState],
         *,
@@ -763,8 +763,9 @@ class SceneBackend(ABC):
     ) -> None:
         """Notify the backend about the current task-focus objects and operations."""
 
-    def get_random_generator(self) -> Optional[np.random.Generator]:
-        """Return the backend-owned RNG, when it has one.
+    @property
+    def rng(self) -> Optional[np.random.Generator]:
+        """The backend-owned RNG, when it has one.
 
         Runner-owned seeded randomness is used when a backend returns ``None``.
         This keeps waypoint randomization deterministic without reaching into a
@@ -772,15 +773,22 @@ class SceneBackend(ABC):
         """
         return None
 
-    def get_camera_reset_poses(self, env_index: int) -> Dict[str, PoseState]:
-        """Return randomized camera poses included in reset diagnostics.
+    def get_camera_poses(self, env_index: int) -> Dict[str, PoseState]:
+        """Return the camera poses this reset ended up with.
 
-        Backends without camera randomization return an empty mapping.
+        Reported in reset diagnostics so a run can be reconstructed from what
+        the cameras actually saw. Backends without cameras return an empty
+        mapping.
         """
         return {}
 
-    def get_randomization_diagnostics(self, env_index: int = 0) -> Dict[str, Any]:
-        """Return diagnostics produced by the most recent randomization reset."""
+    def get_reset_diagnostics(self, env_index: int = 0) -> Dict[str, Any]:
+        """Return diagnostics produced by the most recent reset.
+
+        A backend reports here why a placement was hard (exhausted attempts,
+        provably empty constraint intersection), so a failing run can be
+        explained without re-running it.
+        """
         return {}
 
     def get_camera_model(self, camera_name: str, env_index: int = 0) -> CameraModel:
@@ -799,7 +807,7 @@ class SceneBackend(ABC):
             f"Backend does not expose support geometry for '{entity_name}'."
         )
 
-    def evaluate_randomization_constraints(
+    def evaluate_pose_constraints(
         self,
         candidate_poses: Mapping[str, PoseState],
         *,
@@ -808,7 +816,7 @@ class SceneBackend(ABC):
         ancestors: Optional[Mapping[str, Set[str]]] = None,
         target_names: Optional[Set[str]] = None,
     ) -> RandomizationConstraintReport:
-        """Evaluate backend-supported visibility and separation constraints."""
+        """Evaluate the hard pose constraints (visibility, separation)."""
         if constraints is not None:
             raise NotImplementedError(
                 "Backend does not support constrained randomization evaluation."
