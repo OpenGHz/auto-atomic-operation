@@ -489,10 +489,10 @@ A backend therefore only implements `RandomizationHost`
 | Capability | Members |
 |---|---|
 | Elements and batch | `batch_size`, `object_names`, `operator_names` |
-| Pose read/write | `live_pose(label)`, `baseline_pose(label)`, `get_camera_pose()`, `set_camera_pose()`, `apply_action()` |
+| Pose read/write | `live_pose(label)`, `baseline_pose(label)`, `get_camera_pose()`, `set_camera_pose()`, `set_target_pose(kind, owner, pose, env_mask)` |
 | Geometry and cameras | `get_support_geometry()`, `get_operator_support_geometry()`, `camera_names()`, `get_camera_model()` |
-| Randomness source | `randomization_rng`, `randomization_seed`, `randomization_reset_index` |
-| Reporting | `evaluate_constraints()`, `record_randomization_diagnostics()` |
+| Randomness source | `rng`, `seed`, `episode_index` |
+| Reporting | `evaluate_constraints()`, `record_reset_diagnostics()` |
 
 Note what is *not* on that list: no plan, no strategy, no sampler, no
 per-camera randomization hook, no auto-radius resolution, no preflight. The
@@ -501,7 +501,7 @@ selects regions, resolves per-axis references and their delta-carry, samples
 from the configured generators, resolves auto collision radii from the exposed
 support geometry, runs both retry loops and the deterministic `visible_in`
 preflight, orders the reset (operators → cameras → visibility preflight →
-objects), and writes the result back through `apply_action()` /
+objects), and writes the result back through `set_target_pose()` /
 `set_camera_pose()`. A new backend inherits all of it, and
 `tests/test_randomization_executor.py` verifies that claim against a fake host
 that implements nothing but the capabilities above.

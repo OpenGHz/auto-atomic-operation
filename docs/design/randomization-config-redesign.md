@@ -284,6 +284,11 @@ task:
     base/eef 采样、Poisson 流缓存、自动碰撞半径（含 per-episode 缓存策略）、
     配置校验、确定性可见性预检、模板位姿缓冲，全部搬入执行器。
   - 后端删除约 900 行随机化逻辑，只留下能力方法。
+- **R-D3（已完成）**：能力命名去随机化词汇 —— `rng` / `seed` /
+  `episode_index`、`record_reset_diagnostics`、
+  `set_target_pose(kind, owner, pose, env_mask)`（取代
+  `apply_action(action, env_mask)`：后端只按元素部件写位姿，永远不知道执行器把
+  它当成了哪个随机化标签）。
 
 约束（各轮均遵守）：RNG 消费顺序、`sample_index` 公式（`reset_index*1009 +
 env_index`、`+ attempt*17 + sum(ord(c))`）、`env_mask` 与 per-component 批量
@@ -296,12 +301,12 @@ env_index`、`+ attempt*17 + sum(ord(c))`）、`env_mask` 与 per-component 批�
 
 - 元素与批次：`batch_size` / `object_names` / `operator_names`
 - 位姿读写：`live_pose(label)` / `baseline_pose(label)` /
-  `get_camera_pose` / `set_camera_pose` / `apply_action`
+  `get_camera_pose` / `set_camera_pose` /
+  `set_target_pose(kind, owner, pose, env_mask)`
 - 几何与相机：`get_support_geometry` / `get_operator_support_geometry` /
   `camera_names` / `get_camera_model`
-- 随机源与计数：`randomization_rng` / `randomization_seed` /
-  `randomization_reset_index`
-- 报告：`evaluate_constraints` / `record_randomization_diagnostics`
+- 随机源与计数：`rng` / `seed` / `episode_index`
+- 报告：`evaluate_constraints` / `record_reset_diagnostics`
 
 执行器拥有：计划编译、候选生成（IID/Sobol/Poisson + 覆盖历史）、区域选择与权重、
 逐轴 reference 语义、碰撞拒绝判定、约束评估编排、半径解析与缓存、配置校验、

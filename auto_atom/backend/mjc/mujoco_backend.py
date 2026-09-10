@@ -1111,8 +1111,8 @@ class MujocoTaskBackend(SceneBackend):
     random_seed: Optional[int] = None
     randomization_debug: bool = False
     _rng: np.random.Generator = field(init=False, repr=False)
-    _randomization_reset_index: int = field(init=False, repr=False, default=0)
-    _last_randomization_diagnostics: Dict[int, List[Dict[str, Any]]] = field(
+    _episode_index: int = field(init=False, repr=False, default=0)
+    _last_reset_diagnostics: Dict[int, List[Dict[str, Any]]] = field(
         init=False,
         repr=False,
         default_factory=dict,
@@ -1227,7 +1227,7 @@ class MujocoTaskBackend(SceneBackend):
             raise IndexError(
                 f"env_index must be in [0, {self.batch_size}), got {env_index}"
             )
-        entries = self._last_randomization_diagnostics.get(env_index, ())
+        entries = self._last_reset_diagnostics.get(env_index, ())
         return {"attempts": [dict(entry) for entry in entries]} if entries else {}
 
     def get_camera_model(self, camera_name: str, env_index: int = 0) -> CameraModel:
@@ -1338,8 +1338,8 @@ class MujocoTaskBackend(SceneBackend):
 
     def reset(self, env_mask: Optional[np.ndarray] = None) -> None:
         mask = self._normalize_mask(env_mask)
-        self._randomization_reset_index += 1
-        self._last_randomization_diagnostics.clear()
+        self._episode_index += 1
+        self._last_reset_diagnostics.clear()
         self.env.reset(env_mask)
         for operator in self.operator_handlers.values():
             operator.home(mask)
@@ -1780,19 +1780,19 @@ class MujocoTaskBackend(SceneBackend):
         return executor
 
     @property
-    def randomization_rng(self) -> np.random.Generator:
-        """The generator the executor draws from."""
+    def rng(self) -> np.random.Generator:
+        """The backend-owned generator the executor draws from."""
         return self._rng
 
     @property
-    def randomization_seed(self) -> Optional[int]:
-        """The seed only-derived streams (Poisson-disk lattices) are built from."""
+    def seed(self) -> Optional[int]:
+        """The seed the generator was built from (``None`` = nondeterministic)."""
         return self.random_seed
 
     @property
-    def randomization_reset_index(self) -> int:
-        """Monotonic episode counter used to derive sample indices."""
-        return self._randomization_reset_index
+    def episode_index(self) -> int:
+        """Monotonic reset counter used to derive per-episode sample indices."""
+        return self._episode_index
 
     @property
     def object_names(self) -> Set[str]:
@@ -1807,7 +1807,7 @@ class MujocoTaskBackend(SceneBackend):
 
         ``label`` is an object name, or ``<operator>.base`` /
         ``<operator>.eef``. This is the read half of the pose capability; the
-        write half is :meth:`apply_action`.
+        write half is :meth:`set_target_pose`.
         """
         owner, attribute = parse_entity_reference(label)
         if attribute is None:
@@ -1847,23 +1847,29 @@ class MujocoTaskBackend(SceneBackend):
         """
         return sorted(getattr(self.env.envs[0], "_camera_ids", {}) or {})
 
-    def apply_action(
+    def set_target_pose(
         self,
-        action: PendingRandomizationAction,
+        kind: str,
+        owner: str,
+        pose: PoseState,
         env_mask: np.ndarray,
     ) -> None:
-        """Write one sampled action into the scene for the masked envs."""
-        if action.kind == "object":
-            self.object_handlers[action.owner].set_pose(action.pose, env_mask)
-        elif action.kind == "operator_base":
-            self.operator_handlers[action.owner].set_pose(action.pose, env_mask)
-        elif action.kind == "operator_eef":
-            self.operator_handlers[action.owner].set_home_end_effector_pose(
-                action.pose,
+        """Write one element part's pose into the scene for the masked envs.
+
+        ``kind`` is ``object``, ``operator_base`` or ``operator_eef`` — the same
+        element addressing :meth:`live_pose` reads with.
+        """
+        if kind == "object":
+            self.object_handlers[owner].set_pose(pose, env_mask)
+        elif kind == "operator_base":
+            self.operator_handlers[owner].set_pose(pose, env_mask)
+        elif kind == "operator_eef":
+            self.operator_handlers[owner].set_home_end_effector_pose(
+                pose,
                 env_mask=env_mask,
             )
         else:
-            raise ValueError(f"Unknown randomization action kind: {action.kind}")
+            raise ValueError(f"Unknown target part '{kind}' for '{owner}'.")
 
     def evaluate_constraints(
         self,
@@ -1883,15 +1889,13 @@ class MujocoTaskBackend(SceneBackend):
             target_names=target_names,
         )
 
-    def record_randomization_diagnostics(
+    def record_reset_diagnostics(
         self,
         env_index: int,
         diagnostics: Mapping[str, Any],
     ) -> None:
-        """Store one feasibility-loop diagnostic for ``reset()`` details."""
-        self._last_randomization_diagnostics.setdefault(env_index, []).append(
-            dict(diagnostics)
-        )
+        """Store one feasibility diagnostic for the reset-details report."""
+        self._last_reset_diagnostics.setdefault(env_index, []).append(dict(diagnostics))
 
     # ------------------------------------------------------------------
     #  Camera randomization

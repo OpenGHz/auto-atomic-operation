@@ -733,10 +733,10 @@ def test_first_feasible_non_iid_generator_avoids_accepted_samples_across_resets(
         object_positions={"vase": (0.0, 0.0, 0.0)},
     )
 
-    backend._randomization_reset_index = 1
+    backend._episode_index = 1
     backend.randomization_executor.apply_randomization(np.asarray([True], dtype=bool))
     first = backend.object_handlers["vase"].get_pose().position[0].copy()
-    backend._randomization_reset_index = 2
+    backend._episode_index = 2
     backend.randomization_executor.apply_randomization(np.asarray([True], dtype=bool))
     second = backend.object_handlers["vase"].get_pose().position[0].copy()
 
@@ -794,7 +794,7 @@ def test_maximin_records_only_the_selected_candidate_not_the_whole_group() -> No
         randomization={"vase": spec},
         object_positions={"vase": (0.0, 0.0, 0.0)},
     )
-    backend._randomization_reset_index = 1
+    backend._episode_index = 1
     backend.randomization_executor.apply_randomization(np.asarray([True], dtype=bool))
 
     assert len(backend.randomization_executor.history[("vase",)]) == 1

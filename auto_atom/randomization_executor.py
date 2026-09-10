@@ -128,13 +128,19 @@ class RandomizationHost(Protocol):
     def operator_names(self) -> Container[str]: ...
 
     @property
-    def randomization_rng(self) -> np.random.Generator: ...
+    def rng(self) -> np.random.Generator:
+        """The generator the executor draws candidate streams from."""
+        ...
 
     @property
-    def randomization_reset_index(self) -> int: ...
+    def seed(self) -> Optional[int]:
+        """The seed the generator was built from, or ``None`` when unseeded."""
+        ...
 
     @property
-    def randomization_seed(self) -> Optional[int]: ...
+    def episode_index(self) -> int:
+        """How many resets have happened; used to derive per-episode sample indices."""
+        ...
 
     def live_pose(self, label: str) -> PoseState:
         """Current world pose of a target label.
@@ -172,11 +178,19 @@ class RandomizationHost(Protocol):
         env_index: int,
     ) -> Any: ...
 
-    def apply_action(
+    def set_target_pose(
         self,
-        action: PendingRandomizationAction,
+        kind: str,
+        owner: str,
+        pose: PoseState,
         env_mask: np.ndarray,
-    ) -> None: ...
+    ) -> None:
+        """Write one element part's pose into the scene for the masked envs.
+
+        ``kind`` is ``object``, ``operator_base`` or ``operator_eef``: the same
+        element addressing ``live_pose`` reads with.
+        """
+        ...
 
     def evaluate_constraints(
         self,
@@ -188,11 +202,13 @@ class RandomizationHost(Protocol):
         target_names: Optional[Any],
     ) -> RandomizationConstraintReport: ...
 
-    def record_randomization_diagnostics(
+    def record_reset_diagnostics(
         self,
         env_index: int,
         diagnostics: Mapping[str, Any],
-    ) -> None: ...
+    ) -> None:
+        """Store one reset diagnostic entry (why a placement was hard)."""
+        ...
 
 
 class RandomizationExecutor:
@@ -334,7 +350,7 @@ class RandomizationExecutor:
     ) -> PoseRandomRange:
         """Select one region for one sampling attempt."""
         return select_randomization_region(
-            self._host.randomization_rng,
+            self._host.rng,
             spec,
             candidate_index=candidate_index,
         )
@@ -452,11 +468,7 @@ class RandomizationExecutor:
                 lower_bounds=lower_bounds,
                 upper_bounds=upper_bounds,
                 radius=spacing,
-                seed=int(
-                    (self._host.randomization_seed or 0)
-                    + env_index * 10_007
-                    + label_seed
-                ),
+                seed=int((self._host.seed or 0) + env_index * 10_007 + label_seed),
             )
             self._poisson_streams[key] = stream
         return stream
@@ -476,7 +488,7 @@ class RandomizationExecutor:
     ) -> PoseState:
         """Sample one environment's pose from one region."""
         return sample_pose_for_env(
-            self._host.randomization_rng,
+            self._host.rng,
             base_pose=base_pose,
             rand_range=rand_range,
             env_index=env_index,
@@ -484,7 +496,7 @@ class RandomizationExecutor:
             reference_poses=reference_poses,
             distribution=distribution,
             sample_index=sample_index,
-            reset_index=self._host.randomization_reset_index,
+            reset_index=self._host.episode_index,
             poisson_stream=poisson_stream,
         )
 
@@ -856,7 +868,7 @@ class RandomizationExecutor:
         if infeasibility is None:
             return
         constraints = action_specs[infeasibility.target].randomization.constraints
-        self._host.record_randomization_diagnostics(
+        self._host.record_reset_diagnostics(
             infeasibility.env_index,
             {
                 "group": "component",
@@ -975,7 +987,7 @@ class RandomizationExecutor:
                     env_index,
                     working_poses,
                     candidate_index=(
-                        self._host.randomization_reset_index * 1009
+                        self._host.episode_index * 1009
                         + attempt * 17
                         + stable_labels[action_label]
                     ),
@@ -1200,7 +1212,7 @@ class RandomizationExecutor:
                 "minimum_clearance": best_clearance,
                 "mode": "error" if error_actions else "best_effort",
             }
-            self._host.record_randomization_diagnostics(env_index, diagnostics)
+            self._host.record_reset_diagnostics(env_index, diagnostics)
             if error_actions:
                 raise RandomizationFailureError(
                     target=error_actions[0].label,
@@ -1278,7 +1290,7 @@ class RandomizationExecutor:
                 raise ValueError(
                     f"Circular randomization reference in RSA component {component!r}"
                 )
-            rng = self._host.randomization_rng
+            rng = self._host.rng
             if len(ready) > 1 and hasattr(rng, "permutation"):
                 ready = [str(value) for value in rng.permutation(ready)]
             order.extend(ready)
@@ -1316,7 +1328,7 @@ class RandomizationExecutor:
                     env_index,
                     working_poses,
                     candidate_index=(
-                        self._host.randomization_reset_index * 1009
+                        self._host.episode_index * 1009
                         + attempt * 17
                         + sum(ord(c) for c in member)
                     ),
@@ -1456,7 +1468,7 @@ class RandomizationExecutor:
                 "minimum_clearance": best[0],
                 "mode": failure_mode,
             }
-            self._host.record_randomization_diagnostics(env_index, diagnostics)
+            self._host.record_reset_diagnostics(env_index, diagnostics)
             if failure_mode == "error":
                 raise RandomizationFailureError(
                     target=member,
@@ -1499,7 +1511,7 @@ class RandomizationExecutor:
         for camera_name, randomization in self.camera_randomization.items():
             canonical = canonical_randomization_spec(randomization)
             rand_range = select_randomization_region(
-                self._host.randomization_rng,
+                self._host.rng,
                 canonical,
             )
             for reference in rand_range.references():
@@ -1526,13 +1538,13 @@ class RandomizationExecutor:
                 )
                 continue
             sampled = sample_pose_batch(
-                self._host.randomization_rng,
+                self._host.rng,
                 base_pose=default_pose,
                 rand_range=rand_range,
                 env_mask=env_mask,
                 batch_size=self._host.batch_size,
                 distribution=canonical.distribution,
-                reset_index=self._host.randomization_reset_index,
+                reset_index=self._host.episode_index,
             )
             self._host.set_camera_pose(camera_name, sampled, env_mask)
 
@@ -1550,7 +1562,12 @@ class RandomizationExecutor:
 
         def apply_actions(actions: List[PendingRandomizationAction]) -> None:
             for action in actions:
-                self._host.apply_action(action, env_mask)
+                self._host.set_target_pose(
+                    action.kind,
+                    action.owner,
+                    action.pose,
+                    env_mask,
+                )
                 collision_participants.append(
                     CollisionParticipant(
                         owner=action.owner,

@@ -131,15 +131,15 @@ class _RecordingHost:
         return 1
 
     @property
-    def randomization_rng(self) -> np.random.Generator:
+    def rng(self) -> np.random.Generator:
         return self._rng
 
     @property
-    def randomization_seed(self) -> Optional[int]:
+    def seed(self) -> Optional[int]:
         return 0
 
     @property
-    def randomization_reset_index(self) -> int:
+    def episode_index(self) -> int:
         return 0
 
     @property
@@ -193,15 +193,22 @@ class _RecordingHost:
     ) -> SupportGeometry:
         return SupportGeometry(center=(0.0, 0.0, 0.0), radius=0.01)
 
-    def apply_action(self, action, env_mask) -> None:
-        self.events.append(f"apply:{action.label}")
-        self.applied.append(action.label)
-        self.poses[action.label] = action.pose
+    def set_target_pose(self, kind, owner, pose, env_mask) -> None:
+        # The host addresses an element part, not a randomization action: it
+        # never learns which label the executor sampled.
+        label = (
+            owner
+            if kind == "object"
+            else f"{owner}.{'base' if kind == 'operator_base' else 'eef'}"
+        )
+        self.events.append(f"apply:{label}")
+        self.applied.append(label)
+        self.poses[label] = pose
 
     def evaluate_constraints(self, candidate_poses, **kwargs):
         return RandomizationConstraintReport(valid=True)
 
-    def record_randomization_diagnostics(self, env_index, diagnostics) -> None:
+    def record_reset_diagnostics(self, env_index, diagnostics) -> None:
         self.events.append(f"diagnostic:{diagnostics.get('generator', '')}")
         self.diagnostics.append(dict(diagnostics))
 
