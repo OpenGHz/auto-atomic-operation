@@ -27,6 +27,11 @@ from auto_atom.config.env_config import (
     EnvConfig,
 )
 from auto_atom.config.pose import PoseOverrideConfig
+from auto_atom.config.randomization import (
+    PoseRandomRange,
+    RandomizationScopeConfig,
+    ResolvedRandomizationConfig,
+)
 from auto_atom.scene_composition import SceneConfig
 from auto_atom.utils.pose import PoseState
 
@@ -312,6 +317,132 @@ def _relative_camera_offset(
     return body_rotation.T @ (
         np.asarray(env.data.cam_xpos[camera_id]) - np.asarray(env.data.xpos[body_id])
     )
+
+
+def _camera_backend(
+    env: MujocoBasis,
+    cameras: dict[str, object],
+    *,
+    seed: int = 7,
+) -> MujocoTaskBackend:
+    """A backend whose only randomization is the given per-camera entries."""
+    return MujocoTaskBackend(
+        env=_SingleEnvBatch(env),  # type: ignore[arg-type]
+        operator_handlers={},
+        object_handlers={},
+        randomization=ResolvedRandomizationConfig.from_scope_config(
+            RandomizationScopeConfig(cameras=cameras)  # type: ignore[arg-type]
+        ),
+        random_seed=seed,
+    )
+
+
+def test_object_camera_randomization_samples_the_install_offset(
+    tmp_path: Path,
+) -> None:
+    """An object camera randomizes its mount-frame offset, not a world pose."""
+    env = UnifiedMujocoEnv(
+        EnvConfig(
+            scene=SceneConfig(base=_write_scene(tmp_path)),
+            enabled_sensors={DataType.CAMERA},
+            cameras=[_camera("obj_cam", role="object", parent_frame="cup")],
+        )
+    )
+    try:
+        backend = _camera_backend(env, {"obj_cam": PoseRandomRange(z=(-0.05, 0.05))})
+        backend._record_default_poses()
+        camera_id = _cam_id(env.model, "obj_cam")
+        cup_id = _body_id(env.model, "cup")
+        baseline = backend.get_camera_mount_pose("obj_cam").position[0].copy()
+
+        backend.randomization_executor.apply_camera_randomization(
+            np.asarray([True], dtype=bool)
+        )
+
+        sampled = backend.get_camera_mount_pose("obj_cam").position[0]
+        # The mount is untouched, unspecified axes keep the install offset, and
+        # the sampled axis is an additive offset in the mount frame.
+        assert int(env.model.cam_bodyid[camera_id]) == cup_id
+        np.testing.assert_allclose(sampled[:2], baseline[:2], atol=1e-12)
+        assert -0.05 <= sampled[2] - baseline[2] <= 0.05
+        assert sampled[2] != pytest.approx(baseline[2])
+
+        # The sampled offset is what the object transport then carries, so the
+        # randomization composes with motion instead of fighting it.
+        handler = MujocoObjectHandler(
+            name="cup",
+            env=_SingleEnvBatch(env),  # type: ignore[arg-type]
+            body_name="cup",
+            freejoint_name="cup_joint",
+        )
+        yaw = 0.4
+        handler.set_pose(
+            PoseState(
+                position=[[0.2, -0.1, 0.6]],
+                orientation=[[0.0, 0.0, math.sin(yaw / 2.0), math.cos(yaw / 2.0)]],
+            )
+        )
+        np.testing.assert_allclose(
+            _relative_camera_offset(env, camera_id, cup_id), sampled, atol=1e-9
+        )
+    finally:
+        env.close()
+
+
+def test_object_camera_rejects_world_frame_randomization(tmp_path: Path) -> None:
+    env = UnifiedMujocoEnv(
+        EnvConfig(
+            scene=SceneConfig(base=_write_scene(tmp_path)),
+            enabled_sensors={DataType.CAMERA},
+            cameras=[_camera("obj_cam", role="object", parent_frame="cup")],
+        )
+    )
+    try:
+        backend = _camera_backend(
+            env,
+            {
+                "obj_cam": PoseRandomRange.model_validate(
+                    {"reference": "absolute_world", "x": [0.0, 1.0]}
+                )
+            },
+        )
+        assert backend.object_camera_names() == {"obj_cam"}
+
+        with pytest.raises(ValueError, match="install offset in the mount frame"):
+            backend.randomization_executor.apply_camera_randomization(
+                np.asarray([True], dtype=bool)
+            )
+    finally:
+        env.close()
+
+
+def test_fixed_camera_randomization_keeps_world_frame_modes(tmp_path: Path) -> None:
+    env = UnifiedMujocoEnv(
+        EnvConfig(
+            scene=SceneConfig(base=_write_scene(tmp_path)),
+            enabled_sensors={DataType.CAMERA},
+            cameras=[_camera("scene_cam")],
+        )
+    )
+    try:
+        backend = _camera_backend(
+            env,
+            {
+                "scene_cam": PoseRandomRange.model_validate(
+                    {"reference": "absolute_world", "x": [2.0, 2.0]}
+                )
+            },
+        )
+        backend._record_default_poses()
+
+        backend.randomization_executor.apply_camera_randomization(
+            np.asarray([True], dtype=bool)
+        )
+
+        world = backend.get_camera_pose("scene_cam").position[0]
+        np.testing.assert_allclose(world[0], 2.0, atol=1e-9)
+    finally:
+        env.close()
 
 
 def test_object_camera_follows_object_only_transport(tmp_path: Path) -> None:

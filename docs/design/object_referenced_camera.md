@@ -1,7 +1,7 @@
 # 以物体为参考的相机（Object-Referenced Camera）设计
 
-> **状态：轮 1–2（配置、挂载、object_only 边界）已实现；物体系随机化、`visible_in` 边界、
-> GS/批量仍为"提案，尚未实现"。**
+> **状态：轮 1–3（配置、挂载、object_only 边界、物体系随机化）已实现；`visible_in` 边界
+> 与 GS/批量仍为"提案，尚未实现"。**
 >
 > 已实现部分的稳定用法，在后续轮次完成后按 AGENTS.md 约定迁移到
 > `docs/task-configuration/task_file_schema.md`（`env.cameras` 字段语义）与
@@ -31,7 +31,20 @@
   （`tests/test_object_only_execution.py`）；物流搬运路径（`MujocoObjectHandler.set_pose`）下
   相对位姿恒定（`tests/test_object_referenced_camera.py`）。
 
-**未实现（轮 3–5）**：物体系随机化路径、`visible_in` 边界、GS / 批量 / 性能。
+**已实现（轮 3，物体系随机化）**：
+
+- `RandomizationExecutor.apply_camera_randomization` 按 host 的 `object_camera_names()` 分派：
+  object 相机采样 `get_camera_mount_pose` / `set_camera_mount_pose`（即 `cam_pos`/`cam_quat`，
+  挂载系的安装偏移），固定相机仍走世界系基线；
+- object 相机的参考系校验：只接受 `relative`，`absolute_world` 报错（`absolute_base` 与实体引用
+  本来对全部相机都不合法）；
+- `MujocoTaskBackend` 实现三个挂载能力，并把相机 id 解析统一为 `_camera_id`（缺失即报错，写操作
+  不再静默跳过）；无相机条目的 host 无需实现挂载能力（executor 提前返回），
+  `RandomizationHost` 对无相机后端仍然可用；
+- 测试：契约测试 `tests/test_randomization_executor.py`（挂载分派、拒绝世界系参考）、
+  `tests/test_object_referenced_camera.py`（安装偏移采样、搬运后保持、固定相机世界系不受影响）。
+
+**未实现（轮 4–5）**：`visible_in` 边界、GS / 批量 / 性能。
 
 ## 1. 背景与问题
 
@@ -262,7 +275,7 @@ object 相机改为局部偏移后不再依赖该顺序，但该槽位需要按 
 | --- | --- | --- |
 | 1 | ✅ 已实现：`CameraSpec.role` 与校验（挂载目标解析、`is_static`、`camera_initial_pose` 互斥）；`MujocoBasis` 挂载 + baseline 重捕获 | 挂载后 `cam_bodyid` 与局部偏移正确；`reset()` 后保持；缺失物体报错 |
 | 2 | ✅ 已实现：跟随链路贯通：object_only 配置 → prepare → 构造 → `apply_object_pose` 全程验证相对位姿恒定 | 新增/扩展 `tests/test_object_only_execution.py` 等 |
-| 3 | 物体系随机化路径（沿用 `randomization.cameras` 与 scope `distribution` 继承）+ 参考系校验 | 相对位姿随 reset 变化；`absolute_world`/实体引用报错 |
+| 3 | ✅ 已实现：物体系随机化路径（沿用 `randomization.cameras` 与 scope `distribution` 继承）+ 参考系校验 | 相对位姿随 reset 变化；`absolute_world`/实体引用报错 |
 | 4 | `visible_in` 边界 + 文档迁移（`task_file_schema.md`、`randomization.md`、`initialization_randomization.md`） | 文档与测试同步 |
 | 5 | GS / 批量 / 性能：`is_static` 校验、GS 缓存键、replicated 与 shared-physics 验证、渲染开销基准 | 批量测试 + 基准 |
 

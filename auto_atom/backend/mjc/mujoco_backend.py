@@ -1898,6 +1898,76 @@ class MujocoTaskBackend(SceneBackend):
     #  Camera randomization
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _camera_id(single_env: Any, cam_name: str) -> int:
+        """Resolve a camera id in one environment, or fail loudly.
+
+        Every camera write is addressed by name, and a name the model does not
+        have is a configuration bug rather than a no-op to swallow.
+        """
+        cam_id = mujoco.mj_name2id(
+            single_env.model, mujoco.mjtObj.mjOBJ_CAMERA, cam_name
+        )
+        if cam_id < 0:
+            raise KeyError(f"Camera '{cam_name}' not found in the MuJoCo model.")
+        return int(cam_id)
+
+    def object_camera_names(self) -> Set[str]:
+        """Names of the cameras rigidly mounted on a scene object.
+
+        Their pose is an install offset rather than a world pose, so the
+        executor samples that offset instead (see ``role: object``).
+        """
+        envs = getattr(self.env, "envs", ())
+        if not envs:
+            return set()
+        return set(getattr(envs[0], "object_camera_names", frozenset()))
+
+    def get_camera_mount_pose(self, cam_name: str) -> PoseState:
+        """Read a camera's mount-frame pose across all envs.
+
+        This is ``cam_pos``/``cam_quat`` verbatim: the offset the camera keeps
+        relative to the body it is mounted on.  It is what an object-mounted
+        camera's randomization samples — the mount frame moves with the object,
+        so a world pose would describe a different (and moving) thing.
+        """
+        positions = np.zeros((self.batch_size, 3), dtype=np.float64)
+        orientations = np.zeros((self.batch_size, 4), dtype=np.float64)
+        for env_index, single_env in enumerate(self.env.envs):
+            cam_id = self._camera_id(single_env, cam_name)
+            positions[env_index] = np.asarray(
+                single_env.model.cam_pos[cam_id], dtype=np.float64
+            )
+            qw, qx, qy, qz = np.asarray(
+                single_env.model.cam_quat[cam_id], dtype=np.float64
+            )
+            orientations[env_index] = [qx, qy, qz, qw]
+        return PoseState(position=positions, orientation=orientations)
+
+    def set_camera_mount_pose(
+        self,
+        cam_name: str,
+        pose: PoseState,
+        env_mask: np.ndarray,
+    ) -> None:
+        """Write mount-frame camera poses into the masked environments."""
+        pose = pose.broadcast_to(self.batch_size)
+        env_indices = _stateful_pose_indices(
+            self.env,
+            pose,
+            env_mask,
+            label=f"Camera '{cam_name}' mount pose",
+        )
+        for env_index in env_indices:
+            single_env = self.env.envs[env_index]
+            cam_id = self._camera_id(single_env, cam_name)
+            qx, qy, qz, qw = pose.orientation[env_index]
+            single_env.model.cam_pos[cam_id] = np.asarray(
+                pose.position[env_index], dtype=np.float64
+            )
+            single_env.model.cam_quat[cam_id] = [qw, qx, qy, qz]
+            mujoco.mj_forward(single_env.model, single_env.data)
+
     def get_camera_pose(self, cam_name: str) -> PoseState:
         """Read a camera's world pose across all envs.
 
@@ -1909,11 +1979,7 @@ class MujocoTaskBackend(SceneBackend):
         positions = np.zeros((self.batch_size, 3), dtype=np.float64)
         orientations = np.zeros((self.batch_size, 4), dtype=np.float64)
         for env_index, single_env in enumerate(self.env.envs):
-            cam_id = mujoco.mj_name2id(
-                single_env.model, mujoco.mjtObj.mjOBJ_CAMERA, cam_name
-            )
-            if cam_id < 0:
-                raise KeyError(f"Camera '{cam_name}' not found in the MuJoCo model.")
+            cam_id = self._camera_id(single_env, cam_name)
             mujoco.mj_forward(single_env.model, single_env.data)
             positions[env_index] = np.asarray(
                 single_env.data.cam_xpos[cam_id], dtype=np.float64
@@ -1941,11 +2007,7 @@ class MujocoTaskBackend(SceneBackend):
         )
         for env_index in env_indices:
             single_env = self.env.envs[env_index]
-            cam_id = mujoco.mj_name2id(
-                single_env.model, mujoco.mjtObj.mjOBJ_CAMERA, cam_name
-            )
-            if cam_id < 0:
-                continue
+            cam_id = self._camera_id(single_env, cam_name)
             model = single_env.model
             data = single_env.data
             mujoco.mj_forward(model, data)

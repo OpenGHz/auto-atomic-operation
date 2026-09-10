@@ -110,6 +110,9 @@ class _RecordingHost:
         self.events: List[str] = []
         self.applied: List[str] = []
         self.diagnostics: List[dict] = []
+        # Cameras the host reports as rigidly mounted on an object; empty means
+        # every camera is a fixed world pose.
+        self.object_cameras: Set[str] = set()
         self.poses: Dict[str, PoseState] = {
             f"{ARM}.base": PoseState(position=(0.0, 0.0, 0.0)),
             f"{ARM}.eef": PoseState(position=(0.0, 0.0, 0.0)),
@@ -167,6 +170,18 @@ class _RecordingHost:
 
     def camera_names(self) -> List[str]:
         return [CAMERA]
+
+    def object_camera_names(self) -> Set[str]:
+        return set(self.object_cameras)
+
+    def get_camera_mount_pose(self, camera_name: str) -> PoseState:
+        return self.poses[CAMERA]
+
+    def set_camera_mount_pose(
+        self, camera_name: str, pose: PoseState, env_mask
+    ) -> None:
+        self.events.append("camera_mount")
+        self.poses[CAMERA] = pose
 
     def get_camera_model(self, camera_name: str, env_index: int) -> CameraModel:
         # A degenerate clip range: every box is provably outside the frustum, so
@@ -250,6 +265,43 @@ def test_reset_orders_operators_before_cameras_before_objects() -> None:
     # so their poses are written first; cameras are final before objects are
     # sampled, because object visibility constraints are evaluated against them.
     assert operator_apply < camera < object_apply
+
+
+def test_object_mounted_camera_samples_the_mount_frame() -> None:
+    """Camera randomization dispatches on how the camera is mounted.
+
+    A camera the host reports as object-mounted samples its install offset in
+    the mount frame, never the world pose, so a moving mount cannot leak into
+    the sample.
+    """
+    host = _RecordingHost()
+    host.object_cameras.add(CAMERA)
+    executor = RandomizationExecutor(host, _config(RandomizationStrategy.RSA))
+
+    executor.apply_camera_randomization(np.asarray([True], dtype=bool))
+
+    assert "camera_mount" in host.events
+    assert "camera" not in host.events
+
+
+def test_object_mounted_camera_rejects_world_frame_references() -> None:
+    host = _RecordingHost()
+    host.object_cameras.add(CAMERA)
+    config = ResolvedRandomizationConfig(
+        scope=ResolvedRandomizationScope(
+            entities={},
+            cameras={
+                CAMERA: PoseRandomRange.model_validate(
+                    {"reference": "absolute_world", "x": [0.0, 1.0]}
+                )
+            },
+            strategy=RandomizationStrategy.RSA,
+        )
+    )
+    executor = RandomizationExecutor(host, config)
+
+    with pytest.raises(ValueError, match="install offset in the mount frame"):
+        executor.apply_camera_randomization(np.asarray([True], dtype=bool))
 
 
 def test_executor_owned_preflight_rejects_a_region_that_can_never_be_visible() -> None:

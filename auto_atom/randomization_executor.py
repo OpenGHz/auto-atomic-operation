@@ -49,6 +49,7 @@ from auto_atom.config.randomization import (
     RandomizationInput,
     RandomizationPoissonDiskConfig,
     RandomizationSelectorKind,
+    RandomizationSpec,
     RandomizationStrategy,
     RandomizationVisibilityConfig,
     ResolvedRandomizationConfig,
@@ -169,6 +170,32 @@ class RandomizationHost(Protocol):
 
     def camera_names(self) -> List[str]:
         """Names of the cameras this scene actually has."""
+        ...
+
+    def object_camera_names(self) -> Container[str]:
+        """Names of the cameras rigidly mounted on a scene object.
+
+        Such a camera's pose *is* its install offset in the mount frame, so its
+        randomization samples that offset; the mount frame's own motion is the
+        scene graph's business, not the sample's.
+        """
+        ...
+
+    def get_camera_mount_pose(self, camera_name: str) -> PoseState:
+        """Read a camera's pose in its mount frame across all environments.
+
+        See :meth:`object_camera_names` for when this frame, rather than the
+        world frame of :meth:`get_camera_pose`, is the one that means something.
+        """
+        ...
+
+    def set_camera_mount_pose(
+        self,
+        camera_name: str,
+        pose: PoseState,
+        env_mask: np.ndarray,
+    ) -> None:
+        """Write a camera's mount-frame pose into the masked environments."""
         ...
 
     def get_camera_model(self, camera_name: str, env_index: int) -> Any: ...
@@ -1505,36 +1532,61 @@ class RandomizationExecutor:
             actions.append(best_action)
         return sampled_poses, actions, None
 
+    def _reject_camera_dependency_references(
+        self,
+        camera_name: str,
+        rand_range: PoseRandomRange,
+    ) -> None:
+        """Reject references that only entity placement can honour."""
+        for reference in rand_range.references():
+            if reference == RandomizationReference.ABSOLUTE_BASE:
+                raise ValueError(
+                    f"Camera '{camera_name}' randomization cannot use "
+                    "'absolute_base' — cameras have no operator base frame."
+                )
+            if isinstance(reference, str) and not isinstance(
+                reference,
+                RandomizationReference,
+            ):
+                raise ValueError(
+                    f"Camera '{camera_name}' randomization cannot use entity "
+                    f"reference '{reference}' — cameras do not participate in "
+                    "entity dependency ordering."
+                )
+
     def apply_camera_randomization(self, env_mask: np.ndarray) -> None:
         """Sample and apply pose randomization for the configured cameras.
 
-        Cameras sample a pose stream like any other target, but they own no
-        collision, separation, or dependency semantics: ``absolute_base`` and
-        entity-name references are rejected, and no constraint is evaluated.
-        The host only has to be able to read and write a named camera's
-        world pose.
+        A fixed camera is a world pose, sampled against its recorded reset
+        baseline.  A camera mounted on an object (``role: object``) is instead a
+        rigid install offset in the mount frame, so its randomization samples
+        that offset: expressing it in world terms would make the sample fight
+        the mount, and the object's own motion must not be baked into it.
+
+        Cameras own no collision, separation, or dependency semantics:
+        ``absolute_base`` and entity-name references are rejected for every
+        camera, and no constraint is evaluated.
         """
+        if not self.camera_randomization:
+            # A scene without camera entries never needs the mount capabilities,
+            # so camera-free hosts stay valid randomization hosts.
+            return
+        object_cameras = self._host.object_camera_names()
         for camera_name, randomization in self.camera_randomization.items():
             canonical = canonical_randomization_spec(randomization)
             rand_range = select_randomization_region(
                 self._host.rng,
                 canonical,
             )
-            for reference in rand_range.references():
-                if reference == RandomizationReference.ABSOLUTE_BASE:
-                    raise ValueError(
-                        f"Camera '{camera_name}' randomization cannot use "
-                        "'absolute_base' — cameras have no operator base frame."
-                    )
-                if isinstance(reference, str) and not isinstance(
-                    reference,
-                    RandomizationReference,
-                ):
-                    raise ValueError(
-                        f"Camera '{camera_name}' randomization cannot use entity "
-                        f"reference '{reference}' — cameras do not participate in "
-                        "entity dependency ordering."
-                    )
+            self._reject_camera_dependency_references(camera_name, rand_range)
+            if camera_name in object_cameras:
+                self._apply_object_camera_randomization(
+                    camera_name,
+                    canonical,
+                    rand_range,
+                    env_mask,
+                )
+                continue
             default_pose = self._host.baseline_pose(camera_name)
             if default_pose is None:
                 self._logger.warning(
@@ -1553,6 +1605,47 @@ class RandomizationExecutor:
                 reset_index=self._host.reset_index,
             )
             self._host.set_camera_pose(camera_name, sampled, env_mask)
+
+    def _apply_object_camera_randomization(
+        self,
+        camera_name: str,
+        canonical: RandomizationSpec,
+        rand_range: PoseRandomRange,
+        env_mask: np.ndarray,
+    ) -> None:
+        """Randomize an object-mounted camera's install offset.
+
+        The offset lives in the mount frame, so only ``relative`` is defined:
+        absolute world coordinates (or another entity's frame) would describe a
+        pose the camera does not own. Fixed cameras keep the world-frame modes.
+        """
+        world_modes = sorted(
+            str(
+                reference.value
+                if isinstance(reference, RandomizationReference)
+                else reference
+            )
+            for reference in rand_range.references()
+            if reference != RandomizationReference.RELATIVE
+        )
+        if world_modes:
+            raise ValueError(
+                f"Camera '{camera_name}' is mounted on an object, so its "
+                f"randomization samples the install offset in the mount frame; "
+                f"reference mode(s) {world_modes} are not defined for it. Use "
+                "the default 'relative' reference."
+            )
+        base_pose = self._host.get_camera_mount_pose(camera_name)
+        sampled = sample_pose_batch(
+            self._host.rng,
+            base_pose=base_pose,
+            rand_range=rand_range,
+            env_mask=env_mask,
+            batch_size=self._host.batch_size,
+            distribution=canonical.distribution,
+            reset_index=self._host.reset_index,
+        )
+        self._host.set_camera_mount_pose(camera_name, sampled, env_mask)
 
     def apply_randomization(self, env_mask: np.ndarray) -> None:
         self.begin_reset()
