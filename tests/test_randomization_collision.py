@@ -9,10 +9,8 @@ import numpy as np
 import pytest
 
 import auto_atom.backend.mjc.mujoco_backend as mujoco_backend_module
-from auto_atom.backend.mjc.mujoco_backend import (
-    MujocoTaskBackend,
-    _CollisionParticipant,
-)
+from auto_atom.backend.mjc.mujoco_backend import MujocoTaskBackend
+from auto_atom.randomization import CollisionParticipant
 from auto_atom.config.motion import PoseControlConfig
 from auto_atom.config.randomization import (
     OperatorRandomizationConfig,
@@ -1285,7 +1283,7 @@ def test_batched_regions_preserve_per_environment_radius_and_ancestors() -> None
     assert np.allclose(action.radius, [0.1, 0.2])
     assert action.ancestors == [{"anchor_a"}, {"anchor_b"}]
 
-    participant = _CollisionParticipant(
+    participant = CollisionParticipant(
         owner="block",
         label="block",
         pose=action.pose,

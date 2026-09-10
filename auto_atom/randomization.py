@@ -10,7 +10,7 @@ inter-entity separation) used to accept or reject candidates.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import (
     Any,
     Callable,
@@ -23,6 +23,7 @@ from typing import (
     Sequence,
     Set,
     Tuple,
+    Union,
 )
 
 import numpy as np
@@ -31,7 +32,9 @@ from scipy.stats import qmc
 
 from auto_atom.config.randomization import (
     OperatorRandomizationConfig,
+    PoseRandomRange,
     RandomizationConstraintConfig,
+    RandomizationDistributionConfig,
     RandomizationGeneratorConfig,
     RandomizationGeneratorInput,
     RandomizationGeneratorKind,
@@ -52,7 +55,12 @@ from auto_atom.contracts import (
     RandomizationConstraintReport,
     SupportGeometry,
 )
-from auto_atom.utils.pose import PoseState, quaternion_to_rotation_matrix
+from auto_atom.utils.pose import (
+    PoseState,
+    euler_to_quaternion,
+    quaternion_to_rotation_matrix,
+    quaternion_to_rpy,
+)
 
 
 @dataclass(frozen=True)
@@ -570,11 +578,327 @@ def maximin_select(
     return points[np.asarray(selected, dtype=np.int64)]
 
 
+_RandomizationAncestors = Union[Set[str], List[Set[str]]]
+
+
+@dataclass
+class CollisionParticipant:
+    """One already-accepted pose that later candidates must keep clear of.
+
+    ``radius`` and ``ancestors`` may be scalar (shared by every environment) or
+    batched (a per-environment value), because auto-resolved operator radii and
+    per-environment reference ancestors differ between environments.
+    """
+
+    owner: str
+    label: str
+    pose: PoseState
+    radius: Union[float, np.ndarray]
+    ancestors: _RandomizationAncestors = field(default_factory=set)
+
+
+def resolve_collision_radius(radius: Union[float, np.ndarray], env_index: int) -> float:
+    """Resolve a scalar or batched collision radius for one environment."""
+    if isinstance(radius, np.ndarray):
+        values = np.asarray(radius, dtype=np.float64).reshape(-1)
+        if values.size == 0:
+            return 0.0
+        if values.size == 1:
+            return float(values[0])
+        return float(values[env_index])
+    return float(radius)
+
+
+def resolve_collision_ancestors(
+    ancestors: _RandomizationAncestors,
+    env_index: int,
+) -> Set[str]:
+    """Resolve scalar or batched reference ancestors for one environment."""
+    if isinstance(ancestors, list):
+        if not ancestors:
+            return set()
+        if len(ancestors) == 1:
+            return ancestors[0]
+        return ancestors[env_index]
+    return ancestors
+
+
+def find_collision_participant(
+    *,
+    owner_name: str,
+    env_index: int,
+    candidate_pose: PoseState,
+    collision_radius: float,
+    ancestors: Set[str],
+    collision_participants: Sequence[CollisionParticipant],
+    extra_clearance: float = 0.0,
+) -> Optional[CollisionParticipant]:
+    """Return the first accepted participant closer than the radius sum.
+
+    The test is a pure radius sum: object size is carried by the participants'
+    radii, so ``extra_clearance`` is a surface gap. A non-positive candidate
+    radius means the candidate is exempt from collision rejection, and
+    parent/child pairs are skipped so an articulated assembly is never treated
+    as self-colliding.
+    """
+    candidate_radius = float(collision_radius)
+    if candidate_radius <= 0.0:
+        return None
+    candidate_row = 0 if candidate_pose.batch_size == 1 else env_index
+    candidate_pos = np.asarray(candidate_pose.position[candidate_row], dtype=np.float64)
+    for participant in collision_participants:
+        participant_radius = resolve_collision_radius(participant.radius, env_index)
+        if participant_radius <= 0.0:
+            continue
+        if participant.owner == owner_name:
+            continue
+        participant_ancestors = resolve_collision_ancestors(
+            participant.ancestors,
+            env_index,
+        )
+        if participant.owner in ancestors or owner_name in participant_ancestors:
+            continue
+        other_row = 0 if participant.pose.batch_size == 1 else env_index
+        other_pos = np.asarray(participant.pose.position[other_row], dtype=np.float64)
+        if np.linalg.norm(candidate_pos - other_pos) < (
+            candidate_radius + participant_radius + float(extra_clearance)
+        ):
+            return participant
+    return None
+
+
+def distribution_uses_space_filling_history(distribution: object) -> bool:
+    """Return whether a generator participates in cross-reset coverage.
+
+    ``selector`` is intentionally absent from this decision: selectors operate
+    on the current candidate group only, while non-IID generators own the
+    persistent sequence semantics that make accepted samples from earlier
+    resets unavailable to later resets.
+    """
+    generator = getattr(distribution, "generator", RandomizationGeneratorKind.IID)
+    return generator != RandomizationGeneratorKind.IID
+
+
+def history_clearance(vector: np.ndarray, history: Sequence[np.ndarray]) -> float:
+    """Return distance from a candidate to its nearest accepted sample."""
+    if not history:
+        return float("inf")
+    points = np.vstack(history)
+    return float(
+        np.linalg.norm(
+            np.asarray(vector, dtype=np.float64) - points,
+            axis=1,
+        ).min()
+    )
+
+
+def select_randomization_region(
+    rng: np.random.Generator,
+    spec: RandomizationInput,
+    *,
+    candidate_index: int = 0,
+) -> PoseRandomRange:
+    """Select one region from a possibly multi-region randomization spec.
+
+    A wrapper's regions are selected once per sampling attempt so rejection
+    retries naturally draw a fresh region. ``equal`` weighting is a uniform
+    draw; ``volume`` weighting draws proportionally to the proposal box volume.
+    The single ``PoseRandomRange`` path consumes no random value, which keeps
+    legacy streams bit-identical.
+    """
+    canonical = canonical_randomization_spec(spec)
+    regions = pose_randomization_regions(canonical)
+    if not regions:
+        raise ValueError("Randomization region lists must not be empty")
+    if len(regions) == 1:
+        return regions[0]
+    if canonical.distribution.region_weighting == "volume":
+        volumes = []
+        for region in regions:
+            volume = 1.0
+            for axis in ("x", "y", "z", "roll", "pitch", "yaw"):
+                axis_range = region.axis_range(axis)
+                if axis_range is not None:
+                    volume *= max(float(axis_range[1]) - float(axis_range[0]), 0.0)
+            volumes.append(volume)
+        total_volume = float(sum(volumes))
+        if total_volume > 0.0:
+            sampled = float(rng.uniform(0.0, total_volume))
+            cumulative = 0.0
+            for region, volume in zip(regions, volumes):
+                cumulative += volume
+                if sampled <= cumulative:
+                    return region
+    sampled_index = int(rng.uniform(0.0, float(len(regions))))
+    return regions[max(0, min(sampled_index, len(regions) - 1))]
+
+
+def sample_pose_for_env(
+    rng: np.random.Generator,
+    *,
+    base_pose: PoseState,
+    rand_range: PoseRandomRange,
+    env_index: int,
+    batch_size: int,
+    reference_poses: Optional[
+        Mapping[Union[RandomizationReference, str], PoseState]
+    ] = None,
+    distribution: Optional[RandomizationDistributionConfig] = None,
+    sample_index: int = 0,
+    reset_index: int = 0,
+    poisson_stream: Optional[PoissonDiskCandidateStream] = None,
+) -> PoseState:
+    """Sample one environment's pose from an axis range.
+
+    Each axis either keeps its baseline (an unconfigured axis), receives an
+    absolute value (``absolute_world`` / ``absolute_base``) or is added to the
+    baseline (a relative or entity-name reference). The baseline per axis comes
+    from that axis's own reference, so a single region can mix frames.
+
+    Random draws happen in a fixed order — one per configured position axis
+    (x, y, z), then one per configured rotation axis (roll, pitch, yaw) — so the
+    stream stays reproducible across resets and refactors. Non-IID generators
+    substitute low-discrepancy values for the uniform draws instead of
+    consuming them.
+    """
+    base_pose = base_pose.broadcast_to(batch_size)
+    pose_by_reference = {
+        reference: pose.broadcast_to(batch_size)
+        for reference, pose in (reference_poses or {}).items()
+    }
+
+    def _baseline(reference: Union[RandomizationReference, str]) -> PoseState:
+        return pose_by_reference.get(reference, base_pose)
+
+    generator = getattr(distribution, "generator", RandomizationGeneratorKind.IID)
+    is_poisson_generator = generator == RandomizationGeneratorKind.POISSON_DISK or (
+        isinstance(generator, RandomizationGeneratorConfig)
+    )
+    candidate_count = int(getattr(distribution, "candidate_count", 1))
+    poisson_position_axes = (
+        tuple(
+            axis for axis in ("x", "y", "z") if rand_range.axis_range(axis) is not None
+        )
+        if poisson_stream is not None
+        else ()
+    )
+    poisson_values = poisson_stream.next() if poisson_stream is not None else None
+    qmc_values = None
+    if generator != RandomizationGeneratorKind.IID:
+        orientation_generator = (
+            RandomizationGeneratorKind.SOBOL if is_poisson_generator else generator
+        )
+        qmc_values = unit_candidate(
+            rng=rng,
+            dimension=3 if is_poisson_generator else 6,
+            generator=orientation_generator,
+            index=sample_index,
+            candidate_count=candidate_count,
+            seed=int(reset_index * 1_000_003 + sample_index),
+        )
+
+    position = np.empty(3, dtype=np.float64)
+    for axis_index, axis_name in enumerate(("x", "y", "z")):
+        reference = rand_range.axis_reference(axis_name)
+        baseline = _baseline(reference)
+        value = float(baseline.position[env_index, axis_index])
+        rng_pair = rand_range.axis_range(axis_name)
+        if rng_pair is not None:
+            if poisson_values is not None:
+                sampled = float(poisson_values[poisson_position_axes.index(axis_name)])
+            elif qmc_values is None:
+                sampled = float(rng.uniform(*rng_pair))
+            else:
+                sampled = float(
+                    rng_pair[0] + qmc_values[axis_index] * (rng_pair[1] - rng_pair[0])
+                )
+            if reference in (
+                RandomizationReference.ABSOLUTE_WORLD,
+                RandomizationReference.ABSOLUTE_BASE,
+            ):
+                value = sampled
+            else:
+                value += sampled
+        position[axis_index] = value
+
+    rotation_axes = ("roll", "pitch", "yaw")
+    rotation_references = tuple(
+        rand_range.axis_reference(axis_name) for axis_name in rotation_axes
+    )
+    if (
+        all(rand_range.axis_range(axis_name) is None for axis_name in rotation_axes)
+        and len(set(rotation_references)) == 1
+    ):
+        orientation = np.asarray(
+            _baseline(rotation_references[0]).orientation[env_index],
+            dtype=np.float64,
+        ).copy()
+        return PoseState(position=position, orientation=orientation)
+
+    rotation = np.empty(3, dtype=np.float64)
+    for axis_index, axis_name in enumerate(rotation_axes):
+        reference = rand_range.axis_reference(axis_name)
+        baseline = _baseline(reference)
+        baseline_rpy = quaternion_to_rpy(baseline.orientation[env_index])
+        value = float(baseline_rpy[axis_index])
+        rng_pair = rand_range.axis_range(axis_name)
+        if rng_pair is not None:
+            if qmc_values is None:
+                sampled = float(rng.uniform(*rng_pair))
+            else:
+                sampled = float(
+                    rng_pair[0]
+                    + qmc_values[axis_index if is_poisson_generator else 3 + axis_index]
+                    * (rng_pair[1] - rng_pair[0])
+                )
+            if reference in (
+                RandomizationReference.ABSOLUTE_WORLD,
+                RandomizationReference.ABSOLUTE_BASE,
+            ):
+                value = sampled
+            else:
+                value += sampled
+        rotation[axis_index] = value
+    orientation = np.asarray(euler_to_quaternion(tuple(rotation)), dtype=np.float64)
+    return PoseState(position=position, orientation=orientation)
+
+
+def sample_pose_batch(
+    rng: np.random.Generator,
+    *,
+    base_pose: PoseState,
+    rand_range: PoseRandomRange,
+    env_mask: np.ndarray,
+    batch_size: int,
+    distribution: Optional[RandomizationDistributionConfig] = None,
+    reset_index: int = 0,
+) -> PoseState:
+    """Sample one pose per enabled environment into a batched ``PoseState``."""
+    base_pose = base_pose.broadcast_to(batch_size)
+    position = base_pose.position.copy()
+    orientation = base_pose.orientation.copy()
+    for env_index, enabled in enumerate(env_mask):
+        if not enabled:
+            continue
+        sampled = sample_pose_for_env(
+            rng,
+            base_pose=base_pose,
+            rand_range=rand_range,
+            env_index=env_index,
+            batch_size=batch_size,
+            distribution=distribution,
+            sample_index=reset_index * 1009 + env_index,
+            reset_index=reset_index,
+        )
+        position[env_index] = sampled.position[0]
+        orientation[env_index] = sampled.orientation[0]
+    return PoseState(position=position, orientation=orientation)
+
+
 class RandomizationConstraintEvaluator:
     """Feasibility oracle for camera visibility and inter-entity separation.
 
-    This owns every part of candidate acceptance that is not simulator-specific:
-    the frustum projection arithmetic, the separation clearance arithmetic, and
+    This owns every part of candidate acceptance that is not simulator-specific:    the frustum projection arithmetic, the separation clearance arithmetic, and
     the per-episode caches that keep the rejection loop cheap. A backend only
     supplies two reads — a camera model and a support geometry per entity — so a
     new backend inherits ``visible_in`` / ``separated`` semantics unchanged.
