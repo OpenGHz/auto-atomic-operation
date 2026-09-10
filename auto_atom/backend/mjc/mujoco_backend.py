@@ -55,18 +55,24 @@ from ...randomization import (
     PoissonDiskCandidateStream,
     RandomizationFailureError,
     RandomizationPlan,
+    camera_frustum_disjoint_box,
     compile_randomization_plan,
     distribution_uses_space_filling_history,
     find_collision_participant,
+    find_visibility_infeasibility,
     history_clearance,
     maximin_select,
+    object_region_world_box,
     parse_entity_reference,
+    reference_ancestors,
     resolve_collision_ancestors,
     resolve_collision_radius,
     sample_pose_batch,
     sample_pose_for_env,
     select_randomization_region,
     unit_candidate,
+    validate_pose_randomization_spec,
+    validate_randomization_configuration,
 )
 from ...runtime import ComponentRegistry, ControlResult, ControlSignal
 from ...utils.pose import (
@@ -2005,17 +2011,12 @@ class MujocoTaskBackend(SceneBackend):
         references: tuple[Union[RandomizationReference, str], ...],
         selected_ancestors: Dict[str, Set[str]],
     ) -> Set[str]:
-        ancestors: Set[str] = set()
-        for reference in references:
-            if isinstance(reference, RandomizationReference):
-                continue
-            bare, attr = parse_entity_reference(reference)
-            if attr is None and bare in self.operator_handlers:
-                attr = "base"
-            reference_key = f"{bare}.{attr}" if attr is not None else bare
-            ancestors.add(bare)
-            ancestors.update(selected_ancestors.get(reference_key, ()))
-        return ancestors
+        """Entity names this target's references depend on."""
+        return reference_ancestors(
+            references,
+            selected_ancestors,
+            operator_names=self.operator_handlers,
+        )
 
     def _validate_pose_randomization_spec(
         self,
@@ -2025,85 +2026,28 @@ class MujocoTaskBackend(SceneBackend):
         allow_absolute_base: bool,
     ) -> None:
         """Validate every region against its target context before sampling."""
-        for region_index, region in enumerate(pose_randomization_regions(spec)):
-            references = region.references()
-            if RandomizationReference.ABSOLUTE_BASE in references:
-                if not allow_absolute_base:
-                    raise ValueError(
-                        f"{label} randomization region {region_index} cannot use "
-                        "'absolute_base' — only operator end-effector "
-                        "randomization is defined in a base frame."
-                    )
-                if any(
-                    reference != RandomizationReference.ABSOLUTE_BASE
-                    for reference in references
-                ):
-                    raise ValueError(
-                        f"{label} randomization region {region_index} cannot mix "
-                        "'absolute_base' with references in other frames."
-                    )
-            for reference in references:
-                if isinstance(reference, RandomizationReference):
-                    continue
-                bare, attr = parse_entity_reference(reference)
-                if attr is not None and bare not in self.operator_handlers:
-                    raise ValueError(
-                        f"{label} randomization region {region_index} reference "
-                        f"'{reference}' uses '.{attr}', but '{bare}' is not a "
-                        "known operator."
-                    )
-                if (
-                    attr is None
-                    and bare not in self.object_handlers
-                    and bare not in self.operator_handlers
-                ):
-                    raise ValueError(
-                        f"{label} randomization region {region_index} reference "
-                        f"'{reference}' is not a known object or operator."
-                    )
+        validate_pose_randomization_spec(
+            label,
+            spec,
+            allow_absolute_base=allow_absolute_base,
+            object_names=self.object_handlers,
+            operator_names=self.operator_handlers,
+        )
 
     def _validate_randomization_configuration(self) -> None:
         """Validate target-specific rules for all configured regions."""
-        for name, spec in self.randomization.items():
-            if name in self.object_handlers:
-                if isinstance(spec, OperatorRandomizationConfig):
-                    raise TypeError(
-                        f"Object '{name}' randomization must use a direct "
-                        "single- or multi-region pose specification, not an "
-                        "operator randomization config."
-                    )
-                self._validate_pose_randomization_spec(
-                    f"Object '{name}'",
-                    spec,
-                    allow_absolute_base=False,
-                )
-                continue
-            if name not in self.operator_handlers:
-                logging.getLogger(MujocoTaskBackend.__name__).warning(
-                    "Randomization key '%s' does not match any object or "
-                    "operator handler — skipping.",
-                    name,
-                )
-                continue
-            if not isinstance(spec, OperatorRandomizationConfig):
-                raise TypeError(
-                    f"Operator '{name}' randomization must use the nested form "
-                    "with explicit `base:` and/or `eef:` sub-entries (i.e. an "
-                    "OperatorRandomizationConfig). Direct pose randomization "
-                    "specifications are not supported."
-                )
-            if spec.base is not None:
-                self._validate_pose_randomization_spec(
-                    f"Operator '{name}' base",
-                    spec.base,
-                    allow_absolute_base=False,
-                )
-            if spec.eef is not None:
-                self._validate_pose_randomization_spec(
-                    f"Operator '{name}' end effector",
-                    spec.eef,
-                    allow_absolute_base=True,
-                )
+        unknown = validate_randomization_configuration(
+            self.randomization,
+            object_names=self.object_handlers,
+            operator_names=self.operator_handlers,
+        )
+        logger = logging.getLogger(MujocoTaskBackend.__name__)
+        for name in unknown:
+            logger.warning(
+                "Randomization key '%s' does not match any object or "
+                "operator handler — skipping.",
+                name,
+            )
 
     def _resolve_reference_base_pose(
         self,
@@ -2160,59 +2104,14 @@ class MujocoTaskBackend(SceneBackend):
         return compose_pose(delta, default_pose)
 
     @staticmethod
+    @staticmethod
     def _camera_frustum_disjoint_box(
         camera: CameraModel,
         box_min: np.ndarray,
         box_max: np.ndarray,
     ) -> bool:
-        """Return True when a world AABB lies entirely outside a camera frustum.
-
-        Deterministic-infeasibility predicate for ``visible_in``: if every
-        possible center position of an entity is outside a camera's view
-        frustum, no sampled pose can ever be visible in that camera, so
-        retrying the feasibility loop is futile. The test is conservative (it
-        never reports a false infeasibility): a box is only declared fully
-        outside when it lies beyond one frustum boundary, and pixel margins are
-        deliberately ignored (a box outside the full frustum is certainly
-        outside any margin-shrunk one).
-        """
-        lower = np.asarray(box_min, dtype=np.float64)
-        upper = np.asarray(box_max, dtype=np.float64)
-        camera_pos = np.asarray(camera.pose.position[0], dtype=np.float64)
-        rotation = quaternion_to_rotation_matrix(camera.pose.orientation[0])
-        # Camera frame: x right, y up, z backward (MuJoCo). A point is visible
-        # when depth d = -z is within [near, far] and |x|, |y| <= d * tan(fov).
-        corners = [
-            rotation.T @ (np.asarray([ix, iy, iz], dtype=np.float64) - camera_pos)
-            for ix in (lower[0], upper[0])
-            for iy in (lower[1], upper[1])
-            for iz in (lower[2], upper[2])
-        ]
-        cam_points = np.asarray(corners, dtype=np.float64)
-        cam_min = cam_points.min(axis=0)
-        cam_max = cam_points.max(axis=0)
-        near = float(camera.near)
-        far = float(camera.far)
-        if near >= far:
-            return True
-        # Depth bounds (z_cam valid in [-far, -near]).
-        if cam_min[2] > -near or cam_max[2] < -far:
-            return True
-        tan_hfy = np.tan(float(camera.fovy_radians) / 2.0)
-        aspect = (
-            float(camera.width) / float(camera.height) if camera.height > 0 else 1.0
-        )
-        tan_hfx = tan_hfy * aspect
-        # Side bounds (valid x in [z*tan, -z*tan]; y analogously).
-        if cam_max[0] - tan_hfx * cam_min[2] < 0.0:  # wholly left of frustum
-            return True
-        if cam_min[0] + tan_hfx * cam_min[2] > 0.0:  # wholly right
-            return True
-        if cam_max[1] - tan_hfy * cam_min[2] < 0.0:  # wholly below
-            return True
-        if cam_min[1] + tan_hfy * cam_min[2] > 0.0:  # wholly above
-            return True
-        return False
+        """Return True when a world AABB lies entirely outside a camera frustum."""
+        return camera_frustum_disjoint_box(camera, box_min, box_max)
 
     def _visibility_camera_names(
         self,
@@ -2227,45 +2126,21 @@ class MujocoTaskBackend(SceneBackend):
         )
         return sorted(getattr(self.env.envs[physical_index], "_camera_ids", {}) or {})
 
+    @staticmethod
     def _object_region_world_box(
-        self,
         region: PoseRandomRange,
         default_world: np.ndarray,
     ) -> Optional[Tuple[np.ndarray, np.ndarray]]:
-        """World AABB of one region's possible center positions, or ``None``.
+        """World AABB of one region's possible center positions, or ``None``."""
+        return object_region_world_box(region, default_world)
 
-        Only world-axis-aligned position ranges (``absolute_world`` or
-        ``relative`` to the fixed default pose) are supported; entity-tracked or
-        otherwise frame-dependent references return ``None`` so the caller
-        falls back to the normal retry loop.
+    def _camera_model_for_env(self, camera_name: str, env_index: int) -> CameraModel:
+        """Camera model for one environment.
+
+        Delegates to this backend's own :meth:`get_camera_model` so subclasses
+        and test doubles that override the accessor stay authoritative.
         """
-        axis_indices = {"x": 0, "y": 1, "z": 2}
-        lower = np.full(3, np.inf, dtype=np.float64)
-        upper = np.full(3, -np.inf, dtype=np.float64)
-        for axis, index in axis_indices.items():
-            reference = region.axis_reference(axis)
-            if not isinstance(reference, RandomizationReference):
-                return None  # entity-tracked reference
-            if reference not in (
-                RandomizationReference.RELATIVE,
-                RandomizationReference.ABSOLUTE_WORLD,
-            ):
-                return None
-            base = float(default_world[index])
-            axis_range = region.axis_range(axis)
-            if axis_range is None:
-                lower[index] = base
-                upper[index] = base
-                continue
-            low, high = float(axis_range[0]), float(axis_range[1])
-            if reference == RandomizationReference.RELATIVE:
-                low += base
-                high += base
-            lower[index] = min(low, high)
-            upper[index] = max(low, high)
-        if not np.all(np.isfinite(lower)) or not np.all(np.isfinite(upper)):
-            return None
-        return lower, upper
+        return self.get_camera_model(camera_name, env_index)
 
     def _preflight_deterministic_visibility_infeasibility(
         self,
@@ -2274,61 +2149,45 @@ class MujocoTaskBackend(SceneBackend):
     ) -> None:
         """Fail fast when a ``visible_in`` region is provably empty.
 
-        A ``visible_in`` target is deterministic given fixed cameras and its own
-        geometry: if the entity's whole possible position box is outside one of
-        the required camera frustums, no candidate can ever satisfy the
-        constraint. Detecting that up front avoids burning ``max_attempts`` on a
-        futile search. Only world-axis-aligned position regions are checked
-        (conservative); other reference modes fall through to the retry loop.
+        The predicate lives in the backend-neutral
+        :func:`find_visibility_infeasibility`; this method supplies the
+        MuJoCo-specific baselines and camera models and turns a hit into the
+        same fail-closed diagnostic the retry loop would produce, but with
+        ``attempts=0``.
         """
-        for name, spec in action_specs.items():
-            if spec.kind != "object":
-                continue
-            constraints = spec.randomization.constraints
-            if constraints is None or constraints.visible_in is None:
-                continue
-            visible = constraints.visible_in
-            failure = constraints.failure
-            if failure.mode.value != "error":
-                continue
-            default_pose = self._default_object_poses.get(name)
-            if default_pose is None:
-                continue
-            for env_index, enabled in enumerate(env_mask):
-                if not enabled:
-                    continue
-                default_world = np.asarray(
-                    default_pose.select(env_index).position, dtype=np.float64
-                ).reshape(3)
-                cameras = self._visibility_camera_names(visible, env_index)
-                for region in pose_randomization_regions(spec.randomization):
-                    box = self._object_region_world_box(region, default_world)
-                    if box is None:
-                        continue
-                    lower, upper = box
-                    for camera_name in cameras:
-                        camera = self.get_camera_model(camera_name, env_index)
-                        if not self._camera_frustum_disjoint_box(camera, lower, upper):
-                            continue
-                        violation = f"{name}:outside_view:{camera_name}"
-                        diagnostics = {
-                            "group": "component",
-                            "generator": "deterministic_infeasible",
-                            "member": name,
-                            "attempts": 0,
-                            "violations": [violation],
-                            "minimum_clearance": float("-inf"),
-                            "mode": failure.mode.value,
-                        }
-                        self._last_randomization_diagnostics.setdefault(
-                            env_index, []
-                        ).append(diagnostics)
-                        raise RandomizationFailureError(
-                            target=name,
-                            attempts=0,
-                            violations=[violation],
-                            minimum_clearance=float("-inf"),
-                        )
+        infeasibility = find_visibility_infeasibility(
+            {
+                label: spec.randomization
+                for label, spec in action_specs.items()
+                if spec.kind == "object"
+            },
+            env_mask=env_mask,
+            default_pose_of=self._default_object_poses.get,
+            camera_names_of=self._visibility_camera_names,
+            camera_model_of=self._camera_model_for_env,
+        )
+        if infeasibility is None:
+            return
+        constraints = action_specs[infeasibility.target].randomization.constraints
+        self._last_randomization_diagnostics.setdefault(
+            infeasibility.env_index, []
+        ).append(
+            {
+                "group": "component",
+                "generator": "deterministic_infeasible",
+                "member": infeasibility.target,
+                "attempts": 0,
+                "violations": list(infeasibility.violations),
+                "minimum_clearance": float("-inf"),
+                "mode": constraints.failure.mode.value,
+            }
+        )
+        raise RandomizationFailureError(
+            target=infeasibility.target,
+            attempts=0,
+            violations=list(infeasibility.violations),
+            minimum_clearance=float("-inf"),
+        )
 
     def _apply_randomization(self, env_mask: np.ndarray) -> None:
         # Operator auto radii depend on the episode's configuration (base/EFF

@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from typing import (
     Any,
     Callable,
+    Container,
     Dict,
     Iterable,
     List,
@@ -32,9 +33,11 @@ from scipy.stats import qmc
 
 from auto_atom.config.randomization import (
     OperatorRandomizationConfig,
+    PoseRandomizationSpec,
     PoseRandomRange,
     RandomizationConstraintConfig,
     RandomizationDistributionConfig,
+    RandomizationFailureMode,
     RandomizationGeneratorConfig,
     RandomizationGeneratorInput,
     RandomizationGeneratorKind,
@@ -46,6 +49,7 @@ from auto_atom.config.randomization import (
     RandomizationSelectorKind,
     RandomizationSpec,
     RandomizationStrategy,
+    RandomizationVisibilityConfig,
     canonical_randomization_spec,
     pose_randomization_regions,
 )
@@ -893,6 +897,298 @@ def sample_pose_batch(
         position[env_index] = sampled.position[0]
         orientation[env_index] = sampled.orientation[0]
     return PoseState(position=position, orientation=orientation)
+
+
+@dataclass(frozen=True)
+class VisibilityInfeasibility:
+    """A ``visible_in`` region that provably cannot be satisfied for one env.
+
+    ``violations`` mirrors the message format used by the feasibility loop so a
+    fail-fast diagnostic is indistinguishable from an exhausted-retry one apart
+    from ``attempts == 0``.
+    """
+
+    target: str
+    env_index: int
+    violations: Tuple[str, ...]
+
+
+def reference_ancestors(
+    references: Sequence[Union[RandomizationReference, str]],
+    selected_ancestors: Mapping[str, Set[str]],
+    *,
+    operator_names: Container[str],
+) -> Set[str]:
+    """Return the entity names a target's references depend on.
+
+    A bare entity reference denotes an operator base when the name belongs to an
+    operator, matching the shorthand used elsewhere in the randomization plan.
+    """
+    ancestors: Set[str] = set()
+    for reference in references:
+        if isinstance(reference, RandomizationReference):
+            continue
+        bare, attribute = parse_entity_reference(reference)
+        if attribute is None and bare in operator_names:
+            attribute = "base"
+        reference_key = f"{bare}.{attribute}" if attribute is not None else bare
+        ancestors.add(bare)
+        ancestors.update(selected_ancestors.get(reference_key, ()))
+    return ancestors
+
+
+def validate_pose_randomization_spec(
+    label: str,
+    spec: PoseRandomizationSpec,
+    *,
+    allow_absolute_base: bool,
+    object_names: Container[str],
+    operator_names: Container[str],
+) -> None:
+    """Validate every region of one target against its reference context.
+
+    ``absolute_base`` is only meaningful for an operator end effector, and a
+    region must not mix it with other frames because the axes would then be
+    resolved against unrelated origins. Named references must resolve to a known
+    object or operator (``<operator>.base`` / ``<operator>.eef``).
+    """
+    for region_index, region in enumerate(pose_randomization_regions(spec)):
+        references = region.references()
+        if RandomizationReference.ABSOLUTE_BASE in references:
+            if not allow_absolute_base:
+                raise ValueError(
+                    f"{label} randomization region {region_index} cannot use "
+                    "'absolute_base' — only operator end-effector "
+                    "randomization is defined in a base frame."
+                )
+            if any(
+                reference != RandomizationReference.ABSOLUTE_BASE
+                for reference in references
+            ):
+                raise ValueError(
+                    f"{label} randomization region {region_index} cannot mix "
+                    "'absolute_base' with references in other frames."
+                )
+        for reference in references:
+            if isinstance(reference, RandomizationReference):
+                continue
+            bare, attribute = parse_entity_reference(reference)
+            if attribute is not None and bare not in operator_names:
+                raise ValueError(
+                    f"{label} randomization region {region_index} reference "
+                    f"'{reference}' uses '.{attribute}', but '{bare}' is not a "
+                    "known operator."
+                )
+            if (
+                attribute is None
+                and bare not in object_names
+                and bare not in operator_names
+            ):
+                raise ValueError(
+                    f"{label} randomization region {region_index} reference "
+                    f"'{reference}' is not a known object or operator."
+                )
+
+
+def validate_randomization_configuration(
+    randomization: Mapping[str, RandomizationInput | OperatorRandomizationConfig],
+    *,
+    object_names: Container[str],
+    operator_names: Container[str],
+) -> Tuple[str, ...]:
+    """Validate target-specific reference rules for every configured region.
+
+    Returns the keys that match neither an object nor an operator so the caller
+    can report them in its own logging channel instead of silently ignoring a
+    typo.
+    """
+    unknown: List[str] = []
+    for name, spec in randomization.items():
+        if name in object_names:
+            if isinstance(spec, OperatorRandomizationConfig):
+                raise TypeError(
+                    f"Object '{name}' randomization must use a direct "
+                    "single- or multi-region pose specification, not an "
+                    "operator randomization config."
+                )
+            validate_pose_randomization_spec(
+                f"Object '{name}'",
+                spec,
+                allow_absolute_base=False,
+                object_names=object_names,
+                operator_names=operator_names,
+            )
+            continue
+        if name not in operator_names:
+            unknown.append(name)
+            continue
+        if not isinstance(spec, OperatorRandomizationConfig):
+            raise TypeError(
+                f"Operator '{name}' randomization must use the nested form "
+                "with explicit `base:` and/or `eef:` sub-entries (i.e. an "
+                "OperatorRandomizationConfig). Direct pose randomization "
+                "specifications are not supported."
+            )
+        if spec.base is not None:
+            validate_pose_randomization_spec(
+                f"Operator '{name}' base",
+                spec.base,
+                allow_absolute_base=False,
+                object_names=object_names,
+                operator_names=operator_names,
+            )
+        if spec.eef is not None:
+            validate_pose_randomization_spec(
+                f"Operator '{name}' end effector",
+                spec.eef,
+                allow_absolute_base=True,
+                object_names=object_names,
+                operator_names=operator_names,
+            )
+    return tuple(unknown)
+
+
+def camera_frustum_disjoint_box(
+    camera: CameraModel,
+    box_min: np.ndarray,
+    box_max: np.ndarray,
+) -> bool:
+    """Return True when a world AABB lies entirely outside a camera frustum.
+
+    Deterministic-infeasibility predicate for ``visible_in``: if every possible
+    center position of an entity is outside a camera's view frustum, no sampled
+    pose can ever be visible in that camera, so retrying the feasibility loop is
+    futile. The test is conservative (it never reports a false infeasibility): a
+    box is only declared fully outside when it lies beyond one frustum boundary,
+    and pixel margins are deliberately ignored (a box outside the full frustum
+    is certainly outside any margin-shrunk one).
+    """
+    lower = np.asarray(box_min, dtype=np.float64)
+    upper = np.asarray(box_max, dtype=np.float64)
+    camera_pos = np.asarray(camera.pose.position[0], dtype=np.float64)
+    rotation = quaternion_to_rotation_matrix(camera.pose.orientation[0])
+    # Camera frame: x right, y up, z backward (MuJoCo). A point is visible
+    # when depth d = -z is within [near, far] and |x|, |y| <= d * tan(fov).
+    corners = [
+        rotation.T @ (np.asarray([ix, iy, iz], dtype=np.float64) - camera_pos)
+        for ix in (lower[0], upper[0])
+        for iy in (lower[1], upper[1])
+        for iz in (lower[2], upper[2])
+    ]
+    cam_points = np.asarray(corners, dtype=np.float64)
+    cam_min = cam_points.min(axis=0)
+    cam_max = cam_points.max(axis=0)
+    near = float(camera.near)
+    far = float(camera.far)
+    if near >= far:
+        return True
+    # Depth bounds (z_cam valid in [-far, -near]).
+    if cam_min[2] > -near or cam_max[2] < -far:
+        return True
+    tan_hfy = np.tan(float(camera.fovy_radians) / 2.0)
+    aspect = float(camera.width) / float(camera.height) if camera.height > 0 else 1.0
+    tan_hfx = tan_hfy * aspect
+    # Side bounds (valid x in [z*tan, -z*tan]; y analogously).
+    if cam_max[0] - tan_hfx * cam_min[2] < 0.0:  # wholly left of frustum
+        return True
+    if cam_min[0] + tan_hfx * cam_min[2] > 0.0:  # wholly right
+        return True
+    if cam_max[1] - tan_hfy * cam_min[2] < 0.0:  # wholly below
+        return True
+    return bool(cam_min[1] + tan_hfy * cam_min[2] > 0.0)  # wholly above
+
+
+def object_region_world_box(
+    region: PoseRandomRange,
+    default_world: np.ndarray,
+) -> Optional[Tuple[np.ndarray, np.ndarray]]:
+    """World AABB of one region's possible center positions, or ``None``.
+
+    Only world-axis-aligned position ranges (``absolute_world`` or ``relative``
+    to the fixed default pose) are supported; entity-tracked or otherwise
+    frame-dependent references return ``None`` so the caller falls back to the
+    normal retry loop.
+    """
+    lower = np.full(3, np.inf, dtype=np.float64)
+    upper = np.full(3, -np.inf, dtype=np.float64)
+    for axis, index in (("x", 0), ("y", 1), ("z", 2)):
+        reference = region.axis_reference(axis)
+        if not isinstance(reference, RandomizationReference):
+            return None  # entity-tracked reference
+        if reference not in (
+            RandomizationReference.RELATIVE,
+            RandomizationReference.ABSOLUTE_WORLD,
+        ):
+            return None
+        base = float(default_world[index])
+        axis_range = region.axis_range(axis)
+        if axis_range is None:
+            lower[index] = base
+            upper[index] = base
+            continue
+        low, high = float(axis_range[0]), float(axis_range[1])
+        if reference == RandomizationReference.RELATIVE:
+            low += base
+            high += base
+        lower[index] = min(low, high)
+        upper[index] = max(low, high)
+    if not np.all(np.isfinite(lower)) or not np.all(np.isfinite(upper)):
+        return None
+    return lower, upper
+
+
+def find_visibility_infeasibility(
+    targets: Mapping[str, RandomizationSpec],
+    *,
+    env_mask: np.ndarray,
+    default_pose_of: Callable[[str], Optional[PoseState]],
+    camera_names_of: Callable[[RandomizationVisibilityConfig, int], Sequence[str]],
+    camera_model_of: Callable[[str, int], CameraModel],
+) -> Optional[VisibilityInfeasibility]:
+    """Return the first provably empty ``visible_in`` region, if any.
+
+    A ``visible_in`` target is deterministic given fixed cameras and its own
+    geometry: if the entity's whole possible position box is outside one of the
+    required camera frustums, no candidate can ever satisfy the constraint.
+    Detecting that up front avoids burning ``max_attempts`` on a futile search.
+    Only world-axis-aligned position regions are checked (conservative); other
+    reference modes fall through to the retry loop. Targets whose failure policy
+    is not fail-closed are left to the loop, which may still apply a
+    best-effort candidate.
+    """
+    for name, spec in targets.items():
+        constraints = spec.constraints
+        if constraints is None or constraints.visible_in is None:
+            continue
+        visible = constraints.visible_in
+        if constraints.failure.mode != RandomizationFailureMode.ERROR:
+            continue
+        default_pose = default_pose_of(name)
+        if default_pose is None:
+            continue
+        regions = pose_randomization_regions(spec)
+        for env_index, enabled in enumerate(env_mask):
+            if not enabled:
+                continue
+            default_world = np.asarray(
+                default_pose.select(env_index).position, dtype=np.float64
+            ).reshape(3)
+            camera_names = camera_names_of(visible, env_index)
+            for region in regions:
+                box = object_region_world_box(region, default_world)
+                if box is None:
+                    continue
+                lower, upper = box
+                for camera_name in camera_names:
+                    camera = camera_model_of(camera_name, env_index)
+                    if not camera_frustum_disjoint_box(camera, lower, upper):
+                        continue
+                    return VisibilityInfeasibility(
+                        target=name,
+                        env_index=env_index,
+                        violations=(f"{name}:outside_view:{camera_name}",),
+                    )
+    return None
 
 
 class RandomizationConstraintEvaluator:

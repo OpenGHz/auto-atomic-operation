@@ -471,12 +471,16 @@ operator, camera, joint, and named-frame bindings. Backend-specific limitations
 must not reinterpret shared frame modes or omitted-axis behavior.
 
 The shared layer already owns plan compilation (`compile_randomization_plan`),
-candidate generation (`unit_candidate`, `PoissonDiskCandidateStream`,
-`maximin_select`), and constraint evaluation
-(`RandomizationConstraintEvaluator`). For the constraint half a backend only
-supplies two reads — `get_camera_model()` and `get_support_geometry()` — and
-inherits `visible_in` / `separated` semantics, including the per-episode
-`CameraModel` / support-radius caches, unchanged.
+candidate generation and sampling (`unit_candidate`, `PoissonDiskCandidateStream`,
+`maximin_select`, `sample_pose_for_env`, `select_randomization_region`),
+collision rejection (`find_collision_participant`), configuration validation
+(`validate_randomization_configuration`), the deterministic `visible_in`
+preflight (`find_visibility_infeasibility`, `camera_frustum_disjoint_box`), and
+constraint evaluation (`RandomizationConstraintEvaluator`). A backend supplies
+the simulator-specific reads — `get_camera_model()` / `get_support_geometry()`
+for constraints, plus its pose read/write and named-frame bindings — and
+inherits the frame modes, omitted-axis behavior, region weighting, retry
+semantics, and the per-episode `CameraModel` / support-radius caches unchanged.
 
 If a backend does not support a configured initialization or randomization
 capability, reject the non-empty field during construction with a clear error.

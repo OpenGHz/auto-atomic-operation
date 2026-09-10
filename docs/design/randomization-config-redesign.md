@@ -235,3 +235,28 @@ task:
   （实体专属），显式声明 `constraints` 的相机条目直接报错。
   `resolve_randomization_scope` 改为返回 `ResolvedRandomizationScope`
   （`entities` / `cameras` / `strategy`）。
+
+## 后续：把执行语义收敛到共享层（进行中）
+
+目标：新增 backend 只需提供接口（位姿读写、命名 frame 解析、相机模型、支撑几何），
+不再重写随机化语义。分轮推进，每轮独立提交、独立验证：
+
+- **R-A（已完成，提交 `50126e9`）**：约束评估（视锥投影 + 分离间距 +
+  per-episode 缓存）提到 `RandomizationConstraintEvaluator`，
+  `MujocoBasis` 只留 `get_camera_model` / `get_support_geometry`。
+- **R-B1（已完成，提交 `e287a7d`）**：纯采样/碰撞原语提到共享层
+  （`sample_pose_for_env`、`sample_pose_batch`、`select_randomization_region`、
+  `find_collision_participant`、`history_clearance`、
+  `distribution_uses_space_filling_history`、半径/祖先解析）。
+  `CollisionParticipant` 由后端私有提升为共享类型。
+- **R-B2a（已完成）**：配置校验与确定性 `visible_in` 预检提到共享层
+  （`validate_randomization_configuration`、
+  `validate_pose_randomization_spec`、`reference_ancestors`、
+  `camera_frustum_disjoint_box`、`object_region_world_box`、
+  `find_visibility_infeasibility`）。
+- **R-B2b（未完成）**：编排与重试循环（`_apply_randomization`、
+  `_sample_randomization_component`、`_sample_component_for_env`、
+  `_sample_hard_sphere_rsa_component_for_env`）搬到共享执行器，
+  后端只留「读/写位姿 + 命名 frame 解析 + 相机模型/支撑几何」。
+  约束：RNG 消费顺序、`sample_index` 公式、`env_mask` 与 per-component
+  批量写回语义必须逐字保留，否则 reset 复现性会漂。
