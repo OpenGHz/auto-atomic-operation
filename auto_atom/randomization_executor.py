@@ -37,10 +37,12 @@ from auto_atom.config.randomization import (
     RandomizationConstraintConfig,
     RandomizationFailureConfig,
     RandomizationGroupConfig,
+    RandomizationInput,
     RandomizationSelectorKind,
     RandomizationSpec,
     RandomizationStrategy,
 )
+from auto_atom.config.reference import RandomizationReference
 from auto_atom.contracts import RandomizationConstraintReport
 from auto_atom.randomization import (
     CollisionParticipant,
@@ -48,6 +50,7 @@ from auto_atom.randomization import (
     RandomizationAncestors,
     RandomizationFailureError,
     RandomizationPlan,
+    canonical_randomization_spec,
     copy_randomization_ancestors,
     distribution_uses_space_filling_history,
     find_collision_participant,
@@ -56,6 +59,8 @@ from auto_atom.randomization import (
     reference_ancestors,
     resolve_collision_ancestors,
     resolve_collision_radius,
+    sample_pose_batch,
+    select_randomization_region,
 )
 from auto_atom.utils.pose import PoseState
 
@@ -109,6 +114,20 @@ class RandomizationHost(Protocol):
 
     def template_pose(self, label: str) -> PoseState: ...
 
+    def baseline_pose(self, label: str) -> Optional[PoseState]: ...
+
+    @property
+    def camera_randomization(self) -> Mapping[str, RandomizationInput]: ...
+
+    def get_camera_pose(self, camera_name: str) -> PoseState: ...
+
+    def set_camera_pose(
+        self,
+        camera_name: str,
+        pose: PoseState,
+        env_mask: np.ndarray,
+    ) -> None: ...
+
     def begin_randomization_episode(self) -> None: ...
 
     def apply_action(
@@ -116,8 +135,6 @@ class RandomizationHost(Protocol):
         action: PendingRandomizationAction,
         env_mask: np.ndarray,
     ) -> None: ...
-
-    def apply_camera_randomization(self, env_mask: np.ndarray) -> None: ...
 
     def run_visibility_preflight(self, env_mask: np.ndarray) -> None: ...
 
@@ -782,6 +799,55 @@ class RandomizationExecutor:
             actions.append(best_action)
         return sampled_poses, actions, None
 
+    def apply_camera_randomization(self, env_mask: np.ndarray) -> None:
+        """Sample and apply pose randomization for the configured cameras.
+
+        Cameras sample a pose stream like any other target, but they own no
+        collision, separation, or dependency semantics: ``absolute_base`` and
+        entity-name references are rejected, and no constraint is evaluated.
+        The host only has to be able to read and write a named camera's
+        world pose.
+        """
+        for camera_name, randomization in self._host.camera_randomization.items():
+            canonical = canonical_randomization_spec(randomization)
+            rand_range = select_randomization_region(
+                self._host.randomization_rng,
+                canonical,
+            )
+            for reference in rand_range.references():
+                if reference == RandomizationReference.ABSOLUTE_BASE:
+                    raise ValueError(
+                        f"Camera '{camera_name}' randomization cannot use "
+                        "'absolute_base' — cameras have no operator base frame."
+                    )
+                if isinstance(reference, str) and not isinstance(
+                    reference,
+                    RandomizationReference,
+                ):
+                    raise ValueError(
+                        f"Camera '{camera_name}' randomization cannot use entity "
+                        f"reference '{reference}' — cameras do not participate in "
+                        "entity dependency ordering."
+                    )
+            default_pose = self._host.baseline_pose(camera_name)
+            if default_pose is None:
+                self._logger.warning(
+                    "Camera '%s' has no recorded reset baseline — skipping "
+                    "randomization.",
+                    camera_name,
+                )
+                continue
+            sampled = sample_pose_batch(
+                self._host.randomization_rng,
+                base_pose=default_pose,
+                rand_range=rand_range,
+                env_mask=env_mask,
+                batch_size=self._host.batch_size,
+                distribution=canonical.distribution,
+                reset_index=self._host.randomization_reset_index,
+            )
+            self._host.set_camera_pose(camera_name, sampled, env_mask)
+
     def apply_randomization(self, env_mask: np.ndarray) -> None:
         self._host.begin_randomization_episode()
         plan = self._host.randomization_plan()
@@ -828,7 +894,7 @@ class RandomizationExecutor:
             apply_actions(component_actions)
             sampled_poses.update(component_poses)
 
-        self._host.apply_camera_randomization(env_mask)
+        self.apply_camera_randomization(env_mask)
 
         # A ``visible_in`` object region whose whole position box is outside a
         # required camera frustum is deterministically infeasible — fail fast

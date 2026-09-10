@@ -1,0 +1,92 @@
+python用/home/ghz/.mini_conda3/envs/airbot_play_data/bin/python
+
+## 代码修改后的最小验证
+
+将目标替换为受影响的测试文件，使用资源受限 runner 执行定向测试：
+
+```bash
+/home/ghz/.mini_conda3/envs/airbot_play_data/bin/python scripts/run_tests_safe.py --test-targets tests/test_target.py --max-concurrency=1
+```
+
+`--test-targets` 接收一个字符串参数。测试多个目标时，将路径放在同一个引号内并用空格或逗号分隔，例如：
+
+```bash
+/home/ghz/.mini_conda3/envs/airbot_play_data/bin/python scripts/run_tests_safe.py --test-targets "tests/test_a.py tests/test_b.py" --max-concurrency=1
+```
+
+不要在该参数后追加未加引号的位置参数，否则参数解析会失败。
+
+`--test-targets` 只解析测试路径，不透传 pytest 的筛选选项。需要使用 `-k`
+等 pytest 选项时，通过 `--pytest-args` 传入，同时继续使用 runner 的资源限制：
+
+```bash
+/home/ghz/.mini_conda3/envs/airbot_play_data/bin/python scripts/run_tests_safe.py \
+  --test-targets tests/test_target.py \
+  --pytest-args='-q -k test_name' --max-concurrency=1
+```
+
+需要全量验证时，使用同一资源受限 runner：
+
+```bash
+/home/ghz/.mini_conda3/envs/airbot_play_data/bin/python scripts/run_tests_safe.py --test-targets tests --max-concurrency=1
+```
+
+## 提交钩子自动修复
+
+若 `git commit` 仅因提交钩子自动格式化或机械修复文件而中止，直接重新暂存这些修改并再次执行原提交命令；两次提交之间不重复运行测试、diff 检查、提交钩子或 GitNexus 影响审计。提交钩子出现非自动修复类失败时，先处理失败原因。
+
+## 任务复用与新建
+
+当用户需要某个任务时，先用 `aao-info`（见 docs/getting-started/cli_reference.md）检索现有任务，
+再按 docs/task-configuration/reusing_and_creating_tasks.md 的决策流程处理：
+不涉及根本性差异（机器人、物体种类、操作流程不变）时，原地修改配置或用命令行参数覆盖，
+**不要**新增配置文件；确需新建时，通过 `defaults` 组合现有基座并遵循命名规范。
+
+<!-- gitnexus:start -->
+# GitNexus — Code Intelligence
+
+This project is indexed by GitNexus as **auto-atomic-operation** (8049 symbols, 15441 relationships, 300 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+
+> Index stale? Run `node .gitnexus/run.cjs analyze` from the project root — it auto-selects an available runner. No `.gitnexus/run.cjs` yet? `npx gitnexus analyze` (npm 11 crash → `npm i -g gitnexus`; #1939).
+
+## Always Do
+
+- **MUST run impact analysis before editing any symbol.** Before modifying a function, class, or method, run `impact({target: "symbolName", direction: "upstream"})` and report the blast radius (direct callers, affected processes, risk level) to the user.
+- **MUST run `detect_changes()` before committing** to verify your changes only affect expected symbols and execution flows. For regression review, compare against the default branch: `detect_changes({scope: "compare", base_ref: "main"})`.
+- **MUST warn the user** if impact analysis returns HIGH or CRITICAL risk before proceeding with edits.
+- When exploring unfamiliar code, use `query({search_query: "concept"})` to find execution flows instead of grepping. It returns process-grouped results ranked by relevance.
+- When you need full context on a specific symbol — callers, callees, which execution flows it participates in — use `context({name: "symbolName"})`.
+- For security review, `explain({target: "fileOrSymbol"})` lists taint findings (source→sink flows; needs `analyze --pdg`).
+
+## Never Do
+
+- NEVER edit a function, class, or method without first running `impact` on it.
+- NEVER ignore HIGH or CRITICAL risk warnings from impact analysis.
+- NEVER rename symbols with find-and-replace — use `rename` which understands the call graph.
+- NEVER commit changes without running `detect_changes()` to check affected scope.
+
+## Resources
+
+| Resource | Use for |
+|----------|---------|
+| `gitnexus://repo/auto-atomic-operation/context` | Codebase overview, check index freshness |
+| `gitnexus://repo/auto-atomic-operation/clusters` | All functional areas |
+| `gitnexus://repo/auto-atomic-operation/processes` | All execution flows |
+| `gitnexus://repo/auto-atomic-operation/process/{name}` | Step-by-step execution trace |
+
+## CLI
+
+| Task | Read this skill file |
+|------|---------------------|
+| Understand architecture / "How does X work?" | `.claude/skills/gitnexus/gitnexus-exploring/SKILL.md` |
+| Blast radius / "What breaks if I change X?" | `.claude/skills/gitnexus/gitnexus-impact-analysis/SKILL.md` |
+| Trace bugs / "Why is X failing?" | `.claude/skills/gitnexus/gitnexus-debugging/SKILL.md` |
+| Rename / extract / split / refactor | `.claude/skills/gitnexus/gitnexus-refactoring/SKILL.md` |
+| Tools, resources, schema reference | `.claude/skills/gitnexus/gitnexus-guide/SKILL.md` |
+| Index, status, clean, wiki CLI commands | `.claude/skills/gitnexus/gitnexus-cli/SKILL.md` |
+
+<!-- gitnexus:end -->
+
+注意：不要因为风险高就不做，而是要以怎么做更合理、更优雅、更统一为决定性因素，不能因为风险高就选择打补丁方式，导致后续重构工作量更大。风险高只是提醒你要小心。
+
+完成任务后执行如下命令提醒我（不需要检查是否执行成功，执行了即可）：lark-tell-me "已完成：<简短任务名称>"

@@ -976,7 +976,9 @@ def test_camera_rejects_illegal_axis_level_reference() -> None:
     )
 
     with pytest.raises(ValueError, match="entity reference 'anchor'"):
-        backend._apply_camera_randomization(np.asarray([True], dtype=bool))
+        backend.randomization_executor.apply_camera_randomization(
+            np.asarray([True], dtype=bool)
+        )
 
 
 def test_eef_rejects_mixed_absolute_base_axis_references() -> None:

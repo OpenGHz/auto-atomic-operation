@@ -84,18 +84,18 @@ def test_camera_initial_pose_euler_orientation_uses_roll_pitch_yaw_order() -> No
         },
     )
 
-    def _get_camera_pose(cam_name: str) -> PoseState:
+    def get_camera_pose(cam_name: str) -> PoseState:
         assert cam_name == "cam0"
         return stored_pose
 
-    def _set_camera_pose(cam_name: str, pose: PoseState, env_mask: np.ndarray) -> None:
+    def set_camera_pose(cam_name: str, pose: PoseState, env_mask: np.ndarray) -> None:
         nonlocal stored_pose
         assert cam_name == "cam0"
         assert bool(env_mask[0])
         stored_pose = pose.broadcast_to(1)
 
-    backend._get_camera_pose = _get_camera_pose  # type: ignore[method-assign]
-    backend._set_camera_pose = _set_camera_pose  # type: ignore[method-assign]
+    backend.get_camera_pose = get_camera_pose  # type: ignore[method-assign]
+    backend.set_camera_pose = set_camera_pose  # type: ignore[method-assign]
 
     backend._apply_camera_initial_poses()
 
@@ -398,12 +398,12 @@ def test_camera_pose_round_trip_uses_world_coordinates_for_mounted_camera() -> N
         object_handlers={},
     )
 
-    initial = backend._get_camera_pose("wrist_cam")
+    initial = backend.get_camera_pose("wrist_cam")
     np.testing.assert_allclose(initial.position[0], [1.0, 3.0, 0.0], atol=1e-6)
 
     target = PoseState(position=[4.0, 5.0, 6.0], orientation=[0.0, 0.0, 0.0, 1.0])
-    backend._set_camera_pose("wrist_cam", target, np.asarray([True]))
-    actual = backend._get_camera_pose("wrist_cam")
+    backend.set_camera_pose("wrist_cam", target, np.asarray([True]))
+    actual = backend.get_camera_pose("wrist_cam")
     np.testing.assert_allclose(actual.position, target.position, atol=1e-6)
     np.testing.assert_allclose(actual.orientation, target.orientation, atol=1e-6)
 

@@ -341,8 +341,8 @@ def test_masked_initial_pose_keeps_unselected_camera_baseline() -> None:
         orientation[env_mask] = pose.orientation[env_mask]
         camera_pose = PoseState(position=position, orientation=orientation)
 
-    backend._get_camera_pose = get_camera_pose  # type: ignore[method-assign]
-    backend._set_camera_pose = set_camera_pose  # type: ignore[method-assign]
+    backend.get_camera_pose = get_camera_pose  # type: ignore[method-assign]
+    backend.set_camera_pose = set_camera_pose  # type: ignore[method-assign]
     backend._apply_camera_initial_poses()
     baseline = backend._default_camera_poses["camera"]
     camera_pose.position[1] = [9.0, 9.0, 9.0]

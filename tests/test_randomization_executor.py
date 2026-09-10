@@ -42,6 +42,7 @@ from auto_atom.utils.pose import PoseState
 ARM = "arm"
 CUP = "cup"
 PLATE = "plate"
+CAMERA = "head_cam"
 
 
 def _spec(label: str, **kwargs) -> RandomizationSpec:
@@ -99,6 +100,13 @@ class _RecordingHost:
         self.diagnostics: List[dict] = []
         self.dependency_queries = 0
         self.positions = {ARM: 0.0, CUP: 5.0, PLATE: 7.0}
+        # A camera samples a pose stream like any other target, but the host
+        # only has to be able to read and write it.
+        self._camera_spec = RandomizationSpec(
+            proposal=PoseRandomRange(x=(0.0, 0.0)),
+        )
+        self.camera_baseline = PoseState()
+        self.camera_pose = PoseState()
 
     # --- host surface -----------------------------------------------------
     @property
@@ -161,15 +169,28 @@ class _RecordingHost:
     def record_randomization_diagnostics(self, env_index, diagnostics) -> None:
         self.diagnostics.append(dict(diagnostics))
 
+    def baseline_pose(self, label: str) -> Optional[PoseState]:
+        if label == CAMERA:
+            return self.camera_baseline
+        return None
+
+    @property
+    def camera_randomization(self):
+        return {CAMERA: self._camera_spec}
+
+    def get_camera_pose(self, camera_name: str) -> PoseState:
+        return self.camera_pose
+
+    def set_camera_pose(self, camera_name: str, pose, env_mask) -> None:
+        self.events.append("camera")
+        self.camera_pose = pose
+
     def begin_randomization_episode(self) -> None:
         self.events.append("begin")
 
     def apply_action(self, action, env_mask) -> None:
         self.events.append(f"apply:{action.label}")
         self.applied.append(action.label)
-
-    def apply_camera_randomization(self, env_mask) -> None:
-        self.events.append("camera")
 
     def run_visibility_preflight(self, env_mask) -> None:
         self.events.append("preflight")

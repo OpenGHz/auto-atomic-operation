@@ -1268,9 +1268,7 @@ class MujocoTaskBackend(SceneBackend):
         poses: Dict[str, PoseState] = {}
         for camera_name in self.randomization_scope.cameras:
             try:
-                poses[camera_name] = self._get_camera_pose(camera_name).select(
-                    env_index
-                )
+                poses[camera_name] = self.get_camera_pose(camera_name).select(env_index)
             except KeyError:
                 continue
         return poses
@@ -1456,7 +1454,7 @@ class MujocoTaskBackend(SceneBackend):
             self._default_operator_base_poses[name] = handler.get_base_pose()
             self._default_operator_eef_poses[name] = handler.get_end_effector_pose()
         for cam_name in self.randomization_scope.cameras:
-            self._default_camera_poses[cam_name] = self._get_camera_pose(cam_name)
+            self._default_camera_poses[cam_name] = self.get_camera_pose(cam_name)
 
     def _resolve_initial_reference_pose(
         self,
@@ -1781,7 +1779,7 @@ class MujocoTaskBackend(SceneBackend):
         """
         mask = self._normalize_mask(env_mask)
         for cam_name, cfg in self.camera_initial_poses.items():
-            current = self._get_camera_pose(cam_name)
+            current = self.get_camera_pose(cam_name)
             baseline = self._default_camera_poses.get(cam_name)
             if baseline is None:
                 baseline = current
@@ -1796,10 +1794,10 @@ class MujocoTaskBackend(SceneBackend):
                 mask,
                 context=f"camera_initial_pose[{cam_name!r}]",
             )
-            self._set_camera_pose(cam_name, resolved, mask)
+            self.set_camera_pose(cam_name, resolved, mask)
             # Keep only selected rows in sync so camera_randomization offsets
             # from the overridden pose without absorbing unselected samples.
-            effective = self._get_camera_pose(cam_name)
+            effective = self.get_camera_pose(cam_name)
             positions = baseline.position.copy()
             orientations = baseline.orientation.copy()
             positions[mask] = effective.position[mask]
@@ -2009,6 +2007,30 @@ class MujocoTaskBackend(SceneBackend):
         """Batch-shaped template pose used to buffer one action's samples."""
         return self._current_pose_for_randomization_key(label)
 
+    def baseline_pose(self, label: str) -> Optional[PoseState]:
+        """Recorded reset baseline for one target, or ``None`` when unrecorded.
+
+        Labels are the plan's action labels (an object name, or
+        ``<operator>.base`` / ``<operator>.eef``) or a camera name. Objects,
+        operators, and cameras live in separate handler families, so the labels
+        are resolved across them rather than from one namespace.
+        """
+        for recorded in (
+            self._default_object_poses,
+            self._default_operator_base_poses,
+            self._default_operator_eef_poses,
+            self._default_camera_poses,
+        ):
+            pose = recorded.get(label)
+            if pose is not None:
+                return pose
+        return None
+
+    @property
+    def camera_randomization(self) -> Dict[str, RandomizationInput]:
+        """Configured per-camera pose randomization entries."""
+        return dict(self.randomization_scope.cameras)
+
     def begin_randomization_episode(self) -> None:
         """Per-episode preparation performed before any pose is sampled.
 
@@ -2042,11 +2064,6 @@ class MujocoTaskBackend(SceneBackend):
             )
         else:
             raise ValueError(f"Unknown randomization action kind: {action.kind}")
-
-    def apply_camera_randomization(self, env_mask: np.ndarray) -> None:
-        """Apply configured camera randomization; a no-op when none is set."""
-        if self.randomization_scope.cameras:
-            self._apply_camera_randomization(env_mask)
 
     def run_visibility_preflight(self, env_mask: np.ndarray) -> None:
         """Fail fast on a deterministically unsatisfiable ``visible_in`` region."""
@@ -2813,7 +2830,7 @@ class MujocoTaskBackend(SceneBackend):
     #  Camera randomization
     # ------------------------------------------------------------------
 
-    def _get_camera_pose(self, cam_name: str) -> PoseState:
+    def get_camera_pose(self, cam_name: str) -> PoseState:
         """Read a camera's world pose across all envs.
 
         MuJoCo stores ``cam_pos``/``cam_quat`` in the attached body's local
@@ -2840,7 +2857,7 @@ class MujocoTaskBackend(SceneBackend):
             )
         return PoseState(position=positions, orientation=orientations)
 
-    def _set_camera_pose(
+    def set_camera_pose(
         self,
         cam_name: str,
         pose: PoseState,
@@ -2881,42 +2898,6 @@ class MujocoTaskBackend(SceneBackend):
             mujoco.mju_mulQuat(local_quat, inverse_parent_quat, world_quat_wxyz)
             model.cam_quat[cam_id] = local_quat
             mujoco.mj_forward(single_env.model, single_env.data)
-
-    def _apply_camera_randomization(self, env_mask: np.ndarray) -> None:
-        """Sample and apply pose randomization for configured cameras."""
-        for cam_name, randomization in self.randomization_scope.cameras.items():
-            canonical = canonical_randomization_spec(randomization)
-            rand_range = self._select_randomization_region(canonical)
-            for reference in rand_range.references():
-                if reference == RandomizationReference.ABSOLUTE_BASE:
-                    raise ValueError(
-                        f"Camera '{cam_name}' randomization cannot use "
-                        "'absolute_base' — cameras have no operator base frame."
-                    )
-                if isinstance(reference, str) and not isinstance(
-                    reference,
-                    RandomizationReference,
-                ):
-                    raise ValueError(
-                        f"Camera '{cam_name}' randomization cannot use entity "
-                        f"reference '{reference}' — cameras do not participate in "
-                        "entity dependency ordering."
-                    )
-            default_pose = self._default_camera_poses.get(cam_name)
-            if default_pose is None:
-                logging.getLogger(MujocoTaskBackend.__name__).warning(
-                    "Camera '%s' has no recorded default pose — skipping "
-                    "randomization.",
-                    cam_name,
-                )
-                continue
-            sampled = self._sample_random_pose(
-                default_pose,
-                rand_range,
-                env_mask,
-                distribution=canonical.distribution,
-            )
-            self._set_camera_pose(cam_name, sampled, env_mask)
 
     def get_element_pose(self, name: str, env_index: int = 0) -> PoseState:
         single_env = self.env.envs[env_index]
