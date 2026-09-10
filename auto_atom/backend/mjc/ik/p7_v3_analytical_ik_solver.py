@@ -157,13 +157,16 @@ def build_p7_v3_umi_v3_backend(
     solver_params = dict(binding.ik_params) if binding is not None else {}
     solver_params.setdefault("flange_site_name", _P7V3_FLANGE_SITE)
     solver_params.setdefault("tcp_site_name", _P7V3_TCP_SITE)
-    ik_solver = P7V3AnalyticalIKSolver(
-        model=first_env.model,
-        arm_joint_names=_P7V3_ARM_JOINTS,
-        **solver_params,
-    )
 
-    print("fk_result:", ik_solver._solver.fk([0.0] * 7))
+    def _build_ik_solver(
+        scene_env: BatchedUnifiedMujocoEnv,
+    ) -> P7V3AnalyticalIKSolver:
+        """Build the arm solver lazily, only when an operator handler needs it."""
+        return P7V3AnalyticalIKSolver(
+            model=scene_env.envs[0].model,
+            arm_joint_names=_P7V3_ARM_JOINTS,
+            **solver_params,
+        )
 
     eef_aidx = first_env._op_eef_aidx.get("arm", np.array([]))
     eef_ctrl_index = int(eef_aidx[0]) if len(eef_aidx) > 0 else 0
@@ -177,7 +180,7 @@ def build_p7_v3_umi_v3_backend(
     return build_mujoco_backend(
         task,
         operators,
-        ik_solver=ik_solver,
+        ik_solver_factory=_build_ik_solver,
         handler_kwargs={
             "root_body_name": _P7V3_ROOT_BODY,
             "eef_site_name": _P7V3_TCP_SITE,

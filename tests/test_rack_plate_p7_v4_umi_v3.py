@@ -234,3 +234,54 @@ def test_rack_plate_p7_v4_umi_v3_completes_headless() -> None:
     finally:
         runner.close()
         ComponentRegistry.clear()
+
+
+def test_rack_plate_p7_v4_umi_v3_object_only_transports_the_plate() -> None:
+    """``object_only`` drops the operator layer and still completes the task.
+
+    The P7 backend must therefore not build an operator IK solver against a
+    model that no longer contains the arm, and the plate must be transported
+    kinematically through its own free joint.
+    """
+    ComponentRegistry.clear()
+    with initialize_config_dir(
+        version_base=None,
+        config_dir=str(_ROOT / "aao_configs"),
+    ):
+        config = compose(
+            config_name="rack_plate_p7_v4_umi_v3",
+            overrides=["env.viewer=null", "execution.mode=object_only"],
+        )
+
+    runner = TaskRunner().from_config(prepare_task_file(config))
+    try:
+        env = runner.get_env()
+        model = env.envs[0].model
+        assert mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "p7_mount") == -1
+        assert mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, "tool_site") == -1
+
+        plate_body = _id(model, mujoco.mjtObj.mjOBJ_BODY, "object")
+        target_site = _id(model, mujoco.mjtObj.mjOBJ_SITE, "rack_target_site")
+
+        update = runner.reset()
+        for _ in range(_MAX_UPDATES):
+            if bool(update.done[0]):
+                break
+            update = runner.update()
+
+        assert update.done.tolist() == [True]
+        assert update.success.tolist() == [True]
+        assert bool(runner._context.is_object_only)
+        # The plate is released inside the slot and stays there under gravity.
+        for _ in range(round(_SETTLE_SECONDS / model.opt.timestep)):
+            mujoco.mj_step(model, env.envs[0].data)
+        placement_error = float(
+            np.linalg.norm(
+                env.envs[0].data.xpos[plate_body]
+                - env.envs[0].data.site_xpos[target_site]
+            )
+        )
+        assert placement_error <= 0.05
+    finally:
+        runner.close()
+        ComponentRegistry.clear()

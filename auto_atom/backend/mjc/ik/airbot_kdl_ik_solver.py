@@ -231,14 +231,18 @@ def build_airbot_play_xf9600_backend(
             ik_params = ik_block
             break
 
-    ik_solver = AirbotKdlIKSolver(
-        model=first_env.model,
-        arm_joint_names=_AIRBOT_PLAY_JOINTS,
-        arm_base_body=_AIRBOT_ROOT_BODY,
-        tcp_site_name=_AIRBOT_TCP_SITE,
-        arm_type=str(ik_params.get("arm_type", "play_short")),
-        eef_type=str(ik_params.get("eef_type", "none")),
-    )
+    def _build_ik_solver(
+        scene_env: BatchedUnifiedMujocoEnv,
+    ) -> AirbotKdlIKSolver:
+        """Build the arm solver lazily, only when an operator handler needs it."""
+        return AirbotKdlIKSolver(
+            model=scene_env.envs[0].model,
+            arm_joint_names=_AIRBOT_PLAY_JOINTS,
+            arm_base_body=_AIRBOT_ROOT_BODY,
+            tcp_site_name=_AIRBOT_TCP_SITE,
+            arm_type=str(ik_params.get("arm_type", "play_short")),
+            eef_type=str(ik_params.get("eef_type", "none")),
+        )
 
     eef_aidx = first_env._op_eef_aidx.get("arm", np.array([]))
     eef_ctrl_index = int(eef_aidx[0]) if len(eef_aidx) > 0 else 0
@@ -252,7 +256,7 @@ def build_airbot_play_xf9600_backend(
     return build_mujoco_backend(
         task,
         operators,
-        ik_solver=ik_solver,
+        ik_solver_factory=_build_ik_solver,
         handler_kwargs={
             "root_body_name": _AIRBOT_ROOT_BODY,
             "eef_site_name": _AIRBOT_TCP_SITE,

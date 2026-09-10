@@ -484,3 +484,62 @@ def test_shared_physics_rejects_divergent_object_pose_rows(tmp_path: Path) -> No
         np.testing.assert_allclose(physical.data.xpos[body_id], [1.0, 0.0, 0.0])
     finally:
         physical.close()
+
+
+def test_object_free_joint_is_resolved_from_the_model(tmp_path: Path) -> None:
+    """A scene owns its joint names; the handler derives the driving joint."""
+    path = _write_xml(
+        tmp_path,
+        """
+        <mujoco>
+          <worldbody>
+            <body name="object" pos="0 0 0.5">
+              <freejoint name="object_free"/>
+              <geom type="sphere" size="0.01"/>
+            </body>
+            <body name="drawer" pos="0 1 0">
+              <joint name="drawer_slide" type="slide" axis="0 1 0"/>
+              <geom type="box" size="0.01 0.01 0.01"/>
+            </body>
+          </worldbody>
+        </mujoco>
+        """,
+    )
+    physical = UnifiedMujocoEnv(_scene_config(path))
+    try:
+        env = type(
+            "SingleBatch",
+            (),
+            {"batch_size": 1, "envs": [physical]},
+        )()
+        handler = MujocoObjectHandler(
+            name="object",
+            env=env,  # type: ignore[arg-type]
+            body_name="object",
+        )
+        joint_id = handler.get_free_joint_id(physical.model)
+        assert mujoco.mj_id2name(
+            physical.model, mujoco.mjtObj.mjOBJ_JOINT, joint_id
+        ) == ("object_free")
+
+        handler.set_pose(
+            PoseState(
+                position=[[1.0, 0.0, 0.5]],
+                orientation=[[0.0, 0.0, 0.0, 1.0]],
+            )
+        )
+        body_id = mujoco.mj_name2id(physical.model, mujoco.mjtObj.mjOBJ_BODY, "object")
+        np.testing.assert_allclose(
+            physical.data.xpos[body_id], [1.0, 0.0, 0.5], atol=1e-9
+        )
+
+        # Detection is joint-type based, so a jointed static body such as a
+        # drawer is not mistaken for a free-flying object.
+        drawer = MujocoObjectHandler(
+            name="drawer",
+            env=env,  # type: ignore[arg-type]
+            body_name="drawer",
+        )
+        assert drawer.get_free_joint_id(physical.model) == -1
+    finally:
+        physical.close()

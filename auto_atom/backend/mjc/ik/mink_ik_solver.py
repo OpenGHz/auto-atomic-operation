@@ -286,17 +286,19 @@ def build_franka_backend(
             ik_params = ik_block
             break
 
-    ik_solver = MinkIKSolver(
-        model=first_env.model,
-        arm_joint_names=_FRANKA_ARM_JOINTS,
-        frame_name=_FRANKA_EEF_SITE,
-        root_body_name=_FRANKA_ROOT_BODY,
-        n_iterations=ik_params.get("n_iterations", 300),
-        dt=ik_params.get("dt", 0.1),
-        position_cost=ik_params.get("position_cost", 1.0),
-        orientation_cost=ik_params.get("orientation_cost", 1.0),
-        posture_cost=ik_params.get("posture_cost", 1e-4),
-    )
+    def _build_ik_solver(scene_env: BatchedUnifiedMujocoEnv) -> MinkIKSolver:
+        """Build the arm solver lazily, only when an operator handler needs it."""
+        return MinkIKSolver(
+            model=scene_env.envs[0].model,
+            arm_joint_names=_FRANKA_ARM_JOINTS,
+            frame_name=_FRANKA_EEF_SITE,
+            root_body_name=_FRANKA_ROOT_BODY,
+            n_iterations=ik_params.get("n_iterations", 300),
+            dt=ik_params.get("dt", 0.1),
+            position_cost=ik_params.get("position_cost", 1.0),
+            orientation_cost=ik_params.get("orientation_cost", 1.0),
+            posture_cost=ik_params.get("posture_cost", 1e-4),
+        )
 
     eef_aidx = first_env._op_eef_aidx.get("arm", np.array([]))
     eef_ctrl_index = int(eef_aidx[0]) if len(eef_aidx) > 0 else 0
@@ -304,7 +306,7 @@ def build_franka_backend(
     return build_mujoco_backend(
         task,
         operators,
-        ik_solver=ik_solver,
+        ik_solver_factory=_build_ik_solver,
         handler_kwargs={
             "root_body_name": _FRANKA_ROOT_BODY,
             "eef_site_name": _FRANKA_EEF_SITE,

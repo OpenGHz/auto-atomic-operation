@@ -315,6 +315,11 @@ check; it does not claim physical grasp, contact, reachability, or collision
 success. Unsupported operations (`move`, `push`, `pull`, `press`, standalone
 `grasp`/`release`) fail fast in this mode.
 
+Operator composition is removed before the environment is instantiated, so the
+task backend never builds an operator IK solver against a model that has no
+operator bodies or sites: a backend constructs its solver only when it actually
+creates an operator handler.
+
 `object_only` applies each held-object waypoint directly by default. If a
 trajectory of intermediate kinematic poses is needed, opt into interpolation:
 

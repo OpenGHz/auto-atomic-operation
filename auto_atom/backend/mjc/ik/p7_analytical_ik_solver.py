@@ -150,12 +150,16 @@ def build_p7_xf9600_backend(
             ik_params = ik_block
             break
 
-    ik_solver = P7AnalyticalIKSolver(
-        model=first_env.model,
-        arm_joint_names=_P7_ARM_JOINTS,
-        flange_site_name=_P7_FLANGE_SITE,
-        tcp_site_name=_P7_TCP_SITE,
-    )
+    def _build_ik_solver(
+        scene_env: BatchedUnifiedMujocoEnv,
+    ) -> P7AnalyticalIKSolver:
+        """Build the arm solver lazily, only when an operator handler needs it."""
+        return P7AnalyticalIKSolver(
+            model=scene_env.envs[0].model,
+            arm_joint_names=_P7_ARM_JOINTS,
+            flange_site_name=_P7_FLANGE_SITE,
+            tcp_site_name=_P7_TCP_SITE,
+        )
 
     eef_aidx = first_env._op_eef_aidx.get("arm", np.array([]))
     eef_ctrl_index = int(eef_aidx[0]) if len(eef_aidx) > 0 else 0
@@ -169,7 +173,7 @@ def build_p7_xf9600_backend(
     return build_mujoco_backend(
         task,
         operators,
-        ik_solver=ik_solver,
+        ik_solver_factory=_build_ik_solver,
         handler_kwargs={
             "root_body_name": _P7_ROOT_BODY,
             "eef_site_name": _P7_TCP_SITE,

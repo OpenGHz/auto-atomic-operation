@@ -252,6 +252,9 @@ class MujocoObjectHandler(ObjectHandler):
     _descendant_body_ids: Optional[Dict[int, frozenset]] = field(
         init=False, repr=False, default=None
     )
+    _free_joint_ids: Dict[int, int] = field(
+        init=False, repr=False, default_factory=dict
+    )
 
     def get_descendant_body_ids(self, model: Any) -> frozenset:
         """Return a frozenset of body IDs that are the target body or its
@@ -276,6 +279,39 @@ class MujocoObjectHandler(ObjectHandler):
         self._descendant_body_ids[model_id] = result
         return result
 
+    def get_free_joint_id(self, model: Any) -> int:
+        """Return the model joint that drives this body, or ``-1`` when static.
+
+        ``freejoint_name`` is an explicit override.  Otherwise the body's own
+        joints are inspected for a MuJoCo free joint, so a scene owns its joint
+        names (``object_free``, ``cup_joint``, ...) instead of the backend
+        guessing at a ``<object>_joint`` convention.  Cached per model because
+        model topology is static.
+        """
+        model_id = id(model)
+        cached = self._free_joint_ids.get(model_id)
+        if cached is not None:
+            return cached
+        joint_id = -1
+        if self.freejoint_name:
+            joint_id = int(
+                mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, self.freejoint_name)
+            )
+        if joint_id < 0:
+            body_id = int(
+                mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, self.body_name)
+            )
+            if body_id >= 0:
+                first = int(model.body_jntadr[body_id])
+                for candidate in range(first, first + int(model.body_jntnum[body_id])):
+                    if int(model.jnt_type[candidate]) == int(
+                        mujoco.mjtJoint.mjJNT_FREE
+                    ):
+                        joint_id = candidate
+                        break
+        self._free_joint_ids[model_id] = joint_id
+        return joint_id
+
     def get_pose(self) -> PoseState:
         pos, quat = self.env.get_body_pose(self.body_name)
         return PoseState(position=pos, orientation=quat)
@@ -292,25 +328,22 @@ class MujocoObjectHandler(ObjectHandler):
             single_env = self.env.envs[env_index]
             x, y, z = pose.position[env_index]
             qx, qy, qz, qw = pose.orientation[env_index]
-            if self.freejoint_name is not None:
-                jid = mujoco.mj_name2id(
-                    single_env.model, mujoco.mjtObj.mjOBJ_JOINT, self.freejoint_name
-                )
-                if jid >= 0:
-                    qpos_adr = int(single_env.model.jnt_qposadr[jid])
-                    dof_adr = int(single_env.model.jnt_dofadr[jid])
-                    single_env.data.qpos[qpos_adr : qpos_adr + 7] = [
-                        x,
-                        y,
-                        z,
-                        qw,
-                        qx,
-                        qy,
-                        qz,
-                    ]
-                    single_env.data.qvel[dof_adr : dof_adr + 6] = 0.0
-                    mujoco.mj_forward(single_env.model, single_env.data)
-                    continue
+            joint_id = self.get_free_joint_id(single_env.model)
+            if joint_id >= 0:
+                qpos_adr = int(single_env.model.jnt_qposadr[joint_id])
+                dof_adr = int(single_env.model.jnt_dofadr[joint_id])
+                single_env.data.qpos[qpos_adr : qpos_adr + 7] = [
+                    x,
+                    y,
+                    z,
+                    qw,
+                    qx,
+                    qy,
+                    qz,
+                ]
+                single_env.data.qvel[dof_adr : dof_adr + 6] = 0.0
+                mujoco.mj_forward(single_env.model, single_env.data)
+                continue
 
             bid = mujoco.mj_name2id(
                 single_env.model, mujoco.mjtObj.mjOBJ_BODY, self.body_name
@@ -4285,7 +4318,23 @@ def build_mujoco_backend(
     operators: Dict[str, OperatorConfig],
     ik_solver: Optional[IKSolver] = None,
     handler_kwargs: Optional[Dict[str, Any]] = None,
+    *,
+    ik_solver_factory: Optional[Callable[[BatchedUnifiedMujocoEnv], IKSolver]] = None,
 ) -> MujocoTaskBackend:
+    """Build the MuJoCo backend for one task.
+
+    ``ik_solver_factory`` is the preferred way to supply operator IK.  The
+    factory is invoked at most once, and only when at least one operator
+    handler is actually created.  Operator-free executions (for example
+    ``execution.mode: object_only``, which strips operator MJCF layers and
+    bindings at the Hydra boundary) therefore never build a solver against a
+    model that has no operator bodies or sites.
+    """
+    if ik_solver is not None and ik_solver_factory is not None:
+        raise ValueError(
+            "Pass either ik_solver or ik_solver_factory to build_mujoco_backend, "
+            "not both."
+        )
     config = (
         task
         if isinstance(task, AutoAtomConfig)
@@ -4297,6 +4346,9 @@ def build_mujoco_backend(
         raise TypeError(
             f"Registered environment '{config.env_name}' must be a BatchedUnifiedMujocoEnv, got {type(env).__name__}."
         )
+
+    if ik_solver_factory is not None and operator_configs:
+        ik_solver = ik_solver_factory(env)
 
     extra = handler_kwargs or {}
     operator_handlers: Dict[str, MujocoOperatorHandler] = {}
@@ -4429,22 +4481,13 @@ def build_mujoco_backend(
         body_name = object_name
         if mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, f"{object_name}_gs") >= 0:
             body_name = f"{object_name}_gs"
-        freejoint_name: Optional[str] = None
-        if (
-            mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, f"{object_name}_joint")
-            >= 0
-        ):
-            freejoint_name = f"{object_name}_joint"
-        elif (
-            mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, f"{object_name}_joint0")
-            >= 0
-        ):
-            freejoint_name = f"{object_name}_joint0"
+        # The handler resolves the driving free joint from the model, so the
+        # scene owns its joint names instead of the backend pattern-matching
+        # ``<object>_joint``.
         object_handlers[object_name] = MujocoObjectHandler(
             name=object_name,
             env=env,
             body_name=body_name,
-            freejoint_name=freejoint_name,
         )
 
     resolved_randomization, resolved_strategy = resolve_randomization_scope(
