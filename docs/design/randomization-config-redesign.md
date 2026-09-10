@@ -13,13 +13,13 @@
 - 容器化切片（提交 `5626df0`）：`task.randomization` → `RandomizationScopeConfig`
   {`distribution`、`constraints`、`entities`、`cameras`}；`resolve_randomization_scope` 三级回落
   （目标显式 > scope 默认 > 内置）；`failure` 归入 `constraints.failure`；
-  `strategy` 归入 `separated.strategy`，删除 `AutoAtomConfig.randomization_strategy`；
+  `strategy` 删除 `AutoAtomConfig.randomization_strategy`（先暂归 `separated.strategy`，
+  见下文 R-C1 再提到 scope 层）；
   采用**新语义**（默认 `failure=error`，去掉 legacy best_effort 特殊化）。同步后端工厂、
   runtime / execution_config / data_replay、24 个 `aao_configs` 的 `entities` 包装、
   相关测试与 `randomization.md` / `task_file_schema.md` / `ik_control.md` 文档。
-- **限制（已实现为单一有效策略）**：后端仍按单策略分发；scope/实体声明的
-  `separated.strategy` 若不一致会报错。**逐组件混合策略**（不同组件各用不同策略）
-  需另行改造后端分发，未实现。
+- **单一有效策略**：一次 reset 只应用一种放置策略。scope 级 `strategy` 是唯一
+  声明处，逐实体/逐组件混合策略不提供（见下文「`strategy` 是 scope 级、非逐组件」）。
 - **auto collision_radius 扩展到 operator**（提交 `a91b12f`）：base=root body 自身
   footprint、eef=eef site body 子树（详见文末"已记录的后续增强"）。
 - **visible_in 确定性判空**（提交 `add77d2`）：范围盒与相机视锥整体不相交时
@@ -70,15 +70,23 @@
 | 子类 | 内容 | 说明 |
 |------|------|------|
 | 可选硬要求 | `visible_in` / `separated` | 叠加在机制之上 |
-| 接受机制 | `separated.strategy`、`constraints.failure` | **始终生效** |
+| 接受机制 | `strategy`（scope 层）、`constraints.failure` | **始终生效** |
 
-### 为什么 `strategy` / `failure` 不游离在外
+### 为什么 `strategy` 在 scope 层、不在 `separated` 里
 
-RSA / joint_rejection（`strategy`）与 `max_attempts`（`failure`）作用于那条
-**始终存在的半径分离**（随机参与者只要 `collision_radius > 0` 就两两避碰），
-不依赖用户是否显式写 `separated` / `visible_in`。因此它们必须"始终有个家"——
-通过在**全局默认 `constraints`** 中始终携带一份带默认 `strategy` 与 `failure`
-的 `separated` 来实现。这样"没写 separated 时 RSA 仍在跑"就有了确定的承载点。
+RSA / joint_rejection 与 `max_attempts`（`failure`）作用于那条**始终存在的半径
+分离**（随机参与者只要 `collision_radius > 0` 就两两避碰），不依赖用户是否显式
+写 `separated` / `visible_in`。因此它们必须"始终有个家"。
+
+`failure` 的家是 `constraints.failure`（`constraints` 始终存在）。`strategy`
+曾一度塞进 `constraints.separated`，但 `separated` 是**可选**的：一旦用户不写
+`separated`，策略就无处安放，配置层无法表达"没有分离约束但组件用 joint
+rejection 放置"这种合法组合，只能靠一个独立的 `randomization_strategy` 字段
+一路传下去（正是"后端为何要持有策略"的根因）。
+
+R-C1 把 `strategy` 提到 scope 层：它始终存在、scope 级唯一、不可逐实体覆盖
+（一次 reset 只应用一种放置策略），于是既不需要独立字段承载，也不再假装自己
+是"分离约束的一个子字段"。
 
 ## 最终配置结构
 
@@ -92,12 +100,13 @@ task:
       candidate_count: 1
       spacing: 0.0              # 原 distribution.min_distance
 
+    strategy: rsa               # scope 级唯一（原 randomization_strategy）
+
     constraints:                # 可行性（始终存在，承载 always-on 机制）
       failure:                  # 可行性搜索预算耗尽时怎么办
         mode: error             # error | best_effort
         max_attempts: 100
-      separated:                # 分离要求（默认存在 → strategy 有固定家）
-        strategy: rsa           # rsa | joint_rejection（原 randomization_strategy）
+      separated:                # 分离要求（可选）
         scope: randomized       # randomized | scene
         clearance: 0.0          # 原 separated.min_distance
       visible_in: null          # 可选，默认无
@@ -120,7 +129,6 @@ task:
           spacing: 0.04
         constraints:            # 实体级覆盖（按子字段合并）
           separated:
-            strategy: joint_rejection   # 本实体组件用 joint 策略
             clearance: 0.02
           visible_in:
             cameras: all
@@ -143,16 +151,12 @@ task:
 `constraints` 的实体覆盖是**按 `separated` / `visible_in` / `failure` 子字段合并**，
 避免"覆盖一个丢掉另一个"。`distribution` 与 `constraints.failure` 为整块替换。
 
-## `strategy` 逐组件独立的影响
+## `strategy` 是 scope 级、非逐组件
 
-`separated.strategy`（rsa / joint_rejection）支持逐实体/逐组件独立。当前后端
-只支持**单一全局策略**（`randomization_strategy` 默认 RSA，joint 走另一条
-`_sample_component_for_env` 路径）。放开为逐组件策略后：
-
-- 组件分发需携带"该组件用哪种策略"；
-- 同一 reset 里可能混合 rsa 与 joint_rejection 组件；
-- `AutoAtomConfig.randomization_strategy` 旧字段删除，语义迁移到全局默认
-  `constraints.separated.strategy`。
+一次 reset 只应用一种放置策略，因此 `strategy` **不支持**逐实体/逐组件覆盖：
+没有"同一 reset 里混合 rsa 与 joint_rejection 组件"这种语义。这既是实现现状
+（组件分发只带一种策略），也是刻意收紧——否则 `RandomizationPlan` 就无法用
+单个字段表达生效策略。
 
 ## `visible_in` 语义：保守内缩（首选），非重试式 rejection
 
@@ -221,7 +225,7 @@ task:
 - R1：本文档（钉死方案）。
 - R2：schema 重构 —— 容器（`distribution` / `constraints` / `entities` / `cameras`）、
   `min_distance`→`spacing`、`separated.min_distance`→`clearance`、
-  `separated.strategy`、删 `randomization_strategy`、三级回落。
+  `strategy`、删 `randomization_strategy`、三级回落。
   （注：原 `framework.py` 已拆分为 `auto_atom/config/` 子包，schema 类按域
   分布于 `config/randomization.py` / `config/motion.py` / `config/task.py` 等。）
 - R3：后端读取与逐组件策略分发（`mujoco_backend.py` / `mujoco_basis.py`；

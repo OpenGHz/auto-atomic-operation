@@ -236,7 +236,7 @@ def test_config_selects_automatic_randomization_strategy() -> None:
             "stages": [],
             "env_name": "randomization_test",
             "randomization": {
-                "constraints": {"separated": {"strategy": "joint_rejection"}},
+                "strategy": "joint_rejection",
                 "entities": {
                     "large": {"x": [0.0, 1.0]},
                     "small": {"x": [0.0, 1.0]},
@@ -285,11 +285,9 @@ def test_scope_defaults_inherited_and_strategy_resolved() -> None:
             generator=RandomizationGeneratorKind.SOBOL,
             spacing=0.05,
         ),
+        strategy=RandomizationStrategy.JOINT_REJECTION,
         constraints=RandomizationConstraintConfig(
-            separated={
-                "clearance": 0.02,
-                "strategy": "joint_rejection",
-            },
+            separated={"clearance": 0.02},
             failure=RandomizationFailureConfig(max_attempts=7),
         ),
         entities={
@@ -340,20 +338,30 @@ def test_scope_defaults_inherited_and_strategy_resolved() -> None:
     assert arm.base.constraints.failure.max_attempts == 7
 
 
-def test_scope_rejects_conflicting_entity_separated_strategy() -> None:
+def test_scope_strategy_is_scope_wide() -> None:
+    """There is one placement strategy per reset, declared on the scope."""
     scope = RandomizationScopeConfig(
-        constraints=RandomizationConstraintConfig(separated={"strategy": "rsa"}),
-        entities={
-            "cup": RandomizationSpec(
-                proposal=PoseRandomRange(x=(0.0, 1.0)),
-                constraints=RandomizationConstraintConfig(
-                    separated={"strategy": "joint_rejection"}
-                ),
-            ),
-        },
+        strategy=RandomizationStrategy.JOINT_REJECTION,
+        entities={"cup": PoseRandomRange(x=(0.0, 1.0))},
     )
-    with pytest.raises(ValueError, match="one placement strategy"):
-        resolve_randomization_scope(scope)
+    assert (
+        resolve_randomization_scope(scope).strategy
+        == RandomizationStrategy.JOINT_REJECTION
+    )
+
+    # A per-entity spec cannot change it: `RandomizationSpec.constraints` has
+    # no strategy anywhere, so there is nothing to disagree with.
+    spec = RandomizationSpec(
+        proposal=PoseRandomRange(x=(0.0, 1.0)),
+        constraints=RandomizationConstraintConfig(separated={"clearance": 0.02}),
+    )
+    resolved = resolve_randomization_scope(
+        RandomizationScopeConfig(
+            strategy=RandomizationStrategy.RSA, entities={"cup": spec}
+        )
+    )
+    assert resolved.strategy == RandomizationStrategy.RSA
+    assert resolved.entities["cup"].constraints.separated.clearance == 0.02
 
 
 def test_cameras_inherit_scope_distribution_but_not_constraints() -> None:
@@ -362,8 +370,9 @@ def test_cameras_inherit_scope_distribution_but_not_constraints() -> None:
             generator=RandomizationGeneratorKind.SOBOL,
             spacing=0.05,
         ),
+        strategy=RandomizationStrategy.JOINT_REJECTION,
         constraints=RandomizationConstraintConfig(
-            separated={"clearance": 0.02, "strategy": "joint_rejection"},
+            separated={"clearance": 0.02},
             failure=RandomizationFailureConfig(max_attempts=7),
         ),
         cameras={"head_cam": PoseRandomRange(x=(0.0, 1.0))},
@@ -430,11 +439,9 @@ def test_cameras_reject_declared_constraints() -> None:
         )
 
 
-def test_camera_entries_skip_the_scope_strategy_agreement_check() -> None:
+def test_camera_entries_stay_out_of_the_separation_strategy() -> None:
     scope = RandomizationScopeConfig(
-        constraints=RandomizationConstraintConfig(
-            separated={"strategy": "joint_rejection"}
-        ),
+        strategy=RandomizationStrategy.JOINT_REJECTION,
         entities={"cup": PoseRandomRange(x=(0.0, 1.0))},
         cameras={"head_cam": PoseRandomRange(x=(0.0, 1.0))},
     )

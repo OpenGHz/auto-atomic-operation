@@ -9,6 +9,7 @@ import numpy as np
 import pytest
 
 from auto_atom.backend.mjc.mujoco_backend import MujocoTaskBackend
+from auto_atom.config.randomization import ResolvedRandomizationScope
 from auto_atom.randomization import CollisionParticipant
 from auto_atom.config.motion import PoseControlConfig
 from auto_atom.config.randomization import (
@@ -160,14 +161,27 @@ def _make_backend(
         env=DummyEnv(batch_size=1),
         operator_handlers={},
         object_handlers=object_handlers,
-        randomization=randomization,
-        randomization_strategy=strategy,
+        randomization_scope=_scope(randomization, strategy=strategy),
         randomization_groups=randomization_groups or {},
     )
     backend._default_object_poses = {
         name: handler.get_pose() for name, handler in object_handlers.items()
     }
     return backend
+
+
+def _scope(
+    entities: Dict[str, object],
+    *,
+    strategy: RandomizationStrategy = RandomizationStrategy.RSA,
+    cameras: Optional[Dict[str, object]] = None,
+) -> ResolvedRandomizationScope:
+    """Build the resolved scope a backend is constructed with."""
+    return ResolvedRandomizationScope(
+        entities=dict(entities),
+        cameras=dict(cameras or {}),
+        strategy=strategy,
+    )
 
 
 def _hard_sphere_group(
@@ -422,13 +436,15 @@ def test_direct_operator_randomization_raises_type_error() -> None:
         env=DummyEnv(batch_size=1),
         operator_handlers={"arm": handler},
         object_handlers={},
-        randomization={
-            "arm": PoseRandomRange(
-                x=(0.1, 0.1),
-                y=(0.0, 0.0),
-                collision_radius=0.1,
-            )
-        },
+        randomization_scope=_scope(
+            {
+                "arm": PoseRandomRange(
+                    x=(0.1, 0.1),
+                    y=(0.0, 0.0),
+                    collision_radius=0.1,
+                )
+            }
+        ),
     )
     backend._default_operator_base_poses = {"arm": handler.get_base_pose()}
     backend._default_operator_eef_poses = {"arm": handler.get_end_effector_pose()}
@@ -452,11 +468,13 @@ def test_direct_operator_multi_region_randomization_raises_type_error() -> None:
         env=DummyEnv(batch_size=1),
         operator_handlers={"arm": handler},
         object_handlers={},
-        randomization={
-            "arm": PoseRandomizationConfig(
-                regions=[PoseRandomRange(), PoseRandomRange()]
-            )
-        },
+        randomization_scope=_scope(
+            {
+                "arm": PoseRandomizationConfig(
+                    regions=[PoseRandomRange(), PoseRandomRange()]
+                )
+            }
+        ),
     )
 
     with pytest.raises(TypeError, match="nested form"):
@@ -947,11 +965,14 @@ def test_camera_rejects_illegal_axis_level_reference() -> None:
         env=DummyEnv(batch_size=1),
         operator_handlers={},
         object_handlers={},
-        camera_randomization={
-            "camera": PoseRandomRange.model_validate(
-                {"z": {"range": [0.0, 0.0], "reference": "anchor"}}
-            )
-        },
+        randomization_scope=_scope(
+            {},
+            cameras={
+                "camera": PoseRandomRange.model_validate(
+                    {"z": {"range": [0.0, 0.0], "reference": "anchor"}}
+                )
+            },
+        ),
     )
 
     with pytest.raises(ValueError, match="entity reference 'anchor'"):
@@ -973,19 +994,21 @@ def test_eef_rejects_mixed_absolute_base_axis_references() -> None:
             )
         },
         object_handlers={},
-        randomization={
-            "arm": OperatorRandomizationConfig(
-                eef=PoseRandomRange.model_validate(
-                    {
-                        "reference": "absolute_base",
-                        "z": {
-                            "range": [0.0, 0.0],
-                            "reference": "absolute_world",
-                        },
-                    }
+        randomization_scope=_scope(
+            {
+                "arm": OperatorRandomizationConfig(
+                    eef=PoseRandomRange.model_validate(
+                        {
+                            "reference": "absolute_base",
+                            "z": {
+                                "range": [0.0, 0.0],
+                                "reference": "absolute_world",
+                            },
+                        }
+                    )
                 )
-            )
-        },
+            }
+        ),
     )
 
     with pytest.raises(ValueError, match="cannot mix 'absolute_base'"):
@@ -1034,7 +1057,7 @@ def test_multi_region_selection_is_equiprobable() -> None:
         },
         object_positions={"block": (0.0, 0.0, 0.0)},
     )
-    regions = backend.randomization["block"]
+    regions = backend.randomization_scope.entities["block"]
     assert isinstance(regions, PoseRandomizationConfig)
 
     backend._rng = np.random.default_rng(123)
@@ -1102,24 +1125,26 @@ def test_operator_eef_multi_region_randomization() -> None:
         env=DummyEnv(batch_size=1),
         operator_handlers={"arm": handler},
         object_handlers={},
-        randomization={
-            "arm": OperatorRandomizationConfig(
-                eef=PoseRandomizationConfig(
-                    regions=[
-                        PoseRandomRange(
-                            reference=RandomizationReference.RELATIVE,
-                            x=(0.1, 0.1),
-                            collision_radius=0.0,
-                        ),
-                        PoseRandomRange(
-                            reference=RandomizationReference.ABSOLUTE_WORLD,
-                            x=(1.0, 1.0),
-                            collision_radius=0.0,
-                        ),
-                    ]
+        randomization_scope=_scope(
+            {
+                "arm": OperatorRandomizationConfig(
+                    eef=PoseRandomizationConfig(
+                        regions=[
+                            PoseRandomRange(
+                                reference=RandomizationReference.RELATIVE,
+                                x=(0.1, 0.1),
+                                collision_radius=0.0,
+                            ),
+                            PoseRandomRange(
+                                reference=RandomizationReference.ABSOLUTE_WORLD,
+                                x=(1.0, 1.0),
+                                collision_radius=0.0,
+                            ),
+                        ]
+                    )
                 )
-            )
-        },
+            }
+        ),
     )
     backend._default_operator_base_poses = {"arm": handler.get_base_pose()}
     backend._default_operator_eef_poses = {"arm": handler.get_end_effector_pose()}
@@ -1147,16 +1172,18 @@ def test_multi_region_references_are_all_dependencies() -> None:
         env=DummyEnv(batch_size=1),
         operator_handlers={},
         object_handlers=handlers,
-        randomization={
-            "anchor_a": PoseRandomRange(),
-            "anchor_b": PoseRandomRange(),
-            "block": PoseRandomizationConfig(
-                regions=[
-                    PoseRandomRange(reference="anchor_a"),
-                    PoseRandomRange(reference="anchor_b"),
-                ]
-            ),
-        },
+        randomization_scope=_scope(
+            {
+                "anchor_a": PoseRandomRange(),
+                "anchor_b": PoseRandomRange(),
+                "block": PoseRandomizationConfig(
+                    regions=[
+                        PoseRandomRange(reference="anchor_a"),
+                        PoseRandomRange(reference="anchor_b"),
+                    ]
+                ),
+            }
+        ),
     )
 
     dependencies = backend._randomization_dependencies()
@@ -1177,16 +1204,18 @@ def test_axis_level_references_are_dependencies() -> None:
         env=DummyEnv(batch_size=1),
         operator_handlers={},
         object_handlers=handlers,
-        randomization={
-            "anchor_a": PoseRandomRange(),
-            "anchor_b": PoseRandomRange(),
-            "block": PoseRandomRange.model_validate(
-                {
-                    "reference": "anchor_a",
-                    "z": {"range": [0.0, 0.0], "reference": "anchor_b"},
-                }
-            ),
-        },
+        randomization_scope=_scope(
+            {
+                "anchor_a": PoseRandomRange(),
+                "anchor_b": PoseRandomRange(),
+                "block": PoseRandomRange.model_validate(
+                    {
+                        "reference": "anchor_a",
+                        "z": {"range": [0.0, 0.0], "reference": "anchor_b"},
+                    }
+                ),
+            }
+        ),
     )
 
     dependencies = backend._randomization_dependencies()
@@ -1212,18 +1241,20 @@ def test_operator_multi_region_references_are_all_dependencies() -> None:
         env=DummyEnv(batch_size=1),
         operator_handlers={"arm": operator_handler},
         object_handlers=object_handlers,
-        randomization={
-            "base_anchor": PoseRandomRange(),
-            "eef_anchor": PoseRandomRange(),
-            "arm": OperatorRandomizationConfig(
-                base=PoseRandomizationConfig(
-                    regions=[PoseRandomRange(reference="base_anchor")]
+        randomization_scope=_scope(
+            {
+                "base_anchor": PoseRandomRange(),
+                "eef_anchor": PoseRandomRange(),
+                "arm": OperatorRandomizationConfig(
+                    base=PoseRandomizationConfig(
+                        regions=[PoseRandomRange(reference="base_anchor")]
+                    ),
+                    eef=PoseRandomizationConfig(
+                        regions=[PoseRandomRange(reference="eef_anchor")]
+                    ),
                 ),
-                eef=PoseRandomizationConfig(
-                    regions=[PoseRandomRange(reference="eef_anchor")]
-                ),
-            ),
-        },
+            }
+        ),
     )
 
     dependencies = backend._randomization_dependencies()
@@ -1248,14 +1279,16 @@ def test_batched_regions_preserve_per_environment_radius_and_ancestors() -> None
         env=DummyEnv(batch_size=2),
         operator_handlers={},
         object_handlers=handlers,
-        randomization={
-            "block": PoseRandomizationConfig(
-                regions=[
-                    PoseRandomRange(reference="anchor_a", collision_radius=0.1),
-                    PoseRandomRange(reference="anchor_b", collision_radius=0.2),
-                ]
-            )
-        },
+        randomization_scope=_scope(
+            {
+                "block": PoseRandomizationConfig(
+                    regions=[
+                        PoseRandomRange(reference="anchor_a", collision_radius=0.1),
+                        PoseRandomRange(reference="anchor_b", collision_radius=0.2),
+                    ]
+                )
+            }
+        ),
     )
     backend._default_object_poses = {
         name: handler.get_pose() for name, handler in handlers.items()
@@ -1317,22 +1350,24 @@ def test_batched_region_randomization_respects_environment_mask() -> None:
         env=DummyEnv(batch_size=2),
         operator_handlers={},
         object_handlers={"block": handler},
-        randomization={
-            "block": PoseRandomizationConfig(
-                regions=[
-                    PoseRandomRange(
-                        reference=RandomizationReference.ABSOLUTE_WORLD,
-                        x=(1.0, 1.0),
-                        collision_radius=0.0,
-                    ),
-                    PoseRandomRange(
-                        reference=RandomizationReference.ABSOLUTE_WORLD,
-                        x=(2.0, 2.0),
-                        collision_radius=0.0,
-                    ),
-                ]
-            )
-        },
+        randomization_scope=_scope(
+            {
+                "block": PoseRandomizationConfig(
+                    regions=[
+                        PoseRandomRange(
+                            reference=RandomizationReference.ABSOLUTE_WORLD,
+                            x=(1.0, 1.0),
+                            collision_radius=0.0,
+                        ),
+                        PoseRandomRange(
+                            reference=RandomizationReference.ABSOLUTE_WORLD,
+                            x=(2.0, 2.0),
+                            collision_radius=0.0,
+                        ),
+                    ]
+                )
+            }
+        ),
     )
     backend._default_object_poses = {"block": handler.get_pose()}
     backend._rng = SequenceRNG([1.0, 2.0])
@@ -1361,16 +1396,18 @@ def test_batched_regions_preserve_only_selected_transitive_ancestors() -> None:
         env=DummyEnv(batch_size=2),
         operator_handlers={},
         object_handlers=handlers,
-        randomization={
-            "root": PoseRandomRange(collision_radius=0.0),
-            "anchor": PoseRandomizationConfig(
-                regions=[
-                    PoseRandomRange(collision_radius=0.0),
-                    PoseRandomRange(reference="root", collision_radius=0.0),
-                ]
-            ),
-            "block": PoseRandomRange(reference="anchor", collision_radius=0.0),
-        },
+        randomization_scope=_scope(
+            {
+                "root": PoseRandomRange(collision_radius=0.0),
+                "anchor": PoseRandomizationConfig(
+                    regions=[
+                        PoseRandomRange(collision_radius=0.0),
+                        PoseRandomRange(reference="root", collision_radius=0.0),
+                    ]
+                ),
+                "block": PoseRandomRange(reference="anchor", collision_radius=0.0),
+            }
+        ),
     )
     backend._default_object_poses = {
         name: handler.get_pose() for name, handler in handlers.items()
@@ -1428,16 +1465,18 @@ def test_multi_reference_dependency_order_follows_declaration_order() -> None:
         env=DummyEnv(batch_size=1),
         operator_handlers={},
         object_handlers=handlers,
-        randomization={
-            "child": PoseRandomizationConfig(
-                regions=[
-                    PoseRandomRange(reference="anchor_b"),
-                    PoseRandomRange(reference="anchor_a"),
-                ]
-            ),
-            "anchor_b": PoseRandomRange(),
-            "anchor_a": PoseRandomRange(),
-        },
+        randomization_scope=_scope(
+            {
+                "child": PoseRandomizationConfig(
+                    regions=[
+                        PoseRandomRange(reference="anchor_b"),
+                        PoseRandomRange(reference="anchor_a"),
+                    ]
+                ),
+                "anchor_b": PoseRandomRange(),
+                "anchor_a": PoseRandomRange(),
+            }
+        ),
     )
 
     assert backend._randomization_order() == ["anchor_b", "anchor_a", "child"]
@@ -1455,16 +1494,18 @@ def test_unknown_multi_region_target_does_not_connect_known_components(
         env=DummyEnv(batch_size=1),
         operator_handlers={},
         object_handlers=handlers,
-        randomization={
-            "a": PoseRandomRange(collision_radius=0.0),
-            "b": PoseRandomRange(collision_radius=0.0),
-            "ghost": PoseRandomizationConfig(
-                regions=[
-                    PoseRandomRange(reference="a", collision_radius=0.0),
-                    PoseRandomRange(reference="b", collision_radius=0.0),
-                ]
-            ),
-        },
+        randomization_scope=_scope(
+            {
+                "a": PoseRandomRange(collision_radius=0.0),
+                "b": PoseRandomRange(collision_radius=0.0),
+                "ghost": PoseRandomizationConfig(
+                    regions=[
+                        PoseRandomRange(reference="a", collision_radius=0.0),
+                        PoseRandomRange(reference="b", collision_radius=0.0),
+                    ]
+                ),
+            }
+        ),
     )
     backend._default_object_poses = {
         name: handler.get_pose() for name, handler in handlers.items()
@@ -1501,13 +1542,15 @@ def test_operator_eef_own_base_reference_uses_selected_base_ancestors() -> None:
         env=DummyEnv(batch_size=1),
         operator_handlers={"arm": arm_handler},
         object_handlers={"root": root_handler},
-        randomization={
-            "arm": OperatorRandomizationConfig(
-                base=PoseRandomRange(reference="root", collision_radius=0.0),
-                eef=PoseRandomRange(reference="arm.base", collision_radius=0.0),
-            ),
-            "root": PoseRandomRange(x=(0.5, 0.5), collision_radius=0.0),
-        },
+        randomization_scope=_scope(
+            {
+                "arm": OperatorRandomizationConfig(
+                    base=PoseRandomRange(reference="root", collision_radius=0.0),
+                    eef=PoseRandomRange(reference="arm.base", collision_radius=0.0),
+                ),
+                "root": PoseRandomRange(x=(0.5, 0.5), collision_radius=0.0),
+            }
+        ),
     )
     backend._default_object_poses = {"root": root_handler.get_pose()}
     backend._default_operator_base_poses = {"arm": arm_handler.get_base_pose()}
@@ -1556,13 +1599,15 @@ def test_operator_base_and_eef_dependencies_can_interleave_an_object() -> None:
         env=DummyEnv(batch_size=1),
         operator_handlers={"arm": arm_handler},
         object_handlers={"child": child_handler},
-        randomization={
-            "arm": OperatorRandomizationConfig(
-                base=PoseRandomRange(x=(0.5, 0.5), collision_radius=0.0),
-                eef=PoseRandomRange(reference="child", collision_radius=0.0),
-            ),
-            "child": PoseRandomRange(reference="arm.base", collision_radius=0.0),
-        },
+        randomization_scope=_scope(
+            {
+                "arm": OperatorRandomizationConfig(
+                    base=PoseRandomRange(x=(0.5, 0.5), collision_radius=0.0),
+                    eef=PoseRandomRange(reference="child", collision_radius=0.0),
+                ),
+                "child": PoseRandomRange(reference="arm.base", collision_radius=0.0),
+            }
+        ),
     )
     backend._default_object_poses = {"child": child_handler.get_pose()}
     backend._default_operator_base_poses = {"arm": arm_handler.get_base_pose()}
@@ -1601,28 +1646,30 @@ def test_operator_base_and_eef_select_regions_independently() -> None:
         env=DummyEnv(batch_size=1),
         operator_handlers={"arm": handler},
         object_handlers={},
-        randomization={
-            "arm": OperatorRandomizationConfig(
-                base=PoseRandomizationConfig(
-                    regions=[
-                        PoseRandomRange(x=(0.1, 0.1), collision_radius=0.0),
-                        PoseRandomRange(x=(0.2, 0.2), collision_radius=0.0),
-                    ]
-                ),
-                eef=PoseRandomizationConfig(
-                    regions=[
-                        PoseRandomRange(z=(0.1, 0.1), collision_radius=0.0),
-                        PoseRandomRange(
-                            reference=RandomizationReference.ABSOLUTE_BASE,
-                            x=(0.5, 0.5),
-                            y=(0.0, 0.0),
-                            z=(0.4, 0.4),
-                            collision_radius=0.0,
-                        ),
-                    ]
-                ),
-            )
-        },
+        randomization_scope=_scope(
+            {
+                "arm": OperatorRandomizationConfig(
+                    base=PoseRandomizationConfig(
+                        regions=[
+                            PoseRandomRange(x=(0.1, 0.1), collision_radius=0.0),
+                            PoseRandomRange(x=(0.2, 0.2), collision_radius=0.0),
+                        ]
+                    ),
+                    eef=PoseRandomizationConfig(
+                        regions=[
+                            PoseRandomRange(z=(0.1, 0.1), collision_radius=0.0),
+                            PoseRandomRange(
+                                reference=RandomizationReference.ABSOLUTE_BASE,
+                                x=(0.5, 0.5),
+                                y=(0.0, 0.0),
+                                z=(0.4, 0.4),
+                                collision_radius=0.0,
+                            ),
+                        ]
+                    ),
+                )
+            }
+        ),
     )
     backend._default_operator_base_poses = {"arm": handler.get_base_pose()}
     backend._default_operator_eef_poses = {"arm": handler.get_end_effector_pose()}

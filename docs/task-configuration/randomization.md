@@ -220,6 +220,7 @@ with optional global defaults and per-kind maps:
 ```yaml
 task:
   randomization:
+    strategy: rsa          # rsa | joint_rejection (scope-wide placement policy)
     # Optional global defaults (inherited by bare entity ranges).
     distribution: {...}    # generator / selector / spacing
     constraints: {...}     # visible_in / separated / failure
@@ -238,7 +239,7 @@ task:
 
 Bare entity ranges inherit the scope-wide `distribution` and `constraints`
 defaults; an advanced `RandomizationSpec` is fully explicit. The placement
-`strategy` lives in `constraints.separated.strategy` and defaults to `rsa`.
+`strategy` is scope-wide and defaults to `rsa`.
 
 `cameras` is a separate kind of entry, grouped here for cohesion. Camera
 entries inherit the scope-wide `distribution` (a pose-stream property) but
@@ -339,7 +340,10 @@ The advanced per-entity form groups three responsibilities in one entry:
 |-------|----------|--------------------|
 | `proposal` | Defines the candidate pose space. | One `PoseRandomRange`, or a `regions` list of ranges. |
 | `distribution` | Defines how candidates are generated and selected. | Generator, selector, region weighting, candidate count, and spacing target. |
-| `constraints` | Defines the feasibility conditions and the failure policy. | `visible_in`, `separated` (with `strategy`), and `failure` (mode + `max_attempts`). |
+| `constraints` | Defines the feasibility conditions and the failure policy. | `visible_in`, `separated`, and `failure` (mode + `max_attempts`). |
+
+The placement `strategy` is a scope-level property, not a member of
+`constraints`: see [Placement strategy](#placement-strategy) below.
 
 The same two optional groups (`distribution` and `constraints`) may be declared
 **at the randomization scope** (siblings of `entities`) as global defaults;
@@ -476,12 +480,9 @@ with `attempts=0` and an `outside_view` diagnostic instead of exhausting
 `max_attempts`. Entity-tracked or otherwise frame-dependent references cannot
 be bounded this way and fall back to the normal retry loop.
 
-`separated` keeps entities apart. `separated` owns the placement `strategy`
-because strategy only affects member-vs-member placement (it is inert for
-`visible_in`, which is a single entity against fixed cameras):
+`separated` keeps entities apart:
 | Field | Function | Supported values | Default |
 |-------|----------|------------------|---------|
-| `strategy` | Placement/retry policy used to satisfy inter-entity separation. | `rsa`: place members sequentially and keep accepted members fixed; `joint_rejection`: sample the whole component and reject it on any failure. | `rsa` |
 | `scope` | Selects the set of possible collision partners. | `randomized`: other randomized objects; `scene`: all scene geometry supported by the backend. | `randomized` |
 | `geometry` | Selects the geometry used to measure separation. | `center`: entity reference points; `support`: backend-provided support geometry. | `support` |
 | `clearance` | Adds required surface clearance between the selected geometries. The enforced minimum center distance is `collision_radius_i + collision_radius_j + clearance`; size is carried by the radius terms, so clearance is a size-adaptive surface gap. | Non-negative number in metres. | `0.0` |
@@ -715,20 +716,32 @@ Practical implications:
   carried child is allowed to remain inside/on its referenced parent as
   intended.
 
+### Placement strategy
+
+`randomization.strategy` selects how a reference-connected component is placed
+on each reset:
+
+| Value | Meaning |
+|-------|---------|
+| `rsa` (default) | Place members sequentially and keep accepted members fixed. |
+| `joint_rejection` | Sample the whole component together and reject the proposal on any failure. |
+
+It is **scope-wide** because one reset applies one placement strategy. It is
+deliberately not nested under `constraints.separated`: the strategy also governs
+the always-on collision rejection between randomized participants, which applies
+whether or not `separated` is configured.
+
 ### Automatic joint placement
 
 The task no longer requires a user-maintained `randomization_groups` mapping.
 The compiler automatically joins reference-connected actions, actions with a
 separation constraint, and object proposals whose position regions can overlap.
-Select the placement policy with `constraints.separated.strategy` on the
-randomization scope (default `rsa`):
+The placement policy is the [scope-wide `strategy`](#placement-strategy):
 
 ```yaml
 task:
   randomization:
-    constraints:
-      separated:
-        strategy: rsa        # or joint_rejection
+    strategy: rsa            # or joint_rejection
 ```
 
 `rsa` is the default: random sequential adsorption with a bounding sphere per

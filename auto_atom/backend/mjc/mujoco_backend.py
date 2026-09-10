@@ -32,6 +32,7 @@ from auto_atom.config.randomization import (
     RandomizationSpec,
     RandomizationStrategy,
     RandomizationVisibilityConfig,
+    ResolvedRandomizationScope,
     canonical_randomization_spec,
     pose_randomization_regions,
     resolve_randomization_scope,
@@ -1136,21 +1137,19 @@ class MujocoTaskBackend(SceneBackend):
     env: BatchedUnifiedMujocoEnv
     operator_handlers: Dict[str, MujocoOperatorHandler]
     object_handlers: Dict[str, MujocoObjectHandler]
-    randomization: Dict[
-        str,
-        RandomizationInput | OperatorRandomizationConfig,
-    ] = field(default_factory=dict)
-    randomization_strategy: RandomizationStrategy = RandomizationStrategy.RSA
-    """Placement strategy this backend's plan is compiled for.
+    randomization_scope: ResolvedRandomizationScope = field(
+        default_factory=ResolvedRandomizationScope
+    )
+    """Resolved randomization configuration for this task.
 
-    Configuration passthrough, not behavior: the backend only hands it to the
-    shared plan compiler. Consumers read the effective strategy from the
-    compiled plan instead of asking the backend.
+    The scope keeps the placement strategy, the per-entity entries, and the
+    per-camera entries together, because they are one config object rather than
+    three unrelated fields. It is an *input* to the shared plan compiler: the
+    compiled plan, not the backend, carries the effective policy.
     """
     randomization_groups: Dict[str, RandomizationGroupConfig] = field(
         default_factory=dict
     )
-    camera_randomization: Dict[str, RandomizationInput] = field(default_factory=dict)
     initial_poses: Dict[str, PoseOverrideConfig] = field(default_factory=dict)
     camera_initial_poses: Dict[str, PoseOverrideConfig] = field(default_factory=dict)
     operator_initial_states: Dict[str, OperatorInitialState] = field(
@@ -1267,7 +1266,7 @@ class MujocoTaskBackend(SceneBackend):
                 f"env_index must be in [0, {self.batch_size}), got {env_index}"
             )
         poses: Dict[str, PoseState] = {}
-        for camera_name in self.camera_randomization:
+        for camera_name in self.randomization_scope.cameras:
             try:
                 poses[camera_name] = self._get_camera_pose(camera_name).select(
                     env_index
@@ -1410,7 +1409,7 @@ class MujocoTaskBackend(SceneBackend):
             or self._default_camera_poses
         ):
             self._record_default_poses()
-        if self.randomization or self.camera_randomization:
+        if self.randomization_scope.entities or self.randomization_scope.cameras:
             self._apply_randomization(mask)
         self.env.refresh_viewer()
 
@@ -1456,7 +1455,7 @@ class MujocoTaskBackend(SceneBackend):
         for name, handler in self.operator_handlers.items():
             self._default_operator_base_poses[name] = handler.get_base_pose()
             self._default_operator_eef_poses[name] = handler.get_end_effector_pose()
-        for cam_name in self.camera_randomization:
+        for cam_name in self.randomization_scope.cameras:
             self._default_camera_poses[cam_name] = self._get_camera_pose(cam_name)
 
     def _resolve_initial_reference_pose(
@@ -1834,15 +1833,15 @@ class MujocoTaskBackend(SceneBackend):
     def _randomization_plan(self) -> RandomizationPlan:
         """Compile the backend's public randomization mapping into a plan."""
         return compile_randomization_plan(
-            self.randomization,
+            self.randomization_scope.entities,
             object_names=set(self.object_handlers),
             operator_names=set(self.operator_handlers),
             randomization_groups=(
                 self.randomization_groups
-                if self.randomization_strategy == RandomizationStrategy.RSA
+                if self.randomization_scope.strategy == RandomizationStrategy.RSA
                 else {}
             ),
-            strategy=self.randomization_strategy,
+            strategy=self.randomization_scope.strategy,
         )
 
     def _randomization_dependencies(self) -> Dict[str, Set[str]]:
@@ -2046,7 +2045,7 @@ class MujocoTaskBackend(SceneBackend):
 
     def apply_camera_randomization(self, env_mask: np.ndarray) -> None:
         """Apply configured camera randomization; a no-op when none is set."""
-        if self.camera_randomization:
+        if self.randomization_scope.cameras:
             self._apply_camera_randomization(env_mask)
 
     def run_visibility_preflight(self, env_mask: np.ndarray) -> None:
@@ -2139,7 +2138,7 @@ class MujocoTaskBackend(SceneBackend):
     def _validate_randomization_configuration(self) -> None:
         """Validate target-specific rules for all configured regions."""
         unknown = validate_randomization_configuration(
-            self.randomization,
+            self.randomization_scope.entities,
             object_names=self.object_handlers,
             operator_names=self.operator_handlers,
         )
@@ -2885,7 +2884,7 @@ class MujocoTaskBackend(SceneBackend):
 
     def _apply_camera_randomization(self, env_mask: np.ndarray) -> None:
         """Sample and apply pose randomization for configured cameras."""
-        for cam_name, randomization in self.camera_randomization.items():
+        for cam_name, randomization in self.randomization_scope.cameras.items():
             canonical = canonical_randomization_spec(randomization)
             rand_range = self._select_randomization_region(canonical)
             for reference in rand_range.references():
@@ -3387,9 +3386,7 @@ def build_mujoco_backend(
         env=env,
         operator_handlers=operator_handlers,
         object_handlers=object_handlers,
-        randomization=dict(resolved_scope.entities),
-        randomization_strategy=resolved_scope.strategy,
-        camera_randomization=dict(resolved_scope.cameras),
+        randomization_scope=resolved_scope,
         initial_poses=dict(config.initial_pose),
         camera_initial_poses=dict(config.camera_initial_pose),
         operator_initial_states={

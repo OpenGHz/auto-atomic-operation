@@ -54,7 +54,7 @@ class AutoAtomConfig(BaseModel):
 
     Bare entity ranges inherit the scope-wide ``distribution`` and
     ``constraints`` defaults; advanced specs are fully explicit. The placement
-    strategy lives in ``constraints.separated.strategy``. Camera entries never
+    strategy is scope-wide (``randomization.strategy``). Camera entries never
     inherit those defaults because cameras have no distribution or collision
     semantics.
     """

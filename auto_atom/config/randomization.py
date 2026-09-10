@@ -1,6 +1,6 @@
 """randomization configuration models (split from the former auto_atom.framework monolith)."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Dict, List, Literal, Optional, Tuple, Union
 
@@ -377,15 +377,6 @@ class RandomizationSeparationConfig(BaseModel, frozen=True):
 
     model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid")
 
-    strategy: RandomizationStrategy = RandomizationStrategy.RSA
-    """Placement strategy used to satisfy inter-entity separation.
-
-    ``rsa`` places members sequentially and keeps accepted members fixed;
-    ``joint_rejection`` samples the whole component together and rejects it on
-    any failure. Strategy is a property of the separation/acceptance mechanism,
-    not of ``visible_in`` (which never retries across members).
-    """
-
     scope: Literal["randomized", "scene"] = "randomized"
     """Check only randomized participants or all backend-supported scene geometry."""
 
@@ -436,9 +427,10 @@ class RandomizationConstraintConfig(BaseModel, frozen=True):
     separated: Optional[RandomizationSeparationConfig] = None
     """Require clearance from other randomized entities or the scene.
 
-    ``separated.strategy`` selects the placement/retry policy used to satisfy
-    inter-entity separation. This constraint (not ``visible_in``) owns
-    ``strategy`` because strategy only affects member-vs-member placement.
+    This block carries only the separation geometry and clearance. The
+    placement strategy is a scope-level property (``randomization.strategy``)
+    because it also governs the always-on collision rejection, which applies
+    whether or not ``separated`` is configured.
     """
 
     failure: RandomizationFailureConfig = RandomizationFailureConfig()
@@ -578,15 +570,19 @@ class OperatorRandomizationConfig(BaseModel):
 class RandomizationScopeConfig(BaseModel):
     """Container for global randomization defaults and the target maps.
 
-    This is the value of ``task.randomization``. It groups four orthogonal
+    This is the value of ``task.randomization``. It groups five orthogonal
     concerns:
 
+    * ``strategy`` — the scope-wide placement strategy. It is deliberately
+      *not* nested under ``constraints.separated``: it also governs the
+      always-on collision rejection between randomized participants, which
+      applies whether or not ``separated`` is configured.
     * ``distribution`` — the global default candidate-generation settings.
       Bare ``entities`` and ``cameras`` ranges inherit this default.
     * ``constraints`` — the global default feasibility settings (visibility,
-      separation, failure policy, and the placement ``separated.strategy``).
-      Only bare ``entities`` ranges inherit this default: cameras own no
-      separation, visibility, or feasibility-loop semantics.
+      separation, failure policy). Only bare ``entities`` ranges inherit this
+      default: cameras own no separation, visibility, or feasibility-loop
+      semantics.
     * ``entities`` — the per-entity entries (objects, or operators with
       ``base`` / ``eef``). Advanced ``RandomizationSpec`` entries are fully
       explicit and override the scope defaults entirely.
@@ -596,12 +592,21 @@ class RandomizationScopeConfig(BaseModel):
 
     model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid")
 
+    strategy: RandomizationStrategy = RandomizationStrategy.RSA
+    """Placement strategy for one reset's reference-connected components.
+
+    ``rsa`` places members sequentially and keeps accepted members fixed;
+    ``joint_rejection`` samples the whole component together and rejects it on
+    any failure. The strategy is scope-wide and cannot be overridden per
+    entity, because one reset applies one placement strategy.
+    """
+
     distribution: RandomizationDistributionConfig = RandomizationDistributionConfig()
     """Global default distribution inherited by bare entity and camera ranges."""
 
     constraints: RandomizationConstraintConfig = RandomizationConstraintConfig()
     """Global default constraints (visible_in / separated / failure) inherited
-    by bare entity ranges, including the placement strategy."""
+    by bare entity ranges."""
 
     entities: Dict[
         str,
@@ -677,47 +682,35 @@ class ResolvedRandomizationScope:
     the backend must apply.
     """
 
-    entities: Dict[str, Union[RandomizationInput, OperatorRandomizationConfig]]
+    entities: Dict[str, Union[RandomizationInput, OperatorRandomizationConfig]] = field(
+        default_factory=dict
+    )
     """Resolved per-entity entries with scope defaults applied."""
 
-    cameras: Dict[str, RandomizationInput]
+    cameras: Dict[str, RandomizationInput] = field(default_factory=dict)
     """Resolved per-camera entries with the scope distribution applied."""
 
-    strategy: RandomizationStrategy
-    """Effective separation strategy for this scope."""
+    strategy: RandomizationStrategy = RandomizationStrategy.RSA
+    """Effective placement strategy for this scope."""
 
 
 def _apply_scope_defaults(
     value: RandomizationInput,
     *,
-    name: str,
     distribution: RandomizationDistributionConfig,
     constraints: Optional[RandomizationConstraintConfig],
-    strategy: Optional[RandomizationStrategy],
 ) -> RandomizationInput:
-    """Give a bare proposal the given defaults, or validate an advanced spec.
+    """Give a bare proposal the given defaults, or pass an advanced spec through.
 
     Legacy ``PoseRandomRange`` / ``PoseRandomizationConfig`` inputs carry no
     distribution/constraints of their own and therefore inherit the scope-wide
     defaults. An advanced ``RandomizationSpec`` is fully explicit and is
     returned unchanged.
 
-    ``constraints`` / ``strategy`` are ``None`` for targets that own no
-    separation semantics (cameras). Such targets are exempt from the strategy
-    agreement check, which exists only because the backend applies one
-    placement strategy per randomization plan.
+    ``constraints`` is ``None`` for targets that own no constraint semantics
+    (cameras), which keeps their built-in default instead.
     """
     if isinstance(value, RandomizationSpec):
-        if strategy is None or value.constraints.separated is None:
-            return value
-        declared = value.constraints.separated.strategy
-        if declared != strategy:
-            raise ValueError(
-                f"Randomization '{name}' declares "
-                f"constraints.separated.strategy={declared.value!r} which differs "
-                f"from the scope strategy {strategy.value!r}. The backend applies "
-                "one placement strategy per randomization plan."
-            )
         return value
     return RandomizationSpec(
         proposal=value,
@@ -740,11 +733,7 @@ def resolve_randomization_scope(
     visibility, or feasibility-loop semantics, so their ``constraints`` stays at
     the built-in default. The result is consumed by the backends.
     """
-    strategy = (
-        scope.constraints.separated.strategy
-        if scope.constraints.separated is not None
-        else RandomizationStrategy.RSA
-    )
+    strategy = scope.strategy
     resolved: Dict[str, Union[RandomizationInput, OperatorRandomizationConfig]] = {}
     for name, value in scope.entities.items():
         if isinstance(value, OperatorRandomizationConfig):
@@ -752,10 +741,8 @@ def resolve_randomization_scope(
                 base=(
                     _apply_scope_defaults(
                         value.base,
-                        name=name,
                         distribution=scope.distribution,
                         constraints=scope.constraints,
-                        strategy=strategy,
                     )
                     if value.base is not None
                     else None
@@ -763,10 +750,8 @@ def resolve_randomization_scope(
                 eef=(
                     _apply_scope_defaults(
                         value.eef,
-                        name=name,
                         distribution=scope.distribution,
                         constraints=scope.constraints,
-                        strategy=strategy,
                     )
                     if value.eef is not None
                     else None
@@ -775,18 +760,14 @@ def resolve_randomization_scope(
             continue
         resolved[name] = _apply_scope_defaults(
             value,
-            name=name,
             distribution=scope.distribution,
             constraints=scope.constraints,
-            strategy=strategy,
         )
     cameras = {
         name: _apply_scope_defaults(
             value,
-            name=name,
             distribution=scope.distribution,
             constraints=None,
-            strategy=None,
         )
         for name, value in scope.cameras.items()
     }
