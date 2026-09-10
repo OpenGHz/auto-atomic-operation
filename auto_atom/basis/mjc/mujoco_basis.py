@@ -1239,10 +1239,19 @@ class MujocoBasis:
             constraints,
             camera_model_of=self.get_camera_model,
             support_geometry_of=self.get_support_geometry,
-            all_camera_names=tuple(self._camera_ids),
+            all_camera_names=self._visibility_witness_camera_names(),
             ancestors=ancestors,
             target_names=target_names,
         )
+
+    def _visibility_witness_camera_names(self) -> tuple[str, ...]:
+        """Cameras that can witness an object, for ``visible_in.cameras: all``.
+
+        An object-mounted camera rides the very object it would have to
+        witness, so it is not part of the set.
+        """
+        object_cameras = getattr(self, "_object_camera_names", frozenset())
+        return tuple(name for name in self._camera_ids if name not in object_cameras)
 
     def _get_camera_extrinsics(self) -> Dict[str, dict]:
         extrinsics = {}

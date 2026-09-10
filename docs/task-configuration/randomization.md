@@ -896,6 +896,11 @@ Semantics:
 - Named references are resolved once per environment during reset. They
   are anchors, not tracking references: if the referenced articulated element
   moves during a Stage, the camera keeps the resolved world pose.
+- An **object-mounted** camera (`env.cameras[].role: object`) does not accept a
+  `camera_initial_pose` entry: its pose is the install offset in the reference
+  object's frame, which belongs in `calibration.extrinsics` (or the MJCF
+  `cam_pos`/`cam_quat`). Construction fails on the combination rather than
+  letting a per-reset override compete with the mount.
 
 ## Camera Pose Randomization
 
@@ -951,6 +956,15 @@ no operator base frame and do not participate in entity dependency ordering.
   exists, otherwise that resolved override.
 - Cameras do **not** participate in `collision_radius` rejection — they have no
   physical presence.
+- An **object-mounted** camera (`env.cameras[].role: object`) randomizes its
+  **install offset** in the mount frame instead of a world pose: sampled values
+  are additive offsets from the camera's baseline mount pose, so the
+  camera-object relative pose is what varies across resets while the object's
+  own motion never leaks into the sample. Only `relative` is defined for such a
+  camera; `absolute_world` is rejected.
+- `visible_in` never uses an object-mounted camera — it rides the object it
+  would have to witness. Naming one explicitly is an error, and `cameras: all`
+  excludes them.
 - Camera randomization uses the same `task.seed` RNG as entity randomization for
   full reproducibility.
 - Sampled camera poses are included in the `initial_poses` details returned by

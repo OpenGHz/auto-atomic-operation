@@ -111,7 +111,46 @@ env:
         extrinsics:
           position: [-0.1086, 0.0, 0.04]
           orientation: [0.0, 0.0, 0.0, 1.0]
+    - name: object_cam
+      role: object
+      parent_frame: cup
+      is_static: false
+      calibration:
+        extrinsics:
+          position: [0.0, 0.0, 0.25]
 ```
+
+### Object-mounted cameras
+
+`role` selects a camera's ownership and, with it, whether the camera survives
+object-only execution:
+
+| `role` | Meaning |
+| --- | --- |
+| `scene` (default) | Scene-owned camera; a fixed viewpoint unless the MJCF attaches it to a moving body. |
+| `operator` | Mounted on an operator; removed together with the operator layer under `execution.mode: object_only`. |
+| `object` | Rigidly mounted on the object named by `parent_frame`; survives object-only execution and follows the object. |
+
+An object camera is re-parented onto the reference object's body at load time,
+so MuJoCo's own kinematics carry it: it keeps its pose relative to the object
+while the object is transported through object-only waypoints or manipulated
+physically, with no per-step tracking.
+
+- `parent_frame` names the object as a site or body. A logical object name also
+  resolves to its Gaussian-Splatting body (`cup` → `cup_gs`). When it is empty,
+  the mount frame is the camera's MJCF parent body, so declaring the camera
+  under the object in XML works as well.
+- The mount must resolve to a scene body. A camera left at the world body fails
+  at construction instead of silently rendering from a fixed viewpoint.
+- The camera's local pose is the *install offset* in the mount frame.
+  `calibration.extrinsics` keeps its usual meaning (relative to
+  `parent_frame`); omitted extrinsics keep the XML `cam_pos`/`cam_quat`, read in
+  the mount frame.
+- `is_static` must stay `False`: the viewpoint moves with the object, so a
+  cached GS background would go stale.
+- `task.camera_initial_pose` entries are rejected for object cameras — see
+  [Randomization](../task-configuration/randomization.md) for why, and for how
+  the install offset is randomized per reset.
 
 `calibration.fovy_deg` overrides the XML camera's vertical FOV. Calibration
 `extrinsics` are expressed relative to `parent_frame`; omitted components keep

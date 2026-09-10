@@ -68,8 +68,9 @@ During every `reset()` it:
 3. Reapplies `task.initial_pose`, operator initial states, and
    `task.camera_initial_pose` in the same ownership order used during setup.
 4. Samples and applies operator context randomization.
-5. Applies camera randomization, then samples constrained object candidates
-   against the final camera poses, and refreshes the viewer.
+5. Applies camera randomization — world poses for fixed cameras, mount-frame
+   install offsets for object-mounted ones — then samples constrained object
+   candidates against the final camera poses, and refreshes the viewer.
 
 Because the native state and configured overrides are restored before every
 sample, randomization offsets do not accumulate between resets.
@@ -96,6 +97,12 @@ documented in [Gripper Joint Semantics](gripper_joint_semantics.md).
 
 For ordinary MuJoCo rendering, camera initial poses and randomization directly
 update the model camera pose before observations are captured.
+
+A camera with `role: object` is re-parented onto its reference object's body
+before the baselines are captured, so its pose is the install offset in that
+body's frame and `reset()` restores that offset. MuJoCo then derives its world
+pose from the object every forward pass, which is why it follows object-only
+transport and physical manipulation without any per-step update.
 
 Gaussian Splatting cameras with `env.cameras.<name>.is_static: true` cache their
 background at the first render. If such a camera is randomized on later

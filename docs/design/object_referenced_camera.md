@@ -1,12 +1,15 @@
 # 以物体为参考的相机（Object-Referenced Camera）设计
 
-> **状态：轮 1–3（配置、挂载、object_only 边界、物体系随机化）已实现；`visible_in` 边界
-> 与 GS/批量仍为"提案，尚未实现"。**
+> **状态：轮 1–4 已实现，使用说明已迁移到配置与后端文档；轮 5（GS / 批量 / 性能验证）
+> 仍为"提案，尚未实现"。**
 >
-> 已实现部分的稳定用法，在后续轮次完成后按 AGENTS.md 约定迁移到
-> `docs/task-configuration/task_file_schema.md`（`env.cameras` 字段语义）与
-> `docs/task-configuration/randomization.md`（`camera_initial_pose` / `randomization.cameras`），
-> 并同步 `docs/mujoco-backend/initialization_randomization.md`，然后删除本文件的"提案"声明。
+> 已迁移：
+> - `docs/task-configuration/task_file_schema.md`：`role: object`、`parent_frame` 挂载与 `is_static` 约束；
+> - `docs/task-configuration/randomization.md`：`camera_initial_pose` 对 object 相机的拒绝、
+>   `randomization.cameras` 的物体系安装偏移语义与 `visible_in` 边界；
+> - `docs/mujoco-backend/initialization_randomization.md`：挂载时机、baseline 与跟随机制。
+>
+> 本文保留设计推导、实现状态与尚未完成的轮 5。
 
 ## 实现状态
 
@@ -44,7 +47,15 @@
 - 测试：契约测试 `tests/test_randomization_executor.py`（挂载分派、拒绝世界系参考）、
   `tests/test_object_referenced_camera.py`（安装偏移采样、搬运后保持、固定相机世界系不受影响）。
 
-**未实现（轮 4–5）**：`visible_in` 边界、GS / 批量 / 性能。
+**已实现（轮 4，可见性边界与文档迁移）**：
+
+- `visible_in` 不使用 object 相机：显式命名 → `validate_configuration` 阶段报错；
+  `cameras: all` → executor 的 `_visibility_camera_names` 与 `MujocoBasis.evaluate_pose_constraints`
+  的 `all_camera_names` 两处都过滤掉；
+- 文档迁移见文首；测试：`tests/test_randomization_executor.py`（显式命名报错、`all` 过滤）、
+  `tests/test_object_referenced_camera.py`（basis 层的 witness 集合）。
+
+**未实现（轮 5）**：GS 缓存键与批量（replicated / shared-physics）验证、渲染开销基准。
 
 ## 1. 背景与问题
 
@@ -276,7 +287,7 @@ object 相机改为局部偏移后不再依赖该顺序，但该槽位需要按 
 | 1 | ✅ 已实现：`CameraSpec.role` 与校验（挂载目标解析、`is_static`、`camera_initial_pose` 互斥）；`MujocoBasis` 挂载 + baseline 重捕获 | 挂载后 `cam_bodyid` 与局部偏移正确；`reset()` 后保持；缺失物体报错 |
 | 2 | ✅ 已实现：跟随链路贯通：object_only 配置 → prepare → 构造 → `apply_object_pose` 全程验证相对位姿恒定 | 新增/扩展 `tests/test_object_only_execution.py` 等 |
 | 3 | ✅ 已实现：物体系随机化路径（沿用 `randomization.cameras` 与 scope `distribution` 继承）+ 参考系校验 | 相对位姿随 reset 变化；`absolute_world`/实体引用报错 |
-| 4 | `visible_in` 边界 + 文档迁移（`task_file_schema.md`、`randomization.md`、`initialization_randomization.md`） | 文档与测试同步 |
+| 4 | ✅ 已实现：`visible_in` 边界 + 文档迁移（`task_file_schema.md`、`randomization.md`、`initialization_randomization.md`） | 文档与测试同步 |
 | 5 | GS / 批量 / 性能：`is_static` 校验、GS 缓存键、replicated 与 shared-physics 验证、渲染开销基准 | 批量测试 + 基准 |
 
 相关既有测试：`tests/test_camera_frame_ids.py`、`tests/test_hide_operators_in_camera.py`、

@@ -267,6 +267,43 @@ def test_reset_orders_operators_before_cameras_before_objects() -> None:
     assert operator_apply < camera < object_apply
 
 
+def test_visible_in_cannot_target_an_object_mounted_camera() -> None:
+    """A camera riding the target cannot witness that target's visibility."""
+    host = _RecordingHost()
+    host.object_cameras.add(CAMERA)
+    config = ResolvedRandomizationConfig(
+        scope=ResolvedRandomizationScope(
+            entities={
+                CUP: RandomizationSpec(
+                    proposal=PoseRandomRange(x=(0.0, 0.0)),
+                    constraints=RandomizationConstraintConfig(
+                        visible_in=RandomizationVisibilityConfig(cameras=[CAMERA])
+                    ),
+                )
+            },
+            cameras={},
+            strategy=RandomizationStrategy.RSA,
+        )
+    )
+    executor = RandomizationExecutor(host, config)
+
+    with pytest.raises(ValueError, match="object-mounted camera"):
+        executor.validate_configuration()
+
+
+def test_visible_in_all_excludes_object_mounted_cameras() -> None:
+    host = _RecordingHost()
+    host.object_cameras.add(CAMERA)
+    executor = RandomizationExecutor(host, _config(RandomizationStrategy.RSA))
+
+    resolved = executor._visibility_camera_names(
+        RandomizationVisibilityConfig(cameras="all"),
+        0,
+    )
+
+    assert resolved == []
+
+
 def test_object_mounted_camera_samples_the_mount_frame() -> None:
     """Camera randomization dispatches on how the camera is mounted.
 

@@ -370,6 +370,7 @@ class RandomizationExecutor:
                 "operator handler — skipping.",
                 name,
             )
+        self._validate_visibility_camera_ownership()
 
     # ------------------------------------------------------------------
     #  Pose sampling: regions, references, and generators
@@ -925,10 +926,45 @@ class RandomizationExecutor:
         visible: RandomizationVisibilityConfig,
         env_index: int,
     ) -> List[str]:
-        """Resolve a visibility config's camera list for one environment."""
+        """Resolve a visibility config's camera list for one environment.
+
+        Object-mounted cameras are excluded from ``all``: such a camera rides
+        the object it is mounted on, so it cannot witness that object's
+        visibility (the requirement would be self-referential).
+        """
         if visible.cameras != "all":
             return list(visible.cameras)
-        return self._host.camera_names()
+        object_cameras = self._host.object_camera_names()
+        return [
+            name for name in self._host.camera_names() if name not in object_cameras
+        ]
+
+    def _validate_visibility_camera_ownership(self) -> None:
+        """Reject ``visible_in`` targets that name an object-mounted camera.
+
+        The camera moves with the very object it would have to witness, so its
+        frustum depends on the candidate being tested and the requirement
+        cannot be answered. Failing here — at configuration time — keeps it from
+        surfacing as an unfalsifiable constraint during a reset.
+        """
+        object_cameras: Optional[Set[str]] = None
+        for spec in self.plan.actions.values():
+            constraints = spec.randomization.constraints
+            visible = None if constraints is None else constraints.visible_in
+            if visible is None or visible.cameras == "all":
+                continue
+            if object_cameras is None:
+                object_cameras = set(self._host.object_camera_names())
+            named = sorted(
+                str(name) for name in visible.cameras if name in object_cameras
+            )
+            if named:
+                raise ValueError(
+                    f"visible_in cannot target the object-mounted camera(s) "
+                    f"{named}: such a camera moves with the object it is mounted "
+                    "on, so it cannot witness that object's visibility. Use a "
+                    "fixed camera, or 'all' (object cameras are excluded)."
+                )
 
     def sample_component_for_env(
         self,

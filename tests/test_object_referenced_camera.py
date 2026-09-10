@@ -29,7 +29,9 @@ from auto_atom.config.env_config import (
 from auto_atom.config.pose import PoseOverrideConfig
 from auto_atom.config.randomization import (
     PoseRandomRange,
+    RandomizationConstraintConfig,
     RandomizationScopeConfig,
+    RandomizationVisibilityConfig,
     ResolvedRandomizationConfig,
 )
 from auto_atom.scene_composition import SceneConfig
@@ -412,6 +414,50 @@ def test_object_camera_rejects_world_frame_randomization(tmp_path: Path) -> None
             backend.randomization_executor.apply_camera_randomization(
                 np.asarray([True], dtype=bool)
             )
+    finally:
+        env.close()
+
+
+def test_visibility_all_ignores_object_mounted_cameras(tmp_path: Path) -> None:
+    """``visible_in.cameras: all`` means the cameras that can witness the object."""
+    env = _basis(tmp_path, [_camera("obj_cam", role="object", parent_frame="cup")])
+    try:
+        constraints = RandomizationConstraintConfig(
+            visible_in=RandomizationVisibilityConfig(cameras="all")
+        )
+
+        # The only camera is mounted on the target itself, so the witness set is
+        # empty rather than silently self-referential.
+        with pytest.raises(ValueError, match="none was provided"):
+            env.evaluate_pose_constraints(
+                {"cup": PoseState(position=[0.5, 0.0, 0.8])},
+                constraints=constraints,
+                target_names={"cup"},
+            )
+    finally:
+        env.close()
+
+
+def test_visibility_all_uses_only_fixed_cameras(tmp_path: Path) -> None:
+    env = _basis(
+        tmp_path,
+        [
+            _camera("obj_cam", role="object", parent_frame="cup"),
+            _camera("scene_cam"),
+        ],
+    )
+    try:
+        report = env.evaluate_pose_constraints(
+            {"cup": PoseState(position=[10.0, 10.0, 10.0])},
+            constraints=RandomizationConstraintConfig(
+                visible_in=RandomizationVisibilityConfig(cameras="all")
+            ),
+            target_names={"cup"},
+        )
+
+        assert report.valid is False
+        assert any(violation.endswith(":scene_cam") for violation in report.violations)
+        assert all("obj_cam" not in violation for violation in report.violations)
     finally:
         env.close()
 
