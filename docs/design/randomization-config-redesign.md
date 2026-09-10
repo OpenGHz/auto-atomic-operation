@@ -267,26 +267,55 @@ task:
   （逐 env 采样并入 batch 形状缓冲）搬到执行器；后端 `_apply_randomization`
   退化为一行委托。
 
+- **R-C1（已完成，提交 `a1048e1`）**：`strategy` 从
+  `constraints.separated` 下提到 scope 顶层。它同时支配"总在生效"的参与者之间的
+  碰撞拒绝，放在可选的分离约束下无法表达"不配 separation 但用联合拒绝放置"。
+- **R-C2（已完成）**：后端三个随机化字段收成一个 `randomization`
+  （`ResolvedRandomizationScope`）。
+- **R-D1（已完成）**：相机随机化整段搬到执行器
+  （`RandomizationExecutor.apply_camera_randomization`）。相机只需要"读写某个具名相机的世界位姿"
+  这一能力，此前却把区域选择、引用解析、拒绝采样、写回、无基线告警全放在后端。
+  后端相应的私有方法改名为能力语义：`get_camera_pose` / `set_camera_pose`，
+  新增 `baseline_pose(label)` 与 `camera_randomization` 由执行器侧提供。
+- **R-D2（已完成）**：执行器成为随机化的**唯一持有者**：
+  - 配置所有权转移 —— `ResolvedRandomizationConfig`（`scope` + `groups`）
+    由工厂构造并注入执行器，后端只保留一个字段用于转交，读都不读。
+  - 计划编译、区域选择、逐轴 reference 解析（含 delta-carry）、对象/operator
+    base/eef 采样、Poisson 流缓存、自动碰撞半径（含 per-episode 缓存策略）、
+    配置校验、确定性可见性预检、模板位姿缓冲，全部搬入执行器。
+  - 后端删除约 900 行随机化逻辑，只留下能力方法。
+
 约束（各轮均遵守）：RNG 消费顺序、`sample_index` 公式（`reset_index*1009 +
 env_index`、`+ attempt*17 + sum(ord(c))`）、`env_mask` 与 per-component 批量
 写回语义逐字保留，否则 reset 复现性会漂。
 
 ### 迁移后的职责边界
 
-后端（`RandomizationHost` 协议，16 个成员）只剩：
-`randomization_rng` / `randomization_reset_index` /
-`batch_size` / `object_names` / `operator_names` / `randomization_plan()` /
-`action_dependencies()` / `template_pose(label)` / `sample_target(...)` /
-`evaluate_constraints(...)` / `record_randomization_diagnostics(...)` /
-`begin_randomization_episode()` / `apply_action(...)` /
-`apply_camera_randomization(...)` / `run_visibility_preflight(...)`，
-外加 `get_camera_model` / `get_support_geometry` / 命名 frame 解析。
+后端（`RandomizationHost`）只剩**能力**，每个成员都是"读/写某个场景事实"，
+没有一个知道"随机化"是什么：
 
-生效的放置策略随 `RandomizationPlan.strategy` 传递（策略是编译结果的一部分：
-plan 同时携带它的后果 —— component 分组与生成的 joint-placement groups），
-因此执行器不再向 backend 索要策略，backend 也不需要暴露随机化策略。
+- 元素与批次：`batch_size` / `object_names` / `operator_names`
+- 位姿读写：`live_pose(label)` / `baseline_pose(label)` /
+  `get_camera_pose` / `set_camera_pose` / `apply_action`
+- 几何与相机：`get_support_geometry` / `get_operator_support_geometry` /
+  `camera_names` / `get_camera_model`
+- 随机源与计数：`randomization_rng` / `randomization_seed` /
+  `randomization_reset_index`
+- 报告：`evaluate_constraints` / `record_randomization_diagnostics`
 
-共享层拥有：计划编译、候选生成（IID/Sobol/Poisson + 覆盖历史）、
-区域选择与权重、逐轴 reference 语义、碰撞拒绝判定、约束评估（视锥/分离 +
-per-episode 缓存）、配置校验、确定性可见性预检、两条重试循环、排序策略、
-批量写回缓冲、失败策略。
+执行器拥有：计划编译、候选生成（IID/Sobol/Poisson + 覆盖历史）、区域选择与权重、
+逐轴 reference 语义、碰撞拒绝判定、约束评估编排、半径解析与缓存、配置校验、
+确定性可见性预检、两条重试循环、排序策略、批量写回缓冲、失败策略、相机随机化。
+
+由此得到两个可验证的性质：
+
+1. **新增后端只需实现能力**：`tests/test_randomization_executor.py` 的假 host
+   只提供位姿读写、基线、几何、相机模型与诊断 sink，就能跑完整一次 reset
+   （含 operator → camera → 预检 → object 顺序、引用成组、RSA 放置）。
+2. **策略不再是后端字段**：生效策略来自配置 → 计划，后端既不声明也不传递它。
+
+仍留在后端命名里的随机化词汇只剩 `SceneBackend` 的**运行时契约**
+（`get_random_generator`、`get_camera_reset_poses`、`get_randomization_diagnostics`、
+`evaluate_randomization_constraints`）：它们是 runner 向"当前后端"索要随机源、
+相机位姿快照与失败诊断的入口，属于跨模块公开协议而非后端内部实现语义，
+改名要连带 runner、mock 后端与 `SceneBackend` 协议一起动，因此单独评估。

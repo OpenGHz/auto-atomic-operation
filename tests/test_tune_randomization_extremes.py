@@ -4,7 +4,13 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from auto_atom.config.randomization import PoseRandomizationConfig, PoseRandomRange
+from auto_atom.config.randomization import (
+    PoseRandomizationConfig,
+    PoseRandomRange,
+    ResolvedRandomizationConfig,
+    ResolvedRandomizationScope,
+)
+from auto_atom.randomization_executor import RandomizationExecutor
 from auto_atom.utils.pose import PoseState
 from examples.tune_randomization_extremes import (
     ExtremeCase,
@@ -43,27 +49,47 @@ class _SequenceRng:
         return value
 
 
+class _CountingExecutor(RandomizationExecutor):
+    """Executor that records how often the config is validated."""
+
+    def __init__(self, host, config) -> None:
+        super().__init__(host, config)
+        self.validation_calls = 0
+
+    def validate_configuration(self) -> None:
+        self.validation_calls += 1
+        super().validate_configuration()
+
+
 class _DummyBackend:
+    """Just enough host surface for the inspector's config path.
+
+    The inspector only asks its backend to validate the randomization config, so
+    the dummy exposes the executor's host capabilities (element names) instead
+    of stubbing randomization policy.
+    """
+
     def __init__(self, handler: _DummyObject, randomization) -> None:
         self.batch_size = 1
         self.env = _DummyEnv()
         self.object_handlers = {"block": handler}
         self.operator_handlers = {}
-        self.randomization = randomization
         self._default_object_poses = {"block": handler.get_pose()}
-        self.validation_calls = 0
+        self.randomization = ResolvedRandomizationConfig(
+            scope=ResolvedRandomizationScope(entities=dict(randomization))
+        )
+        self.randomization_executor = _CountingExecutor(self, self.randomization)
 
-    def _validate_randomization_configuration(self) -> None:
-        self.validation_calls += 1
+    @property
+    def object_names(self) -> set[str]:
+        return set(self.object_handlers)
+
+    @property
+    def operator_names(self) -> set[str]:
+        return set(self.operator_handlers)
 
     def get_env(self):
         return self.env
-
-    def _randomization_order(self):
-        return ["block"]
-
-    def _resolve_reference_base_pose(self, _reference, _sampled, default_pose):
-        return default_pose
 
 
 def _make_inspector() -> tuple[RandomizationInspector, _DummyObject]:
@@ -226,7 +252,7 @@ def test_collect_targets_reuses_backend_validation() -> None:
 
     targets = inspector._collect_targets()
 
-    assert inspector.backend.validation_calls == 1
+    assert inspector.backend.randomization_executor.validation_calls == 1
     assert [target.key for target in targets] == ["object:block"]
 
 

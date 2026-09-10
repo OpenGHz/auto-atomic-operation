@@ -25,7 +25,7 @@
 
 现有链路无法表达这件事：
 
-- `_apply_camera_randomization` 采样并写回的是**世界系**位姿，`_default_camera_poses` 记录的也是
+- `RandomizationExecutor.apply_camera_randomization` 采样并写回的是**世界系**位姿，`_default_camera_poses` 记录的也是
   世界位姿；
 - 相机随机化发生在 **object 采样之前**（见 §6.1），此时物体最终世界位姿尚未确定，无法围绕
   "物体坐标系"采样。
@@ -185,12 +185,12 @@ object 相机与其它相机共用同一配置面 —— `task.randomization.cam
 
 补充规则：
 
-- 世界系路径（`_apply_camera_randomization` / `_apply_camera_initial_poses`）对 `role: object` 相机
+- 世界系路径（`RandomizationExecutor.apply_camera_randomization` / `_apply_camera_initial_poses`）对 `role: object` 相机
   **整段跳过**；后者还应在构造期直接拒绝配置（§3.2），而不是静默忽略；
 - 参考系约束：object 相机只接受 `relative`（= 相对基线安装偏移）；`absolute_world`、
   `absolute_base`、实体名引用一律报错，并提示"object 相机使用物体坐标系局部偏移语义"；
 - 采样时机与世界位姿解耦：局部偏移与物体最终世界位姿无关，因此可在与
-  `_apply_camera_randomization` 相同的槽位执行，不受 §6.1 顺序限制。这一点必须在代码注释与文档中
+  `RandomizationExecutor.apply_camera_randomization` 相同的槽位执行，不受 §6.1 顺序限制。这一点必须在代码注释与文档中
   显式区分两类相机随机化；
 - 采样使用同一条 `task.seed` 随机流，`TaskRunner.reset()` 的 `initial_poses["_cameras"]` 仍报告采样后的
   **世界位姿**（由 `cam_xpos` 推导），使 object 相机在观测契约上与其它相机一致。
@@ -199,13 +199,13 @@ object 相机与其它相机共用同一配置面 —— `task.randomization.cam
 
 ### 6.1 reset / 随机化顺序（现状）
 
-`MujocoTaskBackend._apply_randomization` 的顺序为：operator 采样 → 相机随机化（`randomization.cameras`）
+`RandomizationExecutor.apply_randomization` 的顺序为：operator 采样 → 相机随机化（`randomization.cameras`）
 → `visible_in` 确定性判空 → object 采样。该顺序是"世界系相机是物体可见性上下文"所要求的；
 object 相机改为局部偏移后不再依赖该顺序，但该槽位需要按 `role` 分派两类相机随机化，而不是新增第二个槽位。
 
 ### 6.2 `visible_in` 约束边界
 
-`_visibility_camera_names` 在 `cameras: all` 时会枚举模型中的全部相机。object 相机挂在目标物体
+`RandomizationExecutor._visibility_camera_names` 在 `cameras: all` 时会枚举模型中的全部相机。object 相机挂在目标物体
 上，其视锥随候选物体位姿一起移动，"目标是否在自身所挂相机的视锥内"退化为自指问题，无法用现有
 判空/重试语义表达。方案：
 

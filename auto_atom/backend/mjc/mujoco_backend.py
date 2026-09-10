@@ -21,21 +21,9 @@ from auto_atom.config.pose import PoseOverrideConfig
 from auto_atom.config.randomization import (
     OperatorRandomizationConfig,
     PoseRandomizationSpec,
-    PoseRandomRange,
     RandomizationConstraintConfig,
-    RandomizationGeneratorConfig,
-    RandomizationGeneratorKind,
-    RandomizationGroupConfig,
-    RandomizationInput,
-    RandomizationPoissonDiskConfig,
-    RandomizationSelectorKind,
-    RandomizationSpec,
-    RandomizationStrategy,
-    RandomizationVisibilityConfig,
-    ResolvedRandomizationScope,
-    canonical_randomization_spec,
+    ResolvedRandomizationConfig,
     pose_randomization_regions,
-    resolve_randomization_scope,
 )
 from auto_atom.config.reference import PoseReference, RandomizationReference
 from auto_atom.config.task import AutoAtomConfig, OperatorConfig, OperatorInitialState
@@ -51,51 +39,20 @@ from auto_atom.contracts import (
 )
 
 from ...basis.mjc.mujoco_env import BatchedUnifiedMujocoEnv, EnvConfig
-from ...randomization import (
-    CollisionParticipant,
-    PoissonDiskCandidateStream,
-    RandomizationAction,
-    RandomizationAncestors,
-    RandomizationFailureError,
-    RandomizationPlan,
-    camera_frustum_disjoint_box,
-    compile_randomization_plan,
-    copy_randomization_ancestors,
-    distribution_uses_space_filling_history,
-    find_collision_participant,
-    find_visibility_infeasibility,
-    history_clearance,
-    maximin_select,
-    object_region_world_box,
-    parse_entity_reference,
-    reference_ancestors,
-    resolve_collision_ancestors,
-    resolve_collision_radius,
-    sample_pose_batch,
-    sample_pose_for_env,
-    select_randomization_region,
-    unit_candidate,
-    validate_pose_randomization_spec,
-    validate_randomization_configuration,
-)
+from ...randomization import parse_entity_reference
 from ...randomization_executor import (
-    DEFAULT_ATTEMPT_BUDGET,
     PendingRandomizationAction,
     RandomizationExecutor,
 )
 from ...runtime import ComponentRegistry, ControlResult, ControlSignal
 from ...utils.pose import (
     PoseState,
-    compose_pose,
-    euler_to_quaternion,
-    inverse_pose,
     orientation_within_tolerance_nullable,
     position_within_tolerance,
     position_within_tolerance_nullable,
     quaternion_angular_distance,
     quaternion_from_matrix_3x3,
     quaternion_to_rotation_matrix,
-    quaternion_to_rpy,
     resolve_pose_override,
 )
 from ...utils.transformations import quaternion_slerp
@@ -1137,19 +1094,15 @@ class MujocoTaskBackend(SceneBackend):
     env: BatchedUnifiedMujocoEnv
     operator_handlers: Dict[str, MujocoOperatorHandler]
     object_handlers: Dict[str, MujocoObjectHandler]
-    randomization_scope: ResolvedRandomizationScope = field(
-        default_factory=ResolvedRandomizationScope
+    randomization: ResolvedRandomizationConfig = field(
+        default_factory=ResolvedRandomizationConfig
     )
-    """Resolved randomization configuration for this task.
+    """Task-level randomization configuration.
 
-    The scope keeps the placement strategy, the per-entity entries, and the
-    per-camera entries together, because they are one config object rather than
-    three unrelated fields. It is an *input* to the shared plan compiler: the
-    compiled plan, not the backend, carries the effective policy.
+    The backend holds this value only to hand it to its
+    :attr:`randomization_executor`; it reads neither the entries nor the
+    strategy, and it has no randomization policy of its own.
     """
-    randomization_groups: Dict[str, RandomizationGroupConfig] = field(
-        default_factory=dict
-    )
     initial_poses: Dict[str, PoseOverrideConfig] = field(default_factory=dict)
     camera_initial_poses: Dict[str, PoseOverrideConfig] = field(default_factory=dict)
     operator_initial_states: Dict[str, OperatorInitialState] = field(
@@ -1164,15 +1117,10 @@ class MujocoTaskBackend(SceneBackend):
         repr=False,
         default_factory=dict,
     )
-    _poisson_streams: Dict[Tuple[object, ...], PoissonDiskCandidateStream] = field(
+    _randomization_executor_instance: Optional[RandomizationExecutor] = field(
         init=False,
         repr=False,
-        default_factory=dict,
-    )
-    _auto_radius_cache: Dict[Tuple[Any, ...], float] = field(
-        init=False,
-        repr=False,
-        default_factory=dict,
+        default=None,
     )
     _default_object_poses: Dict[str, PoseState] = field(
         init=False, repr=False, default_factory=dict
@@ -1266,7 +1214,7 @@ class MujocoTaskBackend(SceneBackend):
                 f"env_index must be in [0, {self.batch_size}), got {env_index}"
             )
         poses: Dict[str, PoseState] = {}
-        for camera_name in self.randomization_scope.cameras:
+        for camera_name in self.camera_names():
             try:
                 poses[camera_name] = self.get_camera_pose(camera_name).select(env_index)
             except KeyError:
@@ -1407,8 +1355,8 @@ class MujocoTaskBackend(SceneBackend):
             or self._default_camera_poses
         ):
             self._record_default_poses()
-        if self.randomization_scope.entities or self.randomization_scope.cameras:
-            self._apply_randomization(mask)
+        if not self.randomization.is_empty:
+            self.randomization_executor.apply_randomization(mask)
         self.env.refresh_viewer()
 
     @contextmanager
@@ -1453,7 +1401,7 @@ class MujocoTaskBackend(SceneBackend):
         for name, handler in self.operator_handlers.items():
             self._default_operator_base_poses[name] = handler.get_base_pose()
             self._default_operator_eef_poses[name] = handler.get_end_effector_pose()
-        for cam_name in self.randomization_scope.cameras:
+        for cam_name in self.camera_names():
             self._default_camera_poses[cam_name] = self.get_camera_pose(cam_name)
 
     def _resolve_initial_reference_pose(
@@ -1808,170 +1756,24 @@ class MujocoTaskBackend(SceneBackend):
             )
 
     # ------------------------------------------------------------------
-    #  Randomization: ordering, reference resolution, and application
-    # ------------------------------------------------------------------
-
-    def _select_randomization_region(
-        self,
-        spec: RandomizationInput,
-        *,
-        candidate_index: int = 0,
-    ) -> PoseRandomRange:
-        """Select one region for one sampling attempt (see the shared helper)."""
-        return select_randomization_region(
-            self._rng,
-            spec,
-            candidate_index=candidate_index,
-        )
-
-    def _randomization_action_specs(self) -> Dict[str, RandomizationAction]:
-        """Per-label randomization actions from the compiled plan."""
-        return dict(self._randomization_plan().actions)
-
-    def _randomization_plan(self) -> RandomizationPlan:
-        """Compile the backend's public randomization mapping into a plan."""
-        return compile_randomization_plan(
-            self.randomization_scope.entities,
-            object_names=set(self.object_handlers),
-            operator_names=set(self.operator_handlers),
-            randomization_groups=(
-                self.randomization_groups
-                if self.randomization_scope.strategy == RandomizationStrategy.RSA
-                else {}
-            ),
-            strategy=self.randomization_scope.strategy,
-        )
-
-    def _randomization_dependencies(self) -> Dict[str, Set[str]]:
-        return {
-            label: set(dependencies)
-            for label, dependencies in self._randomization_plan().dependencies.items()
-        }
-
-    def _poisson_stream_for_action(
-        self,
-        action_spec: RandomizationAction,
-        env_index: int,
-        rand_range: PoseRandomRange,
-        distribution: Any,
-        working_poses: Dict[str, PoseState],
-    ) -> PoissonDiskCandidateStream | None:
-        """Return the persistent physical-position stream for one proposal range."""
-        generator = getattr(
-            distribution,
-            "generator",
-            RandomizationGeneratorKind.IID,
-        )
-        if isinstance(generator, RandomizationGeneratorConfig):
-            poisson_config = generator.poisson_disk
-        elif generator == RandomizationGeneratorKind.POISSON_DISK:
-            poisson_config = RandomizationPoissonDiskConfig()
-        else:
-            return None
-
-        position_axes = tuple(
-            axis for axis in ("x", "y", "z") if rand_range.axis_range(axis) is not None
-        )
-        if not position_axes:
-            return None
-        spacing = float(getattr(distribution, "spacing", 0.0))
-        if spacing <= 0.0:
-            raise ValueError(
-                f"Poisson-disk randomization '{action_spec.label}' requires "
-                "distribution.spacing > 0"
-            )
-        lower_bounds = tuple(
-            float(rand_range.axis_range(axis)[0]) for axis in position_axes
-        )
-        upper_bounds = tuple(
-            float(rand_range.axis_range(axis)[1]) for axis in position_axes
-        )
-        reference_context: list[float] = []
-        for reference in rand_range.references():
-            if isinstance(reference, RandomizationReference):
-                if reference == RandomizationReference.ABSOLUTE_WORLD:
-                    continue
-                if reference == RandomizationReference.ABSOLUTE_BASE:
-                    key = f"{action_spec.owner}.base"
-                    pose = working_poses.get(key)
-                    if pose is None:
-                        pose = self._default_operator_base_poses.get(
-                            action_spec.owner,
-                            self.operator_handlers[action_spec.owner].get_base_pose(),
-                        )
-                else:
-                    pose = working_poses.get(action_spec.label)
-                    if pose is None:
-                        pose = self._current_pose_for_action(
-                            action_spec.kind, action_spec.owner
-                        )
-            else:
-                bare, attr = parse_entity_reference(reference)
-                if attr is None and bare in self.operator_handlers:
-                    attr = "base"
-                key = f"{bare}.{attr}" if attr is not None else bare
-                pose = working_poses.get(key)
-                if pose is None and attr is None:
-                    pose = working_poses.get(bare)
-                if pose is None:
-                    if attr == "base":
-                        pose = self._default_operator_base_poses.get(
-                            bare, self.operator_handlers[bare].get_base_pose()
-                        )
-                    elif attr == "eef":
-                        pose = self._default_operator_eef_poses.get(
-                            bare, self.operator_handlers[bare].get_end_effector_pose()
-                        )
-                    else:
-                        pose = self._default_object_poses.get(
-                            bare, self.object_handlers[bare].get_pose()
-                        )
-            selected_pose = pose.select(env_index)
-            reference_context.extend(
-                np.asarray(selected_pose.position[0], dtype=np.float64).tolist()
-            )
-            reference_context.extend(
-                np.asarray(selected_pose.orientation[0], dtype=np.float64).tolist()
-            )
-        key = (
-            env_index,
-            action_spec.label,
-            position_axes,
-            lower_bounds,
-            upper_bounds,
-            spacing,
-            tuple(reference_context),
-            poisson_config.hypersphere,
-            int(poisson_config.ncandidates),
-            poisson_config.optimization,
-        )
-        stream = self._poisson_streams.get(key)
-        if stream is None:
-            label_seed = sum(
-                (index + 1) * ord(character)
-                for index, character in enumerate(action_spec.label)
-            )
-            stream = PoissonDiskCandidateStream(
-                poisson_config,
-                lower_bounds=lower_bounds,
-                upper_bounds=upper_bounds,
-                radius=spacing,
-                seed=int((self.random_seed or 0) + env_index * 10_007 + label_seed),
-            )
-            self._poisson_streams[key] = stream
-        return stream
-
-    # ------------------------------------------------------------------
     #  Randomization host surface (consumed by RandomizationExecutor)
+    #
+    #  Everything below is a *capability*: pose reads and writes, recorded
+    #  baselines, camera names and models, support geometry, and the diagnostics
+    #  sink. The policy that uses them — how a region is selected, how
+    #  references carry deltas, how many attempts a component gets, which
+    #  component runs first — lives in RandomizationExecutor and is shared by
+    #  every backend.
     # ------------------------------------------------------------------
 
     @property
     def randomization_executor(self) -> RandomizationExecutor:
-        """The backend-neutral feasibility loop bound to this backend."""
+        """The randomization policy bound to this backend."""
         executor = getattr(self, "_randomization_executor_instance", None)
         if executor is None:
             executor = RandomizationExecutor(
                 self,
+                self.randomization,
                 logger=logging.getLogger(MujocoTaskBackend.__name__),
             )
             self._randomization_executor_instance = executor
@@ -1979,8 +1781,13 @@ class MujocoTaskBackend(SceneBackend):
 
     @property
     def randomization_rng(self) -> np.random.Generator:
-        """The generator shared by entity and camera randomization."""
+        """The generator the executor draws from."""
         return self._rng
+
+    @property
+    def randomization_seed(self) -> Optional[int]:
+        """The seed only-derived streams (Poisson-disk lattices) are built from."""
+        return self.random_seed
 
     @property
     def randomization_reset_index(self) -> int:
@@ -1995,17 +1802,23 @@ class MujocoTaskBackend(SceneBackend):
     def operator_names(self) -> Set[str]:
         return set(self.operator_handlers)
 
-    def action_dependencies(self) -> Dict[str, Set[str]]:
-        """Reference dependency edges between randomized actions."""
-        return self._randomization_dependencies()
+    def live_pose(self, label: str) -> PoseState:
+        """Current world pose of one target label.
 
-    def randomization_plan(self) -> RandomizationPlan:
-        """The compiled action graph for this reset."""
-        return self._randomization_plan()
-
-    def template_pose(self, label: str) -> PoseState:
-        """Batch-shaped template pose used to buffer one action's samples."""
-        return self._current_pose_for_randomization_key(label)
+        ``label`` is an object name, or ``<operator>.base`` /
+        ``<operator>.eef``. This is the read half of the pose capability; the
+        write half is :meth:`apply_action`.
+        """
+        owner, attribute = parse_entity_reference(label)
+        if attribute is None:
+            handler = self.get_object_handler(owner)
+            if handler is None:
+                raise KeyError(f"Unknown target '{label}'.")
+            return handler.get_pose()
+        operator = self.get_operator_handler(owner)
+        if attribute == "base":
+            return operator.get_base_pose()
+        return operator.get_end_effector_pose()
 
     def baseline_pose(self, label: str) -> Optional[PoseState]:
         """Recorded reset baseline for one target, or ``None`` when unrecorded.
@@ -2026,26 +1839,13 @@ class MujocoTaskBackend(SceneBackend):
                 return pose
         return None
 
-    @property
-    def camera_randomization(self) -> Dict[str, RandomizationInput]:
-        """Configured per-camera pose randomization entries."""
-        return dict(self.randomization_scope.cameras)
+    def camera_names(self) -> List[str]:
+        """Names of the cameras this scene defines.
 
-    def begin_randomization_episode(self) -> None:
-        """Per-episode preparation performed before any pose is sampled.
-
-        Operator auto radii depend on the episode's configuration (base/EEF
-        geometry follows the home state just applied), so operator entries are
-        dropped and re-resolved each reset while object auto radii (static
-        geometry) stay cached. Configured regions are validated here so a bad
-        reference fails before the scene is mutated.
+        Camera names come from the model, so every environment in the batch
+        exposes the same set.
         """
-        self._auto_radius_cache = {
-            key: value
-            for key, value in self._auto_radius_cache.items()
-            if key[0] == "object"
-        }
-        self._validate_randomization_configuration()
+        return sorted(getattr(self.env.envs[0], "_camera_ids", {}) or {})
 
     def apply_action(
         self,
@@ -2064,29 +1864,6 @@ class MujocoTaskBackend(SceneBackend):
             )
         else:
             raise ValueError(f"Unknown randomization action kind: {action.kind}")
-
-    def run_visibility_preflight(self, env_mask: np.ndarray) -> None:
-        """Fail fast on a deterministically unsatisfiable ``visible_in`` region."""
-        self._preflight_deterministic_visibility_infeasibility(
-            self._randomization_plan().actions,
-            env_mask,
-        )
-
-    def sample_target(
-        self,
-        action: RandomizationAction,
-        env_index: int,
-        working_poses: Dict[str, PoseState],
-        *,
-        candidate_index: int,
-    ) -> tuple[Dict[str, PoseState], List[PendingRandomizationAction]]:
-        """Sample one action's pose for one environment."""
-        return self._sample_randomization_target_for_env(
-            action,
-            env_index,
-            working_poses,
-            candidate_index=candidate_index,
-        )
 
     def evaluate_constraints(
         self,
@@ -2114,716 +1891,6 @@ class MujocoTaskBackend(SceneBackend):
         """Store one feasibility-loop diagnostic for ``reset()`` details."""
         self._last_randomization_diagnostics.setdefault(env_index, []).append(
             dict(diagnostics)
-        )
-
-    def _randomization_order(self) -> List[str]:
-        """Return randomization keys in dependency order (referenced first).
-
-        An entry whose ``reference`` is another entity name depends on that
-        entity being sampled first. Cycles raise ``ValueError``.
-        """
-        return list(self._randomization_plan().order)
-
-    def _reference_ancestors(
-        self,
-        references: tuple[Union[RandomizationReference, str], ...],
-        selected_ancestors: Dict[str, Set[str]],
-    ) -> Set[str]:
-        """Entity names this target's references depend on."""
-        return reference_ancestors(
-            references,
-            selected_ancestors,
-            operator_names=self.operator_handlers,
-        )
-
-    def _validate_pose_randomization_spec(
-        self,
-        label: str,
-        spec: PoseRandomizationSpec,
-        *,
-        allow_absolute_base: bool,
-    ) -> None:
-        """Validate every region against its target context before sampling."""
-        validate_pose_randomization_spec(
-            label,
-            spec,
-            allow_absolute_base=allow_absolute_base,
-            object_names=self.object_handlers,
-            operator_names=self.operator_handlers,
-        )
-
-    def _validate_randomization_configuration(self) -> None:
-        """Validate target-specific rules for all configured regions."""
-        unknown = validate_randomization_configuration(
-            self.randomization_scope.entities,
-            object_names=self.object_handlers,
-            operator_names=self.operator_handlers,
-        )
-        logger = logging.getLogger(MujocoTaskBackend.__name__)
-        for name in unknown:
-            logger.warning(
-                "Randomization key '%s' does not match any object or "
-                "operator handler — skipping.",
-                name,
-            )
-
-    def _resolve_reference_base_pose(
-        self,
-        reference: Union[RandomizationReference, str],
-        sampled_poses: Dict[str, PoseState],
-        default_pose: PoseState,
-    ) -> PoseState:
-        """Resolve the base pose to feed ``_sample_random_pose``.
-
-        For enum modes the entity's own ``default_pose`` is returned.
-
-        For an entity-name reference, the delta-carry algorithm is applied:
-        ``delta = ref_sampled * ref_default⁻¹``, then ``delta * default_pose``
-        so the current entity moves with the referenced entity while
-        preserving their original spatial relationship.
-        """
-        if isinstance(reference, RandomizationReference):
-            return default_pose
-        # --- Entity-name reference: delta-carry ---
-        bare, attr = parse_entity_reference(reference)
-        if attr is None and bare in self.operator_handlers:
-            attr = "base"  # plain operator name defaults to its base
-        if attr is not None:
-            if bare not in self.operator_handlers:
-                raise ValueError(
-                    f"Randomization reference '{reference}' — '.{attr}' is only "
-                    f"valid for operator names, but '{bare}' is not a known operator."
-                )
-            handler = self.operator_handlers[bare]
-            if attr == "base":
-                ref_default = self._default_operator_base_poses.get(
-                    bare, handler.get_base_pose()
-                )
-            else:
-                ref_default = self._default_operator_eef_poses.get(
-                    bare, handler.get_end_effector_pose()
-                )
-            ref_sampled = sampled_poses.get(f"{bare}.{attr}")
-        else:
-            ref_sampled = sampled_poses.get(bare)
-            if bare in self._default_object_poses:
-                ref_default = self._default_object_poses[bare]
-            elif bare in self.object_handlers:
-                ref_default = self.object_handlers[bare].get_pose()
-            else:
-                raise ValueError(
-                    f"Randomization reference '{reference}' is not a known mode "
-                    "('relative', 'absolute_world', 'absolute_base') nor an "
-                    "existing object/operator name."
-                )
-        if ref_sampled is None:
-            return default_pose  # entity not randomized → no delta
-        delta = compose_pose(ref_sampled, inverse_pose(ref_default))
-        return compose_pose(delta, default_pose)
-
-    @staticmethod
-    @staticmethod
-    def _camera_frustum_disjoint_box(
-        camera: CameraModel,
-        box_min: np.ndarray,
-        box_max: np.ndarray,
-    ) -> bool:
-        """Return True when a world AABB lies entirely outside a camera frustum."""
-        return camera_frustum_disjoint_box(camera, box_min, box_max)
-
-    def _visibility_camera_names(
-        self,
-        visible: RandomizationVisibilityConfig,
-        env_index: int,
-    ) -> List[str]:
-        """Resolve a visibility config's camera list for one environment."""
-        if visible.cameras != "all":
-            return list(visible.cameras)
-        physical_index = (
-            0 if bool(getattr(self.env, "_share_physics", False)) else env_index
-        )
-        return sorted(getattr(self.env.envs[physical_index], "_camera_ids", {}) or {})
-
-    @staticmethod
-    def _object_region_world_box(
-        region: PoseRandomRange,
-        default_world: np.ndarray,
-    ) -> Optional[Tuple[np.ndarray, np.ndarray]]:
-        """World AABB of one region's possible center positions, or ``None``."""
-        return object_region_world_box(region, default_world)
-
-    def _camera_model_for_env(self, camera_name: str, env_index: int) -> CameraModel:
-        """Camera model for one environment.
-
-        Delegates to this backend's own :meth:`get_camera_model` so subclasses
-        and test doubles that override the accessor stay authoritative.
-        """
-        return self.get_camera_model(camera_name, env_index)
-
-    def _preflight_deterministic_visibility_infeasibility(
-        self,
-        action_specs: Dict[str, RandomizationAction],
-        env_mask: np.ndarray,
-    ) -> None:
-        """Fail fast when a ``visible_in`` region is provably empty.
-
-        The predicate lives in the backend-neutral
-        :func:`find_visibility_infeasibility`; this method supplies the
-        MuJoCo-specific baselines and camera models and turns a hit into the
-        same fail-closed diagnostic the retry loop would produce, but with
-        ``attempts=0``.
-        """
-        infeasibility = find_visibility_infeasibility(
-            {
-                label: spec.randomization
-                for label, spec in action_specs.items()
-                if spec.kind == "object"
-            },
-            env_mask=env_mask,
-            default_pose_of=self._default_object_poses.get,
-            camera_names_of=self._visibility_camera_names,
-            camera_model_of=self._camera_model_for_env,
-        )
-        if infeasibility is None:
-            return
-        constraints = action_specs[infeasibility.target].randomization.constraints
-        self._last_randomization_diagnostics.setdefault(
-            infeasibility.env_index, []
-        ).append(
-            {
-                "group": "component",
-                "generator": "deterministic_infeasible",
-                "member": infeasibility.target,
-                "attempts": 0,
-                "violations": list(infeasibility.violations),
-                "minimum_clearance": float("-inf"),
-                "mode": constraints.failure.mode.value,
-            }
-        )
-        raise RandomizationFailureError(
-            target=infeasibility.target,
-            attempts=0,
-            violations=list(infeasibility.violations),
-            minimum_clearance=float("-inf"),
-        )
-
-    def _apply_randomization(self, env_mask: np.ndarray) -> None:
-        """Run this episode's randomization (see RandomizationExecutor)."""
-        self.randomization_executor.apply_randomization(env_mask)
-
-    def _randomization_components(
-        self,
-        order: List[str],
-        deps: Dict[str, Set[str]],
-    ) -> List[List[str]]:
-        adjacency: Dict[str, Set[str]] = {name: set() for name in deps}
-        for name, parents in deps.items():
-            for parent in parents:
-                adjacency[name].add(parent)
-                adjacency[parent].add(name)
-        order_index = {name: index for index, name in enumerate(order)}
-        visited: Set[str] = set()
-        components: List[List[str]] = []
-        for name in order:
-            if name in visited:
-                continue
-            stack = [name]
-            component: Set[str] = set()
-            while stack:
-                current = stack.pop()
-                if current in visited:
-                    continue
-                visited.add(current)
-                component.add(current)
-                stack.extend(adjacency[current] - visited)
-            components.append(sorted(component, key=order_index.__getitem__))
-        return components
-
-    def _sample_randomization_target_for_env(
-        self,
-        action_spec: RandomizationAction,
-        env_index: int,
-        working_poses: Dict[str, PoseState],
-        *,
-        candidate_index: int = 0,
-    ) -> tuple[Dict[str, PoseState], List[PendingRandomizationAction]]:
-        name = action_spec.owner
-        if action_spec.kind == "unknown" or (
-            action_spec.kind != "object" and name not in self.operator_handlers
-        ):
-            logging.getLogger(MujocoTaskBackend.__name__).warning(
-                "Randomization key '%s' does not match any object or operator "
-                "handler — skipping.",
-                name,
-            )
-            return {}, []
-
-        selected_range = self._select_randomization_region(
-            action_spec.randomization,
-            candidate_index=candidate_index,
-        )
-        distribution = action_spec.randomization.distribution
-        poisson_stream = self._poisson_stream_for_action(
-            action_spec,
-            env_index,
-            selected_range,
-            distribution,
-            working_poses,
-        )
-        if action_spec.kind == "object":
-            if RandomizationReference.ABSOLUTE_BASE in selected_range.references():
-                raise ValueError(
-                    f"Object '{name}' randomization cannot use 'absolute_base' — "
-                    "only operator end-effector randomization is defined in a "
-                    "base frame."
-                )
-            sampled = self._sample_object_pose_for_env(
-                name,
-                selected_range,
-                env_index,
-                working_poses,
-                distribution=distribution,
-                sample_index=candidate_index,
-                poisson_stream=poisson_stream,
-            )
-            return {action_spec.label: sampled}, [
-                PendingRandomizationAction(
-                    kind=action_spec.kind,
-                    owner=name,
-                    label=action_spec.label,
-                    pose=sampled,
-                    radius=self._resolve_collision_radius(
-                        kind=action_spec.kind,
-                        owner=name,
-                        env_index=env_index,
-                        spec_radius=float(selected_range.collision_radius),
-                        margin=float(selected_range.collision_margin),
-                    ),
-                    references=selected_range.references(),
-                    constraints=action_spec.randomization.constraints,
-                )
-            ]
-
-        handler = self.operator_handlers[name]
-        if action_spec.kind == "operator_base":
-            if RandomizationReference.ABSOLUTE_BASE in selected_range.references():
-                raise ValueError(
-                    f"Operator '{name}' base randomization cannot use "
-                    "'absolute_base' — the base IS the frame."
-                )
-            sampled = self._sample_operator_base_pose_for_env(
-                name,
-                handler,
-                selected_range,
-                env_index,
-                working_poses,
-                distribution=distribution,
-                sample_index=candidate_index,
-                poisson_stream=poisson_stream,
-            )
-        elif action_spec.kind == "operator_eef":
-            sampled = self._sample_operator_eef_pose_for_env(
-                name,
-                handler,
-                selected_range,
-                env_index,
-                working_poses,
-                distribution=distribution,
-                sample_index=candidate_index,
-                poisson_stream=poisson_stream,
-            )
-        else:
-            raise ValueError(f"Unknown randomization action kind: {action_spec.kind}")
-        return {
-            name: sampled,
-            action_spec.label: sampled,
-        }, [
-            PendingRandomizationAction(
-                kind=action_spec.kind,
-                owner=name,
-                label=action_spec.label,
-                pose=sampled,
-                radius=self._resolve_collision_radius(
-                    kind=action_spec.kind,
-                    owner=name,
-                    env_index=env_index,
-                    spec_radius=float(selected_range.collision_radius),
-                    margin=float(selected_range.collision_margin),
-                ),
-                references=selected_range.references(),
-                constraints=action_spec.randomization.constraints,
-            )
-        ]
-
-    def _sample_object_pose_for_env(
-        self,
-        name: str,
-        rand_range: PoseRandomRange,
-        env_index: int,
-        sampled_poses: Dict[str, PoseState],
-        *,
-        distribution: Any = None,
-        sample_index: int = 0,
-        poisson_stream: PoissonDiskCandidateStream | None = None,
-    ) -> PoseState:
-        default_pose = self._default_object_poses.get(
-            name,
-            self.object_handlers[name].get_pose(),
-        ).select(env_index)
-        reference_poses = self._resolve_reference_poses_for_env(
-            rand_range,
-            sampled_poses,
-            default_pose,
-            env_index,
-        )
-        return self._sample_random_pose_single(
-            default_pose,
-            rand_range,
-            0,
-            reference_poses=reference_poses,
-            distribution=distribution,
-            sample_index=sample_index,
-            poisson_stream=poisson_stream,
-        )
-
-    def _sample_operator_base_pose_for_env(
-        self,
-        name: str,
-        handler: MujocoOperatorHandler,
-        rand_range: PoseRandomRange,
-        env_index: int,
-        sampled_poses: Dict[str, PoseState],
-        *,
-        distribution: Any = None,
-        sample_index: int = 0,
-        poisson_stream: PoissonDiskCandidateStream | None = None,
-    ) -> PoseState:
-        default_base = self._default_operator_base_poses.get(
-            name,
-            handler.get_base_pose(),
-        ).select(env_index)
-        reference_poses = self._resolve_reference_poses_for_env(
-            rand_range,
-            sampled_poses,
-            default_base,
-            env_index,
-        )
-        return self._sample_random_pose_single(
-            default_base,
-            rand_range,
-            0,
-            reference_poses=reference_poses,
-            distribution=distribution,
-            sample_index=sample_index,
-            poisson_stream=poisson_stream,
-        )
-
-    def _operator_default_eef_following_base(
-        self,
-        name: str,
-        handler: MujocoOperatorHandler,
-        env_index: int,
-        sampled_poses: Optional[Dict[str, PoseState]] = None,
-    ) -> tuple[PoseState, PoseState]:
-        """Return the operator's default EEF pose **rigidly tracking the
-        operator's current base**, plus the resolved current base pose.
-
-        ``_record_default_poses`` snapshots the EEF in **world** frame at
-        backend init. If the operator's base is later randomized (by this
-        sampler or by external tooling), naïvely reusing that world-frame
-        default leaves the EEF target sitting at its old absolute position,
-        and the IK chain has to bridge a base-induced offset that grows
-        with the base randomization range — quickly becoming unreachable
-        and surfacing as ``ik_unreachable`` failures even when the EEF
-        offset itself is small.
-
-        Re-anchoring to the current base preserves the original eef-in-base
-        relative pose, so randomizing the base does not implicitly enlarge
-        the EEF reach budget. Sampling logic on top of this helper then
-        operates on a default that is already sensible for the current
-        base placement.
-
-        ``sampled_poses`` (if given) is consulted for an in-flight base
-        sample so eef sampling sees the base that was just decided in the
-        same iteration; otherwise the helper falls back to the handler's
-        live base pose.
-        """
-        default_eef_world = self._default_operator_eef_poses.get(
-            name,
-            handler.get_end_effector_pose(),
-        ).select(env_index)
-        default_base_world = self._default_operator_base_poses.get(
-            name,
-            handler.get_base_pose(),
-        ).select(env_index)
-        current_base_world: Optional[PoseState] = None
-        if sampled_poses is not None:
-            current_base_world = sampled_poses.get(name)
-        if current_base_world is None:
-            current_base_world = handler.get_base_pose().select(env_index)
-        eef_in_default_base = compose_pose(
-            inverse_pose(default_base_world), default_eef_world
-        )
-        return (
-            compose_pose(current_base_world, eef_in_default_base),
-            current_base_world,
-        )
-
-    def _sample_operator_eef_pose_for_env(
-        self,
-        name: str,
-        handler: MujocoOperatorHandler,
-        rand_range: PoseRandomRange,
-        env_index: int,
-        sampled_poses: Dict[str, PoseState],
-        *,
-        distribution: Any = None,
-        sample_index: int = 0,
-        poisson_stream: PoissonDiskCandidateStream | None = None,
-    ) -> PoseState:
-        following_base_default, base_world = self._operator_default_eef_following_base(
-            name,
-            handler,
-            env_index,
-            sampled_poses,
-        )
-        references = rand_range.references()
-        if references == (RandomizationReference.ABSOLUTE_BASE,):
-            default_in_base = compose_pose(
-                inverse_pose(base_world),
-                following_base_default,
-            )
-            sampled_in_base = self._sample_random_pose_single(
-                default_in_base,
-                rand_range,
-                0,
-                distribution=distribution,
-                sample_index=sample_index,
-                poisson_stream=poisson_stream,
-            )
-            return compose_pose(base_world, sampled_in_base)
-
-        snapshot_default = self._default_operator_eef_poses.get(
-            name,
-            handler.get_end_effector_pose(),
-        ).select(env_index)
-        reference_poses: Dict[Union[RandomizationReference, str], PoseState] = {}
-        for reference in references:
-            if isinstance(reference, RandomizationReference):
-                reference_poses[reference] = following_base_default
-            else:
-                reference_poses[reference] = self._resolve_reference_base_pose_for_env(
-                    reference,
-                    sampled_poses,
-                    snapshot_default,
-                    env_index,
-                )
-        return self._sample_random_pose_single(
-            following_base_default,
-            rand_range,
-            0,
-            reference_poses=reference_poses,
-            distribution=distribution,
-            sample_index=sample_index,
-            poisson_stream=poisson_stream,
-        )
-
-    def _resolve_reference_poses_for_env(
-        self,
-        rand_range: PoseRandomRange,
-        sampled_poses: Dict[str, PoseState],
-        default_pose: PoseState,
-        env_index: int,
-    ) -> Dict[Union[RandomizationReference, str], PoseState]:
-        """Resolve every reference used by one range to its baseline pose."""
-        return {
-            reference: self._resolve_reference_base_pose_for_env(
-                reference,
-                sampled_poses,
-                default_pose,
-                env_index,
-            )
-            for reference in rand_range.references()
-        }
-
-    def _resolve_reference_base_pose_for_env(
-        self,
-        reference: Union[RandomizationReference, str],
-        sampled_poses: Dict[str, PoseState],
-        default_pose: PoseState,
-        env_index: int,
-    ) -> PoseState:
-        if isinstance(reference, RandomizationReference):
-            return default_pose
-        bare, attr = parse_entity_reference(reference)
-        if attr is None and bare in self.operator_handlers:
-            attr = "base"  # plain operator name defaults to its base
-        if attr is not None:
-            if bare not in self.operator_handlers:
-                raise ValueError(
-                    f"Randomization reference '{reference}' — '.{attr}' is only "
-                    f"valid for operator names, but '{bare}' is not a known operator."
-                )
-            handler = self.operator_handlers[bare]
-            if attr == "base":
-                ref_default = self._default_operator_base_poses.get(
-                    bare, handler.get_base_pose()
-                ).select(env_index)
-            else:
-                ref_default = self._default_operator_eef_poses.get(
-                    bare, handler.get_end_effector_pose()
-                ).select(env_index)
-            ref_sampled = sampled_poses.get(f"{bare}.{attr}")
-        else:
-            ref_sampled = sampled_poses.get(bare)
-            if bare in self._default_object_poses:
-                ref_default = self._default_object_poses[bare].select(env_index)
-            elif bare in self.object_handlers:
-                ref_default = self.object_handlers[bare].get_pose().select(env_index)
-            else:
-                raise ValueError(
-                    f"Randomization reference '{reference}' is not a known mode "
-                    "('relative', 'absolute_world', 'absolute_base') nor an existing "
-                    "object/operator name."
-                )
-        if ref_sampled is None:
-            return default_pose
-        delta = compose_pose(ref_sampled, inverse_pose(ref_default))
-        return compose_pose(delta, default_pose)
-
-    def _current_pose_for_randomization_key(self, name: str) -> PoseState:
-        action = self._randomization_action_specs().get(name)
-        if (
-            action is None
-            or action.kind == "unknown"
-            or (action.kind != "object" and action.owner not in self.operator_handlers)
-        ):
-            return PoseState().broadcast_to(self.batch_size)
-        return self._current_pose_for_action(action.kind, action.owner)
-
-    def _current_pose_for_action(self, kind: str, owner: str) -> PoseState:
-        if kind == "object":
-            return self.object_handlers[owner].get_pose()
-        if kind == "operator_base":
-            return self.operator_handlers[owner].get_base_pose()
-        if kind == "operator_eef":
-            return self.operator_handlers[owner].get_end_effector_pose()
-        raise ValueError(f"Unknown randomization action kind: {kind}")
-
-    def _sample_random_pose(
-        self,
-        base_pose: PoseState,
-        rand_range: PoseRandomRange,
-        env_mask: np.ndarray,
-        *,
-        distribution: Any = None,
-    ) -> PoseState:
-        return sample_pose_batch(
-            self._rng,
-            base_pose=base_pose,
-            rand_range=rand_range,
-            env_mask=env_mask,
-            batch_size=self.batch_size,
-            distribution=distribution,
-            reset_index=self._randomization_reset_index,
-        )
-
-    def _find_collision_participant(
-        self,
-        *,
-        owner_name: str,
-        env_index: int,
-        candidate_pose: PoseState,
-        collision_radius: float,
-        ancestors: Set[str],
-        collision_participants: List[CollisionParticipant],
-        extra_clearance: float = 0.0,
-    ) -> Optional[CollisionParticipant]:
-        """Return the first accepted participant inside the radius sum."""
-        return find_collision_participant(
-            owner_name=owner_name,
-            env_index=env_index,
-            candidate_pose=candidate_pose,
-            collision_radius=collision_radius,
-            ancestors=ancestors,
-            collision_participants=collision_participants,
-            extra_clearance=extra_clearance,
-        )
-
-    def _resolve_collision_radius(
-        self,
-        *,
-        kind: str,
-        owner: str,
-        env_index: int,
-        spec_radius: float,
-        margin: float = 0.0,
-    ) -> float:
-        """Resolve a region's ``collision_radius`` for one environment.
-
-        Positive values are used verbatim; ``0`` stays exempt; a negative value
-        requests ``auto`` and resolves to the entity's conservative
-        support-geometry radius plus ``collision_margin`` (cached per
-        entity/environment).
-        """
-        radius = float(spec_radius)
-        if radius >= 0.0:
-            return radius
-        auto = self._auto_collision_radius(kind=kind, owner=owner, env_index=env_index)
-        return auto + float(margin)
-
-    def _auto_collision_radius(self, *, kind: str, owner: str, env_index: int) -> float:
-        """Return the backend-derived conservative radius for one entity.
-
-        Objects resolve to their own support geometry (static, so cached for
-        the backend lifetime). Operator ``base``/``eef`` regions resolve to
-        their region footprint (see ``get_operator_support_geometry``); because
-        that geometry follows the episode's configuration it is re-resolved
-        each reset (``_apply_randomization`` drops operator entries).
-        """
-        key = (kind, owner, env_index)
-        cached = self._auto_radius_cache.get(key)
-        if cached is not None:
-            return cached
-        if kind == "object":
-            geometry = self.get_support_geometry(owner, env_index)
-        elif kind in ("operator_base", "operator_eef"):
-            part = "base" if kind == "operator_base" else "eef"
-            geometry = self.get_operator_support_geometry(owner, part, env_index)
-        else:
-            raise KeyError(
-                f"Unknown randomization kind {kind!r} for auto collision_radius "
-                f"of '{owner}'."
-            )
-        cached = float(geometry.radius)
-        self._auto_radius_cache[key] = cached
-        return cached
-
-    def _sample_random_pose_single(
-        self,
-        base_pose: PoseState,
-        rand_range: PoseRandomRange,
-        env_index: int,
-        *,
-        reference_poses: Optional[
-            Mapping[Union[RandomizationReference, str], PoseState]
-        ] = None,
-        distribution: Any = None,
-        sample_index: int = 0,
-        poisson_stream: PoissonDiskCandidateStream | None = None,
-    ) -> PoseState:
-        """Sample one environment's pose (see the shared helper)."""
-        return sample_pose_for_env(
-            self._rng,
-            base_pose=base_pose,
-            rand_range=rand_range,
-            env_index=env_index,
-            batch_size=self.batch_size,
-            reference_poses=reference_poses,
-            distribution=distribution,
-            sample_index=sample_index,
-            reset_index=self._randomization_reset_index,
-            poisson_stream=poisson_stream,
         )
 
     # ------------------------------------------------------------------
@@ -3361,13 +2428,15 @@ def build_mujoco_backend(
             body_name=body_name,
         )
 
-    resolved_scope = resolve_randomization_scope(config.randomization)
+    randomization_config = ResolvedRandomizationConfig.from_scope_config(
+        config.randomization
+    )
 
     backend = MujocoTaskBackend(
         env=env,
         operator_handlers=operator_handlers,
         object_handlers=object_handlers,
-        randomization_scope=resolved_scope,
+        randomization=randomization_config,
         initial_poses=dict(config.initial_pose),
         camera_initial_poses=dict(config.camera_initial_pose),
         operator_initial_states={

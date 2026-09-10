@@ -131,8 +131,9 @@ def test_operator_auto_collision_radius_resolves_from_real_geometry() -> None:
         details = update.details[0]["initial_poses"]["arm"]
         assert "base_pose" in details
         assert "eef_pose" in details
-        base_auto = backend._auto_radius_cache[("operator_base", "arm", 0)]
-        eef_auto = backend._auto_radius_cache[("operator_eef", "arm", 0)]
+        cache = backend.randomization_executor._auto_radius_cache
+        base_auto = cache[("operator_base", "arm", 0)]
+        eef_auto = cache[("operator_eef", "arm", 0)]
         # pick_and_place's ``arm`` is a mocap gripper whose root body
         # (robotiq_interface) carries no geoms → base footprint is 0 (exempt).
         assert base_auto == 0.0

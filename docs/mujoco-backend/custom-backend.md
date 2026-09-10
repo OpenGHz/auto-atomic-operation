@@ -483,17 +483,28 @@ preflight → objects), the candidate-group `maximin` selection, and the
 fail-closed / best-effort decision.
 
 A backend therefore only implements `RandomizationHost`
-(`auto_atom/randomization_executor.py`): the RNG and reset counter,
-`batch_size`, the object / operator name sets, the compiled
-`randomization_plan()`, `template_pose()` / `sample_target()`, its pose
-write-back (`apply_action()`, `apply_camera_randomization()`), the visibility
-preflight hook, and the constraint reads (`get_camera_model()`,
-`get_support_geometry()`), plus named-frame resolution. Everything else —
-the placement strategy, frame modes, omitted-axis behavior, region weighting,
-retry budgets, coverage history, and the per-episode `CameraModel` /
-support-radius caches — is inherited unchanged: the compiled
-`RandomizationPlan` carries the effective policy, so no backend has to expose
-(or even know) it.
+(`auto_atom/randomization_executor.py`), and every member of that protocol is a
+**capability** — a fact about the simulator, not a policy:
+
+| Capability | Members |
+|---|---|
+| Elements and batch | `batch_size`, `object_names`, `operator_names` |
+| Pose read/write | `live_pose(label)`, `baseline_pose(label)`, `get_camera_pose()`, `set_camera_pose()`, `apply_action()` |
+| Geometry and cameras | `get_support_geometry()`, `get_operator_support_geometry()`, `camera_names()`, `get_camera_model()` |
+| Randomness source | `randomization_rng`, `randomization_seed`, `randomization_reset_index` |
+| Reporting | `evaluate_constraints()`, `record_randomization_diagnostics()` |
+
+Note what is *not* on that list: no plan, no strategy, no sampler, no
+per-camera randomization hook, no auto-radius resolution, no preflight. The
+executor compiles the plan from the task's config (`ResolvedRandomizationConfig`),
+selects regions, resolves per-axis references and their delta-carry, samples
+from the configured generators, resolves auto collision radii from the exposed
+support geometry, runs both retry loops and the deterministic `visible_in`
+preflight, orders the reset (operators → cameras → visibility preflight →
+objects), and writes the result back through `apply_action()` /
+`set_camera_pose()`. A new backend inherits all of it, and
+`tests/test_randomization_executor.py` verifies that claim against a fake host
+that implements nothing but the capabilities above.
 
 If a backend does not support a configured initialization or randomization
 capability, reject the non-empty field during construction with a clear error.

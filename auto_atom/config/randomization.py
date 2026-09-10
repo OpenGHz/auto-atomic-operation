@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Dict, List, Literal, Optional, Tuple, Union
+from typing import Dict, List, Literal, Mapping, Optional, Tuple, Union
 
 from pydantic import (
     BaseModel,
@@ -776,3 +776,49 @@ def resolve_randomization_scope(
         cameras=cameras,
         strategy=strategy,
     )
+
+
+@dataclass(frozen=True)
+class ResolvedRandomizationConfig:
+    """The complete randomization configuration of one task.
+
+    This is the randomization layer's *input*: the resolved scope (per-entity
+    and per-camera entries plus the placement strategy) together with the
+    generated-group definitions. It exists so that a backend never holds a
+    randomization config at all — the task factory builds this value and hands
+    it to the randomization layer, which compiles it into a
+    :class:`~auto_atom.randomization.RandomizationPlan`.
+
+    The two halves travel together because they are one task-level config and
+    because the plan compiler needs both: the scope supplies the entries and the
+    strategy, the groups supply the generated multi-member components that only
+    the ``rsa`` strategy consumes.
+    """
+
+    scope: ResolvedRandomizationScope = field(
+        default_factory=ResolvedRandomizationScope
+    )
+    """Resolved per-entity and per-camera entries plus the placement strategy."""
+
+    groups: Mapping[str, RandomizationGroupConfig] = field(default_factory=dict)
+    """Generated multi-member groups consumed by the ``rsa`` strategy."""
+
+    @property
+    def is_empty(self) -> bool:
+        """True when nothing in the scope asks for pose randomization."""
+        return not (self.scope.entities or self.scope.cameras)
+
+    @classmethod
+    def from_scope_config(
+        cls,
+        config: Optional[RandomizationScopeConfig],
+        *,
+        groups: Optional[Mapping[str, RandomizationGroupConfig]] = None,
+    ) -> "ResolvedRandomizationConfig":
+        """Resolve a task's ``randomization`` config into an executor input."""
+        if config is None:
+            return cls(groups=dict(groups or {}))
+        return cls(
+            scope=resolve_randomization_scope(config),
+            groups=dict(groups or {}),
+        )

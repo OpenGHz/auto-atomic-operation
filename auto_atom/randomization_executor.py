@@ -1,11 +1,16 @@
 """Backend-neutral randomization execution.
 
-The executor owns the *policy* half of randomization: the feasibility loop, its
-attempt budget, cross-reset coverage history, the ``maximin`` candidate-group
-selection, and the fail-closed vs. best-effort decision. A backend implements
-:class:`RandomizationHost` — pose reads/writes, baselines, named-frame
-resolution, camera models, and support geometry — and inherits the semantics
-unchanged.
+The executor owns randomization: it compiles the task's config into a plan,
+selects regions, resolves per-axis references, samples from the configured
+generators, resolves auto collision radii, runs both retry loops and the
+deterministic ``visible_in`` preflight, orders the reset, and writes the result
+back through the host.
+
+A backend implements :class:`RandomizationHost` — a capability surface of pose
+reads and writes, recorded baselines, element names, support geometry, camera
+models, and the diagnostics sink — and inherits every semantic above unchanged.
+Nothing on that surface knows what a randomization is, so a new backend supports
+the whole layer by providing pose access alone.
 
 Reproducibility contract: the executor draws from the host's RNG in a fixed
 order and derives only a ``sample_index`` from the host's reset counter, so a
@@ -25,44 +30,57 @@ from typing import (
     Mapping,
     Optional,
     Protocol,
-    Sequence,
     Set,
     Tuple,
+    Union,
     runtime_checkable,
 )
 
 import numpy as np
 
 from auto_atom.config.randomization import (
+    PoseRandomRange,
     RandomizationConstraintConfig,
+    RandomizationDistributionConfig,
     RandomizationFailureConfig,
+    RandomizationGeneratorConfig,
+    RandomizationGeneratorKind,
     RandomizationGroupConfig,
     RandomizationInput,
+    RandomizationPoissonDiskConfig,
     RandomizationSelectorKind,
-    RandomizationSpec,
     RandomizationStrategy,
+    RandomizationVisibilityConfig,
+    ResolvedRandomizationConfig,
+    ResolvedRandomizationScope,
+    canonical_randomization_spec,
 )
 from auto_atom.config.reference import RandomizationReference
 from auto_atom.contracts import RandomizationConstraintReport
 from auto_atom.randomization import (
     CollisionParticipant,
+    PoissonDiskCandidateStream,
     RandomizationAction,
     RandomizationAncestors,
     RandomizationFailureError,
     RandomizationPlan,
-    canonical_randomization_spec,
+    compile_randomization_plan,
     copy_randomization_ancestors,
     distribution_uses_space_filling_history,
     find_collision_participant,
+    find_visibility_infeasibility,
     history_clearance,
     maximin_select,
+    parse_entity_reference,
     reference_ancestors,
     resolve_collision_ancestors,
     resolve_collision_radius,
     sample_pose_batch,
+    sample_pose_for_env,
     select_randomization_region,
+    validate_randomization_configuration,
 )
-from auto_atom.utils.pose import PoseState
+from auto_atom.utils.pose import PoseState, compose_pose, inverse_pose
 
 DEFAULT_ATTEMPT_BUDGET = RandomizationFailureConfig().max_attempts
 """Attempt budget for a component whose specs leave ``failure.max_attempts``
@@ -91,7 +109,23 @@ class PendingRandomizationAction:
 
 @runtime_checkable
 class RandomizationHost(Protocol):
-    """The simulator-specific surface the randomization executor needs."""
+    """The simulator surface the randomization executor needs.
+
+    Every member is a **capability**: read or write the pose of a scene
+    element, read a recorded baseline, read support/camera geometry, report
+    diagnostics. Nothing here knows what a randomization is, which is what lets
+    a new backend support the whole randomization layer by implementing pose
+    access alone.
+    """
+
+    @property
+    def batch_size(self) -> int: ...
+
+    @property
+    def object_names(self) -> Container[str]: ...
+
+    @property
+    def operator_names(self) -> Container[str]: ...
 
     @property
     def randomization_rng(self) -> np.random.Generator: ...
@@ -100,24 +134,19 @@ class RandomizationHost(Protocol):
     def randomization_reset_index(self) -> int: ...
 
     @property
-    def object_names(self) -> Container[str]: ...
+    def randomization_seed(self) -> Optional[int]: ...
 
-    @property
-    def operator_names(self) -> Container[str]: ...
+    def live_pose(self, label: str) -> PoseState:
+        """Current world pose of a target label.
 
-    def action_dependencies(self) -> Mapping[str, Set[str]]: ...
+        ``label`` is an object name, or ``<operator>.base`` /
+        ``<operator>.eef`` for an operator's base body / home end-effector.
+        """
+        ...
 
-    def randomization_plan(self) -> RandomizationPlan: ...
-
-    @property
-    def batch_size(self) -> int: ...
-
-    def template_pose(self, label: str) -> PoseState: ...
-
-    def baseline_pose(self, label: str) -> Optional[PoseState]: ...
-
-    @property
-    def camera_randomization(self) -> Mapping[str, RandomizationInput]: ...
+    def baseline_pose(self, label: str) -> Optional[PoseState]:
+        """Recorded reset baseline for a target label, or ``None`` if unrecorded."""
+        ...
 
     def get_camera_pose(self, camera_name: str) -> PoseState: ...
 
@@ -128,24 +157,26 @@ class RandomizationHost(Protocol):
         env_mask: np.ndarray,
     ) -> None: ...
 
-    def begin_randomization_episode(self) -> None: ...
+    def camera_names(self) -> List[str]:
+        """Names of the cameras this scene actually has."""
+        ...
+
+    def get_camera_model(self, camera_name: str, env_index: int) -> Any: ...
+
+    def get_support_geometry(self, entity_name: str, env_index: int) -> Any: ...
+
+    def get_operator_support_geometry(
+        self,
+        operator_name: str,
+        part: str,
+        env_index: int,
+    ) -> Any: ...
 
     def apply_action(
         self,
         action: PendingRandomizationAction,
         env_mask: np.ndarray,
     ) -> None: ...
-
-    def run_visibility_preflight(self, env_mask: np.ndarray) -> None: ...
-
-    def sample_target(
-        self,
-        action: RandomizationAction,
-        env_index: int,
-        working_poses: Dict[str, PoseState],
-        *,
-        candidate_index: int,
-    ) -> Tuple[Dict[str, PoseState], List[PendingRandomizationAction]]: ...
 
     def evaluate_constraints(
         self,
@@ -170,12 +201,20 @@ class RandomizationExecutor:
     def __init__(
         self,
         host: RandomizationHost,
+        config: Optional[ResolvedRandomizationConfig] = None,
         *,
         logger: Optional[logging.Logger] = None,
     ) -> None:
         self._host = host
+        self._config = config or ResolvedRandomizationConfig()
         self._logger = logger or logging.getLogger(__name__)
         self._history: Dict[Tuple[str, ...], List[np.ndarray]] = {}
+        self._poisson_streams: Dict[Tuple[object, ...], PoissonDiskCandidateStream] = {}
+        # Auto-resolved collision radii are cached per (kind, owner, env). Object
+        # entries stay valid for the backend lifetime (static geometry); operator
+        # entries are dropped every episode (their geometry follows the episode
+        # configuration) — see ``begin_episode``.
+        self._auto_radius_cache: Dict[Tuple[Any, ...], float] = {}
 
     @property
     def history(self) -> Dict[Tuple[str, ...], List[np.ndarray]]:
@@ -196,6 +235,655 @@ class RandomizationExecutor:
         history = self._history.get(history_key, [])
         history = (history + [np.asarray(vector, dtype=np.float64).copy()])[-256:]
         self._history[history_key] = history
+
+    # ------------------------------------------------------------------
+    #  Plan and configuration
+    # ------------------------------------------------------------------
+
+    @property
+    def config(self) -> ResolvedRandomizationConfig:
+        """The task-level randomization config this executor applies."""
+        return self._config
+
+    @property
+    def scope(self) -> ResolvedRandomizationScope:
+        """The resolved per-entity / per-camera entries plus the strategy."""
+        return self._config.scope
+
+    @property
+    def plan(self) -> RandomizationPlan:
+        """The compiled action graph.
+
+        Compilation is a pure function of the config and the host's element
+        names, so it is re-derived on demand: a host may register elements after
+        construction, and the plan is cheap to rebuild.
+        """
+        scope = self._config.scope
+        return compile_randomization_plan(
+            scope.entities,
+            object_names=set(self._host.object_names),
+            operator_names=set(self._host.operator_names),
+            randomization_groups=(
+                self._config.groups
+                if scope.strategy == RandomizationStrategy.RSA
+                else {}
+            ),
+            strategy=scope.strategy,
+        )
+
+    def action_dependencies(self) -> Dict[str, Set[str]]:
+        """Reference dependency edges between the plan's actions."""
+        return {
+            label: set(dependencies)
+            for label, dependencies in self.plan.dependencies.items()
+        }
+
+    @property
+    def camera_randomization(self) -> Mapping[str, RandomizationInput]:
+        """Configured per-camera pose randomization entries."""
+        return self.scope.cameras
+
+    # ------------------------------------------------------------------
+    #  Episode preparation
+    # ------------------------------------------------------------------
+
+    def begin_episode(self) -> None:
+        """Prepare one reset before any pose is sampled.
+
+        Operator auto radii depend on the episode's configuration (base/EEF
+        geometry follows the home state just applied), so operator entries are
+        dropped and re-resolved each reset while object auto radii (static
+        geometry) stay cached. Configured regions are validated here so a bad
+        reference fails before the scene is mutated.
+        """
+        self._auto_radius_cache = {
+            key: value
+            for key, value in self._auto_radius_cache.items()
+            if key[0] == "object"
+        }
+        self.validate_configuration()
+
+    def validate_configuration(self) -> None:
+        """Validate target-specific rules for every configured region.
+
+        Public because a bad reference should surface when a task is
+        configured or inspected, not only when a reset first samples the
+        entry that uses it.
+        """
+        unknown = validate_randomization_configuration(
+            self.scope.entities,
+            object_names=set(self._host.object_names),
+            operator_names=set(self._host.operator_names),
+        )
+        for name in unknown:
+            self._logger.warning(
+                "Randomization key '%s' does not match any object or "
+                "operator handler — skipping.",
+                name,
+            )
+
+    # ------------------------------------------------------------------
+    #  Pose sampling: regions, references, and generators
+    # ------------------------------------------------------------------
+
+    def _select_region(
+        self,
+        spec: RandomizationInput,
+        *,
+        candidate_index: int = 0,
+    ) -> PoseRandomRange:
+        """Select one region for one sampling attempt."""
+        return select_randomization_region(
+            self._host.randomization_rng,
+            spec,
+            candidate_index=candidate_index,
+        )
+
+    def _baseline_or_live(self, label: str) -> PoseState:
+        """A target's recorded reset baseline, or its live pose when unrecorded.
+
+        The recorded baseline is the frame a reset starts from, so it is the
+        right default for delta-carry references. Elements registered after
+        initialization have no recorded baseline; their live pose is the only
+        sensible fallback.
+        """
+        baseline = self._host.baseline_pose(label)
+        if baseline is not None:
+            return baseline
+        return self._host.live_pose(label)
+
+    def _template_pose(self, label: str) -> PoseState:
+        """Batch-shaped buffer template for one action's per-env samples."""
+        if label not in self.plan.actions:
+            return PoseState().broadcast_to(self._host.batch_size)
+        return self._host.live_pose(label)
+
+    def _poisson_stream_for_action(
+        self,
+        action_spec: RandomizationAction,
+        env_index: int,
+        rand_range: PoseRandomRange,
+        distribution: Optional[RandomizationDistributionConfig],
+        working_poses: Dict[str, PoseState],
+    ) -> Optional[PoissonDiskCandidateStream]:
+        """Return the persistent physical-position stream for one proposal range."""
+        generator = getattr(
+            distribution,
+            "generator",
+            RandomizationGeneratorKind.IID,
+        )
+        if isinstance(generator, RandomizationGeneratorConfig):
+            poisson_config = generator.poisson_disk
+        elif generator == RandomizationGeneratorKind.POISSON_DISK:
+            poisson_config = RandomizationPoissonDiskConfig()
+        else:
+            return None
+
+        position_axes = tuple(
+            axis for axis in ("x", "y", "z") if rand_range.axis_range(axis) is not None
+        )
+        if not position_axes:
+            return None
+        spacing = float(getattr(distribution, "spacing", 0.0))
+        if spacing <= 0.0:
+            raise ValueError(
+                f"Poisson-disk randomization '{action_spec.label}' requires "
+                "distribution.spacing > 0"
+            )
+        lower_bounds = tuple(
+            float(rand_range.axis_range(axis)[0]) for axis in position_axes
+        )
+        upper_bounds = tuple(
+            float(rand_range.axis_range(axis)[1]) for axis in position_axes
+        )
+        # The stream is keyed by the *physical* frame the range resolves to, so a
+        # relative range keeps one coherent lattice while its reference moves.
+        reference_context: list[float] = []
+        for reference in rand_range.references():
+            if isinstance(reference, RandomizationReference):
+                if reference == RandomizationReference.ABSOLUTE_WORLD:
+                    continue
+                if reference == RandomizationReference.ABSOLUTE_BASE:
+                    label = f"{action_spec.owner}.base"
+                    pose = working_poses.get(label)
+                    if pose is None:
+                        pose = self._baseline_or_live(label)
+                else:
+                    pose = working_poses.get(action_spec.label)
+                    if pose is None:
+                        pose = self._host.live_pose(action_spec.label)
+            else:
+                bare, attr = parse_entity_reference(reference)
+                if attr is None and bare in self._host.operator_names:
+                    attr = "base"
+                key = f"{bare}.{attr}" if attr is not None else bare
+                pose = working_poses.get(key)
+                if pose is None and attr is None:
+                    pose = working_poses.get(bare)
+                if pose is None:
+                    pose = self._baseline_or_live(key)
+            selected_pose = pose.select(env_index)
+            reference_context.extend(
+                np.asarray(selected_pose.position[0], dtype=np.float64).tolist()
+            )
+            reference_context.extend(
+                np.asarray(selected_pose.orientation[0], dtype=np.float64).tolist()
+            )
+        key = (
+            env_index,
+            action_spec.label,
+            position_axes,
+            lower_bounds,
+            upper_bounds,
+            spacing,
+            tuple(reference_context),
+            poisson_config.hypersphere,
+            int(poisson_config.ncandidates),
+            poisson_config.optimization,
+        )
+        stream = self._poisson_streams.get(key)
+        if stream is None:
+            label_seed = sum(
+                (index + 1) * ord(character)
+                for index, character in enumerate(action_spec.label)
+            )
+            stream = PoissonDiskCandidateStream(
+                poisson_config,
+                lower_bounds=lower_bounds,
+                upper_bounds=upper_bounds,
+                radius=spacing,
+                seed=int(
+                    (self._host.randomization_seed or 0)
+                    + env_index * 10_007
+                    + label_seed
+                ),
+            )
+            self._poisson_streams[key] = stream
+        return stream
+
+    def _sample_pose_for_env(
+        self,
+        base_pose: PoseState,
+        rand_range: PoseRandomRange,
+        env_index: int,
+        *,
+        reference_poses: Optional[
+            Mapping[Union[RandomizationReference, str], PoseState]
+        ] = None,
+        distribution: Any = None,
+        sample_index: int = 0,
+        poisson_stream: Optional[PoissonDiskCandidateStream] = None,
+    ) -> PoseState:
+        """Sample one environment's pose from one region."""
+        return sample_pose_for_env(
+            self._host.randomization_rng,
+            base_pose=base_pose,
+            rand_range=rand_range,
+            env_index=env_index,
+            batch_size=self._host.batch_size,
+            reference_poses=reference_poses,
+            distribution=distribution,
+            sample_index=sample_index,
+            reset_index=self._host.randomization_reset_index,
+            poisson_stream=poisson_stream,
+        )
+
+    def _resolve_reference_base_pose_for_env(
+        self,
+        reference: Union[RandomizationReference, str],
+        sampled_poses: Dict[str, PoseState],
+        default_pose: PoseState,
+        env_index: int,
+    ) -> PoseState:
+        """Resolve one reference to the baseline pose the sampler adds its delta to.
+
+        For enum modes the target's own ``default_pose`` is returned. For an
+        entity-name reference the delta-carry algorithm is applied:
+        ``delta = ref_sampled * ref_default⁻¹``, then ``delta * default_pose``,
+        so the target moves with the referenced entity while preserving their
+        original spatial relationship.
+        """
+        if isinstance(reference, RandomizationReference):
+            return default_pose
+        bare, attr = parse_entity_reference(reference)
+        if attr is None and bare in self._host.operator_names:
+            attr = "base"  # plain operator name defaults to its base
+        if attr is not None:
+            if bare not in self._host.operator_names:
+                raise ValueError(
+                    f"Randomization reference '{reference}' — '.{attr}' is only "
+                    f"valid for operator names, but '{bare}' is not a known operator."
+                )
+            ref_default = self._baseline_or_live(f"{bare}.{attr}").select(env_index)
+            ref_sampled = sampled_poses.get(f"{bare}.{attr}")
+        else:
+            if bare not in self._host.object_names:
+                raise ValueError(
+                    f"Randomization reference '{reference}' is not a known mode "
+                    "('relative', 'absolute_world', 'absolute_base') nor an existing "
+                    "object/operator name."
+                )
+            ref_default = self._baseline_or_live(bare).select(env_index)
+            ref_sampled = sampled_poses.get(bare)
+        if ref_sampled is None:
+            return default_pose  # entity not randomized → no delta
+        delta = compose_pose(ref_sampled, inverse_pose(ref_default))
+        return compose_pose(delta, default_pose)
+
+    def _resolve_reference_poses_for_env(
+        self,
+        rand_range: PoseRandomRange,
+        sampled_poses: Dict[str, PoseState],
+        default_pose: PoseState,
+        env_index: int,
+    ) -> Dict[Union[RandomizationReference, str], PoseState]:
+        """Resolve every reference used by one range to its baseline pose."""
+        return {
+            reference: self._resolve_reference_base_pose_for_env(
+                reference,
+                sampled_poses,
+                default_pose,
+                env_index,
+            )
+            for reference in rand_range.references()
+        }
+
+    def _operator_default_eef_following_base(
+        self,
+        label: str,
+        owner: str,
+        env_index: int,
+        sampled_poses: Optional[Dict[str, PoseState]] = None,
+    ) -> tuple[PoseState, PoseState]:
+        """Return the operator's default EEF pose rigidly tracking its current
+        base, plus the resolved current base pose.
+
+        The recorded EEF baseline is a **world** frame pose. If the operator's
+        base is later randomized, naïvely reusing that world-frame default leaves
+        the EEF target at its old absolute position, and the IK chain has to
+        bridge a base-induced offset that grows with the base randomization
+        range — quickly becoming unreachable and surfacing as ``ik_unreachable``
+        failures even when the EEF offset itself is small.
+
+        Re-anchoring to the current base preserves the original eef-in-base
+        relative pose, so randomizing the base does not implicitly enlarge the
+        EEF reach budget.
+
+        ``sampled_poses`` (if given) is consulted for an in-flight base sample so
+        eef sampling sees the base that was just decided in the same iteration;
+        otherwise the host's live base pose is used.
+        """
+        default_eef_world = self._baseline_or_live(label).select(env_index)
+        default_base_world = self._baseline_or_live(f"{owner}.base").select(env_index)
+        current_base_world: Optional[PoseState] = None
+        if sampled_poses is not None:
+            current_base_world = sampled_poses.get(owner)
+        if current_base_world is None:
+            current_base_world = self._host.live_pose(f"{owner}.base").select(env_index)
+        eef_in_default_base = compose_pose(
+            inverse_pose(default_base_world), default_eef_world
+        )
+        return (
+            compose_pose(current_base_world, eef_in_default_base),
+            current_base_world,
+        )
+
+    def _sample_target_for_env(
+        self,
+        action_spec: RandomizationAction,
+        env_index: int,
+        working_poses: Dict[str, PoseState],
+        *,
+        candidate_index: int = 0,
+    ) -> tuple[Dict[str, PoseState], List[PendingRandomizationAction]]:
+        """Sample one action's pose for one environment."""
+        label = action_spec.label
+        owner = action_spec.owner
+        if action_spec.kind == "unknown" or (
+            action_spec.kind != "object" and owner not in self._host.operator_names
+        ):
+            self._logger.warning(
+                "Randomization key '%s' does not match any object or operator "
+                "handler — skipping.",
+                owner,
+            )
+            return {}, []
+
+        selected_range = self._select_region(
+            action_spec.randomization,
+            candidate_index=candidate_index,
+        )
+        distribution = action_spec.randomization.distribution
+        poisson_stream = self._poisson_stream_for_action(
+            action_spec,
+            env_index,
+            selected_range,
+            distribution,
+            working_poses,
+        )
+        if action_spec.kind == "object":
+            if RandomizationReference.ABSOLUTE_BASE in selected_range.references():
+                raise ValueError(
+                    f"Object '{owner}' randomization cannot use 'absolute_base' — "
+                    "only operator end-effector randomization is defined in a "
+                    "base frame."
+                )
+            default_pose = self._baseline_or_live(label).select(env_index)
+            sampled = self._sample_pose_for_env(
+                default_pose,
+                selected_range,
+                0,
+                reference_poses=self._resolve_reference_poses_for_env(
+                    selected_range,
+                    working_poses,
+                    default_pose,
+                    env_index,
+                ),
+                distribution=distribution,
+                sample_index=candidate_index,
+                poisson_stream=poisson_stream,
+            )
+            return {label: sampled}, [
+                self._pending_action(
+                    action_spec,
+                    owner,
+                    sampled,
+                    selected_range,
+                    env_index,
+                )
+            ]
+
+        if action_spec.kind == "operator_base":
+            if RandomizationReference.ABSOLUTE_BASE in selected_range.references():
+                raise ValueError(
+                    f"Operator '{owner}' base randomization cannot use "
+                    "'absolute_base' — the base IS the frame."
+                )
+            default_pose = self._baseline_or_live(label).select(env_index)
+            sampled = self._sample_pose_for_env(
+                default_pose,
+                selected_range,
+                0,
+                reference_poses=self._resolve_reference_poses_for_env(
+                    selected_range,
+                    working_poses,
+                    default_pose,
+                    env_index,
+                ),
+                distribution=distribution,
+                sample_index=candidate_index,
+                poisson_stream=poisson_stream,
+            )
+        elif action_spec.kind == "operator_eef":
+            sampled = self._sample_operator_eef_pose_for_env(
+                label,
+                owner,
+                selected_range,
+                env_index,
+                working_poses,
+                distribution=distribution,
+                sample_index=candidate_index,
+                poisson_stream=poisson_stream,
+            )
+        else:
+            raise ValueError(f"Unknown randomization action kind: {action_spec.kind}")
+        return {
+            owner: sampled,
+            label: sampled,
+        }, [
+            self._pending_action(
+                action_spec,
+                owner,
+                sampled,
+                selected_range,
+                env_index,
+            )
+        ]
+
+    def _pending_action(
+        self,
+        action_spec: RandomizationAction,
+        owner: str,
+        pose: PoseState,
+        selected_range: PoseRandomRange,
+        env_index: int,
+    ) -> PendingRandomizationAction:
+        """Wrap one sampled pose with its resolved radius and constraints."""
+        return PendingRandomizationAction(
+            kind=action_spec.kind,
+            owner=owner,
+            label=action_spec.label,
+            pose=pose,
+            radius=self._collision_radius(
+                kind=action_spec.kind,
+                owner=owner,
+                env_index=env_index,
+                spec_radius=float(selected_range.collision_radius),
+                margin=float(selected_range.collision_margin),
+            ),
+            references=selected_range.references(),
+            constraints=action_spec.randomization.constraints,
+        )
+
+    def _sample_operator_eef_pose_for_env(
+        self,
+        label: str,
+        owner: str,
+        rand_range: PoseRandomRange,
+        env_index: int,
+        sampled_poses: Dict[str, PoseState],
+        *,
+        distribution: Any = None,
+        sample_index: int = 0,
+        poisson_stream: Optional[PoissonDiskCandidateStream] = None,
+    ) -> PoseState:
+        """Sample one operator's EEF pose for one environment."""
+        following_base_default, base_world = self._operator_default_eef_following_base(
+            label,
+            owner,
+            env_index,
+            sampled_poses,
+        )
+        references = rand_range.references()
+        if references == (RandomizationReference.ABSOLUTE_BASE,):
+            # The range is expressed in the base frame, so sample there and lift
+            # the result back into the world frame.
+            default_in_base = compose_pose(
+                inverse_pose(base_world),
+                following_base_default,
+            )
+            sampled_in_base = self._sample_pose_for_env(
+                default_in_base,
+                rand_range,
+                0,
+                distribution=distribution,
+                sample_index=sample_index,
+                poisson_stream=poisson_stream,
+            )
+            return compose_pose(base_world, sampled_in_base)
+
+        snapshot_default = self._baseline_or_live(label).select(env_index)
+        reference_poses: Dict[Union[RandomizationReference, str], PoseState] = {}
+        for reference in references:
+            if isinstance(reference, RandomizationReference):
+                reference_poses[reference] = following_base_default
+            else:
+                reference_poses[reference] = self._resolve_reference_base_pose_for_env(
+                    reference,
+                    sampled_poses,
+                    snapshot_default,
+                    env_index,
+                )
+        return self._sample_pose_for_env(
+            following_base_default,
+            rand_range,
+            0,
+            reference_poses=reference_poses,
+            distribution=distribution,
+            sample_index=sample_index,
+            poisson_stream=poisson_stream,
+        )
+
+    # ------------------------------------------------------------------
+    #  Collision radii
+    # ------------------------------------------------------------------
+
+    def _collision_radius(
+        self,
+        *,
+        kind: str,
+        owner: str,
+        env_index: int,
+        spec_radius: float,
+        margin: float = 0.0,
+    ) -> float:
+        """Resolve a region's ``collision_radius`` for one environment.
+
+        Positive values are used verbatim; ``0`` stays exempt; a negative value
+        requests ``auto`` and resolves to the entity's conservative
+        support-geometry radius plus ``collision_margin`` (cached per
+        entity/environment).
+        """
+        radius = float(spec_radius)
+        if radius >= 0.0:
+            return radius
+        auto = self._auto_collision_radius(kind=kind, owner=owner, env_index=env_index)
+        return auto + float(margin)
+
+    def _auto_collision_radius(self, *, kind: str, owner: str, env_index: int) -> float:
+        """Return the host-derived conservative radius for one entity."""
+        key = (kind, owner, env_index)
+        cached = self._auto_radius_cache.get(key)
+        if cached is not None:
+            return cached
+        if kind == "object":
+            geometry = self._host.get_support_geometry(owner, env_index)
+        elif kind in ("operator_base", "operator_eef"):
+            part = "base" if kind == "operator_base" else "eef"
+            geometry = self._host.get_operator_support_geometry(owner, part, env_index)
+        else:
+            raise KeyError(
+                f"Unknown randomization kind {kind!r} for auto collision_radius "
+                f"of '{owner}'."
+            )
+        cached = float(geometry.radius)
+        self._auto_radius_cache[key] = cached
+        return cached
+
+    # ------------------------------------------------------------------
+    #  Deterministic visibility preflight
+    # ------------------------------------------------------------------
+
+    def run_visibility_preflight(self, env_mask: np.ndarray) -> None:
+        """Fail fast when a ``visible_in`` region is provably empty.
+
+        A ``visible_in`` object region whose whole position box lies outside a
+        required camera frustum can never be satisfied, so it is reported with
+        ``attempts=0`` instead of exhausting the attempt loop.
+        """
+        action_specs = self.plan.actions
+        infeasibility = find_visibility_infeasibility(
+            {
+                label: spec.randomization
+                for label, spec in action_specs.items()
+                if spec.kind == "object"
+            },
+            env_mask=env_mask,
+            default_pose_of=self._host.baseline_pose,
+            camera_names_of=self._visibility_camera_names,
+            camera_model_of=self._host.get_camera_model,
+        )
+        if infeasibility is None:
+            return
+        constraints = action_specs[infeasibility.target].randomization.constraints
+        self._host.record_randomization_diagnostics(
+            infeasibility.env_index,
+            {
+                "group": "component",
+                "generator": "deterministic_infeasible",
+                "member": infeasibility.target,
+                "attempts": 0,
+                "violations": list(infeasibility.violations),
+                "minimum_clearance": float("-inf"),
+                "mode": constraints.failure.mode.value,
+            },
+        )
+        raise RandomizationFailureError(
+            target=infeasibility.target,
+            attempts=0,
+            violations=list(infeasibility.violations),
+            minimum_clearance=float("-inf"),
+        )
+
+    def _visibility_camera_names(
+        self,
+        visible: RandomizationVisibilityConfig,
+        env_index: int,
+    ) -> List[str]:
+        """Resolve a visibility config's camera list for one environment."""
+        if visible.cameras != "all":
+            return list(visible.cameras)
+        return self._host.camera_names()
 
     def sample_component_for_env(
         self,
@@ -227,7 +915,7 @@ class RandomizationExecutor:
                 float,
             ]
         ] = None
-        action_specs = self._host.randomization_plan().actions
+        action_specs = self.plan.actions
         configured_attempts = [
             int(action_specs[label].randomization.constraints.failure.max_attempts)
             for label in component
@@ -282,7 +970,7 @@ class RandomizationExecutor:
             violations: List[str] = []
             minimum_clearance = float("inf")
             for action_label in component:
-                sampled_poses, actions = self._host.sample_target(
+                sampled_poses, actions = self._sample_target_for_env(
                     action_specs[action_label],
                     env_index,
                     working_poses,
@@ -567,7 +1255,7 @@ class RandomizationExecutor:
         order is independently shuffled for every environment/reset, so the
         YAML declaration order does not become a spatial bias.
         """
-        action_specs = self._host.randomization_plan().actions
+        action_specs = self.plan.actions
         accepted_env_poses = {
             name: pose.select(env_index)
             for name, pose in accepted_sampled_poses.items()
@@ -576,7 +1264,7 @@ class RandomizationExecutor:
         sampled_poses: Dict[str, PoseState] = {}
         actions: List[PendingRandomizationAction] = []
         local_participants: List[CollisionParticipant] = []
-        dependencies = self._host.action_dependencies()
+        dependencies = self.action_dependencies()
         remaining = set(component)
         order: list[str] = []
         while remaining:
@@ -623,7 +1311,7 @@ class RandomizationExecutor:
             best: tuple[float, PoseState, PendingRandomizationAction, str] | None = None
             accepted = False
             for attempt in range(max_attempts):
-                candidate_poses, candidate_actions = self._host.sample_target(
+                candidate_poses, candidate_actions = self._sample_target_for_env(
                     action_spec,
                     env_index,
                     working_poses,
@@ -808,7 +1496,7 @@ class RandomizationExecutor:
         The host only has to be able to read and write a named camera's
         world pose.
         """
-        for camera_name, randomization in self._host.camera_randomization.items():
+        for camera_name, randomization in self.camera_randomization.items():
             canonical = canonical_randomization_spec(randomization)
             rand_range = select_randomization_region(
                 self._host.randomization_rng,
@@ -849,8 +1537,8 @@ class RandomizationExecutor:
             self._host.set_camera_pose(camera_name, sampled, env_mask)
 
     def apply_randomization(self, env_mask: np.ndarray) -> None:
-        self._host.begin_randomization_episode()
-        plan = self._host.randomization_plan()
+        self.begin_episode()
+        plan = self.plan
         components = [list(component) for component in plan.components]
         action_specs = plan.actions
         hard_sphere_groups = {
@@ -899,7 +1587,7 @@ class RandomizationExecutor:
         # A ``visible_in`` object region whose whole position box is outside a
         # required camera frustum is deterministically infeasible — fail fast
         # with a diagnostic instead of exhausting the attempt loop.
-        self._host.run_visibility_preflight(env_mask)
+        self.run_visibility_preflight(env_mask)
 
         # Object components retain reference-connected and separated joint
         # sampling, but now see the already-final operator/camera context.
@@ -933,7 +1621,7 @@ class RandomizationExecutor:
         hard_sphere_rsa_group: tuple[str, RandomizationGroupConfig] | None = None,
         use_rsa: bool = False,
     ) -> tuple[Dict[str, PoseState], List[PendingRandomizationAction]]:
-        key_buffers = {name: self._host.template_pose(name) for name in component}
+        key_buffers = {name: self._template_pose(name) for name in component}
         action_buffers: Dict[str, PendingRandomizationAction] = {}
         action_order: List[str] = []
 
@@ -985,7 +1673,7 @@ class RandomizationExecutor:
                 key_buffers[name].orientation[env_index] = pose.orientation[0]
             for action in env_actions:
                 if action.label not in action_buffers:
-                    template = self._host.template_pose(action.label)
+                    template = self._template_pose(action.label)
                     buffered_radius: float | np.ndarray = float(action.radius)
                     action_ancestors = resolve_collision_ancestors(
                         action.ancestors,

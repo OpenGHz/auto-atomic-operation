@@ -35,6 +35,7 @@ from auto_atom.config.randomization import (
     OperatorRandomizationConfig,
     PoseRandomizationSpec,
     PoseRandomRange,
+    ResolvedRandomizationConfig,
     pose_randomization_regions,
 )
 from auto_atom.config.reference import PoseReference, RandomizationReference
@@ -194,7 +195,7 @@ def _configure_tk_dpi_and_fonts(root: tk.Tk) -> None:
 
 @dataclass(frozen=True)
 class ReloadedTuningConfig:
-    randomization: Dict[str, PoseRandomizationSpec | OperatorRandomizationConfig]
+    randomization: ResolvedRandomizationConfig
     initial_poses: Dict[str, PoseOverrideConfig]
     operator_initial_states: Dict[str, OperatorInitialState]
 
@@ -331,7 +332,9 @@ def _parse_tuning_config(cfg: DictConfig) -> ReloadedTuningConfig:
             operator_initial_states[name] = op_cfg.initial_state
 
     return ReloadedTuningConfig(
-        randomization=dict(task_cfg.randomization),
+        randomization=ResolvedRandomizationConfig.from_scope_config(
+            task_cfg.randomization
+        ),
         initial_poses=dict(task_cfg.initial_pose),
         operator_initial_states=operator_initial_states,
     )
@@ -500,7 +503,7 @@ class RandomizationInspector:
         self.apply_selected_case()
 
     def _apply_reloaded_defaults(self, tuning_config: ReloadedTuningConfig) -> None:
-        self.backend.randomization = dict(tuning_config.randomization)
+        self.backend.randomization = tuning_config.randomization
         self.backend.initial_poses = dict(tuning_config.initial_poses)
         self.operator_initial_states = dict(tuning_config.operator_initial_states)
         self.backend.operator_initial_states = dict(self.operator_initial_states)
@@ -522,9 +525,9 @@ class RandomizationInspector:
         self.backend.get_env().refresh_viewer()
 
     def _collect_targets(self) -> List[RandomizationTarget]:
-        self.backend._validate_randomization_configuration()  # type: ignore[attr-defined]
+        self.backend.randomization_executor.validate_configuration()
         targets: List[RandomizationTarget] = []
-        for name, rand in self.backend.randomization.items():
+        for name, rand in self.backend.randomization.scope.entities.items():
             if name in self.backend.object_handlers:
                 if isinstance(rand, OperatorRandomizationConfig):
                     continue
@@ -645,16 +648,17 @@ class RandomizationInspector:
     ) -> Callable[[], PoseState]:
         """Return a closure that yields the operator's default EEF pose
         re-anchored to the operator's **current** base, by delegating to
-        ``MujocoTaskBackend._operator_default_eef_following_base`` so the
-        runtime sampler and this tool agree on the same semantics.
+        the executor's ``_operator_default_eef_following_base`` so the runtime
+        sampler and this tool agree on the same semantics.
         """
         backend = self.backend
+        executor = backend.randomization_executor
 
         def _getter() -> PoseState:
             poses = []
             for env_index in range(backend.batch_size):
-                follow_default, _ = backend._operator_default_eef_following_base(  # type: ignore[attr-defined]
-                    name, handler, env_index, sampled_poses=None
+                follow_default, _ = executor._operator_default_eef_following_base(
+                    f"{name}.eef", name, env_index, sampled_poses=None
                 )
                 poses.append(follow_default)
             return PoseState(
@@ -869,7 +873,7 @@ class RandomizationInspector:
     def _sorted_targets_for_apply(self) -> List[RandomizationTarget]:
         """Order targets so entity-name-referenced entries resolve after their
         referents (delta-carry depends on the referenced pose being sampled)."""
-        action_order = self.backend._randomization_order()
+        action_order = self.backend.randomization_executor.plan.order
         order_index = {name: idx for idx, name in enumerate(action_order)}
 
         def sort_key(target: RandomizationTarget) -> tuple:

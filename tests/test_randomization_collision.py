@@ -10,9 +10,14 @@ import pytest
 
 from auto_atom.backend.mjc.mujoco_backend import MujocoTaskBackend
 from auto_atom.config.randomization import ResolvedRandomizationScope
-from auto_atom.randomization import CollisionParticipant
+from auto_atom.randomization import (
+    CollisionParticipant,
+    camera_frustum_disjoint_box,
+    find_collision_participant,
+)
 from auto_atom.config.motion import PoseControlConfig
 from auto_atom.config.randomization import (
+    ResolvedRandomizationConfig,
     OperatorRandomizationConfig,
     RandomizationConstraintConfig,
     PoseRandomizationConfig,
@@ -161,8 +166,10 @@ def _make_backend(
         env=DummyEnv(batch_size=1),
         operator_handlers={},
         object_handlers=object_handlers,
-        randomization_scope=_scope(randomization, strategy=strategy),
-        randomization_groups=randomization_groups or {},
+        randomization=ResolvedRandomizationConfig(
+            scope=_scope(randomization, strategy=strategy),
+            groups=dict(randomization_groups or {}),
+        ),
     )
     backend._default_object_poses = {
         name: handler.get_pose() for name, handler in object_handlers.items()
@@ -224,7 +231,7 @@ def test_hard_sphere_rsa_resamples_locally_with_heterogeneous_radii() -> None:
     rng = OrderedGroupRNG([0.0, 0.0, 0.18], order=("large", "small"))
     backend._rng = rng
 
-    backend._apply_randomization(np.asarray([True], dtype=bool))
+    backend.randomization_executor.apply_randomization(np.asarray([True], dtype=bool))
 
     large = backend.object_handlers["large"].get_pose().position[0]
     small = backend.object_handlers["small"].get_pose().position[0]
@@ -258,7 +265,9 @@ def test_hard_sphere_rsa_error_reports_an_infeasible_member() -> None:
     backend._rng = OrderedGroupRNG([0.0, 0.0, 0.0], order=("large", "small"))
 
     with pytest.raises(RandomizationFailureError, match="small.*after 2 attempts"):
-        backend._apply_randomization(np.asarray([True], dtype=bool))
+        backend.randomization_executor.apply_randomization(
+            np.asarray([True], dtype=bool)
+        )
 
 
 def test_hard_sphere_rsa_best_effort_records_diagnostics() -> None:
@@ -286,7 +295,7 @@ def test_hard_sphere_rsa_best_effort_records_diagnostics() -> None:
     )
     backend._rng = OrderedGroupRNG([0.0, 0.0], order=("large", "small"))
 
-    backend._apply_randomization(np.asarray([True], dtype=bool))
+    backend.randomization_executor.apply_randomization(np.asarray([True], dtype=bool))
 
     diagnostics = backend.get_randomization_diagnostics()
     assert diagnostics["attempts"][0]["group"] == "tabletop"
@@ -318,7 +327,7 @@ def test_collision_rejection_resamples_overlapping_objects() -> None:
     )
     backend._rng = SequenceRNG([0.0, 0.0, 0.0, 0.0, 0.2, 0.0])
 
-    backend._apply_randomization(np.asarray([True], dtype=bool))
+    backend.randomization_executor.apply_randomization(np.asarray([True], dtype=bool))
 
     vase_pos = backend.object_handlers["vase"].get_pose().position[0]
     vase2_pos = backend.object_handlers["vase2"].get_pose().position[0]
@@ -349,7 +358,7 @@ def test_reference_chain_skips_collision_rejection_with_ancestor() -> None:
     )
     backend._rng = SequenceRNG([0.0, 0.0, 0.0, 0.0])
 
-    backend._apply_randomization(np.asarray([True], dtype=bool))
+    backend.randomization_executor.apply_randomization(np.asarray([True], dtype=bool))
 
     flower_pos = backend.object_handlers["flower"].get_pose().position[0]
     assert np.allclose(flower_pos[:2], [0.0, 0.0])
@@ -412,7 +421,7 @@ def test_child_collision_resamples_reference_component() -> None:
         ]
     )
 
-    backend._apply_randomization(np.asarray([True], dtype=bool))
+    backend.randomization_executor.apply_randomization(np.asarray([True], dtype=bool))
 
     vase_pos = backend.object_handlers["vase"].get_pose().position[0]
     flower_pos = backend.object_handlers["flower"].get_pose().position[0]
@@ -436,14 +445,16 @@ def test_direct_operator_randomization_raises_type_error() -> None:
         env=DummyEnv(batch_size=1),
         operator_handlers={"arm": handler},
         object_handlers={},
-        randomization_scope=_scope(
-            {
-                "arm": PoseRandomRange(
-                    x=(0.1, 0.1),
-                    y=(0.0, 0.0),
-                    collision_radius=0.1,
-                )
-            }
+        randomization=ResolvedRandomizationConfig(
+            scope=_scope(
+                {
+                    "arm": PoseRandomRange(
+                        x=(0.1, 0.1),
+                        y=(0.0, 0.0),
+                        collision_radius=0.1,
+                    )
+                }
+            )
         ),
     )
     backend._default_operator_base_poses = {"arm": handler.get_base_pose()}
@@ -451,7 +462,9 @@ def test_direct_operator_randomization_raises_type_error() -> None:
     backend._rng = SequenceRNG([0.1, 0.0])
 
     with pytest.raises(TypeError, match="nested form"):
-        backend._apply_randomization(np.asarray([True], dtype=bool))
+        backend.randomization_executor.apply_randomization(
+            np.asarray([True], dtype=bool)
+        )
 
 
 def test_direct_operator_multi_region_randomization_raises_type_error() -> None:
@@ -468,17 +481,21 @@ def test_direct_operator_multi_region_randomization_raises_type_error() -> None:
         env=DummyEnv(batch_size=1),
         operator_handlers={"arm": handler},
         object_handlers={},
-        randomization_scope=_scope(
-            {
-                "arm": PoseRandomizationConfig(
-                    regions=[PoseRandomRange(), PoseRandomRange()]
-                )
-            }
+        randomization=ResolvedRandomizationConfig(
+            scope=_scope(
+                {
+                    "arm": PoseRandomizationConfig(
+                        regions=[PoseRandomRange(), PoseRandomRange()]
+                    )
+                }
+            )
         ),
     )
 
     with pytest.raises(TypeError, match="nested form"):
-        backend._apply_randomization(np.asarray([True], dtype=bool))
+        backend.randomization_executor.apply_randomization(
+            np.asarray([True], dtype=bool)
+        )
 
 
 def test_collision_rejection_warns_after_attempts_exhausted(caplog) -> None:
@@ -512,7 +529,9 @@ def test_collision_rejection_warns_after_attempts_exhausted(caplog) -> None:
     backend._rng = SequenceRNG([0.0] * 12)
 
     with caplog.at_level(logging.WARNING):
-        backend._apply_randomization(np.asarray([True], dtype=bool))
+        backend.randomization_executor.apply_randomization(
+            np.asarray([True], dtype=bool)
+        )
 
     assert "Collision rejection exhausted for 'vase2'" in caplog.text
     vase2_pos = backend.object_handlers["vase2"].get_pose().position[0]
@@ -544,7 +563,9 @@ def test_canonical_error_policy_raises_with_collision_diagnostics() -> None:
     backend._rng = SequenceRNG([0.0] * 8)
 
     with pytest.raises(RuntimeError, match="after 2 attempts"):
-        backend._apply_randomization(np.asarray([True], dtype=bool))
+        backend.randomization_executor.apply_randomization(
+            np.asarray([True], dtype=bool)
+        )
 
     diagnostics = backend.get_randomization_diagnostics(0)
     assert diagnostics["attempts"][0]["attempts"] == 2
@@ -576,10 +597,12 @@ def test_auto_collision_radius_resolves_from_support_geometry(
 
     monkeypatch.setattr(backend, "get_support_geometry", _stub_geometry)
 
-    auto = backend._auto_collision_radius(kind="object", owner="vase", env_index=0)
+    auto = backend.randomization_executor._auto_collision_radius(
+        kind="object", owner="vase", env_index=0
+    )
     assert auto == 0.12
     # Auto + margin.
-    resolved = backend._resolve_collision_radius(
+    resolved = backend.randomization_executor._collision_radius(
         kind="object",
         owner="vase",
         env_index=0,
@@ -589,20 +612,24 @@ def test_auto_collision_radius_resolves_from_support_geometry(
     assert resolved == 0.13
     # Explicit > 0 passes through; 0 stays exempt.
     assert (
-        backend._resolve_collision_radius(
+        backend.randomization_executor._collision_radius(
             kind="object", owner="vase", env_index=0, spec_radius=0.04, margin=0.0
         )
         == 0.04
     )
     assert (
-        backend._resolve_collision_radius(
+        backend.randomization_executor._collision_radius(
             kind="object", owner="vase", env_index=0, spec_radius=0.0, margin=0.0
         )
         == 0.0
     )
     # Support geometry is queried once and cached per (kind, entity, env).
-    backend._auto_collision_radius(kind="object", owner="vase", env_index=0)
-    assert backend._auto_radius_cache[("object", "vase", 0)] == 0.12
+    backend.randomization_executor._auto_collision_radius(
+        kind="object", owner="vase", env_index=0
+    )
+    assert (
+        backend.randomization_executor._auto_radius_cache[("object", "vase", 0)] == 0.12
+    )
 
     # Operator base/eef auto resolves via its own geometry seam (stubbed here)
     # and caches under the operator-kind key, still adding ``collision_margin``.
@@ -626,18 +653,26 @@ def test_auto_collision_radius_resolves_from_support_geometry(
     )
 
     assert (
-        backend._auto_collision_radius(kind="operator_base", owner="arm", env_index=0)
+        backend.randomization_executor._auto_collision_radius(
+            kind="operator_base", owner="arm", env_index=0
+        )
         == 0.07
     )
-    assert backend._resolve_collision_radius(
+    assert backend.randomization_executor._collision_radius(
         kind="operator_eef",
         owner="arm",
         env_index=0,
         spec_radius=-1.0,
         margin=0.02,
     ) == pytest.approx(0.23)
-    assert backend._auto_radius_cache[("operator_base", "arm", 0)] == 0.07
-    assert backend._auto_radius_cache[("operator_eef", "arm", 0)] == 0.21
+    assert (
+        backend.randomization_executor._auto_radius_cache[("operator_base", "arm", 0)]
+        == 0.07
+    )
+    assert (
+        backend.randomization_executor._auto_radius_cache[("operator_eef", "arm", 0)]
+        == 0.21
+    )
 
 
 def test_maximin_reference_component_is_declaration_order_independent() -> None:
@@ -652,7 +687,9 @@ def test_maximin_reference_component_is_declaration_order_independent() -> None:
             randomization=randomization,
             object_positions={"vase": (0.0, 0.0, 0.0), "flower": (0.0, 0.0, 0.0)},
         )
-        backend._apply_randomization(np.asarray([True], dtype=bool))
+        backend.randomization_executor.apply_randomization(
+            np.asarray([True], dtype=bool)
+        )
         return {
             name: backend.object_handlers[name].get_pose().position[0].copy()
             for name in ("vase", "flower")
@@ -697,10 +734,10 @@ def test_first_feasible_non_iid_generator_avoids_accepted_samples_across_resets(
     )
 
     backend._randomization_reset_index = 1
-    backend._apply_randomization(np.asarray([True], dtype=bool))
+    backend.randomization_executor.apply_randomization(np.asarray([True], dtype=bool))
     first = backend.object_handlers["vase"].get_pose().position[0].copy()
     backend._randomization_reset_index = 2
-    backend._apply_randomization(np.asarray([True], dtype=bool))
+    backend.randomization_executor.apply_randomization(np.asarray([True], dtype=bool))
     second = backend.object_handlers["vase"].get_pose().position[0].copy()
 
     assert not np.allclose(first, second)
@@ -729,9 +766,9 @@ def test_poisson_disk_uses_physical_bounds_across_resets() -> None:
         object_positions={"vase": (0.0, 0.0, 0.0)},
     )
 
-    backend._apply_randomization(np.asarray([True], dtype=bool))
+    backend.randomization_executor.apply_randomization(np.asarray([True], dtype=bool))
     first = float(backend.object_handlers["vase"].get_pose().position[0, 0])
-    backend._apply_randomization(np.asarray([True], dtype=bool))
+    backend.randomization_executor.apply_randomization(np.asarray([True], dtype=bool))
     second = float(backend.object_handlers["vase"].get_pose().position[0, 0])
 
     assert 0.0 <= first <= 1.0
@@ -758,7 +795,7 @@ def test_maximin_records_only_the_selected_candidate_not_the_whole_group() -> No
         object_positions={"vase": (0.0, 0.0, 0.0)},
     )
     backend._randomization_reset_index = 1
-    backend._apply_randomization(np.asarray([True], dtype=bool))
+    backend.randomization_executor.apply_randomization(np.asarray([True], dtype=bool))
 
     assert len(backend.randomization_executor.history[("vase",)]) == 1
 
@@ -866,7 +903,7 @@ def test_mixed_axis_references_sample_independently() -> None:
     )
     backend._rng = SequenceRNG([0.1, -0.3, 0.25])
 
-    backend._apply_randomization(np.asarray([True], dtype=bool))
+    backend.randomization_executor.apply_randomization(np.asarray([True], dtype=bool))
 
     pose = backend.object_handlers["block"].get_pose().select(0)
     assert np.allclose(pose.position[0], [1.1, 2.0, -0.3])
@@ -901,7 +938,7 @@ def test_axis_entity_reference_carries_only_that_axis() -> None:
     )
     backend._rng = SequenceRNG([2.0, 3.0, 0.0, 0.0])
 
-    backend._apply_randomization(np.asarray([True], dtype=bool))
+    backend.randomization_executor.apply_randomization(np.asarray([True], dtype=bool))
 
     block = backend.object_handlers["block"].get_pose().position[0]
     assert np.allclose(block, [10.0, 22.0, 0.0])
@@ -936,7 +973,7 @@ def test_axis_entity_reference_keeps_global_baseline_for_unconfigured_axes() -> 
     )
     backend._rng = SequenceRNG([2.0, 4.0, 0.0])
 
-    backend._apply_randomization(np.asarray([True], dtype=bool))
+    backend.randomization_executor.apply_randomization(np.asarray([True], dtype=bool))
 
     block = backend.object_handlers["block"].get_pose().position[0]
     assert np.allclose(block, [11.0, 22.0, 0.0])
@@ -965,13 +1002,15 @@ def test_camera_rejects_illegal_axis_level_reference() -> None:
         env=DummyEnv(batch_size=1),
         operator_handlers={},
         object_handlers={},
-        randomization_scope=_scope(
-            {},
-            cameras={
-                "camera": PoseRandomRange.model_validate(
-                    {"z": {"range": [0.0, 0.0], "reference": "anchor"}}
-                )
-            },
+        randomization=ResolvedRandomizationConfig(
+            scope=_scope(
+                {},
+                cameras={
+                    "camera": PoseRandomRange.model_validate(
+                        {"z": {"range": [0.0, 0.0], "reference": "anchor"}}
+                    )
+                },
+            )
         ),
     )
 
@@ -996,25 +1035,27 @@ def test_eef_rejects_mixed_absolute_base_axis_references() -> None:
             )
         },
         object_handlers={},
-        randomization_scope=_scope(
-            {
-                "arm": OperatorRandomizationConfig(
-                    eef=PoseRandomRange.model_validate(
-                        {
-                            "reference": "absolute_base",
-                            "z": {
-                                "range": [0.0, 0.0],
-                                "reference": "absolute_world",
-                            },
-                        }
+        randomization=ResolvedRandomizationConfig(
+            scope=_scope(
+                {
+                    "arm": OperatorRandomizationConfig(
+                        eef=PoseRandomRange.model_validate(
+                            {
+                                "reference": "absolute_base",
+                                "z": {
+                                    "range": [0.0, 0.0],
+                                    "reference": "absolute_world",
+                                },
+                            }
+                        )
                     )
-                )
-            }
+                }
+            )
         ),
     )
 
     with pytest.raises(ValueError, match="cannot mix 'absolute_base'"):
-        backend._validate_randomization_configuration()
+        backend.randomization_executor.validate_configuration()
 
 
 def test_disjoint_object_regions_use_each_region_configuration() -> None:
@@ -1041,9 +1082,9 @@ def test_disjoint_object_regions_use_each_region_configuration() -> None:
     )
     backend._rng = SequenceRNG([0.0, 0.1, 0.2, 1.0, 1.5, -0.4])
 
-    backend._apply_randomization(np.asarray([True], dtype=bool))
+    backend.randomization_executor.apply_randomization(np.asarray([True], dtype=bool))
     first_position = backend.object_handlers["block"].get_pose().position[0].copy()
-    backend._apply_randomization(np.asarray([True], dtype=bool))
+    backend.randomization_executor.apply_randomization(np.asarray([True], dtype=bool))
     second_position = backend.object_handlers["block"].get_pose().position[0].copy()
 
     assert np.allclose(first_position, [1.1, 1.2, 0.0])
@@ -1059,11 +1100,13 @@ def test_multi_region_selection_is_equiprobable() -> None:
         },
         object_positions={"block": (0.0, 0.0, 0.0)},
     )
-    regions = backend.randomization_scope.entities["block"]
+    regions = backend.randomization.scope.entities["block"]
     assert isinstance(regions, PoseRandomizationConfig)
 
     backend._rng = np.random.default_rng(123)
-    selected = [backend._select_randomization_region(regions) for _ in range(10_000)]
+    selected = [
+        backend.randomization_executor._select_region(regions) for _ in range(10_000)
+    ]
 
     first_count = sum(region is regions.regions[0] for region in selected)
     second_count = sum(region is regions.regions[1] for region in selected)
@@ -1105,7 +1148,7 @@ def test_collision_retry_reselects_a_multi_region_target() -> None:
     )
     backend._rng = SequenceRNG([0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0])
 
-    backend._apply_randomization(np.asarray([True], dtype=bool))
+    backend.randomization_executor.apply_randomization(np.asarray([True], dtype=bool))
 
     block_position = backend.object_handlers["block"].get_pose().position[0]
     assert np.allclose(block_position[:2], [1.0, 0.0])
@@ -1127,34 +1170,36 @@ def test_operator_eef_multi_region_randomization() -> None:
         env=DummyEnv(batch_size=1),
         operator_handlers={"arm": handler},
         object_handlers={},
-        randomization_scope=_scope(
-            {
-                "arm": OperatorRandomizationConfig(
-                    eef=PoseRandomizationConfig(
-                        regions=[
-                            PoseRandomRange(
-                                reference=RandomizationReference.RELATIVE,
-                                x=(0.1, 0.1),
-                                collision_radius=0.0,
-                            ),
-                            PoseRandomRange(
-                                reference=RandomizationReference.ABSOLUTE_WORLD,
-                                x=(1.0, 1.0),
-                                collision_radius=0.0,
-                            ),
-                        ]
+        randomization=ResolvedRandomizationConfig(
+            scope=_scope(
+                {
+                    "arm": OperatorRandomizationConfig(
+                        eef=PoseRandomizationConfig(
+                            regions=[
+                                PoseRandomRange(
+                                    reference=RandomizationReference.RELATIVE,
+                                    x=(0.1, 0.1),
+                                    collision_radius=0.0,
+                                ),
+                                PoseRandomRange(
+                                    reference=RandomizationReference.ABSOLUTE_WORLD,
+                                    x=(1.0, 1.0),
+                                    collision_radius=0.0,
+                                ),
+                            ]
+                        )
                     )
-                )
-            }
+                }
+            )
         ),
     )
     backend._default_operator_base_poses = {"arm": handler.get_base_pose()}
     backend._default_operator_eef_poses = {"arm": handler.get_end_effector_pose()}
     backend._rng = SequenceRNG([0.0, 0.1, 1.0, 1.0])
 
-    backend._apply_randomization(np.asarray([True], dtype=bool))
+    backend.randomization_executor.apply_randomization(np.asarray([True], dtype=bool))
     first_position = handler.get_end_effector_pose().position[0].copy()
-    backend._apply_randomization(np.asarray([True], dtype=bool))
+    backend.randomization_executor.apply_randomization(np.asarray([True], dtype=bool))
     second_position = handler.get_end_effector_pose().position[0].copy()
 
     assert np.allclose(first_position, [0.3, 0.0, 0.3])
@@ -1174,21 +1219,23 @@ def test_multi_region_references_are_all_dependencies() -> None:
         env=DummyEnv(batch_size=1),
         operator_handlers={},
         object_handlers=handlers,
-        randomization_scope=_scope(
-            {
-                "anchor_a": PoseRandomRange(),
-                "anchor_b": PoseRandomRange(),
-                "block": PoseRandomizationConfig(
-                    regions=[
-                        PoseRandomRange(reference="anchor_a"),
-                        PoseRandomRange(reference="anchor_b"),
-                    ]
-                ),
-            }
+        randomization=ResolvedRandomizationConfig(
+            scope=_scope(
+                {
+                    "anchor_a": PoseRandomRange(),
+                    "anchor_b": PoseRandomRange(),
+                    "block": PoseRandomizationConfig(
+                        regions=[
+                            PoseRandomRange(reference="anchor_a"),
+                            PoseRandomRange(reference="anchor_b"),
+                        ]
+                    ),
+                }
+            )
         ),
     )
 
-    dependencies = backend._randomization_dependencies()
+    dependencies = backend.randomization_executor.action_dependencies()
 
     assert dependencies["block"] == {"anchor_a", "anchor_b"}
 
@@ -1206,21 +1253,23 @@ def test_axis_level_references_are_dependencies() -> None:
         env=DummyEnv(batch_size=1),
         operator_handlers={},
         object_handlers=handlers,
-        randomization_scope=_scope(
-            {
-                "anchor_a": PoseRandomRange(),
-                "anchor_b": PoseRandomRange(),
-                "block": PoseRandomRange.model_validate(
-                    {
-                        "reference": "anchor_a",
-                        "z": {"range": [0.0, 0.0], "reference": "anchor_b"},
-                    }
-                ),
-            }
+        randomization=ResolvedRandomizationConfig(
+            scope=_scope(
+                {
+                    "anchor_a": PoseRandomRange(),
+                    "anchor_b": PoseRandomRange(),
+                    "block": PoseRandomRange.model_validate(
+                        {
+                            "reference": "anchor_a",
+                            "z": {"range": [0.0, 0.0], "reference": "anchor_b"},
+                        }
+                    ),
+                }
+            )
         ),
     )
 
-    dependencies = backend._randomization_dependencies()
+    dependencies = backend.randomization_executor.action_dependencies()
 
     assert dependencies["block"] == {"anchor_a", "anchor_b"}
 
@@ -1243,23 +1292,25 @@ def test_operator_multi_region_references_are_all_dependencies() -> None:
         env=DummyEnv(batch_size=1),
         operator_handlers={"arm": operator_handler},
         object_handlers=object_handlers,
-        randomization_scope=_scope(
-            {
-                "base_anchor": PoseRandomRange(),
-                "eef_anchor": PoseRandomRange(),
-                "arm": OperatorRandomizationConfig(
-                    base=PoseRandomizationConfig(
-                        regions=[PoseRandomRange(reference="base_anchor")]
+        randomization=ResolvedRandomizationConfig(
+            scope=_scope(
+                {
+                    "base_anchor": PoseRandomRange(),
+                    "eef_anchor": PoseRandomRange(),
+                    "arm": OperatorRandomizationConfig(
+                        base=PoseRandomizationConfig(
+                            regions=[PoseRandomRange(reference="base_anchor")]
+                        ),
+                        eef=PoseRandomizationConfig(
+                            regions=[PoseRandomRange(reference="eef_anchor")]
+                        ),
                     ),
-                    eef=PoseRandomizationConfig(
-                        regions=[PoseRandomRange(reference="eef_anchor")]
-                    ),
-                ),
-            }
+                }
+            )
         ),
     )
 
-    dependencies = backend._randomization_dependencies()
+    dependencies = backend.randomization_executor.action_dependencies()
 
     assert dependencies["arm.base"] == {"base_anchor"}
     assert dependencies["arm.eef"] == {"arm.base", "eef_anchor"}
@@ -1281,15 +1332,17 @@ def test_batched_regions_preserve_per_environment_radius_and_ancestors() -> None
         env=DummyEnv(batch_size=2),
         operator_handlers={},
         object_handlers=handlers,
-        randomization_scope=_scope(
-            {
-                "block": PoseRandomizationConfig(
-                    regions=[
-                        PoseRandomRange(reference="anchor_a", collision_radius=0.1),
-                        PoseRandomRange(reference="anchor_b", collision_radius=0.2),
-                    ]
-                )
-            }
+        randomization=ResolvedRandomizationConfig(
+            scope=_scope(
+                {
+                    "block": PoseRandomizationConfig(
+                        regions=[
+                            PoseRandomRange(reference="anchor_a", collision_radius=0.1),
+                            PoseRandomRange(reference="anchor_b", collision_radius=0.2),
+                        ]
+                    )
+                }
+            )
         ),
     )
     backend._default_object_poses = {
@@ -1316,7 +1369,7 @@ def test_batched_regions_preserve_per_environment_radius_and_ancestors() -> None
         ancestors=action.ancestors,
     )
     assert (
-        backend._find_collision_participant(
+        find_collision_participant(
             owner_name="anchor_a",
             env_index=0,
             candidate_pose=action.pose.select(0),
@@ -1327,7 +1380,7 @@ def test_batched_regions_preserve_per_environment_radius_and_ancestors() -> None
         is None
     )
     assert (
-        backend._find_collision_participant(
+        find_collision_participant(
             owner_name="anchor_a",
             env_index=1,
             candidate_pose=action.pose.select(1),
@@ -1352,29 +1405,33 @@ def test_batched_region_randomization_respects_environment_mask() -> None:
         env=DummyEnv(batch_size=2),
         operator_handlers={},
         object_handlers={"block": handler},
-        randomization_scope=_scope(
-            {
-                "block": PoseRandomizationConfig(
-                    regions=[
-                        PoseRandomRange(
-                            reference=RandomizationReference.ABSOLUTE_WORLD,
-                            x=(1.0, 1.0),
-                            collision_radius=0.0,
-                        ),
-                        PoseRandomRange(
-                            reference=RandomizationReference.ABSOLUTE_WORLD,
-                            x=(2.0, 2.0),
-                            collision_radius=0.0,
-                        ),
-                    ]
-                )
-            }
+        randomization=ResolvedRandomizationConfig(
+            scope=_scope(
+                {
+                    "block": PoseRandomizationConfig(
+                        regions=[
+                            PoseRandomRange(
+                                reference=RandomizationReference.ABSOLUTE_WORLD,
+                                x=(1.0, 1.0),
+                                collision_radius=0.0,
+                            ),
+                            PoseRandomRange(
+                                reference=RandomizationReference.ABSOLUTE_WORLD,
+                                x=(2.0, 2.0),
+                                collision_radius=0.0,
+                            ),
+                        ]
+                    )
+                }
+            )
         ),
     )
     backend._default_object_poses = {"block": handler.get_pose()}
     backend._rng = SequenceRNG([1.0, 2.0])
 
-    backend._apply_randomization(np.asarray([False, True], dtype=bool))
+    backend.randomization_executor.apply_randomization(
+        np.asarray([False, True], dtype=bool)
+    )
 
     assert np.allclose(
         handler.get_pose().position,
@@ -1398,17 +1455,19 @@ def test_batched_regions_preserve_only_selected_transitive_ancestors() -> None:
         env=DummyEnv(batch_size=2),
         operator_handlers={},
         object_handlers=handlers,
-        randomization_scope=_scope(
-            {
-                "root": PoseRandomRange(collision_radius=0.0),
-                "anchor": PoseRandomizationConfig(
-                    regions=[
-                        PoseRandomRange(collision_radius=0.0),
-                        PoseRandomRange(reference="root", collision_radius=0.0),
-                    ]
-                ),
-                "block": PoseRandomRange(reference="anchor", collision_radius=0.0),
-            }
+        randomization=ResolvedRandomizationConfig(
+            scope=_scope(
+                {
+                    "root": PoseRandomRange(collision_radius=0.0),
+                    "anchor": PoseRandomizationConfig(
+                        regions=[
+                            PoseRandomRange(collision_radius=0.0),
+                            PoseRandomRange(reference="root", collision_radius=0.0),
+                        ]
+                    ),
+                    "block": PoseRandomRange(reference="anchor", collision_radius=0.0),
+                }
+            )
         ),
     )
     backend._default_object_poses = {
@@ -1449,7 +1508,9 @@ def test_all_regions_are_validated_before_region_selection() -> None:
     backend._rng = SequenceRNG([0.0])
 
     with pytest.raises(ValueError, match=r"region 1 cannot use 'absolute_base'"):
-        backend._apply_randomization(np.asarray([True], dtype=bool))
+        backend.randomization_executor.apply_randomization(
+            np.asarray([True], dtype=bool)
+        )
 
     assert backend._rng._values == [0.0]
 
@@ -1467,21 +1528,27 @@ def test_multi_reference_dependency_order_follows_declaration_order() -> None:
         env=DummyEnv(batch_size=1),
         operator_handlers={},
         object_handlers=handlers,
-        randomization_scope=_scope(
-            {
-                "child": PoseRandomizationConfig(
-                    regions=[
-                        PoseRandomRange(reference="anchor_b"),
-                        PoseRandomRange(reference="anchor_a"),
-                    ]
-                ),
-                "anchor_b": PoseRandomRange(),
-                "anchor_a": PoseRandomRange(),
-            }
+        randomization=ResolvedRandomizationConfig(
+            scope=_scope(
+                {
+                    "child": PoseRandomizationConfig(
+                        regions=[
+                            PoseRandomRange(reference="anchor_b"),
+                            PoseRandomRange(reference="anchor_a"),
+                        ]
+                    ),
+                    "anchor_b": PoseRandomRange(),
+                    "anchor_a": PoseRandomRange(),
+                }
+            )
         ),
     )
 
-    assert backend._randomization_order() == ["anchor_b", "anchor_a", "child"]
+    assert list(backend.randomization_executor.plan.order) == [
+        "anchor_b",
+        "anchor_a",
+        "child",
+    ]
 
 
 def test_unknown_multi_region_target_does_not_connect_known_components(
@@ -1496,33 +1563,34 @@ def test_unknown_multi_region_target_does_not_connect_known_components(
         env=DummyEnv(batch_size=1),
         operator_handlers={},
         object_handlers=handlers,
-        randomization_scope=_scope(
-            {
-                "a": PoseRandomRange(collision_radius=0.0),
-                "b": PoseRandomRange(collision_radius=0.0),
-                "ghost": PoseRandomizationConfig(
-                    regions=[
-                        PoseRandomRange(reference="a", collision_radius=0.0),
-                        PoseRandomRange(reference="b", collision_radius=0.0),
-                    ]
-                ),
-            }
+        randomization=ResolvedRandomizationConfig(
+            scope=_scope(
+                {
+                    "a": PoseRandomRange(collision_radius=0.0),
+                    "b": PoseRandomRange(collision_radius=0.0),
+                    "ghost": PoseRandomizationConfig(
+                        regions=[
+                            PoseRandomRange(reference="a", collision_radius=0.0),
+                            PoseRandomRange(reference="b", collision_radius=0.0),
+                        ]
+                    ),
+                }
+            )
         ),
     )
     backend._default_object_poses = {
         name: handler.get_pose() for name, handler in handlers.items()
     }
 
-    dependencies = backend._randomization_dependencies()
-    components = backend._randomization_components(
-        backend._randomization_order(),
-        dependencies,
-    )
+    dependencies = backend.randomization_executor.action_dependencies()
     with caplog.at_level(logging.WARNING):
-        backend._apply_randomization(np.asarray([True], dtype=bool))
+        backend.randomization_executor.apply_randomization(
+            np.asarray([True], dtype=bool)
+        )
 
+    # The unknown target contributes no dependency edge, so the two known
+    # targets stay independent while the ghost entry is skipped with a warning.
     assert dependencies == {"a": set(), "b": set()}
-    assert components == [["a"], ["b"]]
     assert sum("ghost" in record.getMessage() for record in caplog.records) == 1
 
 
@@ -1544,14 +1612,16 @@ def test_operator_eef_own_base_reference_uses_selected_base_ancestors() -> None:
         env=DummyEnv(batch_size=1),
         operator_handlers={"arm": arm_handler},
         object_handlers={"root": root_handler},
-        randomization_scope=_scope(
-            {
-                "arm": OperatorRandomizationConfig(
-                    base=PoseRandomRange(reference="root", collision_radius=0.0),
-                    eef=PoseRandomRange(reference="arm.base", collision_radius=0.0),
-                ),
-                "root": PoseRandomRange(x=(0.5, 0.5), collision_radius=0.0),
-            }
+        randomization=ResolvedRandomizationConfig(
+            scope=_scope(
+                {
+                    "arm": OperatorRandomizationConfig(
+                        base=PoseRandomRange(reference="root", collision_radius=0.0),
+                        eef=PoseRandomRange(reference="arm.base", collision_radius=0.0),
+                    ),
+                    "root": PoseRandomRange(x=(0.5, 0.5), collision_radius=0.0),
+                }
+            )
         ),
     )
     backend._default_object_poses = {"root": root_handler.get_pose()}
@@ -1559,10 +1629,10 @@ def test_operator_eef_own_base_reference_uses_selected_base_ancestors() -> None:
     backend._default_operator_eef_poses = {"arm": arm_handler.get_end_effector_pose()}
     backend._rng = SequenceRNG([0.5])
 
-    dependencies = backend._randomization_dependencies()
+    dependencies = backend.randomization_executor.action_dependencies()
     assert dependencies["arm.base"] == {"root"}
     assert dependencies["arm.eef"] == {"arm.base"}
-    order = backend._randomization_order()
+    order = list(backend.randomization_executor.plan.order)
     _poses, actions = backend.randomization_executor.sample_component(
         order,
         np.asarray([True], dtype=bool),
@@ -1601,14 +1671,18 @@ def test_operator_base_and_eef_dependencies_can_interleave_an_object() -> None:
         env=DummyEnv(batch_size=1),
         operator_handlers={"arm": arm_handler},
         object_handlers={"child": child_handler},
-        randomization_scope=_scope(
-            {
-                "arm": OperatorRandomizationConfig(
-                    base=PoseRandomRange(x=(0.5, 0.5), collision_radius=0.0),
-                    eef=PoseRandomRange(reference="child", collision_radius=0.0),
-                ),
-                "child": PoseRandomRange(reference="arm.base", collision_radius=0.0),
-            }
+        randomization=ResolvedRandomizationConfig(
+            scope=_scope(
+                {
+                    "arm": OperatorRandomizationConfig(
+                        base=PoseRandomRange(x=(0.5, 0.5), collision_radius=0.0),
+                        eef=PoseRandomRange(reference="child", collision_radius=0.0),
+                    ),
+                    "child": PoseRandomRange(
+                        reference="arm.base", collision_radius=0.0
+                    ),
+                }
+            )
         ),
     )
     backend._default_object_poses = {"child": child_handler.get_pose()}
@@ -1616,7 +1690,7 @@ def test_operator_base_and_eef_dependencies_can_interleave_an_object() -> None:
     backend._default_operator_eef_poses = {"arm": arm_handler.get_end_effector_pose()}
     backend._rng = SequenceRNG([0.5])
 
-    order = backend._randomization_order()
+    order = list(backend.randomization_executor.plan.order)
     _poses, actions = backend.randomization_executor.sample_component(
         order,
         np.asarray([True], dtype=bool),
@@ -1648,36 +1722,38 @@ def test_operator_base_and_eef_select_regions_independently() -> None:
         env=DummyEnv(batch_size=1),
         operator_handlers={"arm": handler},
         object_handlers={},
-        randomization_scope=_scope(
-            {
-                "arm": OperatorRandomizationConfig(
-                    base=PoseRandomizationConfig(
-                        regions=[
-                            PoseRandomRange(x=(0.1, 0.1), collision_radius=0.0),
-                            PoseRandomRange(x=(0.2, 0.2), collision_radius=0.0),
-                        ]
-                    ),
-                    eef=PoseRandomizationConfig(
-                        regions=[
-                            PoseRandomRange(z=(0.1, 0.1), collision_radius=0.0),
-                            PoseRandomRange(
-                                reference=RandomizationReference.ABSOLUTE_BASE,
-                                x=(0.5, 0.5),
-                                y=(0.0, 0.0),
-                                z=(0.4, 0.4),
-                                collision_radius=0.0,
-                            ),
-                        ]
-                    ),
-                )
-            }
+        randomization=ResolvedRandomizationConfig(
+            scope=_scope(
+                {
+                    "arm": OperatorRandomizationConfig(
+                        base=PoseRandomizationConfig(
+                            regions=[
+                                PoseRandomRange(x=(0.1, 0.1), collision_radius=0.0),
+                                PoseRandomRange(x=(0.2, 0.2), collision_radius=0.0),
+                            ]
+                        ),
+                        eef=PoseRandomizationConfig(
+                            regions=[
+                                PoseRandomRange(z=(0.1, 0.1), collision_radius=0.0),
+                                PoseRandomRange(
+                                    reference=RandomizationReference.ABSOLUTE_BASE,
+                                    x=(0.5, 0.5),
+                                    y=(0.0, 0.0),
+                                    z=(0.4, 0.4),
+                                    collision_radius=0.0,
+                                ),
+                            ]
+                        ),
+                    )
+                }
+            )
         ),
     )
     backend._default_operator_base_poses = {"arm": handler.get_base_pose()}
     backend._default_operator_eef_poses = {"arm": handler.get_end_effector_pose()}
     backend._rng = SequenceRNG([0.0, 0.1, 1.0, 0.5, 0.0, 0.4])
 
-    backend._apply_randomization(np.asarray([True], dtype=bool))
+    backend.randomization_executor.apply_randomization(np.asarray([True], dtype=bool))
 
     assert np.allclose(handler.get_base_pose().position[0], [1.1, 2.0, 0.0])
     assert np.allclose(
@@ -1707,7 +1783,7 @@ def _fake_visible_camera(
 
 
 def test_camera_frustum_disjoint_box_geometry() -> None:
-    disjoint = MujocoTaskBackend._camera_frustum_disjoint_box
+    disjoint = camera_frustum_disjoint_box
     # A box squarely in front of the camera is not disjoint.
     assert not disjoint(
         _fake_visible_camera((0.0, 0.0, 0.0)),
@@ -1775,9 +1851,8 @@ def test_visible_in_empty_intersection_fails_fast_before_attempts(
     # around z = 0, i.e. entirely behind the camera → deterministic infeasible.
     backend = _visible_in_backend(monkeypatch, camera_pos=(0.0, 0.0, -2.0))
     with pytest.raises(RandomizationFailureError) as excinfo:
-        backend._preflight_deterministic_visibility_infeasibility(
-            backend._randomization_plan().actions,
-            np.asarray([True], dtype=bool),
+        backend.randomization_executor.run_visibility_preflight(
+            np.asarray([True], dtype=bool)
         )
     assert excinfo.value.target == "vase"
     assert excinfo.value.attempts == 0
@@ -1794,8 +1869,7 @@ def test_visible_in_intersecting_region_skips_deterministic_short_circuit(
     # Camera at (0, 0, 2) sees the vase's world box around z = 0 → no empty
     # intersection, so the pre-flight passes without raising.
     backend = _visible_in_backend(monkeypatch, camera_pos=(0.0, 0.0, 2.0))
-    backend._preflight_deterministic_visibility_infeasibility(
-        backend._randomization_plan().actions,
-        np.asarray([True], dtype=bool),
+    backend.randomization_executor.run_visibility_preflight(
+        np.asarray([True], dtype=bool)
     )
     assert backend.get_randomization_diagnostics(0) == {}
