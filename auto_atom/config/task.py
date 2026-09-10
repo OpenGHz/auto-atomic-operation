@@ -35,8 +35,15 @@ class AutoAtomConfig(BaseModel):
     """A list of StageConfig objects, each representing a stage of the AutoAtom operator. The stages are executed in the order they are defined in the list."""
     env_name: str
     """The registered environment name used to resolve the basis environment instance for the selected scene."""
-    seed: int = 0
-    """The random seed for the AutoAtom operator. This is used to ensure reproducibility of the operator's behavior."""
+    seed: int | None = None
+    """The run's root seed, shared by every randomness source (scene
+    randomization, waypoint randomization, and camera noise).
+
+    ``None`` means "no run seed was chosen": the run stays random, but it is
+    resolved once into a concrete entropy-derived seed that is logged and
+    reported, so the run can be replayed afterwards with
+    ``task.seed=<that value>``. Any integer — **including ``0``** — is used
+    verbatim; ``0`` is not a sentinel for "unseeded"."""
     initial_pose: Dict[str, PoseOverrideConfig] = Field(default_factory=dict)
     """Per-object initial pose overrides applied after the backend reset and
     before randomization. Keys are logical object names exposed by the selected

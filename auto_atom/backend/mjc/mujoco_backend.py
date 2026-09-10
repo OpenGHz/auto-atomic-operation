@@ -52,6 +52,7 @@ from ...utils.pose import (
     quaternion_to_rotation_matrix,
     resolve_pose_override,
 )
+from ...utils.seed import resolve_run_seed
 from ...utils.transformations import quaternion_slerp
 
 
@@ -1123,9 +1124,20 @@ class MujocoTaskBackend(SceneBackend):
     )
 
     def __post_init__(self) -> None:
-        logging.getLogger(MujocoTaskBackend.__name__).info(
-            "MujocoTaskBackend random_seed=%s", self.random_seed
-        )
+        logger = logging.getLogger(MujocoTaskBackend.__name__)
+        requested_seed = self.random_seed
+        self.random_seed = resolve_run_seed(requested_seed)
+        if requested_seed is None:
+            logger.warning(
+                "No run seed was requested (task.seed is unset): scene "
+                "randomization, waypoint randomization, and camera noise are "
+                "not reproducible across runs. This run uses random_seed=%s; "
+                "pass task.seed=%s to replay it.",
+                self.random_seed,
+                self.random_seed,
+            )
+        else:
+            logger.info("MujocoTaskBackend random_seed=%s", self.random_seed)
         self._rng = np.random.default_rng(self.random_seed)
         set_noise_seed = getattr(self.env, "set_camera_noise_seed", None)
         if set_noise_seed is not None:
@@ -2507,7 +2519,7 @@ def build_mujoco_backend(
             for operator in operator_configs
             if operator.initial_state is not None
         },
-        random_seed=config.seed if config.seed != 0 else None,
+        random_seed=config.seed,
         randomization_debug=config.randomization_debug,
     )
     return backend

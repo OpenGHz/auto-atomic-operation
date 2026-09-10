@@ -82,6 +82,7 @@ from auto_atom.randomization import (
     validate_randomization_configuration,
 )
 from auto_atom.utils.pose import PoseState, compose_pose, inverse_pose
+from auto_atom.utils.seed import resolve_run_seed
 
 DEFAULT_ATTEMPT_BUDGET = RandomizationFailureConfig().max_attempts
 """Attempt budget for a component whose specs leave ``failure.max_attempts``
@@ -135,7 +136,16 @@ class RandomizationHost(Protocol):
 
     @property
     def seed(self) -> Optional[int]:
-        """The seed the generator was built from, or ``None`` when unseeded."""
+        """The run seed the generator was built from, or ``None`` when unseeded.
+
+        A host that resolves ``task.seed`` through
+        :func:`auto_atom.utils.seed.resolve_run_seed` reports a concrete seed
+        even for an unseeded run: the Poisson-disk lattice then stays stable
+        across that run's resets *and* the run stays replayable afterwards via
+        ``task.seed=<reported value>``. ``None`` is reserved for a host that
+        genuinely has no seed, in which case the executor resolves one entropy
+        seed for the lattice instead of collapsing to a fixed ``0``.
+        """
         ...
 
     @property
@@ -502,7 +512,13 @@ class RandomizationExecutor:
                 lower_bounds=lower_bounds,
                 upper_bounds=upper_bounds,
                 radius=spacing,
-                seed=int((self._host.seed or 0) + env_index * 10_007 + label_seed),
+                # The host reports the run's resolved root seed, so a seeded run
+                # gets the same Poisson lattice as the rest of its randomness;
+                # an unseeded host resolves to its own entropy seed here rather
+                # than collapsing to a fixed 0.
+                seed=resolve_run_seed(self._host.seed)
+                + env_index * 10_007
+                + label_seed,
             )
             self._poisson_streams[key] = stream
         return stream

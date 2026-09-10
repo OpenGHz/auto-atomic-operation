@@ -101,6 +101,7 @@ from .utils.pose import (
     quaternion_angular_distance,
     rotate_pose_around_axis,
 )
+from .utils.seed import resolve_run_seed
 from .utils.transformations import quaternion_slerp
 
 if TYPE_CHECKING:
@@ -164,8 +165,9 @@ class ExecutionContext:
     )
 
     def __post_init__(self) -> None:
-        seed = self.config.seed if self.config.seed != 0 else None
-        self.random_generator = np.random.default_rng(seed)
+        self.random_generator = np.random.default_rng(
+            resolve_run_seed(self.config.seed)
+        )
 
     def capture_grasp_binding(
         self,

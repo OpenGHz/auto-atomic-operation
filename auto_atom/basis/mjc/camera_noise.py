@@ -14,6 +14,8 @@ from typing import Any
 
 import numpy as np
 
+from ...utils.seed import resolve_run_seed
+
 _ENCODING_DTYPES: dict[str, tuple[np.dtype, int]] = {
     "mono8": (np.dtype(np.uint8), 1),
     "rgb8": (np.dtype(np.uint8), 3),
@@ -36,18 +38,12 @@ class CameraNoiseProcessor:
     def __init__(self, camera_specs: Mapping[str, Any], seed: int | None = None):
         self._camera_specs = dict(camera_specs)
         self._capture_index = 0
-        self._seed = self._normalize_seed(seed)
+        self._seed = resolve_run_seed(seed)
         self._temporal_state: dict[tuple[str, str, int], tuple[float, float]] = {}
-
-    @staticmethod
-    def _normalize_seed(seed: int | None) -> int:
-        if seed is None:
-            return int(np.random.SeedSequence().entropy)
-        return int(seed)
 
     def set_seed(self, seed: int | None) -> None:
         """Set the root seed and restart the per-capture sequence."""
-        self._seed = self._normalize_seed(seed)
+        self._seed = resolve_run_seed(seed)
         self._capture_index = 0
         self._temporal_state.clear()
 
