@@ -216,7 +216,7 @@ task:
   - operator base/eef（提交 `a91b12f`）：语义为 base→operator **root body 自身
     几何**（底座/支架 footprint，非整臂子树）；eef→**eef site 所在 body 的子树**
     （含夹爪/手指，随开合构型变化）。`UnifiedMujocoEnv.get_operator_support_geometry`
-    按当前构型测量；radius 缓存 key 含 kind，`_apply_randomization` 每 episode 丢弃
+    按当前构型测量；radius 缓存 key 含 kind，`_apply_randomization` 每 reset 丢弃
     operator 项（构型相关），对象项保持长期缓存。mocap 夹爪的 base（root 无几何）
     解析为 0（视为豁免）。）
 
@@ -246,7 +246,7 @@ task:
 不再重写随机化语义。分轮推进，每轮独立提交、独立验证：
 
 - **R-A（已完成，提交 `50126e9`）**：约束评估（视锥投影 + 分离间距 +
-  per-episode 缓存）提到 `RandomizationConstraintEvaluator`，
+  per-reset 缓存）提到 `RandomizationConstraintEvaluator`，
   `MujocoBasis` 只留 `get_camera_model` / `get_support_geometry`。
 - **R-B1（已完成，提交 `e287a7d`）**：纯采样/碰撞原语提到共享层
   （`sample_pose_for_env`、`sample_pose_batch`、`select_randomization_region`、
@@ -281,7 +281,7 @@ task:
   - 配置所有权转移 —— `ResolvedRandomizationConfig`（`scope` + `groups`）
     由工厂构造并注入执行器，后端只保留一个字段用于转交，读都不读。
   - 计划编译、区域选择、逐轴 reference 解析（含 delta-carry）、对象/operator
-    base/eef 采样、Poisson 流缓存、自动碰撞半径（含 per-episode 缓存策略）、
+    base/eef 采样、Poisson 流缓存、自动碰撞半径（含 per-reset 缓存策略）、
     配置校验、确定性可见性预检、模板位姿缓冲，全部搬入执行器。
   - 后端删除约 900 行随机化逻辑，只留下能力方法。
 - **R-D4（已完成）**：运行时契约（`SceneBackend`）同步去随机化命名 ——
@@ -340,11 +340,22 @@ env_index`、`+ attempt*17 + sum(ord(c))`）、`env_mask` 与 per-component 批�
   `RandomizationConstraintReport` → `PoseConstraintReport`、
   `RandomizationConstraintEnvProtocol` → `PoseConstraintEnvProtocol`
   （报告描述的是"位姿硬约束的评估结果"，不是随机化专属概念）。
-- **R-E2（已完成）**：后端/执行器不再使用 episode 词汇。`episode_index` →
+- **R-E2（已完成）**：backend/执行器不再使用 episode 词汇。`episode_index` →
   `reset_index`（它就是"这个后端实例被 reset 过多少次"，用于派生 per-reset
   采样索引），`_episode_index` → `_reset_index`，执行器 `begin_episode()` →
-  `begin_reset()`，相关注释一并改为 reset。basis/env 层既有的 episode 表述
-  （如 `camera_noise` 的跨 episode 采集序号）属于该层语义，保持不动。
+  `begin_reset()`。
+- **R-E3（已完成）**：把同一套词汇推广到 basis/env、配置与文档 —— 凡是指
+  "一次 reset 到下一次 reset 的运行期"的地方一律用 reset：`mujoco_env.py` /
+  `mujoco_basis.py` / `camera_noise.py` / `gs_mujoco_env.py` 的注释与文档字符串、
+  `config/randomization.py`（`collision_radius: auto` 按 reset 解析）、
+  `config/motion.py`（waypoint 偏移在 reset 开始时采样）、
+  `randomization.py`（per-reset 缓存）、相关测试名与注释，以及
+  `docs/task-configuration/*`、`docs/mujoco-backend/*`、`docs/design/*`。
+
+  **分界线**：`episode` 只保留在数据采集/数据集语境（`docs/tools/`、
+  `docs/design/streaming-data-loader-design.md`、Praxis 对照文档、
+  `McapMultiEpisodeDatasets`、第三方采集脚本说明）。仿真/后端/执行/配置层
+  统一说 reset。
 
 ### 契约分层（最终）
 

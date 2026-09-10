@@ -72,7 +72,7 @@ During every `reset()` it:
    against the final camera poses, and refreshes the viewer.
 
 Because the native state and configured overrides are restored before every
-sample, randomization offsets do not accumulate between episodes.
+sample, randomization offsets do not accumulate between resets.
 
 The backend resolves randomization targets through object handlers and then
 operator handlers. Operator entries must use the nested `base` / `eef` form.
@@ -99,7 +99,7 @@ update the model camera pose before observations are captured.
 
 Gaussian Splatting cameras with `env.cameras.<name>.is_static: true` cache their
 background at the first render. If such a camera is randomized on later
-episodes, its viewpoint changes while the cached background remains tied to the
+resets, its viewpoint changes while the cached background remains tied to the
 first rendered pose. Set `is_static: false` when the background must be
 re-rendered after camera randomization.
 
@@ -121,7 +121,7 @@ visibility constraint.
 
 - `auto_atom/randomization.py` owns the backend-neutral plan, candidate
   generators, and constraint evaluation (`RandomizationConstraintEvaluator`),
-  including the per-episode camera-model and support-radius caches.
+  including the per-reset camera-model and support-radius caches.
 - `auto_atom/backend/mjc/mujoco_backend.py` owns object, operator, and camera
   initialization/randomization and the reset lifecycle; its environment supplies
   `get_camera_model` / `get_support_geometry` to the shared evaluator.

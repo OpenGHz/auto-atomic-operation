@@ -262,7 +262,7 @@ self.env.robot.update_reference(data)
 - 把 `last_cmd_qpos` / `last_cmd_ee_pose` 同步到当前真实状态
 - 把 `ref_qpos` / `ref_ee_pose` 设置为新的控制参考
 
-否则如果环境刚 reset 完还沿用旧 episode 的参考末端位姿，相对控制会瞬间跳变。
+否则如果环境刚 reset 完还沿用旧 reset 的参考末端位姿，相对控制会瞬间跳变。
 
 ## 7. 与 `mink_franka.py` 的关系
 

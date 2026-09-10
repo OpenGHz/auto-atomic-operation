@@ -760,8 +760,8 @@ class MujocoBasis:
         leaves ``MjModel.body_pos/body_quat`` and ``cam_pos/cam_quat`` alone.
         Those arrays are nevertheless mutated by static-object placement,
         operator-base relocation, and camera randomization.  Restoring them at
-        the low-level reset seam prevents one episode's structural pose from
-        becoming the implicit baseline of the next episode.
+        the low-level reset seam prevents one reset's structural pose from
+        becoming the implicit baseline of the next reset.
         """
         self.model.body_pos[...] = self._model_body_pos_baseline
         self.model.body_quat[...] = self._model_body_quat_baseline
@@ -1124,7 +1124,7 @@ class MujocoBasis:
         """Check one candidate set against the configured hard constraints.
 
         The arithmetic (frustum projection, separation clearance, and the
-        per-episode camera/radius caches) lives in the backend-neutral
+        per-reset camera/radius caches) lives in the backend-neutral
         :class:`RandomizationConstraintEvaluator`. This environment only
         supplies the two simulator-specific reads: the camera projection model
         and each entity's conservative support geometry.

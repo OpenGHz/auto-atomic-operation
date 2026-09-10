@@ -87,11 +87,11 @@ task:
 
 ### 5.1 采样时机与可复现性
 
-- 尺寸样本在 episode reset 边界生成，而不是在 control tick 中生成。
+- 尺寸样本在 reset 边界生成，而不是在 control tick 中生成。
 - 每个物理环境单独采样；`task.seed` 仍是随机性的根来源。
-- 每次 reset 先恢复原始场景，再应用新的尺寸样本，不能让上一个 episode 的尺寸
+- 每次 reset 先恢复原始场景，再应用新的尺寸样本，不能让上一个 reset 的尺寸
   继续累乘。
-- 实际采用的倍率应进入随机化诊断或 episode metadata，便于复现和排查。
+- 实际采用的倍率应进入随机化诊断或 reset metadata，便于复现和排查。
 - `randomization_debug` 如果扩展到该能力，应能检查最小倍率、最大倍率和普通样本。
 
 ### 5.2 作用范围
@@ -159,7 +159,7 @@ inertia' = inertia × s⁵
     │    ├─ body 局部几何与 anchor
     │    ├─ 视觉/碰撞 mesh
     │    └─ 质量/惯性
-    ├─ 生成该 episode 的 SceneArtifact / MjModel
+    ├─ 生成该 reset 的 SceneArtifact / MjModel
     └─ 重新绑定 runtime handlers 与 renderer
 ```
 
@@ -205,13 +205,13 @@ inertia' = inertia × s⁵
 6. 执行现有的对象、操作器和相机 pose randomization；
 7. 用缩放后的 support geometry 执行约束和碰撞拒绝。
 
-几何随机化必须只发生在 reset 边界。物体已经被抓取或放置后，不应在 episode 中途
+几何随机化必须只发生在 reset 边界。物体已经被抓取或放置后，不应在 reset 中途
 改变其尺寸。
 
 Data Replay 必须选择并记录一种明确语义：
 
 - 为精确轨迹复现，自动关闭 geometry randomization，并恢复记录中的场景 variant；
-- 或把每个 episode 的实际倍率写入 replay metadata，并按该倍率重建模型。
+- 或把每个 reset 的实际倍率写入 replay metadata，并按该倍率重建模型。
 
 不能只复现 pose 而忽略尺寸，因为这会改变接触、抓取和放置结果。
 

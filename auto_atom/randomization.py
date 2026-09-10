@@ -1230,15 +1230,15 @@ class RandomizationConstraintEvaluator:
     """Feasibility oracle for camera visibility and inter-entity separation.
 
     This owns every part of candidate acceptance that is not simulator-specific:    the frustum projection arithmetic, the separation clearance arithmetic, and
-    the per-episode caches that keep the rejection loop cheap. A backend only
+    the per-reset caches that keep the rejection loop cheap. A backend only
     supplies two reads — a camera model and a support geometry per entity — so a
     new backend inherits ``visible_in`` / ``separated`` semantics unchanged.
 
     The two reads are passed per call rather than bound at construction because
     a backend resolves them through its own (possibly monkeypatched) accessors.
 
-    Camera models and support radii are pose-invariant within one episode, so
-    they are resolved once per episode instead of once per candidate. Call
+    Camera models and support radii are pose-invariant within one reset, so
+    they are resolved once per reset instead of once per candidate. Call
     :meth:`reset` from the backend's low-level reset so camera-pose
     randomization and reconfiguration are picked up.
     """
@@ -1248,7 +1248,7 @@ class RandomizationConstraintEvaluator:
         self._support_radii: MutableMapping[str, float] = {}
 
     def reset(self) -> None:
-        """Drop the per-episode caches."""
+        """Drop the per-reset caches."""
         self._camera_models.clear()
         self._support_radii.clear()
 
@@ -1268,7 +1268,7 @@ class RandomizationConstraintEvaluator:
         entity_name: str,
         support_geometry_of: Callable[[str], SupportGeometry],
     ) -> float:
-        """Conservative support radius of one entity for the current episode.
+        """Conservative support radius of one entity for the current reset.
 
         The bounding-sphere radius is measured around the entity's own geom
         centroid, so it is invariant to the proposed pose; caching it avoids a

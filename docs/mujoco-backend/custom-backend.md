@@ -491,7 +491,7 @@ A backend therefore only implements `RandomizationHost`
 | Elements and batch | `batch_size`, `object_names`, `operator_names` |
 | Pose read/write | `live_pose(label)`, `baseline_pose(label)`, `get_camera_pose()`, `set_camera_pose()`, `set_target_pose(kind, owner, pose, env_mask)` |
 | Geometry and cameras | `get_support_geometry()`, `get_operator_support_geometry()`, `camera_names()`, `get_camera_model()` |
-| Randomness source | `rng`, `seed`, `episode_index` |
+| Randomness source | `rng`, `seed`, `reset_index` |
 | Reporting | `evaluate_pose_constraints()`, `record_reset_diagnostics()` |
 
 The pose-constraint trio (`get_camera_model`, `get_support_geometry`,

@@ -206,10 +206,10 @@ def test_randomization_visibility_uses_rgb_depth_clip_intersection() -> None:
     assert report.violations == ("subject:outside_depth:camera",)
 
 
-def test_visible_in_resolves_geometry_and_camera_once_per_episode(
+def test_visible_in_resolves_geometry_and_camera_once_per_reset(
     monkeypatch,
 ) -> None:
-    """Bounding-sphere radius and camera model are cached per episode."""
+    """Bounding-sphere radius and camera model are cached per reset."""
     model = mujoco.MjModel.from_xml_string(
         """
         <mujoco>
@@ -265,7 +265,7 @@ def test_visible_in_resolves_geometry_and_camera_once_per_episode(
             constraints=constraints,
         )
     assert report.valid
-    # 3 candidate evaluations reuse the per-episode radius and camera model.
+    # 3 candidate evaluations reuse the per-reset radius and camera model.
     assert calls == {"geometry": 1, "camera": 1}
 
 

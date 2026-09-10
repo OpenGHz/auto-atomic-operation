@@ -165,7 +165,7 @@ class PoseRandomRange(BaseModel, frozen=True):
     * **operator ``eef``**: radius of the **end-effector assembly** — geoms
       under the body owning the EEF site (gripper/fingers), measured around
       the EEF site. This varies with gripper open/close, so it is resolved
-      per episode against the home configuration.
+      per reset against the home configuration.
     """
 
     collision_margin: NonNegativeFloat = 0.0

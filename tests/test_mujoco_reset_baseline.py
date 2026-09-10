@@ -238,7 +238,7 @@ def test_masked_initial_pose_keeps_unselected_object_baseline() -> None:
 
     backend._apply_initial_poses()
     baseline = backend._default_object_poses["object"]
-    # Simulate an unselected row that was randomized during its prior episode.
+    # Simulate an unselected row that was randomized during its prior reset.
     object_handler.pose.position[1] = [9.0, 9.0, 9.0]
     backend._apply_initial_poses(np.asarray([True, False]))
 

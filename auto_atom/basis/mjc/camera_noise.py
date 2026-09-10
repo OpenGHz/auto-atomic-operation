@@ -55,9 +55,9 @@ class CameraNoiseProcessor:
         """Clear temporal state for every or selected logical environment row.
 
         Resetting temporal state prevents AR(1) and drift values from leaking
-        into the next episode.  The capture index deliberately continues so a
+        into the next reset.  The capture index deliberately continues so a
         fixed root seed remains a stream of distinct sensor exposures across
-        episodes; call :meth:`set_seed` when the entire sequence must restart.
+        resets; call :meth:`set_seed` when the entire sequence must restart.
         """
         if logical_env_indices is None:
             self._temporal_state.clear()

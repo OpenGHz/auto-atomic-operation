@@ -1493,7 +1493,7 @@ class GSEnvConfig(EnvConfig):
     """Whether to convert GS renderer output to numpy arrays.
     Defaults to True for consistency with all other observation data types."""
     warmup: bool = False
-    """Whether to perform a warmup (reset and capture the first observation) on environment initialization. Can help reduce outliers in the first few frames of the first episode, which may be important for some use cases."""
+    """Whether to perform a warmup (reset and capture the first observation) on environment initialization. Can help reduce outliers in the first few frames after the first reset, which may be important for some use cases."""
 
     @model_validator(mode="after")
     def setup_gs_cameras(self):

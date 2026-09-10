@@ -187,7 +187,7 @@ class PoseControlConfig(BaseModel):
     randomization: Optional[PoseRandomRange] = None
     """Optional per-waypoint pose randomization. When set, a random offset is
     sampled from these ranges and added to the waypoint position/orientation
-    at the start of each episode."""
+    at the start of each reset."""
 
     @model_validator(mode="after")
     def validate_orientation_goal(self) -> Self:

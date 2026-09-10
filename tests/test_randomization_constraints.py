@@ -212,7 +212,7 @@ def test_visibility_only_checks_the_sampled_target() -> None:
     assert report.valid
 
 
-def test_camera_model_and_support_radius_resolve_once_per_episode() -> None:
+def test_camera_model_and_support_radius_resolve_once_per_reset() -> None:
     env = _FakeEnv({"cup": 0.02})
     evaluator = env.evaluator()
     constraints = RandomizationConstraintConfig(
@@ -230,7 +230,7 @@ def test_camera_model_and_support_radius_resolve_once_per_episode() -> None:
     assert env.geometry_calls == ["cup", "cup"]
 
 
-def test_separation_geometry_is_cached_per_episode() -> None:
+def test_separation_geometry_is_cached_per_reset() -> None:
     env = _FakeEnv({"cup": 0.1, "saucer": 0.1})
     evaluator = env.evaluator()
     constraints = RandomizationConstraintConfig(separated={"scope": "randomized"})

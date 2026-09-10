@@ -35,6 +35,10 @@
    `torch.utils.data.DataLoader(num_workers=N)` 的 worker 语义对齐。
 3. **Episode 级确定性**：`episode_index` → 可复现场景（随机化样本），与 worker 数、
    slot 顺序、是否 shuffle 无关。
+   > 词汇边界：这里的 `episode` 属于**数据集层**（一集数据），它的一集边界就是
+   > 一次 `reset()` 到下一次 `reset()`。仿真/后端/执行/配置层一律称"reset"，
+   > 不叫 episode；两者是同一个边界的两个名字。
+
 4. **有界内存**：有界队列 + 预取上限，内存不随运行时长增长。
 5. **失败可治理**：随机化失败 / 超时 / 未完成 → 可配置跳过、重采样、抛错，且有熔断。
 6. **采集与 schema 解耦**：AAO 侧只保证语义字段；落到具体训练框架命名的映射留在 adapter。

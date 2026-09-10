@@ -38,7 +38,7 @@ task_operators:
   unowned names are rejected.
 - The joint state is applied after the backend restores its reset state and
   before operator pose randomization records its baseline. Random samples never
-  become the next episode's baseline.
+  become the next reset's baseline.
 - `joint_positions` and `eef_pose` are competing arm-home representations and
   cannot be configured together. `eef` is an independent gripper-control
   override.
@@ -185,7 +185,7 @@ baseline. This means:
 - The initial pose becomes the **default/baseline** for randomization in that
   reset. A subsequent reset starts from the backend-provided reset state and
   reapplies the configured initial pose, so randomization offsets do not
-  accumulate across episodes.
+  accumulate across resets.
 - `reference: relative` adds offsets on top of the initial pose (not the
   backend's unmodified reset pose).
 - `reference: absolute_world` replaces sampled axes with absolute values
@@ -261,7 +261,7 @@ acceptance rates need not appear equally often.
 
 ```yaml
 task:
-  seed: 42                     # episode randomization seed
+  seed: 42                     # randomization seed
   # randomization_debug: true  # see "Debug Mode" below
   randomization:
     entities:
@@ -657,7 +657,7 @@ sub-entries. Writing per-axis ranges directly under an operator key (the
 unnested "direct form") is rejected at sample time with a `TypeError`.
 
 - `base` randomizes the operator's logical base pose.
-- `eef` randomizes the operator's home end-effector pose; the next episode
+- `eef` randomizes the operator's home end-effector pose; the next reset
   starts from that sampled home.
 - `base` and `eef` can be configured together; each sub-entry has its own
   `reference`, `collision_radius`, and per-axis ranges
@@ -688,7 +688,7 @@ derived radius. `auto` semantics by participant:
   geoms resolves to `0.0` (effectively exempt).
 - **operator `eef`**: radius of the **end-effector assembly** — geoms under the
   body that owns the EEF site (gripper/fingers), measured around the EEF site.
-  This varies with gripper open/close and is resolved per episode against the
+  This varies with gripper open/close and is resolved per reset against the
   home configuration.
 
 Entities linked by an entity-name reference chain are excluded from rejection
@@ -850,7 +850,7 @@ Semantics:
   or `relative` inside its `randomization` block.
 - The sampled numbers are always expressed in the waypoint's own `reference`
   frame, so the perturbation follows the frame the waypoint is anchored to.
-- Sampling happens once per `reset()` and uses the episode random-number
+- Sampling happens once per `reset()` and uses the shared random-number
   stream. A fixed nonzero `task.seed` makes per-waypoint offsets reproducible.
 - Per-waypoint randomization is independent from entity randomization and does
   not participate in `collision_radius` rejection; keep ranges small enough that
@@ -958,7 +958,7 @@ no operator base frame and do not participate in entity dependency ordering.
 
 ## Reset Contract and Observability
 
-The configuration describes this observable episode-reset contract:
+The configuration describes this observable reset contract:
 
 1. The selected backend restores its own native reset state.
 2. Object, operator, and camera initial-state overrides are reapplied. Named
@@ -1027,7 +1027,7 @@ aao-demo task.randomization_debug=true rounds=20
 
 ## Reproducibility
 
-Set `task.seed` to fix the episode randomization seed:
+Set `task.seed` to fix the randomization seed:
 
 ```bash
 aao-demo task.seed=42 rounds=5

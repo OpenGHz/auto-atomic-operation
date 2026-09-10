@@ -156,7 +156,7 @@ class _OperatorState:
     eef_site_name: str
     root_body_name: str
 
-    # Base frame (world, fixed for the episode).
+    # Base frame (world, fixed for the reset).
     base_pos: np.ndarray  # float32, shape (3,)
     base_quat: np.ndarray  # float32, xyzw, shape (4,)
     # Fixed EEF offset in base frame (base_T_eef).
@@ -170,7 +170,7 @@ class _OperatorState:
     home_ctrl: np.ndarray  # float64
 
     # Registration-time reset baseline.  Model pose arrays and these cached
-    # operator fields are both mutable during an episode; keeping the small
+    # operator fields are both mutable during a reset; keeping the small
     # numeric snapshot here lets the reset hook restore them without copying
     # the IK solver or any other opaque runtime object.
     baseline_base_pos: Optional[np.ndarray] = field(default=None, repr=False)
@@ -304,7 +304,7 @@ class UnifiedMujocoEnv(MujocoBasis):
         ``MujocoBasis.reset`` restores model-level body/camera poses and
         dynamic data.  Operator control keeps a second, derived cache in
         ``_OperatorState``; without restoring it, a randomized base or EEF
-        home from the previous episode would be paired with the newly reset
+        home from the previous reset would be paired with the newly reset
         model.  The hook is also invoked during base-class construction, so
         tolerate the pre-registration phase where ``_operator_states`` is not
         initialized yet.
@@ -332,7 +332,7 @@ class UnifiedMujocoEnv(MujocoBasis):
                     state.home_ctrl = state.baseline_home_ctrl.copy()
 
                 # Targets/plans are derived from the restored tool offset and must
-                # not retain a previous episode's waypoint or interpolation state.
+                # not retain a previous reset's waypoint or interpolation state.
                 state.target_pos_in_base = state.tool_offset_pos.copy()
                 state.target_quat_in_base = state.tool_offset_quat.copy()
                 state.planned_joint_start_qpos = (
@@ -617,7 +617,7 @@ class UnifiedMujocoEnv(MujocoBasis):
         * ``eef``: the **end-effector assembly** — geoms under the body that
           owns the EEF site (gripper/fingers), measured around the EEF site.
           This varies with gripper open/close, so callers should not cache it
-          across episodes.
+          across resets.
 
         Returns radius 0.0 when the region has no geoms (the base part is then
         effectively exempt from collision rejection).

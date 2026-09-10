@@ -119,7 +119,7 @@ body）；`parent_frame: eef_pose` 只负责把外参表达成相对 `eef_pose` 
 | 字段 | 作用域 | 时机 |
 | --- | --- | --- |
 | `calibration.extrinsics` | 模型级，所有 env 相同 | 构造期一次性写入 model，并成为 `reset()` 恢复的基线 |
-| `camera_initial_pose` | episode 级，可 per-env（`env_mask` / 参考系解析） | 每次 `reset()` 覆盖，之后成为随机化基线 |
+| `camera_initial_pose` | reset 级，可 per-env（`env_mask` / 参考系解析） | 每次 `reset()` 覆盖，之后成为随机化基线 |
 
 但对 object 相机，两者表达的是**同一件事**：`parent_frame` 就是挂载物体，initial pose 的参考系解析对
 该相机没有第二种有意义的取值（`world` 之类更是无意义），所以 initial pose 能写的值集合与
