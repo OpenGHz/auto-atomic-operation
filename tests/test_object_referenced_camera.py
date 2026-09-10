@@ -16,8 +16,9 @@ import numpy as np
 import pytest
 from pydantic import ValidationError
 
-from auto_atom.backend.mjc.mujoco_backend import MujocoTaskBackend
+from auto_atom.backend.mjc.mujoco_backend import MujocoObjectHandler, MujocoTaskBackend
 from auto_atom.basis.mjc.mujoco_basis import MujocoBasis
+from auto_atom.basis.mjc.mujoco_env import UnifiedMujocoEnv
 from auto_atom.config.env_config import (
     CameraCalibrationConfig,
     CameraExtrinsicsConfig,
@@ -27,6 +28,7 @@ from auto_atom.config.env_config import (
 )
 from auto_atom.config.pose import PoseOverrideConfig
 from auto_atom.scene_composition import SceneConfig
+from auto_atom.utils.pose import PoseState
 
 SCENE_XML = """
 <mujoco>
@@ -294,6 +296,63 @@ def test_object_camera_rejects_camera_initial_pose(tmp_path: Path) -> None:
                 camera_initial_poses={
                     "obj_cam": PoseOverrideConfig(position=[0.0, 0.0, 0.0]),
                 },
+            )
+    finally:
+        env.close()
+
+
+def _relative_camera_offset(
+    env: MujocoBasis,
+    camera_id: int,
+    body_id: int,
+) -> np.ndarray:
+    """The camera position expressed in the object body's own frame."""
+    mujoco.mj_forward(env.model, env.data)
+    body_rotation = np.asarray(env.data.xmat[body_id]).reshape(3, 3)
+    return body_rotation.T @ (
+        np.asarray(env.data.cam_xpos[camera_id]) - np.asarray(env.data.xpos[body_id])
+    )
+
+
+def test_object_camera_follows_object_only_transport(tmp_path: Path) -> None:
+    """The object-only transport path keeps the camera-object relative pose.
+
+    ``object_only`` moves the object kinematically through
+    :meth:`MujocoObjectHandler.set_pose`; the camera is a child body, so its
+    install offset survives arbitrary transport waypoints.
+    """
+    env = UnifiedMujocoEnv(
+        EnvConfig(
+            scene=SceneConfig(base=_write_scene(tmp_path)),
+            enabled_sensors={DataType.CAMERA},
+            cameras=[_camera("obj_cam", role="object", parent_frame="cup")],
+        )
+    )
+    try:
+        handler = MujocoObjectHandler(
+            name="cup",
+            env=_SingleEnvBatch(env),  # type: ignore[arg-type]
+            body_name="cup",
+            freejoint_name="cup_joint",
+        )
+        camera_id = _cam_id(env.model, "obj_cam")
+        cup_id = _body_id(env.model, "cup")
+
+        waypoints = (
+            ([0.0, 0.0, 0.5], math.pi / 2),
+            ([0.3, -0.4, 0.9], -math.pi / 3),
+        )
+        for position, yaw in waypoints:
+            handler.set_pose(
+                PoseState(
+                    position=[position],
+                    orientation=[[0.0, 0.0, math.sin(yaw / 2.0), math.cos(yaw / 2.0)]],
+                )
+            )
+            np.testing.assert_allclose(
+                _relative_camera_offset(env, camera_id, cup_id),
+                [0.1, 0.0, 0.3],
+                atol=1e-9,
             )
     finally:
         env.close()

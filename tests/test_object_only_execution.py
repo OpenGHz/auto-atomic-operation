@@ -180,6 +180,49 @@ def test_object_only_hydra_preparation_removes_operator_owned_composition() -> N
     assert OmegaConf.to_container(raw, resolve=False) == original
 
 
+def test_object_only_preparation_keeps_object_cameras() -> None:
+    """``role: object`` cameras survive; removed cameras take their overrides."""
+
+    raw = OmegaConf.create(
+        {
+            "execution": {"mode": "object_only"},
+            "env": {
+                "scene": {
+                    "layers": [
+                        {"path": "scene.xml", "role": "scene"},
+                        {"path": "robot.xml", "role": "operator"},
+                    ]
+                },
+                "cameras": [
+                    {"name": "obj_cam", "role": "object", "parent_frame": "cup"},
+                    {"name": "wrist_cam", "role": "operator"},
+                ],
+                "enabled_sensors": ["camera"],
+                "operators": {"arm": {"name": "arm"}},
+            },
+            "task_operators": {"arm": {}},
+            "task": {
+                "randomization": {
+                    "cameras": {
+                        "obj_cam": {"x": [-0.01, 0.01]},
+                        "wrist_cam": {"x": [-0.1, 0.1]},
+                    }
+                },
+                "camera_initial_pose": {
+                    "wrist_cam": {"position": [0.0, 0.0, 0.0]},
+                },
+            },
+        }
+    )
+
+    prepared = prepare_task_config_for_instantiation(raw)
+
+    assert [camera["name"] for camera in prepared.env.cameras] == ["obj_cam"]
+    assert list(prepared.env.enabled_sensors) == ["camera"]
+    assert set(prepared.task.randomization.cameras) == {"obj_cam"}
+    assert dict(prepared.task.camera_initial_pose) == {}
+
+
 def test_physical_preparation_is_a_noop_copy() -> None:
     """The default mode keeps every operator-owned config entry intact."""
 

@@ -96,9 +96,17 @@ def prepare_task_config_for_instantiation(cfg: DictConfig) -> DictConfig:
         "task.randomization.entities",
         operator_names,
     )
+    # Camera-owned entries go with their camera: a removed operator camera is no
+    # longer in the model, so its randomization and initial-pose overrides would
+    # otherwise resolve against a name the object-only scene does not have.
     _drop_owned_mapping_entries(
         prepared,
         "task.randomization.cameras",
+        removed_camera_names,
+    )
+    _drop_owned_mapping_entries(
+        prepared,
+        "task.camera_initial_pose",
         removed_camera_names,
     )
     return prepared

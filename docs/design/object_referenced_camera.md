@@ -1,6 +1,7 @@
 # 以物体为参考的相机（Object-Referenced Camera）设计
 
-> **状态：轮 1（配置与挂载）已实现；物体系随机化、`visible_in` 边界、GS/批量仍为"提案，尚未实现"。**
+> **状态：轮 1–2（配置、挂载、object_only 边界）已实现；物体系随机化、`visible_in` 边界、
+> GS/批量仍为"提案，尚未实现"。**
 >
 > 已实现部分的稳定用法，在后续轮次完成后按 AGENTS.md 约定迁移到
 > `docs/task-configuration/task_file_schema.md`（`env.cameras` 字段语义）与
@@ -22,8 +23,15 @@
 - 测试：`tests/test_object_referenced_camera.py`（挂载、跟随不变相对位姿、extrinsics 物体系语义、
   site/`_gs` 解析、world body 与未解析报错、`is_static` 与 `camera_initial_pose` fail-closed）。
 
-**未实现（轮 2–5）**：object_only 全链路贯通、物体系随机化路径、`visible_in` 边界、
-GS / 批量 / 性能。
+**已实现（轮 2，object_only 边界与跟随链路）**：
+
+- `execution_config` 在 `object_only` 边界同时丢弃被移除相机的 `task.camera_initial_pose` 条目
+  （与 `task.randomization.cameras` 一致），否则会在 reset 时对着模型中已不存在的相机名解析；
+- 测试：object 相机与其 randomization 条目在 `object_only` 准备后保留、被移除相机的覆盖被丢弃
+  （`tests/test_object_only_execution.py`）；物流搬运路径（`MujocoObjectHandler.set_pose`）下
+  相对位姿恒定（`tests/test_object_referenced_camera.py`）。
+
+**未实现（轮 3–5）**：物体系随机化路径、`visible_in` 边界、GS / 批量 / 性能。
 
 ## 1. 背景与问题
 
@@ -253,7 +261,7 @@ object 相机改为局部偏移后不再依赖该顺序，但该槽位需要按 
 | 轮次 | 内容 | 验证 |
 | --- | --- | --- |
 | 1 | ✅ 已实现：`CameraSpec.role` 与校验（挂载目标解析、`is_static`、`camera_initial_pose` 互斥）；`MujocoBasis` 挂载 + baseline 重捕获 | 挂载后 `cam_bodyid` 与局部偏移正确；`reset()` 后保持；缺失物体报错 |
-| 2 | 跟随链路贯通：object_only 配置 → prepare → 构造 → `apply_object_pose` 全程验证相对位姿恒定 | 新增/扩展 `tests/test_object_only_execution.py` 等 |
+| 2 | ✅ 已实现：跟随链路贯通：object_only 配置 → prepare → 构造 → `apply_object_pose` 全程验证相对位姿恒定 | 新增/扩展 `tests/test_object_only_execution.py` 等 |
 | 3 | 物体系随机化路径（沿用 `randomization.cameras` 与 scope `distribution` 继承）+ 参考系校验 | 相对位姿随 reset 变化；`absolute_world`/实体引用报错 |
 | 4 | `visible_in` 边界 + 文档迁移（`task_file_schema.md`、`randomization.md`、`initialization_randomization.md`） | 文档与测试同步 |
 | 5 | GS / 批量 / 性能：`is_static` 校验、GS 缓存键、replicated 与 shared-physics 验证、渲染开销基准 | 批量测试 + 基准 |
