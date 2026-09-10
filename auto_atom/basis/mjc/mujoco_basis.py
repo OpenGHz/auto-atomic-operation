@@ -37,6 +37,7 @@ from auto_atom.contracts import (
     RandomizationConstraintReport,
     SupportGeometry,
 )
+from auto_atom.randomization import RandomizationConstraintEvaluator
 from auto_atom.scene_composition import (
     SceneArtifact,
     SceneConfig,
@@ -65,8 +66,7 @@ class MujocoBasis:
             config = EnvConfig.model_validate(kwargs)
         self.config = config
         self._info = None
-        self._visible_radius_cache: Dict[str, float] = {}
-        self._visible_camera_cache: Dict[str, CameraModel] = {}
+        self._randomization_constraints = RandomizationConstraintEvaluator()
         self.scene_artifact = scene_artifact or (
             compile_scene(config.scene) if config.scene.layers else None
         )
@@ -825,12 +825,9 @@ class MujocoBasis:
     def reset(self) -> None:
         """Restore low-level state and notify higher-level wrappers."""
         self._reset_core()
-        visible_cache = getattr(self, "_visible_radius_cache", None)
-        if visible_cache is not None:
-            visible_cache.clear()
-        camera_cache = getattr(self, "_visible_camera_cache", None)
-        if camera_cache is not None:
-            camera_cache.clear()
+        constraints = getattr(self, "_randomization_constraints", None)
+        if constraints is not None:
+            constraints.reset()
         self._after_reset()
 
     def _snapshot_ctrl(self) -> None:
@@ -1115,45 +1112,6 @@ class MujocoBasis:
             )
         return SupportGeometry(center=center, radius=radius)
 
-    def _visible_camera_model(self, camera_name: str) -> CameraModel:
-        """Camera model for one ``visible_in`` camera, cached per episode.
-
-        Camera models (pose + clip near/far) are fixed for the whole feasibility
-        loop of a reset, so resolve each once instead of per candidate
-        evaluation. Cleared on each low-level ``reset`` so camera-pose
-        randomization is picked up.
-        """
-        cache = getattr(self, "_visible_camera_cache", None)
-        if cache is None:
-            cache = {}
-            self._visible_camera_cache = cache
-        cached = cache.get(camera_name)
-        if cached is not None:
-            return cached
-        model = self.get_camera_model(camera_name)
-        cache[camera_name] = model
-        return model
-
-    def _visible_radius(self, entity_name: str) -> float:
-        """Conservative support radius for one ``visible_in`` target entity.
-
-        The bounding-sphere radius is measured around the entity's own geom
-        centroid, so it is invariant to the proposed pose and only needs to be
-        resolved once per entity per episode. Caching it here avoids a full
-        ``mj_forward`` on every candidate evaluation inside the feasibility
-        loop. The cache is cleared on each low-level ``reset``.
-        """
-        cache = getattr(self, "_visible_radius_cache", None)
-        if cache is None:
-            cache = {}
-            self._visible_radius_cache = cache
-        cached = cache.get(entity_name)
-        if cached is not None:
-            return cached
-        radius = float(self.get_support_geometry(entity_name).radius)
-        cache[entity_name] = radius
-        return radius
-
     def evaluate_randomization_constraints(
         self,
         candidate_poses: Mapping[str, PoseState],
@@ -1163,140 +1121,26 @@ class MujocoBasis:
         ancestors: Optional[Mapping[str, Set[str]]] = None,
         target_names: Optional[Set[str]] = None,
     ) -> RandomizationConstraintReport:
-        """Evaluate frustum and support-separation constraints for a candidate."""
-        if constraints is None:
-            return RandomizationConstraintReport(valid=True)
-        violations: list[str] = []
-        minimum_clearance = float("inf")
-        visible = getattr(constraints, "visible_in", None)
-        if visible is not None:
-            if visible.mode.value != "frustum":
-                raise NotImplementedError(
-                    "MuJoCo randomization currently supports frustum visibility; "
-                    "segmentation visibility belongs to the backend hardening phase."
-                )
-            if visible.geometry.value == "support_hull":
-                raise NotImplementedError(
-                    "MuJoCo randomization currently uses a bounding-sphere support; "
-                    "support-hull visibility belongs to the backend hardening phase."
-                )
-            cameras = (
-                list(self._camera_ids)
-                if visible.cameras == "all"
-                else list(visible.cameras)
-            )
-            visibility_candidates = (
-                candidate_poses
-                if target_names is None
-                else {
-                    name: pose
-                    for name, pose in candidate_poses.items()
-                    if name in target_names
-                }
-            )
-            # Camera models and projection constants depend only on the camera
-            # (fixed for the whole evaluation) — resolve them once instead of
-            # once per (entity, camera) pair.
-            camera_data = []
-            for camera_name in cameras:
-                camera = self._visible_camera_model(camera_name)
-                cam_pos = np.asarray(camera.pose.position[0], dtype=np.float64)
-                rotation = np.asarray(
-                    quaternion_to_rotation_matrix(camera.pose.orientation[0]),
-                    dtype=np.float64,
-                )
-                half_fovy = camera.fovy_radians / 2.0
-                half_fovx = np.arctan(
-                    np.tan(half_fovy) * (camera.width / camera.height)
-                )
-                camera_data.append(
-                    (
-                        camera_name,
-                        cam_pos,
-                        rotation,
-                        camera.width * 0.5 / np.tan(half_fovx),
-                        camera.height * 0.5 / np.tan(half_fovy),
-                        float(camera.width),
-                        float(camera.height),
-                        float(camera.near),
-                        float(camera.far),
-                        float(visible.margin_px),
-                    )
-                )
-            use_bounding_sphere = visible.geometry.value == "bounding_sphere"
-            for entity_name, pose in visibility_candidates.items():
-                # The support sphere follows the proposed pose translation. Its
-                # radius is pose-invariant (measured around the entity's own
-                # centroid), so cache it per episode instead of re-running
-                # ``mj_forward`` for every candidate.
-                center = np.asarray(pose.position[0], dtype=np.float64)
-                radius = (
-                    self._visible_radius(entity_name) if use_bounding_sphere else 0.0
-                )
-                for (
-                    camera_name,
-                    cam_pos,
-                    rotation,
-                    scale_x,
-                    scale_y,
-                    cam_width,
-                    cam_height,
-                    near,
-                    far,
-                    margin,
-                ) in camera_data:
-                    # MuJoCo camera x-axis is right, y-axis up, z-axis backward.
-                    camera_point = rotation.T @ (center - cam_pos)
-                    depth = -float(camera_point[2])
-                    depth_margin = radius / max(depth, 1e-9)
-                    px = cam_width * 0.5 + camera_point[0] / max(depth, 1e-9) * scale_x
-                    py = cam_height * 0.5 - camera_point[1] / max(depth, 1e-9) * scale_y
-                    if depth <= near + radius or depth >= far - radius:
-                        violations.append(f"{entity_name}:outside_depth:{camera_name}")
-                    if (
-                        px - depth_margin * cam_width < margin
-                        or px + depth_margin * cam_width > cam_width - margin
-                        or py - depth_margin * cam_height < margin
-                        or py + depth_margin * cam_height > cam_height - margin
-                    ):
-                        violations.append(f"{entity_name}:outside_view:{camera_name}")
+        """Check one candidate set against the configured hard constraints.
 
-        separated = getattr(constraints, "separated", None)
-        if separated is not None and separated.scope == "scene":
-            raise NotImplementedError(
-                "MuJoCo scene-scope separation requires geom-level broad-phase "
-                "support and is reserved for the backend hardening phase."
-            )
-        if separated is not None and separated.scope == "randomized":
-            names = list(candidate_poses)
-            for index, left_name in enumerate(names):
-                left_geometry = self.get_support_geometry(left_name)
-                left_center = np.asarray(
-                    candidate_poses[left_name].position[0], dtype=np.float64
-                )
-                for right_name in names[index + 1 :]:
-                    if ancestors and (
-                        right_name in ancestors.get(left_name, set())
-                        or left_name in ancestors.get(right_name, set())
-                    ):
-                        continue
-                    right_geometry = self.get_support_geometry(right_name)
-                    right_center = np.asarray(
-                        candidate_poses[right_name].position[0], dtype=np.float64
-                    )
-                    clearance = (
-                        float(np.linalg.norm(left_center - right_center))
-                        - left_geometry.radius
-                        - right_geometry.radius
-                        - float(separated.clearance)
-                    )
-                    minimum_clearance = min(minimum_clearance, clearance)
-                    if clearance < 0.0:
-                        violations.append(f"{left_name}:collides:{right_name}")
-        return RandomizationConstraintReport(
-            valid=not violations,
-            violations=tuple(violations),
-            minimum_clearance=minimum_clearance,
+        The arithmetic (frustum projection, separation clearance, and the
+        per-episode camera/radius caches) lives in the backend-neutral
+        :class:`RandomizationConstraintEvaluator`. This environment only
+        supplies the two simulator-specific reads: the camera projection model
+        and each entity's conservative support geometry.
+        """
+        evaluator = getattr(self, "_randomization_constraints", None)
+        if evaluator is None:
+            evaluator = RandomizationConstraintEvaluator()
+            self._randomization_constraints = evaluator
+        return evaluator.evaluate(
+            candidate_poses,
+            constraints,
+            camera_model_of=self.get_camera_model,
+            support_geometry_of=self.get_support_geometry,
+            all_camera_names=tuple(self._camera_ids),
+            ancestors=ancestors,
+            target_names=target_names,
         )
 
     def _get_camera_extrinsics(self) -> Dict[str, dict]:

@@ -470,6 +470,14 @@ apply randomization. Logical names must resolve through the backend's object,
 operator, camera, joint, and named-frame bindings. Backend-specific limitations
 must not reinterpret shared frame modes or omitted-axis behavior.
 
+The shared layer already owns plan compilation (`compile_randomization_plan`),
+candidate generation (`unit_candidate`, `PoissonDiskCandidateStream`,
+`maximin_select`), and constraint evaluation
+(`RandomizationConstraintEvaluator`). For the constraint half a backend only
+supplies two reads — `get_camera_model()` and `get_support_geometry()` — and
+inherits `visible_in` / `separated` semantics, including the per-episode
+`CameraModel` / support-radius caches, unchanged.
+
 If a backend does not support a configured initialization or randomization
 capability, reject the non-empty field during construction with a clear error.
 Do not silently ignore it. Environment-only defaults belong to that backend's

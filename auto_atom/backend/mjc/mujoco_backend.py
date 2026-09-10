@@ -56,6 +56,7 @@ from ...randomization import (
     RandomizationPlan,
     compile_randomization_plan,
     maximin_select,
+    parse_entity_reference,
     unit_candidate,
 )
 from ...runtime import ComponentRegistry, ControlResult, ControlSignal
@@ -1513,7 +1514,7 @@ class MujocoTaskBackend(SceneBackend):
         if reference in self.object_handlers:
             return self.object_handlers[reference].get_pose().select(env_index)
 
-        bare, attr = self._parse_entity_reference(reference)
+        bare, attr = parse_entity_reference(reference)
         if attr is not None:
             if operator_name is None:
                 raise ValueError(
@@ -1863,20 +1864,6 @@ class MujocoTaskBackend(SceneBackend):
         sampled_index = max(0, min(sampled_index, len(regions) - 1))
         return regions[sampled_index]
 
-    @staticmethod
-    def _parse_entity_reference(ref: str) -> Tuple[str, Optional[str]]:
-        """Split an entity-name reference into ``(name, attr)``.
-
-        ``'arm.base'`` → ``('arm', 'base')``; ``'arm.eef'`` → ``('arm', 'eef')``;
-        plain ``'vase'`` → ``('vase', None)``. Only ``.base`` / ``.eef`` suffixes
-        are recognized; any other dotted form is returned unchanged.
-        """
-        if "." in ref:
-            name, attr = ref.split(".", 1)
-            if attr in ("base", "eef"):
-                return name, attr
-        return ref, None
-
     def _randomization_action_specs(self) -> Dict[str, _RandomizationActionSpec]:
         """Expand public entity configs into independently ordered actions."""
         plan = self._randomization_plan()
@@ -2003,7 +1990,7 @@ class MujocoTaskBackend(SceneBackend):
                             action_spec.kind, action_spec.owner
                         )
             else:
-                bare, attr = self._parse_entity_reference(reference)
+                bare, attr = parse_entity_reference(reference)
                 if attr is None and bare in self.operator_handlers:
                     attr = "base"
                 key = f"{bare}.{attr}" if attr is not None else bare
@@ -2075,7 +2062,7 @@ class MujocoTaskBackend(SceneBackend):
         for reference in references:
             if isinstance(reference, RandomizationReference):
                 continue
-            bare, attr = self._parse_entity_reference(reference)
+            bare, attr = parse_entity_reference(reference)
             if attr is None and bare in self.operator_handlers:
                 attr = "base"
             reference_key = f"{bare}.{attr}" if attr is not None else bare
@@ -2111,7 +2098,7 @@ class MujocoTaskBackend(SceneBackend):
             for reference in references:
                 if isinstance(reference, RandomizationReference):
                     continue
-                bare, attr = self._parse_entity_reference(reference)
+                bare, attr = parse_entity_reference(reference)
                 if attr is not None and bare not in self.operator_handlers:
                     raise ValueError(
                         f"{label} randomization region {region_index} reference "
@@ -2189,7 +2176,7 @@ class MujocoTaskBackend(SceneBackend):
         if isinstance(reference, RandomizationReference):
             return default_pose
         # --- Entity-name reference: delta-carry ---
-        bare, attr = self._parse_entity_reference(reference)
+        bare, attr = parse_entity_reference(reference)
         if attr is None and bare in self.operator_handlers:
             attr = "base"  # plain operator name defaults to its base
         if attr is not None:
@@ -3577,7 +3564,7 @@ class MujocoTaskBackend(SceneBackend):
     ) -> PoseState:
         if isinstance(reference, RandomizationReference):
             return default_pose
-        bare, attr = self._parse_entity_reference(reference)
+        bare, attr = parse_entity_reference(reference)
         if attr is None and bare in self.operator_handlers:
             attr = "base"  # plain operator name defaults to its base
         if attr is not None:

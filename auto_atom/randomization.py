@@ -1,14 +1,29 @@
-"""Backend-neutral randomization planning and candidate-generator helpers.
+"""Backend-neutral randomization planning, candidate generation, and constraint
+evaluation.
 
 The module deliberately knows nothing about MuJoCo or a particular simulator.
-Backends provide pose reads/writes and constraint evaluation; this module owns
-the stable action graph and deterministic candidate-generation semantics.
+Backends provide pose reads/writes, camera models, and support geometry; this
+module owns the stable action graph, the deterministic candidate-generation
+semantics, and the feasibility arithmetic (camera frustum projection and
+inter-entity separation) used to accept or reject candidates.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, Iterable, List, Mapping, Sequence, Set, Tuple
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    Iterable,
+    List,
+    Mapping,
+    MutableMapping,
+    Optional,
+    Sequence,
+    Set,
+    Tuple,
+)
 
 import numpy as np
 from scipy.spatial.distance import cdist
@@ -16,6 +31,7 @@ from scipy.stats import qmc
 
 from auto_atom.config.randomization import (
     OperatorRandomizationConfig,
+    RandomizationConstraintConfig,
     RandomizationGeneratorConfig,
     RandomizationGeneratorInput,
     RandomizationGeneratorKind,
@@ -31,6 +47,12 @@ from auto_atom.config.randomization import (
     pose_randomization_regions,
 )
 from auto_atom.config.reference import RandomizationReference
+from auto_atom.contracts import (
+    CameraModel,
+    RandomizationConstraintReport,
+    SupportGeometry,
+)
+from auto_atom.utils.pose import PoseState, quaternion_to_rotation_matrix
 
 
 @dataclass(frozen=True)
@@ -146,7 +168,13 @@ class PoissonDiskCandidateStream:
         return np.asarray(sample[0], dtype=np.float64).copy()
 
 
-def _parse_entity_reference(reference: str) -> tuple[str, str | None]:
+def parse_entity_reference(reference: str) -> tuple[str, str | None]:
+    """Split an entity-name reference into ``(name, attribute)``.
+
+    ``'arm.base'`` → ``('arm', 'base')``; ``'arm.eef'`` → ``('arm', 'eef')``;
+    plain ``'vase'`` → ``('vase', None)``. Any other dotted form is returned
+    unchanged, so it stays an opaque named-frame reference.
+    """
     if "." in reference:
         name, attribute = reference.split(".", 1)
         if attribute in {"base", "eef"}:
@@ -298,7 +326,7 @@ def compile_randomization_plan(
         for reference in _references(action.randomization):
             if isinstance(reference, RandomizationReference):
                 continue
-            bare, attribute = _parse_entity_reference(reference)
+            bare, attribute = parse_entity_reference(reference)
             dependency = f"{bare}.{attribute}" if attribute else bare
             if attribute is None and f"{bare}.base" in actions:
                 dependency = f"{bare}.base"
@@ -540,3 +568,261 @@ def maximin_select(
         selected.append(best_index)
         remaining.remove(best_index)
     return points[np.asarray(selected, dtype=np.int64)]
+
+
+class RandomizationConstraintEvaluator:
+    """Feasibility oracle for camera visibility and inter-entity separation.
+
+    This owns every part of candidate acceptance that is not simulator-specific:
+    the frustum projection arithmetic, the separation clearance arithmetic, and
+    the per-episode caches that keep the rejection loop cheap. A backend only
+    supplies two reads — a camera model and a support geometry per entity — so a
+    new backend inherits ``visible_in`` / ``separated`` semantics unchanged.
+
+    The two reads are passed per call rather than bound at construction because
+    a backend resolves them through its own (possibly monkeypatched) accessors.
+
+    Camera models and support radii are pose-invariant within one episode, so
+    they are resolved once per episode instead of once per candidate. Call
+    :meth:`reset` from the backend's low-level reset so camera-pose
+    randomization and reconfiguration are picked up.
+    """
+
+    def __init__(self) -> None:
+        self._camera_models: MutableMapping[str, CameraModel] = {}
+        self._support_radii: MutableMapping[str, float] = {}
+
+    def reset(self) -> None:
+        """Drop the per-episode caches."""
+        self._camera_models.clear()
+        self._support_radii.clear()
+
+    def _camera_model(
+        self,
+        camera_name: str,
+        camera_model_of: Callable[[str], CameraModel],
+    ) -> CameraModel:
+        cached = self._camera_models.get(camera_name)
+        if cached is None:
+            cached = camera_model_of(camera_name)
+            self._camera_models[camera_name] = cached
+        return cached
+
+    def _support_radius(
+        self,
+        entity_name: str,
+        support_geometry_of: Callable[[str], SupportGeometry],
+    ) -> float:
+        """Conservative support radius of one entity for the current episode.
+
+        The bounding-sphere radius is measured around the entity's own geom
+        centroid, so it is invariant to the proposed pose; caching it avoids a
+        full geometry refresh on every candidate evaluation.
+        """
+        cached = self._support_radii.get(entity_name)
+        if cached is None:
+            cached = float(support_geometry_of(entity_name).radius)
+            self._support_radii[entity_name] = cached
+        return cached
+
+    def evaluate(
+        self,
+        candidate_poses: Mapping[str, PoseState],
+        constraints: Optional[RandomizationConstraintConfig] = None,
+        *,
+        camera_model_of: Callable[[str], CameraModel],
+        support_geometry_of: Callable[[str], SupportGeometry],
+        all_camera_names: Sequence[str] = (),
+        ancestors: Optional[Mapping[str, Set[str]]] = None,
+        target_names: Optional[Set[str]] = None,
+    ) -> RandomizationConstraintReport:
+        """Check one candidate set against the configured hard constraints.
+
+        ``candidate_poses`` maps logical entity names to the *proposed* poses;
+        only translation is used, because both the visibility bound and the
+        separation test are sphere-based. ``target_names`` restricts the
+        visibility check to the entity currently being sampled, ``ancestors``
+        exempts articulated descendants from the separation test, and
+        ``all_camera_names`` is the backend's camera set that
+        ``visible_in.cameras: all`` refers to.
+        """
+        if constraints is None:
+            return RandomizationConstraintReport(valid=True)
+
+        violations: List[str] = []
+        minimum_clearance = float("inf")
+
+        if constraints.visible_in is not None:
+            violations.extend(
+                self._visibility_violations(
+                    candidate_poses,
+                    constraints.visible_in,
+                    camera_model_of=camera_model_of,
+                    support_geometry_of=support_geometry_of,
+                    all_camera_names=all_camera_names,
+                    target_names=target_names,
+                )
+            )
+
+        separated = constraints.separated
+        if separated is not None and separated.scope == "scene":
+            raise NotImplementedError(
+                "scene-scope separation requires geom-level broad-phase support, "
+                "which is not implemented yet."
+            )
+        if separated is not None and separated.scope == "randomized":
+            minimum_clearance = self._separation_violations(
+                candidate_poses,
+                separated.clearance,
+                support_geometry_of=support_geometry_of,
+                ancestors=ancestors,
+                violations=violations,
+            )
+
+        return RandomizationConstraintReport(
+            valid=not violations,
+            violations=tuple(violations),
+            minimum_clearance=minimum_clearance,
+        )
+
+    def _visibility_violations(
+        self,
+        candidate_poses: Mapping[str, PoseState],
+        visible: Any,
+        *,
+        camera_model_of: Callable[[str], CameraModel],
+        support_geometry_of: Callable[[str], SupportGeometry],
+        all_camera_names: Sequence[str],
+        target_names: Optional[Set[str]],
+    ) -> List[str]:
+        if visible.mode.value != "frustum":
+            raise NotImplementedError(
+                "segmentation visibility requires a renderer-backed "
+                "implementation, which is not available yet."
+            )
+        if visible.geometry.value == "support_hull":
+            raise NotImplementedError(
+                "support-hull visibility requires backend-provided support "
+                "points, which are not available yet."
+            )
+        if visible.cameras == "all":
+            camera_names = list(all_camera_names)
+            if not camera_names:
+                raise ValueError(
+                    "visible_in.cameras: all needs the backend's camera set, "
+                    "but none was provided — refusing to skip the visibility "
+                    "check silently."
+                )
+        else:
+            camera_names = list(visible.cameras)
+        candidates = (
+            candidate_poses
+            if target_names is None
+            else {
+                name: pose
+                for name, pose in candidate_poses.items()
+                if name in target_names
+            }
+        )
+        # Camera models and projection constants depend only on the camera and
+        # are fixed for the whole feasibility loop — resolve them once instead
+        # of once per (entity, camera) pair.
+        camera_data = []
+        for camera_name in camera_names:
+            camera = self._camera_model(camera_name, camera_model_of)
+            cam_pos = np.asarray(camera.pose.position[0], dtype=np.float64)
+            rotation = np.asarray(
+                quaternion_to_rotation_matrix(camera.pose.orientation[0]),
+                dtype=np.float64,
+            )
+            half_fovy = camera.fovy_radians / 2.0
+            half_fovx = np.arctan(np.tan(half_fovy) * (camera.width / camera.height))
+            camera_data.append(
+                (
+                    camera_name,
+                    cam_pos,
+                    rotation,
+                    camera.width * 0.5 / np.tan(half_fovx),
+                    camera.height * 0.5 / np.tan(half_fovy),
+                    float(camera.width),
+                    float(camera.height),
+                    float(camera.near),
+                    float(camera.far),
+                    float(visible.margin_px),
+                )
+            )
+        use_bounding_sphere = visible.geometry.value == "bounding_sphere"
+        violations: List[str] = []
+        for entity_name, pose in candidates.items():
+            center = np.asarray(pose.position[0], dtype=np.float64)
+            radius = (
+                self._support_radius(entity_name, support_geometry_of)
+                if use_bounding_sphere
+                else 0.0
+            )
+            for (
+                camera_name,
+                cam_pos,
+                rotation,
+                scale_x,
+                scale_y,
+                cam_width,
+                cam_height,
+                near,
+                far,
+                margin,
+            ) in camera_data:
+                # Camera x-axis is right, y-axis up, z-axis backward, so the
+                # depth is the negated camera-frame z coordinate.
+                camera_point = rotation.T @ (center - cam_pos)
+                depth = -float(camera_point[2])
+                depth_margin = radius / max(depth, 1e-9)
+                px = cam_width * 0.5 + camera_point[0] / max(depth, 1e-9) * scale_x
+                py = cam_height * 0.5 - camera_point[1] / max(depth, 1e-9) * scale_y
+                if depth <= near + radius or depth >= far - radius:
+                    violations.append(f"{entity_name}:outside_depth:{camera_name}")
+                if (
+                    px - depth_margin * cam_width < margin
+                    or px + depth_margin * cam_width > cam_width - margin
+                    or py - depth_margin * cam_height < margin
+                    or py + depth_margin * cam_height > cam_height - margin
+                ):
+                    violations.append(f"{entity_name}:outside_view:{camera_name}")
+        return violations
+
+    def _separation_violations(
+        self,
+        candidate_poses: Mapping[str, PoseState],
+        clearance: float,
+        *,
+        support_geometry_of: Callable[[str], SupportGeometry],
+        ancestors: Optional[Mapping[str, Set[str]]],
+        violations: List[str],
+    ) -> float:
+        """Append pairwise separation violations and return the tightest gap."""
+        names = list(candidate_poses)
+        minimum_clearance = float("inf")
+        for index, left_name in enumerate(names):
+            left_center = np.asarray(
+                candidate_poses[left_name].position[0], dtype=np.float64
+            )
+            left_radius = self._support_radius(left_name, support_geometry_of)
+            for right_name in names[index + 1 :]:
+                if ancestors and (
+                    right_name in ancestors.get(left_name, set())
+                    or left_name in ancestors.get(right_name, set())
+                ):
+                    continue
+                right_center = np.asarray(
+                    candidate_poses[right_name].position[0], dtype=np.float64
+                )
+                gap = (
+                    float(np.linalg.norm(left_center - right_center))
+                    - left_radius
+                    - self._support_radius(right_name, support_geometry_of)
+                    - float(clearance)
+                )
+                minimum_clearance = min(minimum_clearance, gap)
+                if gap < 0.0:
+                    violations.append(f"{left_name}:collides:{right_name}")
+        return minimum_clearance

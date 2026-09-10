@@ -105,9 +105,12 @@ re-rendered after camera randomization.
 
 ## Constrained Camera Visibility
 
-For `visible_in.mode: frustum`, MuJoCo evaluates the support geometry against
-each selected camera's final reset pose. The depth interval is the intersection
-of all enabled image streams for that camera: RGB, mask, and heat-map outputs
+For `visible_in.mode: frustum`, the shared
+`RandomizationConstraintEvaluator` (`auto_atom/randomization.py`) tests the
+support geometry against each selected camera's final reset pose. MuJoCo only
+supplies the camera projection model and each entity's support geometry. The
+depth interval is the intersection of all enabled image streams for that
+camera: RGB, mask, and heat-map outputs
 use `rgb_clip_range_m`; depth uses `depth_clip_range_m`. An omitted range uses
 the XML scene clipping range for that stream. A candidate must fit inside this
 common interval, so a point retained by depth but clipped from RGB is rejected.
@@ -116,8 +119,12 @@ visibility constraint.
 
 ## Implementation Pointers
 
+- `auto_atom/randomization.py` owns the backend-neutral plan, candidate
+  generators, and constraint evaluation (`RandomizationConstraintEvaluator`),
+  including the per-episode camera-model and support-radius caches.
 - `auto_atom/backend/mjc/mujoco_backend.py` owns object, operator, and camera
-  initialization/randomization and the reset lifecycle.
+  initialization/randomization and the reset lifecycle; its environment supplies
+  `get_camera_model` / `get_support_geometry` to the shared evaluator.
 - `auto_atom/basis/mjc/model_initialization.py` owns raw MuJoCo joint-state
   injection and equality-constraint settling.
 - `auto_atom/runtime.py` exposes the realized reset poses through

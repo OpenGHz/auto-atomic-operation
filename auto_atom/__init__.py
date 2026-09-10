@@ -94,7 +94,11 @@ from .config_loader import load_config, load_task_file, load_task_file_hydra
 from .execution_timeline import CompiledKeypoint, ExecutionTimeline
 from .mock import MockOperatorHandler, MockSceneBackend
 from .policy_eval import ConfigDrivenDemoPolicy, PolicyEvaluator
-from .randomization import RandomizationFailureError
+from .randomization import (
+    RandomizationConstraintEvaluator,
+    RandomizationFailureError,
+    parse_entity_reference,
+)
 
 # Runner imports last – runner subpackage depends on the modules above.
 from .runner.base import RunnerBase
