@@ -492,6 +492,13 @@ A backend therefore only implements `RandomizationHost`
 | Pose read/write | `live_pose(label)`, `baseline_pose(label)`, `get_camera_pose()`, `set_camera_pose()`, `set_target_pose(kind, owner, pose, env_mask)` |
 | Geometry and cameras | `get_support_geometry()`, `get_operator_support_geometry()`, `camera_names()`, `get_camera_model()` |
 | Randomness source | `rng`, `seed`, `reset_index` |
+
+`seed` is the run's root seed and follows one policy across AAO: `None` means
+"no run seed was requested", every integer — including `0` — is used verbatim.
+A host should resolve `task.seed` through
+`auto_atom.utils.seed.resolve_run_seed` so that an unseeded run still reports a
+concrete seed (and can be replayed with `task.seed=<that value>`) instead of
+reporting `None`.
 | Reporting | `evaluate_pose_constraints()`, `record_reset_diagnostics()` |
 
 The pose-constraint trio (`get_camera_model`, `get_support_geometry`,
@@ -646,7 +653,7 @@ task_operators:
 Because the file is processed by Hydra you can use all standard Hydra features. For example, to override fields at runtime:
 
 ```bash
-python run_task.py scene_path=other_scene.xml task.seed=0
+python run_task.py scene_path=other_scene.xml task.seed=42
 ```
 
 ---

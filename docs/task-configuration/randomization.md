@@ -851,7 +851,7 @@ Semantics:
 - The sampled numbers are always expressed in the waypoint's own `reference`
   frame, so the perturbation follows the frame the waypoint is anchored to.
 - Sampling happens once per `reset()` and uses the shared random-number
-  stream. A fixed nonzero `task.seed` makes per-waypoint offsets reproducible.
+  stream. A fixed `task.seed` makes per-waypoint offsets reproducible.
 - Per-waypoint randomization is independent from entity randomization and does
   not participate in `collision_radius` rejection; keep ranges small enough that
   the resulting motion stays reachable.
@@ -1047,4 +1047,19 @@ Set `task.seed` to fix the randomization seed:
 aao-demo task.seed=42 rounds=5
 ```
 
-The same seed produces the same sequence of random poses across runs.
+The same seed produces the same sequence of random poses across runs. The seed
+is the root for **every** randomness source in a run — scene randomization,
+per-waypoint randomization, and camera sensor noise — so replaying a run only
+requires the same `task.seed`.
+
+Leaving `task.seed` unset keeps the run random, and the resolved seed is logged
+when the backend is built:
+
+```text
+WARNING  ... No run seed was requested (task.seed is unset): scene randomization,
+waypoint randomization, and camera noise are not reproducible across runs.
+This run uses random_seed=<value>; pass task.seed=<value> to replay it.
+```
+
+Any integer is a valid seed, **including `0`**; `0` is not a sentinel for
+"unseeded" — use `task.seed=null` for that.

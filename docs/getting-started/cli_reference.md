@@ -132,7 +132,7 @@ To discover which configs are runnable tasks, use [`aao-info`](#aao-info).
 | `[+]perf_count=true` | bool | false | Capture observations each step for performance analysis |
 | `[+]print_updates=false` | bool | false | Disable reset/step `TaskUpdate` dumps while retaining summaries |
 | `env.batch_size=N` | int | (from config) | Override the number of parallel environments |
-| `task.seed=N` | int | (from config) | Override the randomization seed |
+| `task.seed=N` | int \| null | (from config) | Fix the run seed. Unset (`null`) keeps the run random but logs the concrete seed, so `task.seed=<logged value>` replays it; `0` is a normal seed |
 | `+env.viewer.disable=true` | bool | false | Run headless (no viewer window) |
 | `env.hide_operators_in_camera=true` | bool | false | Exclude configured operators from native MuJoCo RGB/depth/mask rendering without changing physics |
 | `[+]execution.update_boundary=...` | enum | `control_tick` | Public `update()` boundary: `control_tick`, `primitive`, `keypoint`, or `stage` |
