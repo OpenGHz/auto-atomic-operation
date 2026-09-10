@@ -30,7 +30,7 @@ from auto_atom.contracts import (
     IKSolver,
     ObjectHandler,
     OperatorHandler,
-    RandomizationConstraintReport,
+    PoseConstraintReport,
     SceneBackend,
     SupportGeometry,
 )
@@ -835,7 +835,7 @@ class MujocoOperatorHandler(OperatorHandler):
         # ``_home_ctrl`` is a per-logical-row view used only for the settling
         # pass below.  The authoritative value lives in the env's
         # ``_OperatorState.home_ctrl``; refresh the view after every reset so
-        # stale initial-state/randomization values cannot leak across episodes.
+        # stale initial-state/randomization values cannot leak across resets.
         for env_index, enabled in enumerate(mask):
             if not enabled:
                 continue
@@ -1098,7 +1098,7 @@ class MujocoTaskBackend(SceneBackend):
     random_seed: Optional[int] = None
     randomization_debug: bool = False
     _rng: np.random.Generator = field(init=False, repr=False)
-    _episode_index: int = field(init=False, repr=False, default=0)
+    _reset_index: int = field(init=False, repr=False, default=0)
     _last_reset_diagnostics: Dict[int, List[Dict[str, Any]]] = field(
         init=False,
         repr=False,
@@ -1251,7 +1251,7 @@ class MujocoTaskBackend(SceneBackend):
 
         ``part`` is ``"base"`` (root/base body footprint) or ``"eef"`` (the
         EEF assembly under the body owning the EEF site, measured around the
-        site). The result reflects the current episode configuration, so
+        site). The result reflects the configuration of the current reset, so
         callers must not cache it across resets.
         """
         if not 0 <= env_index < self.batch_size:
@@ -1279,7 +1279,7 @@ class MujocoTaskBackend(SceneBackend):
         constraints: Any = None,
         ancestors: Optional[Mapping[str, Set[str]]] = None,
         target_names: Optional[Set[str]] = None,
-    ) -> RandomizationConstraintReport:
+    ) -> PoseConstraintReport:
         physical_index = (
             0 if bool(getattr(self.env, "_share_physics", False)) else env_index
         )
@@ -1322,7 +1322,7 @@ class MujocoTaskBackend(SceneBackend):
 
     def reset(self, env_mask: Optional[np.ndarray] = None) -> None:
         mask = self._normalize_mask(env_mask)
-        self._episode_index += 1
+        self._reset_index += 1
         self._last_reset_diagnostics.clear()
         self.env.reset(env_mask)
         for operator in self.operator_handlers.values():
@@ -1609,9 +1609,9 @@ class MujocoTaskBackend(SceneBackend):
         After setting each object's pose the selected rows of the recorded
         default are updated so subsequent randomization uses the effective
         initial pose as its baseline.  Unselected rows retain their existing
-        baselines, which keeps masked resets from absorbing a prior episode's
+        baselines, which keeps masked resets from absorbing a prior reset's
         random sample.  Callers may mutate ``self.initial_poses`` between
-        resets for per-episode initial conditions.
+        resets for per-reset initial conditions.
         """
         mask = self._normalize_mask(env_mask)
         for name in self._initial_pose_order():
@@ -1621,7 +1621,7 @@ class MujocoTaskBackend(SceneBackend):
                 continue
             current = handler.get_pose()
             # Keep one stable randomization baseline per logical environment.
-            # A masked reset must not copy an unselected row's episode pose
+            # A masked reset must not copy an unselected row's reset pose
             # (which may already include random offsets) into that baseline.
             baseline = self._default_object_poses.get(name)
             if baseline is None:
@@ -1774,9 +1774,13 @@ class MujocoTaskBackend(SceneBackend):
         return self.random_seed
 
     @property
-    def episode_index(self) -> int:
-        """Monotonic reset counter used to derive per-episode sample indices."""
-        return self._episode_index
+    def reset_index(self) -> int:
+        """How many resets this backend has performed.
+
+        The executor derives per-reset sample indices from it, so consecutive
+        resets draw different candidates from the same stream.
+        """
+        return self._reset_index
 
     @property
     def object_names(self) -> Set[str]:

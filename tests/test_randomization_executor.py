@@ -37,7 +37,7 @@ from auto_atom.config.randomization import (
 )
 from auto_atom.contracts import (
     CameraModel,
-    RandomizationConstraintReport,
+    PoseConstraintReport,
     SupportGeometry,
 )
 from auto_atom.randomization import RandomizationFailureError
@@ -139,7 +139,7 @@ class _RecordingHost:
         return 0
 
     @property
-    def episode_index(self) -> int:
+    def reset_index(self) -> int:
         return 0
 
     @property
@@ -206,7 +206,7 @@ class _RecordingHost:
         self.poses[label] = pose
 
     def evaluate_pose_constraints(self, candidate_poses, **kwargs):
-        return RandomizationConstraintReport(valid=True)
+        return PoseConstraintReport(valid=True)
 
     def record_reset_diagnostics(self, env_index, diagnostics) -> None:
         self.events.append(f"diagnostic:{diagnostics.get('generator', '')}")

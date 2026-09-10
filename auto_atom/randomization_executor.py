@@ -56,7 +56,7 @@ from auto_atom.config.randomization import (
     canonical_randomization_spec,
 )
 from auto_atom.config.reference import RandomizationReference
-from auto_atom.contracts import RandomizationConstraintReport
+from auto_atom.contracts import PoseConstraintReport
 from auto_atom.randomization import (
     CollisionParticipant,
     PoissonDiskCandidateStream,
@@ -138,8 +138,12 @@ class RandomizationHost(Protocol):
         ...
 
     @property
-    def episode_index(self) -> int:
-        """How many resets have happened; used to derive per-episode sample indices."""
+    def reset_index(self) -> int:
+        """How many resets this host has performed.
+
+        The executor derives per-reset sample indices from it, so consecutive
+        resets of the same scene draw different candidates from the same stream.
+        """
         ...
 
     def live_pose(self, label: str) -> PoseState:
@@ -200,7 +204,7 @@ class RandomizationHost(Protocol):
         constraints: Optional[RandomizationConstraintConfig] = None,
         ancestors: Optional[Mapping[str, RandomizationAncestors]] = None,
         target_names: Optional[Any] = None,
-    ) -> RandomizationConstraintReport:
+    ) -> PoseConstraintReport:
         """Evaluate the hard pose constraints for a candidate set."""
         ...
 
@@ -230,8 +234,8 @@ class RandomizationExecutor:
         self._poisson_streams: Dict[Tuple[object, ...], PoissonDiskCandidateStream] = {}
         # Auto-resolved collision radii are cached per (kind, owner, env). Object
         # entries stay valid for the backend lifetime (static geometry); operator
-        # entries are dropped every episode (their geometry follows the episode
-        # configuration) — see ``begin_episode``.
+        # entries are dropped every reset (their geometry follows the reset's
+        # configuration) — see ``begin_reset``.
         self._auto_radius_cache: Dict[Tuple[Any, ...], float] = {}
 
     @property
@@ -240,7 +244,7 @@ class RandomizationExecutor:
 
         The history is intentionally *not* cleared per reset: it is the
         persistent sequence that makes non-IID generators cover the proposal
-        volume across episodes instead of restarting every reset.
+        volume across resets instead of restarting every reset.
         """
         return self._history
 
@@ -302,15 +306,15 @@ class RandomizationExecutor:
         return self.scope.cameras
 
     # ------------------------------------------------------------------
-    #  Episode preparation
+    #  Reset preparation
     # ------------------------------------------------------------------
 
-    def begin_episode(self) -> None:
+    def begin_reset(self) -> None:
         """Prepare one reset before any pose is sampled.
 
-        Operator auto radii depend on the episode's configuration (base/EEF
-        geometry follows the home state just applied), so operator entries are
-        dropped and re-resolved each reset while object auto radii (static
+        Operator auto radii depend on the configuration of the reset being
+        prepared (base/EEF geometry follows the home state just applied), so
+        operator entries are dropped and re-resolved each reset while object auto radii (static
         geometry) stay cached. Configured regions are validated here so a bad
         reference fails before the scene is mutated.
         """
@@ -498,7 +502,7 @@ class RandomizationExecutor:
             reference_poses=reference_poses,
             distribution=distribution,
             sample_index=sample_index,
-            reset_index=self._host.episode_index,
+            reset_index=self._host.reset_index,
             poisson_stream=poisson_stream,
         )
 
@@ -989,7 +993,7 @@ class RandomizationExecutor:
                     env_index,
                     working_poses,
                     candidate_index=(
-                        self._host.episode_index * 1009
+                        self._host.reset_index * 1009
                         + attempt * 17
                         + stable_labels[action_label]
                     ),
@@ -1330,7 +1334,7 @@ class RandomizationExecutor:
                     env_index,
                     working_poses,
                     candidate_index=(
-                        self._host.episode_index * 1009
+                        self._host.reset_index * 1009
                         + attempt * 17
                         + sum(ord(c) for c in member)
                     ),
@@ -1371,7 +1375,7 @@ class RandomizationExecutor:
                         ancestors=candidate.ancestors,
                         collision_participants=local_participants,
                     )
-                constraint_report: RandomizationConstraintReport | None = None
+                constraint_report: PoseConstraintReport | None = None
                 if candidate.constraints is not None and (
                     candidate.constraints.visible_in is not None
                     or candidate.constraints.separated is not None
@@ -1546,12 +1550,12 @@ class RandomizationExecutor:
                 env_mask=env_mask,
                 batch_size=self._host.batch_size,
                 distribution=canonical.distribution,
-                reset_index=self._host.episode_index,
+                reset_index=self._host.reset_index,
             )
             self._host.set_camera_pose(camera_name, sampled, env_mask)
 
     def apply_randomization(self, env_mask: np.ndarray) -> None:
-        self.begin_episode()
+        self.begin_reset()
         plan = self.plan
         components = [list(component) for component in plan.components]
         action_specs = plan.actions

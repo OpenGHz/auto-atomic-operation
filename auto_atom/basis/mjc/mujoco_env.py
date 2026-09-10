@@ -45,7 +45,7 @@ from auto_atom.config.env_config import (
 )
 from auto_atom.contracts import (
     CameraModel,
-    RandomizationConstraintReport,
+    PoseConstraintReport,
     SupportGeometry,
 )
 from auto_atom.runtime import ComponentRegistry
@@ -2720,7 +2720,7 @@ class BatchedUnifiedMujocoEnv:
         constraints: Any = None,
         ancestors: Optional[Mapping[str, set[str]]] = None,
         target_names: Optional[set[str]] = None,
-    ) -> RandomizationConstraintReport:
+    ) -> PoseConstraintReport:
         if not 0 <= env_index < self.batch_size:
             raise IndexError(
                 f"env_index must be in [0, {self.batch_size}), got {env_index}"

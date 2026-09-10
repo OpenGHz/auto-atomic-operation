@@ -31,7 +31,6 @@ from typing import (
     List,
     Optional,
     Protocol,
-    Set,
     TypeVar,
     cast,
     runtime_checkable,
@@ -323,8 +322,8 @@ class SupportGeometry:
 
 
 @dataclass(frozen=True)
-class RandomizationConstraintReport:
-    """Result of evaluating one candidate against backend constraints."""
+class PoseConstraintReport:
+    """Result of evaluating one candidate pose set against hard constraints."""
 
     valid: bool
     violations: tuple[str, ...] = ()
@@ -332,7 +331,7 @@ class RandomizationConstraintReport:
 
 
 @runtime_checkable
-class RandomizationConstraintEnvProtocol(EnvProtocol, Protocol):
+class PoseConstraintEnvProtocol(EnvProtocol, Protocol):
     """Optional environment capability for camera/geometry constraints."""
 
     def get_camera_model(self, camera_name: str) -> CameraModel: ...
@@ -345,7 +344,7 @@ class RandomizationConstraintEnvProtocol(EnvProtocol, Protocol):
         *,
         env_index: int = 0,
         constraints: Any = None,
-    ) -> RandomizationConstraintReport: ...
+    ) -> PoseConstraintReport: ...
 
 
 _EnvCapabilityT = TypeVar("_EnvCapabilityT")
@@ -791,37 +790,14 @@ class SceneBackend(ABC):
         """
         return {}
 
-    def get_camera_model(self, camera_name: str, env_index: int = 0) -> CameraModel:
-        """Return camera projection metadata for constrained randomization."""
-        raise NotImplementedError(
-            f"Backend does not expose camera projection metadata for '{camera_name}'."
-        )
-
-    def get_support_geometry(
-        self,
-        entity_name: str,
-        env_index: int = 0,
-    ) -> SupportGeometry:
-        """Return conservative support geometry for one logical entity."""
-        raise NotImplementedError(
-            f"Backend does not expose support geometry for '{entity_name}'."
-        )
-
-    def evaluate_pose_constraints(
-        self,
-        candidate_poses: Mapping[str, PoseState],
-        *,
-        env_index: int = 0,
-        constraints: Any = None,
-        ancestors: Optional[Mapping[str, Set[str]]] = None,
-        target_names: Optional[Set[str]] = None,
-    ) -> RandomizationConstraintReport:
-        """Evaluate the hard pose constraints (visibility, separation)."""
-        if constraints is not None:
-            raise NotImplementedError(
-                "Backend does not support constrained randomization evaluation."
-            )
-        return RandomizationConstraintReport(valid=True)
+    # Pose-constraint evaluation (`get_camera_model`,
+    # `get_support_geometry`, `get_operator_support_geometry`,
+    # `evaluate_pose_constraints`) is deliberately *not* part of this contract:
+    # it is what the feasibility layer needs in order to decide whether a
+    # candidate placement is legal, and it is declared there instead, by
+    # ``RandomizationHost``. A backend that supports constrained randomization
+    # implements those members structurally; a backend that does not needs to
+    # know nothing about them.
 
 
 def _teardown_backend_after_initialization_failure(backend: SceneBackend) -> None:

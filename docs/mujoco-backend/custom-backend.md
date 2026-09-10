@@ -494,6 +494,14 @@ A backend therefore only implements `RandomizationHost`
 | Randomness source | `rng`, `seed`, `episode_index` |
 | Reporting | `evaluate_pose_constraints()`, `record_reset_diagnostics()` |
 
+The pose-constraint trio (`get_camera_model`, `get_support_geometry`,
+`get_operator_support_geometry`, `evaluate_pose_constraints`) is declared here,
+by `RandomizationHost`, and deliberately **not** by `SceneBackend`: deciding
+whether a candidate pose is legal is the feasibility layer's question, so a
+backend that does not support constrained randomization needs to know nothing
+about it, while the runner's own needs (`rng`, `get_camera_poses`,
+`get_reset_diagnostics`) stay on the general backend contract.
+
 Note what is *not* on that list: no plan, no strategy, no sampler, no
 per-camera randomization hook, no auto-radius resolution, no preflight. The
 executor compiles the plan from the task's config (`ResolvedRandomizationConfig`),

@@ -56,7 +56,7 @@ from auto_atom.config.randomization import (
 from auto_atom.config.reference import RandomizationReference
 from auto_atom.contracts import (
     CameraModel,
-    RandomizationConstraintReport,
+    PoseConstraintReport,
     SupportGeometry,
 )
 from auto_atom.utils.pose import (
@@ -1290,7 +1290,7 @@ class RandomizationConstraintEvaluator:
         all_camera_names: Sequence[str] = (),
         ancestors: Optional[Mapping[str, Set[str]]] = None,
         target_names: Optional[Set[str]] = None,
-    ) -> RandomizationConstraintReport:
+    ) -> PoseConstraintReport:
         """Check one candidate set against the configured hard constraints.
 
         ``candidate_poses`` maps logical entity names to the *proposed* poses;
@@ -1302,7 +1302,7 @@ class RandomizationConstraintEvaluator:
         ``visible_in.cameras: all`` refers to.
         """
         if constraints is None:
-            return RandomizationConstraintReport(valid=True)
+            return PoseConstraintReport(valid=True)
 
         violations: List[str] = []
         minimum_clearance = float("inf")
@@ -1334,7 +1334,7 @@ class RandomizationConstraintEvaluator:
                 violations=violations,
             )
 
-        return RandomizationConstraintReport(
+        return PoseConstraintReport(
             valid=not violations,
             violations=tuple(violations),
             minimum_clearance=minimum_clearance,

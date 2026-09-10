@@ -34,7 +34,7 @@ from auto_atom.basis.mjc.tactile.tactile_sensor import TactileSensorManager
 from auto_atom.config.env_config import DataType, EnvConfig
 from auto_atom.contracts import (
     CameraModel,
-    RandomizationConstraintReport,
+    PoseConstraintReport,
     SupportGeometry,
 )
 from auto_atom.randomization import RandomizationConstraintEvaluator
@@ -1120,7 +1120,7 @@ class MujocoBasis:
         constraints: Any = None,
         ancestors: Optional[Mapping[str, Set[str]]] = None,
         target_names: Optional[Set[str]] = None,
-    ) -> RandomizationConstraintReport:
+    ) -> PoseConstraintReport:
         """Check one candidate set against the configured hard constraints.
 
         The arithmetic (frustum projection, separation clearance, and the

@@ -318,8 +318,8 @@ env_index`、`+ attempt*17 + sum(ord(c))`）、`env_mask` 与 per-component 批�
   `set_target_pose(kind, owner, pose, env_mask)`
 - 几何与相机：`get_support_geometry` / `get_operator_support_geometry` /
   `camera_names` / `get_camera_model`
-- 随机源与计数：`rng` / `seed` / `episode_index`
-- 报告：`evaluate_constraints` / `record_reset_diagnostics`
+- 随机源与计数：`rng` / `seed` / `reset_index`
+- 报告：`evaluate_pose_constraints` / `record_reset_diagnostics`
 
 执行器拥有：计划编译、候选生成（IID/Sobol/Poisson + 覆盖历史）、区域选择与权重、
 逐轴 reference 语义、碰撞拒绝判定、约束评估编排、半径解析与缓存、配置校验、
@@ -332,8 +332,28 @@ env_index`、`+ attempt*17 + sum(ord(c))`）、`env_mask` 与 per-component 批�
    （含 operator → camera → 预检 → object 顺序、引用成组、RSA 放置）。
 2. **策略不再是后端字段**：生效策略来自配置 → 计划，后端既不声明也不传递它。
 
-仍留在后端命名里的随机化词汇只剩 `SceneBackend` 的**运行时契约**
-（`SceneBackend.rng`、`get_camera_poses`、`get_reset_diagnostics`、
-`evaluate_pose_constraints`）：它们是 runner 向"当前后端"索要随机源、
-相机位姿快照与失败诊断的入口，属于跨模块公开协议而非后端内部实现语义，
-改名要连带 runner、mock 后端与 `SceneBackend` 协议一起动，因此单独评估。
+- **R-E1（已完成）**：把"位姿约束评估"从通用后端契约里摘出来。
+  `SceneBackend` 不再声明 `get_camera_model` / `get_support_geometry` /
+  `evaluate_pose_constraints` —— 这三个只被可行性判定使用（runtime 完全不调用），
+  因此改由 `RandomizationHost` 声明，支持约束的后端以结构方式满足它，不支持的后端
+  无需知道它们存在。同时把 DTO 与 env 协议名中性化：
+  `RandomizationConstraintReport` → `PoseConstraintReport`、
+  `RandomizationConstraintEnvProtocol` → `PoseConstraintEnvProtocol`
+  （报告描述的是"位姿硬约束的评估结果"，不是随机化专属概念）。
+- **R-E2（已完成）**：后端/执行器不再使用 episode 词汇。`episode_index` →
+  `reset_index`（它就是"这个后端实例被 reset 过多少次"，用于派生 per-reset
+  采样索引），`_episode_index` → `_reset_index`，执行器 `begin_episode()` →
+  `begin_reset()`，相关注释一并改为 reset。basis/env 层既有的 episode 表述
+  （如 `camera_noise` 的跨 episode 采集序号）属于该层语义，保持不动。
+
+### 契约分层（最终）
+
+| 层 | 谁实现 | 提供什么 |
+|---|---|---|
+| `SceneBackend`（通用后端契约） | 任何后端 | 帧/对象/算子读写、reset、`rng`、`get_camera_poses`、`get_reset_diagnostics` |
+| `RandomizationHost`（可行性层能力） | 支持约束随机化的后端（结构满足） | 元素位姿读写、基线、`camera_names`/`get_camera_model`、`get_support_geometry`/`get_operator_support_geometry`、`evaluate_pose_constraints` |
+| `PoseConstraintEnvProtocol`（env 层） | basis/env | 相机投影模型、支撑几何、约束评估的模拟器侧读取 |
+
+`SceneBackend` 只剩 runner 真正会问的问题：给我随机源、给我这次 reset 的相机位姿、
+告诉我这次 reset 为什么难放。**"某个候选位姿是否合法"是可行性层的问题，
+不是"场景后端"的问题** —— 这正是 R-E1 拆开的边界。
