@@ -18,7 +18,7 @@ from pydantic import ValidationError
 
 from auto_atom.backend.mjc.mujoco_backend import MujocoObjectHandler, MujocoTaskBackend
 from auto_atom.basis.mjc.mujoco_basis import MujocoBasis
-from auto_atom.basis.mjc.mujoco_env import UnifiedMujocoEnv
+from auto_atom.basis.mjc.mujoco_env import BatchedUnifiedMujocoEnv, UnifiedMujocoEnv
 from auto_atom.config.env_config import (
     CameraCalibrationConfig,
     CameraExtrinsicsConfig,
@@ -83,7 +83,7 @@ def _basis(
 
 
 class _SingleEnvBatch:
-    """Minimal ``envs`` carrier for backend-construction tests."""
+    """Minimal ``envs`` carrier so a single environment looks like a batch."""
 
     def __init__(self, single: MujocoBasis) -> None:
         self.envs = [single]
@@ -322,14 +322,14 @@ def _relative_camera_offset(
 
 
 def _camera_backend(
-    env: MujocoBasis,
+    host_env: object,
     cameras: dict[str, object],
     *,
     seed: int = 7,
 ) -> MujocoTaskBackend:
     """A backend whose only randomization is the given per-camera entries."""
     return MujocoTaskBackend(
-        env=_SingleEnvBatch(env),  # type: ignore[arg-type]
+        env=host_env,  # type: ignore[arg-type]
         operator_handlers={},
         object_handlers={},
         randomization=ResolvedRandomizationConfig.from_scope_config(
@@ -351,7 +351,9 @@ def test_object_camera_randomization_samples_the_install_offset(
         )
     )
     try:
-        backend = _camera_backend(env, {"obj_cam": PoseRandomRange(z=(-0.05, 0.05))})
+        backend = _camera_backend(
+            _SingleEnvBatch(env), {"obj_cam": PoseRandomRange(z=(-0.05, 0.05))}
+        )
         backend._record_default_poses()
         camera_id = _cam_id(env.model, "obj_cam")
         cup_id = _body_id(env.model, "cup")
@@ -401,7 +403,7 @@ def test_object_camera_rejects_world_frame_randomization(tmp_path: Path) -> None
     )
     try:
         backend = _camera_backend(
-            env,
+            _SingleEnvBatch(env),
             {
                 "obj_cam": PoseRandomRange.model_validate(
                     {"reference": "absolute_world", "x": [0.0, 1.0]}
@@ -472,7 +474,7 @@ def test_fixed_camera_randomization_keeps_world_frame_modes(tmp_path: Path) -> N
     )
     try:
         backend = _camera_backend(
-            env,
+            _SingleEnvBatch(env),
             {
                 "scene_cam": PoseRandomRange.model_validate(
                     {"reference": "absolute_world", "x": [2.0, 2.0]}
@@ -531,5 +533,138 @@ def test_object_camera_follows_object_only_transport(tmp_path: Path) -> None:
                 [0.1, 0.0, 0.3],
                 atol=1e-9,
             )
+    finally:
+        env.close()
+
+
+def test_object_camera_mounts_in_every_replica(tmp_path: Path) -> None:
+    """Mounting is per-replica model state, like every other camera write."""
+    env = BatchedUnifiedMujocoEnv(
+        EnvConfig(
+            scene=SceneConfig(base=_write_scene(tmp_path)),
+            batch_size=2,
+            enabled_sensors={DataType.CAMERA},
+            cameras=[_camera("obj_cam", role="object", parent_frame="cup")],
+        )
+    )
+    try:
+        for replica in env.envs:
+            camera_id = _cam_id(replica.model, "obj_cam")
+            assert int(replica.model.cam_bodyid[camera_id]) == _body_id(
+                replica.model, "cup"
+            )
+            np.testing.assert_allclose(
+                replica.model.cam_pos[camera_id], [0.1, 0.0, 0.3], atol=1e-12
+            )
+    finally:
+        env.close()
+
+
+def test_object_camera_randomization_honours_the_env_mask(tmp_path: Path) -> None:
+    env = BatchedUnifiedMujocoEnv(
+        EnvConfig(
+            scene=SceneConfig(base=_write_scene(tmp_path)),
+            batch_size=3,
+            enabled_sensors={DataType.CAMERA},
+            cameras=[_camera("obj_cam", role="object", parent_frame="cup")],
+        )
+    )
+    try:
+        backend = _camera_backend(env, {"obj_cam": PoseRandomRange(z=(-0.05, 0.05))})
+        backend._record_default_poses()
+
+        backend.randomization_executor.apply_camera_randomization(
+            np.asarray([True, False, True], dtype=bool)
+        )
+
+        positions = backend.get_camera_mount_pose("obj_cam").position
+        np.testing.assert_allclose(positions[1], [0.1, 0.0, 0.3], atol=1e-12)
+        for index in (0, 2):
+            assert -0.05 <= positions[index][2] - 0.3 <= 0.05
+    finally:
+        env.close()
+
+
+def test_object_camera_mount_pose_honours_the_shared_physics_contract(
+    tmp_path: Path,
+) -> None:
+    """A shared-physics batch cannot hold two different mount offsets."""
+    env = UnifiedMujocoEnv(
+        EnvConfig(
+            scene=SceneConfig(base=_write_scene(tmp_path)),
+            enabled_sensors={DataType.CAMERA},
+            cameras=[_camera("obj_cam", role="object", parent_frame="cup")],
+        )
+    )
+    try:
+        shared = type(
+            "SharedBatch",
+            (),
+            {"batch_size": 2, "envs": [env, env], "_share_physics": True},
+        )()
+        backend = _camera_backend(shared, {"obj_cam": PoseRandomRange(z=(0.0, 0.0))})
+        orientation = [[0.0, 0.0, 0.0, 1.0]] * 2
+
+        with pytest.raises(ValueError, match="shared physics"):
+            backend.set_camera_mount_pose(
+                "obj_cam",
+                PoseState(
+                    position=[[0.0, 0.0, 0.2], [0.0, 0.0, 0.3]],
+                    orientation=orientation,
+                ),
+                np.asarray([True, True], dtype=bool),
+            )
+
+        # A shared offset is applied exactly once, on the canonical row.
+        backend.set_camera_mount_pose(
+            "obj_cam",
+            PoseState(
+                position=[[0.0, 0.0, 0.2], [0.0, 0.0, 0.2]],
+                orientation=orientation,
+            ),
+            np.asarray([True, True], dtype=bool),
+        )
+        np.testing.assert_allclose(
+            env.model.cam_pos[_cam_id(env.model, "obj_cam")],
+            [0.0, 0.0, 0.2],
+            atol=1e-12,
+        )
+    finally:
+        env.close()
+
+
+def test_object_camera_following_costs_nothing_per_step(tmp_path: Path) -> None:
+    """Following is scene graph, not per-step work: nothing rewrites cam_pos."""
+    env = UnifiedMujocoEnv(
+        EnvConfig(
+            scene=SceneConfig(base=_write_scene(tmp_path)),
+            enabled_sensors={DataType.CAMERA},
+            cameras=[_camera("obj_cam", role="object", parent_frame="cup")],
+        )
+    )
+    try:
+        camera_id = _cam_id(env.model, "obj_cam")
+        cup_id = _body_id(env.model, "cup")
+        install_offset = env.model.cam_pos[camera_id].copy()
+
+        joint_id = mujoco.mj_name2id(env.model, mujoco.mjtObj.mjOBJ_JOINT, "cup_joint")
+        qpos_address = int(env.model.jnt_qposadr[joint_id])
+        dof = int(env.model.jnt_dofadr[joint_id])
+        env.data.qvel[dof : dof + 3] = [0.4, -0.2, 0.3]
+
+        env.update()
+
+        # The object moved, the camera's stored offset did not, and the derived
+        # world pose still realizes the same relative pose.
+        assert env.data.qpos[qpos_address] > 0.5
+        np.testing.assert_allclose(
+            env.model.cam_pos[camera_id], install_offset, atol=1e-15
+        )
+        np.testing.assert_allclose(
+            _relative_camera_offset(env, camera_id, cup_id),
+            install_offset,
+            atol=1e-9,
+        )
+        assert env.data.cam_xpos[camera_id][0] > 0.6
     finally:
         env.close()

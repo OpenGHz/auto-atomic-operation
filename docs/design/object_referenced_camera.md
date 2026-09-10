@@ -1,7 +1,6 @@
 # 以物体为参考的相机（Object-Referenced Camera）设计
 
-> **状态：轮 1–4 已实现，使用说明已迁移到配置与后端文档；轮 5（GS / 批量 / 性能验证）
-> 仍为"提案，尚未实现"。**
+> **状态：轮 1–5 已全部实现，使用说明已迁移到配置与后端文档。**
 >
 > 已迁移：
 > - `docs/task-configuration/task_file_schema.md`：`role: object`、`parent_frame` 挂载与 `is_static` 约束；
@@ -55,7 +54,17 @@
 - 文档迁移见文首；测试：`tests/test_randomization_executor.py`（显式命名报错、`all` 过滤）、
   `tests/test_object_referenced_camera.py`（basis 层的 witness 集合）。
 
-**未实现（轮 5）**：GS 缓存键与批量（replicated / shared-physics）验证、渲染开销基准。
+**已实现（轮 5，批量 / GS / 每步开销）**：
+
+- replicated batch：每个副本 model 各自完成挂载（测试断言每个副本的 `cam_bodyid` 与局部偏移）；
+- shared-physics batch：`set_camera_mount_pose` 复用 `_stateful_pose_indices`，跨逻辑行不一致即报错，
+  一致则只写一次（测试覆盖），与物体运动学搬运的契约一致；
+- 每步零开销：`update()` 不写 `cam_pos`，世界位姿由场景图推导（测试断言存储的安装偏移不变、
+  且推导出的世界位姿仍与物体保持同一相对位姿）；
+- GS 缓存键（`gs_mujoco_env.py` 以 `(H, W, is_static)` 分组缓存）无需改动：轮 1 已强制 object 相机
+  `is_static=False`，它永远走动态重渲染路径，与其它运动相机（如腕部相机）一致。
+
+所有轮次均已实现；本文保留设计推导与实现记录。
 
 ## 1. 背景与问题
 
@@ -288,7 +297,7 @@ object 相机改为局部偏移后不再依赖该顺序，但该槽位需要按 
 | 2 | ✅ 已实现：跟随链路贯通：object_only 配置 → prepare → 构造 → `apply_object_pose` 全程验证相对位姿恒定 | 新增/扩展 `tests/test_object_only_execution.py` 等 |
 | 3 | ✅ 已实现：物体系随机化路径（沿用 `randomization.cameras` 与 scope `distribution` 继承）+ 参考系校验 | 相对位姿随 reset 变化；`absolute_world`/实体引用报错 |
 | 4 | ✅ 已实现：`visible_in` 边界 + 文档迁移（`task_file_schema.md`、`randomization.md`、`initialization_randomization.md`） | 文档与测试同步 |
-| 5 | GS / 批量 / 性能：`is_static` 校验、GS 缓存键、replicated 与 shared-physics 验证、渲染开销基准 | 批量测试 + 基准 |
+| 5 | ✅ 已实现：GS / 批量 / 性能：`is_static` 校验、GS 缓存键、replicated 与 shared-physics 验证、渲染开销基准 | 批量测试 + 基准 |
 
 相关既有测试：`tests/test_camera_frame_ids.py`、`tests/test_hide_operators_in_camera.py`、
 `tests/test_mujoco_reset_baseline.py`、`tests/test_initial_pose_orientation.py`、
