@@ -1124,6 +1124,15 @@ class MujocoOperatorHandler(OperatorHandler):
 
 @dataclass
 class MujocoTaskBackend(SceneBackend):
+    """MuJoCo scene backend.
+
+    The randomization fields below are **compile-time configuration** only: they
+    are fed to the shared :func:`compile_randomization_plan`, and the resulting
+    :class:`RandomizationPlan` carries the effective policy (placement strategy,
+    component grouping, generated groups) to the executor. The backend
+    implements no randomization policy of its own and exposes none.
+    """
+
     env: BatchedUnifiedMujocoEnv
     operator_handlers: Dict[str, MujocoOperatorHandler]
     object_handlers: Dict[str, MujocoObjectHandler]
@@ -1132,6 +1141,12 @@ class MujocoTaskBackend(SceneBackend):
         RandomizationInput | OperatorRandomizationConfig,
     ] = field(default_factory=dict)
     randomization_strategy: RandomizationStrategy = RandomizationStrategy.RSA
+    """Placement strategy this backend's plan is compiled for.
+
+    Configuration passthrough, not behavior: the backend only hands it to the
+    shared plan compiler. Consumers read the effective strategy from the
+    compiled plan instead of asking the backend.
+    """
     randomization_groups: Dict[str, RandomizationGroupConfig] = field(
         default_factory=dict
     )

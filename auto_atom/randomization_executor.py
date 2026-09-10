@@ -105,9 +105,6 @@ class RandomizationHost(Protocol):
     def randomization_plan(self) -> RandomizationPlan: ...
 
     @property
-    def randomization_strategy(self) -> RandomizationStrategy: ...
-
-    @property
     def batch_size(self) -> int: ...
 
     def template_pose(self, label: str) -> PoseState: ...
@@ -854,7 +851,7 @@ class RandomizationExecutor:
                 collision_participants,
                 hard_sphere_rsa_group=hard_sphere_group,
                 use_rsa=(
-                    self._host.randomization_strategy == RandomizationStrategy.RSA
+                    plan.strategy == RandomizationStrategy.RSA
                     and len(object_component) > 1
                 ),
             )

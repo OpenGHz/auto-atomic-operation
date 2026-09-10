@@ -270,13 +270,17 @@ env_index`、`+ attempt*17 + sum(ord(c))`）、`env_mask` 与 per-component 批�
 ### 迁移后的职责边界
 
 后端（`RandomizationHost` 协议，16 个成员）只剩：
-`randomization_rng` / `randomization_reset_index` / `randomization_strategy` /
+`randomization_rng` / `randomization_reset_index` /
 `batch_size` / `object_names` / `operator_names` / `randomization_plan()` /
 `action_dependencies()` / `template_pose(label)` / `sample_target(...)` /
 `evaluate_constraints(...)` / `record_randomization_diagnostics(...)` /
 `begin_randomization_episode()` / `apply_action(...)` /
 `apply_camera_randomization(...)` / `run_visibility_preflight(...)`，
 外加 `get_camera_model` / `get_support_geometry` / 命名 frame 解析。
+
+生效的放置策略随 `RandomizationPlan.strategy` 传递（策略是编译结果的一部分：
+plan 同时携带它的后果 —— component 分组与生成的 joint-placement groups），
+因此执行器不再向 backend 索要策略，backend 也不需要暴露随机化策略。
 
 共享层拥有：计划编译、候选生成（IID/Sobol/Poisson + 覆盖历史）、
 区域选择与权重、逐轴 reference 语义、碰撞拒绝判定、约束评估（视锥/分离 +

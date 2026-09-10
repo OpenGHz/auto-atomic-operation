@@ -79,7 +79,13 @@ class RandomizationAction:
 
 @dataclass(frozen=True)
 class RandomizationPlan:
-    """Compiled action graph used by a backend reset."""
+    """Compiled action graph used by a backend reset.
+
+    The plan is the single carrier of randomization *policy*: it records the
+    effective placement strategy alongside its consequences (the component
+    grouping and the generated joint-placement groups). Consumers therefore
+    never need to ask the backend what strategy applies.
+    """
 
     actions: Mapping[str, RandomizationAction]
     dependencies: Mapping[str, frozenset[str]]
@@ -87,6 +93,8 @@ class RandomizationPlan:
     components: Tuple[Tuple[str, ...], ...]
     groups: Mapping[str, RandomizationGroupConfig]
     """Validated joint-placement groups keyed by their task-level name."""
+    strategy: RandomizationStrategy = RandomizationStrategy.RSA
+    """Effective placement strategy this plan was compiled for."""
 
 
 class RandomizationFailureError(RuntimeError):
@@ -468,6 +476,7 @@ def compile_randomization_plan(
         order=tuple(order),
         components=tuple(components),
         groups=groups,
+        strategy=strategy,
     )
 
 
