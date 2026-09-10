@@ -475,12 +475,23 @@ candidate generation and sampling (`unit_candidate`, `PoissonDiskCandidateStream
 `maximin_select`, `sample_pose_for_env`, `select_randomization_region`),
 collision rejection (`find_collision_participant`), configuration validation
 (`validate_randomization_configuration`), the deterministic `visible_in`
-preflight (`find_visibility_infeasibility`, `camera_frustum_disjoint_box`), and
-constraint evaluation (`RandomizationConstraintEvaluator`). A backend supplies
-the simulator-specific reads — `get_camera_model()` / `get_support_geometry()`
-for constraints, plus its pose read/write and named-frame bindings — and
-inherits the frame modes, omitted-axis behavior, region weighting, retry
-semantics, and the per-episode `CameraModel` / support-radius caches unchanged.
+preflight (`find_visibility_infeasibility`, `camera_frustum_disjoint_box`),
+constraint evaluation (`RandomizationConstraintEvaluator`), and the whole
+execution policy — `RandomizationExecutor` owns both retry loops, the
+per-component batching, the reset ordering (operators → cameras → visibility
+preflight → objects), the candidate-group `maximin` selection, and the
+fail-closed / best-effort decision.
+
+A backend therefore only implements `RandomizationHost`
+(`auto_atom/randomization_executor.py`): the RNG and reset counter, the
+strategy, `batch_size`, the object / operator name sets, the compiled
+`randomization_plan()`, `template_pose()` / `sample_target()`, its pose
+write-back (`apply_action()`, `apply_camera_randomization()`), the visibility
+preflight hook, and the constraint reads (`get_camera_model()`,
+`get_support_geometry()`), plus named-frame resolution. Everything else —
+frame modes, omitted-axis behavior, region weighting, retry budgets, coverage
+history, and the per-episode `CameraModel` / support-radius caches — is
+inherited unchanged.
 
 If a backend does not support a configured initialization or randomization
 capability, reject the non-empty field during construction with a clear error.

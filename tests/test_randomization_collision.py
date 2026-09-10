@@ -1261,7 +1261,7 @@ def test_batched_regions_preserve_per_environment_radius_and_ancestors() -> None
         name: handler.get_pose() for name, handler in handlers.items()
     }
     backend._rng = SequenceRNG([0.0, 1.0])
-    _poses, actions = backend._sample_randomization_component(
+    _poses, actions = backend.randomization_executor.sample_component(
         ["block"],
         np.asarray([True, True], dtype=bool),
         {},
@@ -1377,7 +1377,7 @@ def test_batched_regions_preserve_only_selected_transitive_ancestors() -> None:
     }
     backend._rng = SequenceRNG([0.0, 1.0])
 
-    _poses, actions = backend._sample_randomization_component(
+    _poses, actions = backend.randomization_executor.sample_component(
         ["root", "anchor", "block"],
         np.asarray([True, True], dtype=bool),
         {},
@@ -1518,7 +1518,7 @@ def test_operator_eef_own_base_reference_uses_selected_base_ancestors() -> None:
     assert dependencies["arm.base"] == {"root"}
     assert dependencies["arm.eef"] == {"arm.base"}
     order = backend._randomization_order()
-    _poses, actions = backend._sample_randomization_component(
+    _poses, actions = backend.randomization_executor.sample_component(
         order,
         np.asarray([True], dtype=bool),
         {},
@@ -1570,7 +1570,7 @@ def test_operator_base_and_eef_dependencies_can_interleave_an_object() -> None:
     backend._rng = SequenceRNG([0.5])
 
     order = backend._randomization_order()
-    _poses, actions = backend._sample_randomization_component(
+    _poses, actions = backend.randomization_executor.sample_component(
         order,
         np.asarray([True], dtype=bool),
         {},

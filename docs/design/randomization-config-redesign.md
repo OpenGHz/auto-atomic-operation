@@ -254,9 +254,31 @@ task:
   `validate_pose_randomization_spec`、`reference_ancestors`、
   `camera_frustum_disjoint_box`、`object_region_world_box`、
   `find_visibility_infeasibility`）。
-- **R-B2b（未完成）**：编排与重试循环（`_apply_randomization`、
-  `_sample_randomization_component`、`_sample_component_for_env`、
-  `_sample_hard_sphere_rsa_component_for_env`）搬到共享执行器，
-  后端只留「读/写位姿 + 命名 frame 解析 + 相机模型/支撑几何」。
-  约束：RNG 消费顺序、`sample_index` 公式、`env_mask` 与 per-component
-  批量写回语义必须逐字保留，否则 reset 复现性会漂。
+- **R-B2b-i（已完成，提交 `308b298`）**：联合拒绝可行性循环 +
+  跨 reset 覆盖历史 + 尝试预算 + `maximin` 组选取 + fail-closed/best-effort
+  决策搬到 `RandomizationExecutor`。
+- **R-B2b-ii（已完成，提交 `fb02505`）**：硬球 RSA 放置循环搬到同一执行器。
+- **R-B2b-iii（已完成）**：编排与批量写回 —— `apply_randomization`
+  （operator → camera → 可见性预检 → object 顺序策略）与 `sample_component`
+  （逐 env 采样并入 batch 形状缓冲）搬到执行器；后端 `_apply_randomization`
+  退化为一行委托。
+
+约束（各轮均遵守）：RNG 消费顺序、`sample_index` 公式（`reset_index*1009 +
+env_index`、`+ attempt*17 + sum(ord(c))`）、`env_mask` 与 per-component 批量
+写回语义逐字保留，否则 reset 复现性会漂。
+
+### 迁移后的职责边界
+
+后端（`RandomizationHost` 协议，16 个成员）只剩：
+`randomization_rng` / `randomization_reset_index` / `randomization_strategy` /
+`batch_size` / `object_names` / `operator_names` / `randomization_plan()` /
+`action_dependencies()` / `template_pose(label)` / `sample_target(...)` /
+`evaluate_constraints(...)` / `record_randomization_diagnostics(...)` /
+`begin_randomization_episode()` / `apply_action(...)` /
+`apply_camera_randomization(...)` / `run_visibility_preflight(...)`，
+外加 `get_camera_model` / `get_support_geometry` / 命名 frame 解析。
+
+共享层拥有：计划编译、候选生成（IID/Sobol/Poisson + 覆盖历史）、
+区域选择与权重、逐轴 reference 语义、碰撞拒绝判定、约束评估（视锥/分离 +
+per-episode 缓存）、配置校验、确定性可见性预检、两条重试循环、排序策略、
+批量写回缓冲、失败策略。

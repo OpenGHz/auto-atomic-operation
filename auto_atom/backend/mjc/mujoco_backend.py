@@ -59,6 +59,7 @@ from ...randomization import (
     RandomizationPlan,
     camera_frustum_disjoint_box,
     compile_randomization_plan,
+    copy_randomization_ancestors,
     distribution_uses_space_filling_history,
     find_collision_participant,
     find_visibility_infeasibility,
@@ -157,15 +158,6 @@ def _randomization_references(
     for region in pose_randomization_regions(spec):
         references.extend(region.references())
     return tuple(dict.fromkeys(references))
-
-
-def _copy_randomization_ancestors(
-    ancestors: RandomizationAncestors,
-) -> RandomizationAncestors:
-    """Copy scalar or per-environment reference-ancestor sets."""
-    if isinstance(ancestors, list):
-        return [set(values) for values in ancestors]
-    return set(ancestors)
 
 
 def _stateful_pose_indices(
@@ -1991,13 +1983,63 @@ class MujocoTaskBackend(SceneBackend):
     def operator_names(self) -> Set[str]:
         return set(self.operator_handlers)
 
-    def action_specs(self) -> Dict[str, RandomizationAction]:
-        """Per-label randomization actions the executor samples."""
-        return self._randomization_action_specs()
-
     def action_dependencies(self) -> Dict[str, Set[str]]:
         """Reference dependency edges between randomized actions."""
         return self._randomization_dependencies()
+
+    def randomization_plan(self) -> RandomizationPlan:
+        """The compiled action graph for this reset."""
+        return self._randomization_plan()
+
+    def template_pose(self, label: str) -> PoseState:
+        """Batch-shaped template pose used to buffer one action's samples."""
+        return self._current_pose_for_randomization_key(label)
+
+    def begin_randomization_episode(self) -> None:
+        """Per-episode preparation performed before any pose is sampled.
+
+        Operator auto radii depend on the episode's configuration (base/EEF
+        geometry follows the home state just applied), so operator entries are
+        dropped and re-resolved each reset while object auto radii (static
+        geometry) stay cached. Configured regions are validated here so a bad
+        reference fails before the scene is mutated.
+        """
+        self._auto_radius_cache = {
+            key: value
+            for key, value in self._auto_radius_cache.items()
+            if key[0] == "object"
+        }
+        self._validate_randomization_configuration()
+
+    def apply_action(
+        self,
+        action: PendingRandomizationAction,
+        env_mask: np.ndarray,
+    ) -> None:
+        """Write one sampled action into the scene for the masked envs."""
+        if action.kind == "object":
+            self.object_handlers[action.owner].set_pose(action.pose, env_mask)
+        elif action.kind == "operator_base":
+            self.operator_handlers[action.owner].set_pose(action.pose, env_mask)
+        elif action.kind == "operator_eef":
+            self.operator_handlers[action.owner].set_home_end_effector_pose(
+                action.pose,
+                env_mask=env_mask,
+            )
+        else:
+            raise ValueError(f"Unknown randomization action kind: {action.kind}")
+
+    def apply_camera_randomization(self, env_mask: np.ndarray) -> None:
+        """Apply configured camera randomization; a no-op when none is set."""
+        if self.camera_randomization:
+            self._apply_camera_randomization(env_mask)
+
+    def run_visibility_preflight(self, env_mask: np.ndarray) -> None:
+        """Fail fast on a deterministically unsatisfiable ``visible_in`` region."""
+        self._preflight_deterministic_visibility_infeasibility(
+            self._randomization_plan().actions,
+            env_mask,
+        )
 
     def sample_target(
         self,
@@ -2235,103 +2277,8 @@ class MujocoTaskBackend(SceneBackend):
         )
 
     def _apply_randomization(self, env_mask: np.ndarray) -> None:
-        # Operator auto radii depend on the episode's configuration (base/EFF
-        # geometry follows the home state just applied); drop operator entries
-        # each episode and re-resolve, while object auto radii (static
-        # geometry) stay cached.
-        self._auto_radius_cache = {
-            key: value
-            for key, value in self._auto_radius_cache.items()
-            if key[0] == "object"
-        }
-        self._validate_randomization_configuration()
-        plan = self._randomization_plan()
-        order = list(plan.order)
-        components = [list(component) for component in plan.components]
-        action_specs = self._randomization_action_specs()
-        hard_sphere_groups = {
-            frozenset(group.members): (group_name, group)
-            for group_name, group in plan.groups.items()
-        }
-        sampled_poses: Dict[str, PoseState] = {}
-        collision_participants: List[CollisionParticipant] = []
-
-        def apply_actions(actions: List[PendingRandomizationAction]) -> None:
-            for action in actions:
-                if action.kind == "object":
-                    self.object_handlers[action.owner].set_pose(action.pose, env_mask)
-                elif action.kind == "operator_base":
-                    self.operator_handlers[action.owner].set_pose(action.pose, env_mask)
-                elif action.kind == "operator_eef":
-                    self.operator_handlers[action.owner].set_home_end_effector_pose(
-                        action.pose,
-                        env_mask=env_mask,
-                    )
-                else:
-                    raise ValueError(
-                        f"Unknown randomization action kind: {action.kind}"
-                    )
-                collision_participants.append(
-                    CollisionParticipant(
-                        owner=action.owner,
-                        label=action.label,
-                        pose=action.pose,
-                        radius=action.radius,
-                        ancestors=_copy_randomization_ancestors(action.ancestors),
-                    )
-                )
-
-        # Operators form the context for mounted cameras and object references.
-        # Sampling them first makes the camera state final before visibility
-        # constraints are evaluated for objects.
-        operator_labels = {
-            label for label, action in action_specs.items() if action.kind != "object"
-        }
-        for component in components:
-            operator_component = [
-                label for label in component if label in operator_labels
-            ]
-            if not operator_component:
-                continue
-            component_poses, component_actions = self._sample_randomization_component(
-                operator_component,
-                env_mask,
-                sampled_poses,
-                collision_participants,
-            )
-            apply_actions(component_actions)
-            sampled_poses.update(component_poses)
-
-        if self.camera_randomization:
-            self._apply_camera_randomization(env_mask)
-
-        # A ``visible_in`` object region whose whole position box is outside a
-        # required camera frustum is deterministically infeasible — fail fast
-        # with a diagnostic instead of exhausting the attempt loop.
-        self._preflight_deterministic_visibility_infeasibility(action_specs, env_mask)
-
-        # Object components retain reference-connected and separated joint
-        # sampling, but now see the already-final operator/camera context.
-        for component in components:
-            object_component = [
-                label for label in component if action_specs[label].kind == "object"
-            ]
-            if not object_component:
-                continue
-            hard_sphere_group = hard_sphere_groups.get(frozenset(object_component))
-            component_poses, component_actions = self._sample_randomization_component(
-                object_component,
-                env_mask,
-                sampled_poses,
-                collision_participants,
-                hard_sphere_rsa_group=hard_sphere_group,
-                use_rsa=(
-                    self.randomization_strategy == RandomizationStrategy.RSA
-                    and len(object_component) > 1
-                ),
-            )
-            apply_actions(component_actions)
-            sampled_poses.update(component_poses)
+        """Run this episode's randomization (see RandomizationExecutor)."""
+        self.randomization_executor.apply_randomization(env_mask)
 
     def _randomization_components(
         self,
@@ -2360,122 +2307,6 @@ class MujocoTaskBackend(SceneBackend):
                 stack.extend(adjacency[current] - visited)
             components.append(sorted(component, key=order_index.__getitem__))
         return components
-
-    def _sample_randomization_component(
-        self,
-        component: List[str],
-        env_mask: np.ndarray,
-        accepted_sampled_poses: Dict[str, PoseState],
-        accepted_participants: List[CollisionParticipant],
-        hard_sphere_rsa_group: tuple[str, RandomizationGroupConfig] | None = None,
-        use_rsa: bool = False,
-    ) -> tuple[Dict[str, PoseState], List[PendingRandomizationAction]]:
-        key_buffers = {
-            name: self._current_pose_for_randomization_key(name) for name in component
-        }
-        action_buffers: Dict[str, PendingRandomizationAction] = {}
-        action_order: List[str] = []
-
-        for env_index, enabled in enumerate(env_mask):
-            if not enabled:
-                continue
-            if not use_rsa and hard_sphere_rsa_group is None:
-                env_sampled_poses, env_actions, failure = (
-                    self.randomization_executor.sample_component_for_env(
-                        component,
-                        env_index,
-                        accepted_sampled_poses,
-                        accepted_participants,
-                    )
-                )
-            else:
-                env_sampled_poses, env_actions, failure = (
-                    self.randomization_executor.sample_hard_sphere_rsa_component_for_env(
-                        component,
-                        env_index,
-                        accepted_sampled_poses,
-                        accepted_participants,
-                        group_name=(
-                            hard_sphere_rsa_group[0]
-                            if hard_sphere_rsa_group is not None
-                            else f"component:{','.join(component)}"
-                        ),
-                        group=(
-                            hard_sphere_rsa_group[1]
-                            if hard_sphere_rsa_group is not None
-                            else None
-                        ),
-                    )
-                )
-            if failure is not None:
-                # Only the joint-rejection loop returns a failure tuple; the
-                # RSA executor reports its own exhaustion and either raises or
-                # applies the best-effort candidate itself.
-                failed_label, blocking_label = failure
-                logging.getLogger(MujocoTaskBackend.__name__).warning(
-                    "Collision rejection exhausted for '%s'; keeping the "
-                    "last overlapping sample against '%s'.",
-                    failed_label,
-                    blocking_label,
-                )
-
-            for name, pose in env_sampled_poses.items():
-                if name not in key_buffers:
-                    continue
-                key_buffers[name].position[env_index] = pose.position[0]
-                key_buffers[name].orientation[env_index] = pose.orientation[0]
-            for action in env_actions:
-                if action.label not in action_buffers:
-                    template = self._current_pose_for_action(action.kind, action.owner)
-                    buffered_radius: float | np.ndarray = float(action.radius)
-                    action_ancestors = resolve_collision_ancestors(
-                        action.ancestors,
-                        env_index,
-                    )
-                    buffered_ancestors: RandomizationAncestors = set(action_ancestors)
-                    if self.batch_size > 1:
-                        buffered_radius = np.full(
-                            self.batch_size,
-                            float(action.radius),
-                            dtype=np.float64,
-                        )
-                        buffered_ancestors = [
-                            set(action_ancestors) for _ in range(self.batch_size)
-                        ]
-                    action_buffers[action.label] = PendingRandomizationAction(
-                        kind=action.kind,
-                        owner=action.owner,
-                        label=action.label,
-                        pose=template,
-                        radius=buffered_radius,
-                        ancestors=buffered_ancestors,
-                        constraints=action.constraints,
-                    )
-                    action_order.append(action.label)
-                action_buffers[action.label].pose.position[env_index] = (
-                    action.pose.position[0]
-                )
-                action_buffers[action.label].pose.orientation[env_index] = (
-                    action.pose.orientation[0]
-                )
-                if isinstance(action_buffers[action.label].radius, np.ndarray):
-                    action_buffers[action.label].radius[env_index] = float(
-                        action.radius
-                    )
-                else:
-                    action_buffers[action.label].radius = float(action.radius)
-                buffered_action_ancestors = action_buffers[action.label].ancestors
-                env_action_ancestors = resolve_collision_ancestors(
-                    action.ancestors,
-                    env_index,
-                )
-                if isinstance(buffered_action_ancestors, list):
-                    buffered_action_ancestors[env_index] = set(env_action_ancestors)
-                else:
-                    action_buffers[action.label].ancestors = set(env_action_ancestors)
-
-        component_actions = [action_buffers[label] for label in action_order]
-        return key_buffers, component_actions
 
     def _sample_randomization_target_for_env(
         self,

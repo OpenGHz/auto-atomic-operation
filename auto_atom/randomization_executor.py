@@ -39,6 +39,7 @@ from auto_atom.config.randomization import (
     RandomizationGroupConfig,
     RandomizationSelectorKind,
     RandomizationSpec,
+    RandomizationStrategy,
 )
 from auto_atom.contracts import RandomizationConstraintReport
 from auto_atom.randomization import (
@@ -46,6 +47,8 @@ from auto_atom.randomization import (
     RandomizationAction,
     RandomizationAncestors,
     RandomizationFailureError,
+    RandomizationPlan,
+    copy_randomization_ancestors,
     distribution_uses_space_filling_history,
     find_collision_participant,
     history_clearance,
@@ -97,9 +100,29 @@ class RandomizationHost(Protocol):
     @property
     def operator_names(self) -> Container[str]: ...
 
-    def action_specs(self) -> Mapping[str, RandomizationAction]: ...
-
     def action_dependencies(self) -> Mapping[str, Set[str]]: ...
+
+    def randomization_plan(self) -> RandomizationPlan: ...
+
+    @property
+    def randomization_strategy(self) -> RandomizationStrategy: ...
+
+    @property
+    def batch_size(self) -> int: ...
+
+    def template_pose(self, label: str) -> PoseState: ...
+
+    def begin_randomization_episode(self) -> None: ...
+
+    def apply_action(
+        self,
+        action: PendingRandomizationAction,
+        env_mask: np.ndarray,
+    ) -> None: ...
+
+    def apply_camera_randomization(self, env_mask: np.ndarray) -> None: ...
+
+    def run_visibility_preflight(self, env_mask: np.ndarray) -> None: ...
 
     def sample_target(
         self,
@@ -190,7 +213,7 @@ class RandomizationExecutor:
                 float,
             ]
         ] = None
-        action_specs = self._host.action_specs()
+        action_specs = self._host.randomization_plan().actions
         configured_attempts = [
             int(action_specs[label].randomization.constraints.failure.max_attempts)
             for label in component
@@ -530,7 +553,7 @@ class RandomizationExecutor:
         order is independently shuffled for every environment/reset, so the
         YAML declaration order does not become a spatial bias.
         """
-        action_specs = self._host.action_specs()
+        action_specs = self._host.randomization_plan().actions
         accepted_env_poses = {
             name: pose.select(env_index)
             for name, pose in accepted_sampled_poses.items()
@@ -761,3 +784,191 @@ class RandomizationExecutor:
             )
             actions.append(best_action)
         return sampled_poses, actions, None
+
+    def apply_randomization(self, env_mask: np.ndarray) -> None:
+        self._host.begin_randomization_episode()
+        plan = self._host.randomization_plan()
+        components = [list(component) for component in plan.components]
+        action_specs = plan.actions
+        hard_sphere_groups = {
+            frozenset(group.members): (group_name, group)
+            for group_name, group in plan.groups.items()
+        }
+        sampled_poses: Dict[str, PoseState] = {}
+        collision_participants: List[CollisionParticipant] = []
+
+        def apply_actions(actions: List[PendingRandomizationAction]) -> None:
+            for action in actions:
+                self._host.apply_action(action, env_mask)
+                collision_participants.append(
+                    CollisionParticipant(
+                        owner=action.owner,
+                        label=action.label,
+                        pose=action.pose,
+                        radius=action.radius,
+                        ancestors=copy_randomization_ancestors(action.ancestors),
+                    )
+                )
+
+        # Operators form the context for mounted cameras and object references.
+        # Sampling them first makes the camera state final before visibility
+        # constraints are evaluated for objects.
+        operator_labels = {
+            label for label, action in action_specs.items() if action.kind != "object"
+        }
+        for component in components:
+            operator_component = [
+                label for label in component if label in operator_labels
+            ]
+            if not operator_component:
+                continue
+            component_poses, component_actions = self.sample_component(
+                operator_component,
+                env_mask,
+                sampled_poses,
+                collision_participants,
+            )
+            apply_actions(component_actions)
+            sampled_poses.update(component_poses)
+
+        self._host.apply_camera_randomization(env_mask)
+
+        # A ``visible_in`` object region whose whole position box is outside a
+        # required camera frustum is deterministically infeasible — fail fast
+        # with a diagnostic instead of exhausting the attempt loop.
+        self._host.run_visibility_preflight(env_mask)
+
+        # Object components retain reference-connected and separated joint
+        # sampling, but now see the already-final operator/camera context.
+        for component in components:
+            object_component = [
+                label for label in component if action_specs[label].kind == "object"
+            ]
+            if not object_component:
+                continue
+            hard_sphere_group = hard_sphere_groups.get(frozenset(object_component))
+            component_poses, component_actions = self.sample_component(
+                object_component,
+                env_mask,
+                sampled_poses,
+                collision_participants,
+                hard_sphere_rsa_group=hard_sphere_group,
+                use_rsa=(
+                    self._host.randomization_strategy == RandomizationStrategy.RSA
+                    and len(object_component) > 1
+                ),
+            )
+            apply_actions(component_actions)
+            sampled_poses.update(component_poses)
+
+    def sample_component(
+        self,
+        component: List[str],
+        env_mask: np.ndarray,
+        accepted_sampled_poses: Dict[str, PoseState],
+        accepted_participants: List[CollisionParticipant],
+        hard_sphere_rsa_group: tuple[str, RandomizationGroupConfig] | None = None,
+        use_rsa: bool = False,
+    ) -> tuple[Dict[str, PoseState], List[PendingRandomizationAction]]:
+        key_buffers = {name: self._host.template_pose(name) for name in component}
+        action_buffers: Dict[str, PendingRandomizationAction] = {}
+        action_order: List[str] = []
+
+        for env_index, enabled in enumerate(env_mask):
+            if not enabled:
+                continue
+            if not use_rsa and hard_sphere_rsa_group is None:
+                env_sampled_poses, env_actions, failure = self.sample_component_for_env(
+                    component,
+                    env_index,
+                    accepted_sampled_poses,
+                    accepted_participants,
+                )
+            else:
+                env_sampled_poses, env_actions, failure = (
+                    self.sample_hard_sphere_rsa_component_for_env(
+                        component,
+                        env_index,
+                        accepted_sampled_poses,
+                        accepted_participants,
+                        group_name=(
+                            hard_sphere_rsa_group[0]
+                            if hard_sphere_rsa_group is not None
+                            else f"component:{','.join(component)}"
+                        ),
+                        group=(
+                            hard_sphere_rsa_group[1]
+                            if hard_sphere_rsa_group is not None
+                            else None
+                        ),
+                    )
+                )
+            if failure is not None:
+                # Only the joint-rejection loop returns a failure tuple; the
+                # RSA executor reports its own exhaustion and either raises or
+                # applies the best-effort candidate itself.
+                failed_label, blocking_label = failure
+                self._logger.warning(
+                    "Collision rejection exhausted for '%s'; keeping the "
+                    "last overlapping sample against '%s'.",
+                    failed_label,
+                    blocking_label,
+                )
+
+            for name, pose in env_sampled_poses.items():
+                if name not in key_buffers:
+                    continue
+                key_buffers[name].position[env_index] = pose.position[0]
+                key_buffers[name].orientation[env_index] = pose.orientation[0]
+            for action in env_actions:
+                if action.label not in action_buffers:
+                    template = self._host.template_pose(action.label)
+                    buffered_radius: float | np.ndarray = float(action.radius)
+                    action_ancestors = resolve_collision_ancestors(
+                        action.ancestors,
+                        env_index,
+                    )
+                    buffered_ancestors: RandomizationAncestors = set(action_ancestors)
+                    if self._host.batch_size > 1:
+                        buffered_radius = np.full(
+                            self._host.batch_size,
+                            float(action.radius),
+                            dtype=np.float64,
+                        )
+                        buffered_ancestors = [
+                            set(action_ancestors) for _ in range(self._host.batch_size)
+                        ]
+                    action_buffers[action.label] = PendingRandomizationAction(
+                        kind=action.kind,
+                        owner=action.owner,
+                        label=action.label,
+                        pose=template,
+                        radius=buffered_radius,
+                        ancestors=buffered_ancestors,
+                        constraints=action.constraints,
+                    )
+                    action_order.append(action.label)
+                action_buffers[action.label].pose.position[env_index] = (
+                    action.pose.position[0]
+                )
+                action_buffers[action.label].pose.orientation[env_index] = (
+                    action.pose.orientation[0]
+                )
+                if isinstance(action_buffers[action.label].radius, np.ndarray):
+                    action_buffers[action.label].radius[env_index] = float(
+                        action.radius
+                    )
+                else:
+                    action_buffers[action.label].radius = float(action.radius)
+                buffered_action_ancestors = action_buffers[action.label].ancestors
+                env_action_ancestors = resolve_collision_ancestors(
+                    action.ancestors,
+                    env_index,
+                )
+                if isinstance(buffered_action_ancestors, list):
+                    buffered_action_ancestors[env_index] = set(env_action_ancestors)
+                else:
+                    action_buffers[action.label].ancestors = set(env_action_ancestors)
+
+        component_actions = [action_buffers[label] for label in action_order]
+        return key_buffers, component_actions

@@ -915,6 +915,15 @@ class VisibilityInfeasibility:
     violations: Tuple[str, ...]
 
 
+def copy_randomization_ancestors(
+    ancestors: RandomizationAncestors,
+) -> RandomizationAncestors:
+    """Copy scalar or per-environment reference-ancestor sets."""
+    if isinstance(ancestors, list):
+        return [set(values) for values in ancestors]
+    return set(ancestors)
+
+
 def reference_ancestors(
     references: Sequence[Union[RandomizationReference, str]],
     selected_ancestors: Mapping[str, Set[str]],
