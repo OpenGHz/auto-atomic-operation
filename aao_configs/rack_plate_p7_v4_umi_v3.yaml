@@ -70,7 +70,46 @@ task:
   seed: 7
   randomization:
     entities:
+      # The base config ships a wide home-EEF range.  This task is placed to
+      # reach both the source stand (x=-0.40) and the rack (x=-0.126), so the
+      # arm is deliberately left at its home pose for now.
       arm: null
+      # The plate stands leaned against the four-post stand, and that balance
+      # is marginal: the two admissible directions below are the ones measured
+      # not to topple it.  `-x` seats the disc deeper into the post pair while
+      # `+x` walks its rim off the posts, a world-frame `yaw` rotates the lean
+      # out of the post gap, and `y` pushes the rim through the posts it is
+      # preloaded against.  `z` is the release height above the stand base and
+      # `roll` is an in-plane spin of the disc (its normal is world `+x`).
+      object:
+        x: [-0.002, 0.0]
+        z: [0.0, 0.005]
+        roll: [-0.0175, 0.0175]
+        collision_radius: 0.088
+      # The place target is the settled centre of the rack's first slot.  The
+      # two bounding ribs leave a ~32 mm opening and the plate is inserted
+      # edge-on (~4 mm thick), so the sampled centre can move a few millimetres
+      # without the released plate reaching a rib.
+      rack_target:
+        x: [-0.006, 0.006]
+        collision_radius: 0.03
+    cameras:
+      # Static rack view: plain world-frame viewpoint jitter.
+      rack_camera_front:
+        x: [-0.015, 0.015]
+        y: [-0.015, 0.015]
+        z: [-0.010, 0.010]
+        roll: [-0.02, 0.02]
+        pitch: [-0.02, 0.02]
+        yaw: [-0.02, 0.02]
+      # Wrist camera: the sampled world pose is stored as a parent-local
+      # extrinsic, so this varies the camera's mounting offset on the wrist.
+      # It is dropped together with the operator under `execution.mode:
+      # object_only`.
+      eef_wrist_cam:
+        roll: [-0.015, 0.015]
+        pitch: [-0.015, 0.015]
+        yaw: [-0.015, 0.015]
   stages:
     - name: pick_plate
       object: object
