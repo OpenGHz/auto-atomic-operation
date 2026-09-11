@@ -20,6 +20,7 @@ from auto_atom.config.randomization import (
     RandomizationSelectorKind,
     RandomizationStrategy,
     RandomizationSpec,
+    ResolvedRandomizationConfig,
     resolve_randomization_scope,
 )
 from auto_atom.config.task import AutoAtomConfig
@@ -277,6 +278,47 @@ def test_data_replay_disables_object_randomization() -> None:
 
     assert config.task.randomization.entities == {}
     assert config.task.randomization.entities == {}
+    # Replay drops the entries it must not sample; the master switch stays on so
+    # camera randomization keeps working.
+    assert config.task.randomization.enabled is True
+
+
+def test_scope_master_switch_reaches_the_resolved_scope() -> None:
+    scope = RandomizationScopeConfig(
+        enabled=False,
+        entities={"cup": PoseRandomRange(x=(0.0, 1.0))},
+        cameras={"head_cam": PoseRandomRange(x=(0.0, 1.0))},
+    )
+
+    resolved = resolve_randomization_scope(scope)
+    assert resolved.enabled is False
+    # The entries stay configured and validated; only application is off.
+    assert set(resolved.entities) == {"cup"}
+    assert set(resolved.cameras) == {"head_cam"}
+
+
+def test_scope_applies_combines_the_master_switch_and_emptiness() -> None:
+    entry = {"cup": PoseRandomRange(x=(0.0, 1.0))}
+
+    applied = ResolvedRandomizationConfig.from_scope_config(
+        RandomizationScopeConfig(entities=dict(entry))
+    )
+    assert applied.applies is True
+    assert applied.is_empty is False
+
+    disabled = ResolvedRandomizationConfig.from_scope_config(
+        RandomizationScopeConfig(enabled=False, entities=dict(entry))
+    )
+    # The entry is still configured, but a disabled scope applies nothing.
+    assert disabled.applies is False
+    assert disabled.is_empty is False
+
+    assert (
+        ResolvedRandomizationConfig.from_scope_config(
+            RandomizationScopeConfig()
+        ).applies
+        is False
+    )
 
 
 def test_scope_defaults_inherited_and_strategy_resolved() -> None:

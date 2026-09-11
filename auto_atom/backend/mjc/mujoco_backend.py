@@ -1378,7 +1378,7 @@ class MujocoTaskBackend(SceneBackend):
             or self._default_camera_poses
         ):
             self._record_default_poses()
-        if not self.randomization.is_empty:
+        if self.randomization.applies:
             self.randomization_executor.apply_randomization(mask)
         self.env.refresh_viewer()
 

@@ -220,6 +220,7 @@ with optional global defaults and per-kind maps:
 ```yaml
 task:
   randomization:
+    enabled: true          # master switch; false samples nothing
     strategy: rsa          # rsa | joint_rejection (scope-wide placement policy)
     # Optional global defaults (inherited by bare entity ranges).
     distribution: {...}    # generator / selector / spacing
@@ -240,6 +241,29 @@ task:
 Bare entity ranges inherit the scope-wide `distribution` and `constraints`
 defaults; an advanced `RandomizationSpec` is fully explicit. The placement
 `strategy` is scope-wide and defaults to `rsa`.
+
+### Master switch
+
+`enabled` (default `true`) turns the whole scope off without touching its
+entries. With `enabled: false` no pose is sampled at all: objects, operators,
+and cameras keep their reset / `initial_pose` values, and a waypoint's own
+`randomization` is skipped as well, so the run reproduces one deterministic
+scene regardless of `task.seed`. The entries stay configured and are still
+validated, so a disabled scope cannot conceal an invalid one.
+
+```yaml
+task:
+  randomization:
+    enabled: false
+```
+
+The key is not declared in every task file, so the command line adds it:
+
+```bash
+aao-demo --config-name rack_plate_p7_v4_umi_v3 +task.randomization.enabled=false
+```
+
+Sensor noise (`env.cameras[].noise`) is a separate subsystem and keeps running.
 
 `cameras` is a separate kind of entry, grouped here for cohesion. Camera
 entries inherit the scope-wide `distribution` (a pose-stream property) but

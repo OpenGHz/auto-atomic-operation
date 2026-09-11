@@ -25,6 +25,7 @@ def _config(
     execution: dict | None = None,
     seed: int = 0,
     waypoint_randomization: dict | None = None,
+    randomization: dict | None = None,
 ) -> TaskFileConfig:
     ComponentRegistry.register_env(env_name, {"kind": "mock_env", "batch_size": 2})
     payload = {
@@ -58,6 +59,8 @@ def _config(
     }
     if execution is not None:
         payload["execution"] = execution
+    if randomization is not None:
+        payload["task"]["randomization"] = randomization
     return TaskFileConfig.model_validate(payload)
 
 
@@ -120,6 +123,35 @@ def test_waypoint_randomization_uses_task_seed_without_backend_private_rng() -> 
     finally:
         first.close()
         second.close()
+        ComponentRegistry.clear()
+
+
+def test_master_switch_also_disables_waypoint_randomization() -> None:
+    """The scope master switch covers a waypoint's own ``randomization``."""
+    fixed = {"x": [0.05, 0.05]}
+    ComponentRegistry.clear()
+    enabled = TaskRunner().from_config(
+        _config("timeline_switch_on", seed=73, waypoint_randomization=fixed)
+    )
+    disabled = TaskRunner().from_config(
+        _config(
+            "timeline_switch_off",
+            seed=73,
+            waypoint_randomization=fixed,
+            randomization={"enabled": False},
+        )
+    )
+    try:
+        enabled_pose = enabled._materialize_stage_actions(enabled._plan[0])[0].pose
+        disabled_pose = disabled._materialize_stage_actions(disabled._plan[0])[0].pose
+        assert enabled_pose is not None and disabled_pose is not None
+        # The configured offset is applied while randomization is enabled and
+        # skipped entirely once the scope is switched off.
+        assert np.isclose(float(enabled_pose.position[0]), 0.15)
+        assert disabled_pose.position == (0.1, 0.0, 0.3)
+    finally:
+        enabled.close()
+        disabled.close()
         ComponentRegistry.clear()
 
 

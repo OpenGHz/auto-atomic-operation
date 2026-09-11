@@ -570,9 +570,11 @@ class OperatorRandomizationConfig(BaseModel):
 class RandomizationScopeConfig(BaseModel):
     """Container for global randomization defaults and the target maps.
 
-    This is the value of ``task.randomization``. It groups five orthogonal
+    This is the value of ``task.randomization``. It groups six orthogonal
     concerns:
 
+    * ``enabled`` — the master switch. It is checked before anything else, so
+      a disabled scope applies nothing regardless of the entries below.
     * ``strategy`` — the scope-wide placement strategy. It is deliberately
       *not* nested under ``constraints.separated``: it also governs the
       always-on collision rejection between randomized participants, which
@@ -591,6 +593,15 @@ class RandomizationScopeConfig(BaseModel):
     """
 
     model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid")
+
+    enabled: bool = True
+    """Master switch for this scope's pose randomization.
+
+    ``False`` applies no randomization at all: every object, operator, and
+    camera keeps its reset / initial-pose value, and a waypoint's own
+    ``randomization`` is skipped as well. The entries stay configured and are
+    still validated, so a disabled scope cannot conceal an invalid one.
+    """
 
     strategy: RandomizationStrategy = RandomizationStrategy.RSA
     """Placement strategy for one reset's reference-connected components.
@@ -679,8 +690,11 @@ class ResolvedRandomizationScope:
     ``entities`` and ``cameras`` hold the same shape as the scope maps, but
     every bare range is already wrapped into a ``RandomizationSpec`` carrying
     the defaults it inherits. ``strategy`` is the effective separation strategy
-    the backend must apply.
+    the backend must apply, and ``enabled`` carries the scope's master switch.
     """
+
+    enabled: bool = True
+    """Whether this scope applies its entries at all."""
 
     entities: Dict[str, Union[RandomizationInput, OperatorRandomizationConfig]] = field(
         default_factory=dict
@@ -732,6 +746,9 @@ def resolve_randomization_scope(
     ranges inherit only ``distribution``: cameras have no separation,
     visibility, or feasibility-loop semantics, so their ``constraints`` stays at
     the built-in default. The result is consumed by the backends.
+
+    ``enabled`` is carried through untouched: it is the scope's master switch,
+    not a per-entry default, so no target inherits it.
     """
     strategy = scope.strategy
     resolved: Dict[str, Union[RandomizationInput, OperatorRandomizationConfig]] = {}
@@ -775,6 +792,7 @@ def resolve_randomization_scope(
         entities=resolved,
         cameras=cameras,
         strategy=strategy,
+        enabled=scope.enabled,
     )
 
 
@@ -807,6 +825,16 @@ class ResolvedRandomizationConfig:
     def is_empty(self) -> bool:
         """True when nothing in the scope asks for pose randomization."""
         return not (self.scope.entities or self.scope.cameras)
+
+    @property
+    def applies(self) -> bool:
+        """Whether a reset should apply this scope's randomization at all.
+
+        This is the gate the backend reads: a disabled scope applies nothing
+        even though it still carries entries, so the master switch and
+        emptiness are one decision at the call site.
+        """
+        return self.scope.enabled and not self.is_empty
 
     @classmethod
     def from_scope_config(

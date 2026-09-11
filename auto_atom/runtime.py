@@ -1089,6 +1089,10 @@ class TaskRunner:
         BASE`` and use ``absolute_world`` (or ``relative``) in the
         waypoint's ``randomization``.
         """
+        if not context.task_file.task.randomization.enabled:
+            # The scope's master switch covers waypoint randomization too, so a
+            # disabled scope reproduces one deterministic scene everywhere.
+            return
         backend_rng = context.backend.rng
         rng = backend_rng if backend_rng is not None else context.random_generator
         for action in actions:

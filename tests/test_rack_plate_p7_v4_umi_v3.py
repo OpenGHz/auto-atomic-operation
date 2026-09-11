@@ -52,7 +52,14 @@ def test_rack_plate_p7_v4_umi_v3_completes_headless() -> None:
     ):
         config = compose(
             config_name="rack_plate_p7_v4_umi_v3",
-            overrides=["env.viewer=null"],
+            overrides=[
+                "env.viewer=null",
+                # This test covers the physical grasp/place path, so it runs the
+                # design scene rather than a sampled one: the plate stands in a
+                # marginal balance, and where a sample leans it is a different
+                # subject than the path asserted here.
+                "++task.randomization.enabled=false",
+            ],
         )
 
     runner = TaskRunner().from_config(prepare_task_file(config))
@@ -285,3 +292,46 @@ def test_rack_plate_p7_v4_umi_v3_object_only_transports_the_plate() -> None:
     finally:
         runner.close()
         ComponentRegistry.clear()
+
+
+def test_randomization_master_switch_reproduces_one_scene() -> None:
+    """``task.randomization.enabled=false`` leaves every sampled pose alone."""
+
+    def reset_poses(seed: int, *, enabled: bool) -> list[tuple[float, ...]]:
+        ComponentRegistry.clear()
+        overrides = ["env.viewer=null", f"task.seed={seed}"]
+        if not enabled:
+            overrides.append("++task.randomization.enabled=false")
+        with initialize_config_dir(
+            version_base=None,
+            config_dir=str(_ROOT / "aao_configs"),
+        ):
+            config = compose(
+                config_name="rack_plate_p7_v4_umi_v3",
+                overrides=overrides,
+            )
+        runner = TaskRunner().from_config(prepare_task_file(config))
+        try:
+            env = runner.get_env().envs[0]
+            model, data = env.model, env.data
+            plate = _id(model, mujoco.mjtObj.mjOBJ_BODY, "object")
+            joint = _id(model, mujoco.mjtObj.mjOBJ_JOINT, "object_free")
+            address = int(model.jnt_qposadr[joint])
+            runner.reset()
+            mujoco.mj_forward(model, data)
+            return [
+                tuple(float(value) for value in data.qpos[address : address + 7]),
+                tuple(float(value) for value in data.xpos[plate]),
+            ]
+        finally:
+            runner.close()
+            ComponentRegistry.clear()
+
+    disabled_seven = reset_poses(7, enabled=False)
+    disabled_eleven = reset_poses(11, enabled=False)
+    sampled_seven = reset_poses(7, enabled=True)
+
+    # A disabled scope samples nothing, so the seed cannot change the scene,
+    # while an enabled scope moves the plate off that baseline.
+    assert disabled_seven == disabled_eleven
+    assert sampled_seven != disabled_seven
