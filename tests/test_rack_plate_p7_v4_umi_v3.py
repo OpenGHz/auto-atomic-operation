@@ -44,6 +44,24 @@ def _descendant_bodies(model: mujoco.MjModel, root_body: int) -> set[int]:
     return bodies
 
 
+def _plate_relative_camera_pose(
+    model: mujoco.MjModel,
+    data: mujoco.MjData,
+    camera_name: str,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return ``(position, rotation)`` of a camera in the plate body frame."""
+
+    mujoco.mj_forward(model, data)
+    camera = _id(model, mujoco.mjtObj.mjOBJ_CAMERA, camera_name)
+    plate = _id(model, mujoco.mjtObj.mjOBJ_BODY, "object")
+    rotation = np.asarray(data.xmat[plate], dtype=np.float64).reshape(3, 3)
+    return (
+        rotation.T
+        @ (np.asarray(data.cam_xpos[camera], dtype=np.float64) - data.xpos[plate]),
+        rotation.T @ np.asarray(data.cam_xmat[camera], dtype=np.float64).reshape(3, 3),
+    )
+
+
 def test_rack_plate_p7_v4_umi_v3_completes_headless() -> None:
     ComponentRegistry.clear()
     with initialize_config_dir(
@@ -335,3 +353,127 @@ def test_randomization_master_switch_reproduces_one_scene() -> None:
     # while an enabled scope moves the plate off that baseline.
     assert disabled_seven == disabled_eleven
     assert sampled_seven != disabled_seven
+
+
+def test_plate_camera_is_mounted_on_the_plate_in_both_modes() -> None:
+    """``plate_cam`` is object-owned, so only it survives ``object_only``.
+
+    The wrist camera is operator-owned and disappears with the robot layer; the
+    plate camera is re-parented onto the plate body and keeps looking at it.
+    """
+
+    def layout(mode: str) -> tuple[list[str], str, str]:
+        ComponentRegistry.clear()
+        with initialize_config_dir(
+            version_base=None,
+            config_dir=str(_ROOT / "aao_configs"),
+        ):
+            config = compose(
+                config_name="rack_plate_p7_v4_umi_v3",
+                overrides=[
+                    "env.viewer=null",
+                    f"execution.mode={mode}",
+                    "++task.randomization.enabled=false",
+                ],
+            )
+        runner = TaskRunner().from_config(prepare_task_file(config))
+        try:
+            backend = runner._context.backend
+            env = runner.get_env().envs[0]
+            model, data = env.model, env.data
+            runner.reset()
+            mujoco.mj_forward(model, data)
+            cameras = sorted(
+                mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_CAMERA, camera_id)
+                for camera_id in range(model.ncam)
+            )
+            plate_camera = _id(model, mujoco.mjtObj.mjOBJ_CAMERA, "plate_cam")
+            mount_body = mujoco.mj_id2name(
+                model,
+                mujoco.mjtObj.mjOBJ_BODY,
+                int(model.cam_bodyid[plate_camera]),
+            )
+            assert "plate_cam" in backend.object_camera_names()
+            # Aiming check: a ray down the optical axis (-Z_cam) must hit the
+            # plate mesh, so the mount pose frames the object it rides.
+            hit = np.zeros(1, dtype=np.int32)
+            along_axis = -np.asarray(data.cam_xmat[plate_camera]).reshape(3, 3)[:, 2]
+            distance = float(
+                mujoco.mj_ray(
+                    model,
+                    data,
+                    np.asarray(data.cam_xpos[plate_camera]),
+                    along_axis,
+                    np.ones(6, dtype=np.uint8),
+                    1,
+                    -1,
+                    hit,
+                )
+            )
+            assert distance > 0.0
+            return (
+                cameras,
+                mount_body or "",
+                mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_GEOM, int(hit[0])) or "",
+            )
+        finally:
+            runner.close()
+            ComponentRegistry.clear()
+
+    physical = layout("physical")
+    object_only = layout("object_only")
+
+    assert physical[0] == ["eef_wrist_cam", "plate_cam", "rack_camera_front"]
+    assert object_only[0] == ["plate_cam", "rack_camera_front"]
+    assert physical[1] == object_only[1] == "object"
+    assert physical[2] == object_only[2] == "object_visual"
+
+
+def test_plate_camera_rides_the_plate_through_object_only_transport() -> None:
+    """The plate camera moves with the plate, not through its own bookkeeping."""
+
+    ComponentRegistry.clear()
+    with initialize_config_dir(
+        version_base=None,
+        config_dir=str(_ROOT / "aao_configs"),
+    ):
+        config = compose(
+            config_name="rack_plate_p7_v4_umi_v3",
+            overrides=[
+                "env.viewer=null",
+                "execution.mode=object_only",
+                "++task.randomization.enabled=false",
+            ],
+        )
+
+    runner = TaskRunner().from_config(prepare_task_file(config))
+    try:
+        env = runner.get_env().envs[0]
+        model, data = env.model, env.data
+        plate_camera = _id(model, mujoco.mjtObj.mjOBJ_CAMERA, "plate_cam")
+
+        update = runner.reset()
+        start_offset, start_rotation = _plate_relative_camera_pose(
+            model, data, "plate_cam"
+        )
+        start_world = np.asarray(data.cam_xpos[plate_camera], dtype=np.float64).copy()
+        for _ in range(_MAX_UPDATES):
+            if bool(update.done[0]):
+                break
+            update = runner.update()
+
+        assert update.done.tolist() == [True]
+        assert update.success.tolist() == [True]
+        end_offset, end_rotation = _plate_relative_camera_pose(model, data, "plate_cam")
+        end_world = np.asarray(data.cam_xpos[plate_camera], dtype=np.float64).copy()
+
+        # The installed offset is the authored one (randomization is disabled)
+        # and MuJoCo keeps it fixed while the plate travels to the rack.
+        np.testing.assert_allclose(start_offset, [0.25, 0.0, 0.0], atol=1.0e-9)
+        np.testing.assert_allclose(end_offset, start_offset, atol=1.0e-12)
+        np.testing.assert_allclose(end_rotation, start_rotation, atol=1.0e-12)
+        # A camera that stayed behind would not have followed the plate.
+        assert float(np.linalg.norm(end_world - start_world)) > 0.05
+    finally:
+        runner.close()
+        ComponentRegistry.clear()

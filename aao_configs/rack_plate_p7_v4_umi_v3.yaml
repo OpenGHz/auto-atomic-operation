@@ -21,6 +21,12 @@ env:
       - kind: mjcf
         path: ${operator_robot_xml}
         role: operator
+      # The plate's own camera is a sim-only sensor module rather than part of
+      # the migrated scene asset, so the plate body stays identical to the
+      # source asset and `role: object` + `parent_frame` below decide which
+      # body it is mounted on.
+      - kind: mjcf
+        path: ${assets_dir}/xmls/scenes/rack_plate/plate_cam.xml
   cameras:
     # One static environment camera; the wrist camera remains robot-mounted.
     - name: eef_wrist_cam
@@ -35,6 +41,21 @@ env:
       is_static: false
       rgb_clip_range_m: [0.001, 50.0]
       depth_clip_range_m: [0.001, 5.0]
+    # Object-centric view: the camera rides the plate, so it is the only
+    # moving viewpoint that survives `execution.mode: object_only` (the
+    # operator-owned wrist camera is stripped with its layer).  MuJoCo
+    # derives its world pose from the plate body, so the kinematic transport
+    # moves it with no per-step work.
+    - name: plate_cam
+      role: object
+      parent_frame: object
+      width: ${cam_width}
+      height: ${cam_height}
+      enable_color: ${enable_color}
+      enable_depth: ${enable_depth}
+      enable_mask: ${enable_mask}
+      enable_heat_map: ${enable_heat_map}
+      is_static: false
     - name: rack_camera_front
       width: ${cam_width}
       height: ${cam_height}
@@ -118,6 +139,13 @@ task:
       # It is dropped together with the operator under `execution.mode:
       # object_only`.
       eef_wrist_cam:
+        roll: [-0.015, 0.015]
+        pitch: [-0.015, 0.015]
+        yaw: [-0.015, 0.015]
+      # Plate camera: `role: object` cameras sample their install offset
+      # relative to the plate instead of a world pose, so this mirrors the
+      # wrist camera's extrinsic jitter on the object side.
+      plate_cam:
         roll: [-0.015, 0.015]
         pitch: [-0.015, 0.015]
         yaw: [-0.015, 0.015]

@@ -104,6 +104,13 @@ body's frame and `reset()` restores that offset. MuJoCo then derives its world
 pose from the object every forward pass, which is why it follows object-only
 transport and physical manipulation without any per-step update.
 
+The camera element itself still has to exist in the composed MJCF — the stack
+resolves `env.cameras[].name` against the model and never creates cameras at
+runtime. Add a sim-only MJCF module as an ordered `env.scene.layers` entry
+instead of editing the scene asset (`assets/xmls/scenes/rack_plate/plate_cam.xml`
+is the rack-plate example), then point `role: object` and `parent_frame` at the
+object body the module's camera should ride.
+
 Gaussian Splatting cameras with `env.cameras.<name>.is_static: true` cache their
 background at the first render. If such a camera is randomized on later
 resets, its viewpoint changes while the cached background remains tied to the
