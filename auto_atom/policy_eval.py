@@ -294,6 +294,11 @@ class PolicyEvaluator:
                 "execution.interval_selection is supported by TaskRunner/aao-demo only; "
                 "PolicyEvaluator cannot fast-forward external policy actions during reset()."
             )
+        if config.execution.keypoint_selection is not None:
+            raise ValueError(
+                "execution.keypoint_selection is supported by TaskRunner/aao-demo only; "
+                "PolicyEvaluator cannot drive a filtered keypoint program."
+            )
         if config.execution.update_boundary != UpdateBoundary.CONTROL_TICK:
             raise ValueError(
                 "PolicyEvaluator only supports "

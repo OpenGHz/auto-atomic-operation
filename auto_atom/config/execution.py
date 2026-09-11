@@ -2,7 +2,7 @@
 
 from collections.abc import Mapping
 from enum import Enum
-from typing import Optional
+from typing import List, Optional
 
 from pydantic import (
     BaseModel,
@@ -63,6 +63,43 @@ class TaskKeypointConfig(BaseModel, frozen=True):
     """Boundary side relative to the keypoint. Within ``interval_selection``,
     an omitted value resolves to ``before`` for ``start`` and ``after`` for
     ``stop``."""
+
+
+class KeypointRangeConfig(BaseModel, frozen=True):
+    """One entry of ``execution.keypoint_selection``.
+
+    An entry selects a contiguous run of configured keypoints to execute: a
+    whole stage, one phase of a stage, or one YAML waypoint. Keypoints outside
+    every entry are skipped instead of executed.
+    """
+
+    model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid")
+
+    stage: str = Field(min_length=1)
+    """The stage name. Unnamed stages use their generated ``stage_N`` name."""
+    phase: Optional[TaskPhase] = None
+    """Optional phase. Omit to select every keypoint of the stage."""
+    waypoint: Optional[NonNegativeInt] = None
+    """Optional zero-based YAML waypoint index inside ``phase``; it selects
+    that single keypoint and requires ``phase``."""
+
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_side(cls, value: object) -> object:
+        if isinstance(value, Mapping) and value.get("side") is not None:
+            raise ValueError(
+                "a keypoint_selection entry selects keypoints to execute, so it "
+                "has no side; use phase and waypoint to trim the selected range"
+            )
+        return value
+
+    @model_validator(mode="after")
+    def _require_phase_for_waypoint(self) -> "KeypointRangeConfig":
+        if self.waypoint is not None and self.phase is None:
+            raise ValueError(
+                "a keypoint_selection entry with waypoint must also set phase"
+            )
+        return self
 
 
 class IntervalSelectionConfig(BaseModel, frozen=True):
@@ -149,6 +186,10 @@ class ExecutionConfig(BaseModel, frozen=True):
     interval_selection: Optional[IntervalSelectionConfig] = None
     """Optional task interval. ``reset()`` advances to the configured start
     boundary, and execution succeeds at the configured stop boundary."""
+    keypoint_selection: Optional[List[KeypointRangeConfig]] = None
+    """Ordered keypoint ranges to execute instead of the full task. Selected
+    ranges must be non-overlapping and in task execution order; every keypoint
+    outside them is skipped. Mutually exclusive with ``interval_selection``."""
     update_boundary: UpdateBoundary = UpdateBoundary.CONTROL_TICK
     """Boundary at which each public runner update returns."""
     render_internal_updates: bool = True
@@ -158,3 +199,17 @@ class ExecutionConfig(BaseModel, frozen=True):
     max_internal_updates_per_update: PositiveInt = 10_000
     """Maximum controller updates performed internally by one public runner
     update. Interval reset fast-forward has its own independent limit."""
+
+    @model_validator(mode="after")
+    def _validate_task_selection(self) -> "ExecutionConfig":
+        selection = self.keypoint_selection
+        if self.interval_selection is not None and selection is not None:
+            raise ValueError(
+                "execution.interval_selection and execution.keypoint_selection "
+                "are mutually exclusive; configure one task selection"
+            )
+        if selection is not None and not selection:
+            raise ValueError(
+                "execution.keypoint_selection must list at least one keypoint range"
+            )
+        return self

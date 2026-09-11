@@ -4,8 +4,9 @@ This page documents several less-obvious fields on task / stage / waypoint
 configuration that are easy to miss but frequently needed:
 
 - `TaskFileConfig.execution` — select the public `TaskRunner.update()` boundary,
-  choose whether internal ticks are rendered, and optionally run only an
-  interval delimited by states before or after two configured keypoints.
+  choose whether internal ticks are rendered, and optionally restrict execution
+  either to an interval between two configured keypoints or to an ordered subset
+  of configured keypoints.
 - `StageConfig.site` — re-base `object_world` / `object` references onto a
   site or geometry instead of the stage object's body origin.
 - `PoseControlConfig.static` — freeze a tracking reference at the first
@@ -81,8 +82,9 @@ started at `after`. They still validate when `side` is omitted, but now use
 the requested `start.side: before` default. Add `start.side: after` to
 preserve the previous reset and first-update behavior.
 
-Top-level `interval_selection`, `update_boundary`, `render_internal_updates`,
-`max_internal_updates_per_update`, and `max_fast_forward_updates` are rejected
+Top-level `interval_selection`, `keypoint_selection`, `update_boundary`,
+`render_internal_updates`, `max_internal_updates_per_update`, and
+`max_fast_forward_updates` are rejected
 with their expected `execution...` path so misplaced settings cannot be
 silently ignored.
 
@@ -189,11 +191,62 @@ names, absent phases, out-of-range waypoint indexes, and `start` ordered after
 full-task execution; omitting all of `execution` also preserves the default
 one-control-tick update behavior.
 
-> `execution.interval_selection`, non-`control_tick` update boundaries, and
-> `render_internal_updates: false` apply to `TaskRunner` / `aao-demo`.
-> `PolicyEvaluator` / `aao-eval` rejects them:
-> reset cannot synthesize external policy actions, and every policy control
-> tick requires a newly supplied action.
+> `execution.interval_selection`, `execution.keypoint_selection`,
+> non-`control_tick` update boundaries, and `render_internal_updates: false`
+> apply to `TaskRunner` / `aao-demo`.
+> `PolicyEvaluator` / `aao-eval` rejects them: reset cannot synthesize external
+> policy actions, every policy control tick requires a newly supplied action,
+> and a selection changes which keypoints a rollout executes.
+
+## Task keypoint selection
+
+`execution.keypoint_selection` runs an ordered subset of the configured
+keypoints instead of a contiguous interval. It is mutually exclusive with
+`execution.interval_selection`; every keypoint outside the listed entries is
+skipped rather than simulated.
+
+```yaml
+execution:
+  keypoint_selection:
+    - { stage: pick_cube_yellow_2 }                    # whole stage
+    - { stage: place_cube_yellow_2_in_disk }
+    - { stage: pick_cube_orange_3, phase: pre_move }   # one phase of a stage
+    - { stage: place_cube_orange_3_in_disk, phase: post_move, waypoint: 0 }
+```
+
+Each entry is a keypoint reference with optional refinement:
+
+| Field | Meaning |
+| --- | --- |
+| `stage` | Required exact stage `name`; unnamed stages can use their generated `stage_N` name |
+| `phase` | Optional `pre_move`, `eef`, or `post_move`; omitting it selects every keypoint of the stage |
+| `waypoint` | Optional zero-based index inside `phase`; it requires `phase` and selects that single keypoint |
+
+Each entry selects the contiguous run of keypoints it names, and the entries
+execute in the order they are listed:
+
+- Entries must follow task execution order without overlapping. Selecting
+  `third` before `first`, or repeating one entry, is rejected during config
+  validation, as are unknown or ambiguous stage names, a phase the stage never
+  executes, and out-of-range waypoint indexes.
+- `reset()` performs no fast-forward. The rollout starts from the backend reset
+  state and executes only the selected keypoints, so a skipped stage is never
+  simulated — unlike `interval_selection`, which replays its prefix to reach the
+  interval start.
+- A wholly selected stage keeps its normal operation conditions and records one
+  successful stage `ExecutionRecord`. A partially selected stage still runs its
+  configured perform and success conditions at the retained boundaries, so a
+  partial selection of an operation stage can legitimately fail; select the
+  whole stage when its conditions must be satisfied.
+
+Because the selection removes keypoints from the compiled program, a selection
+that starts in the middle of a later stage cannot rely on the skipped stages
+having run. For example, listing only a `place` stage fails that stage's perform
+condition unless the operator already holds the target object.
+
+`TaskUpdate.details[env_index]["keypoint_selection"]` reports the configured
+entries and the current selection event. Omitting
+`execution.keypoint_selection` preserves full-task execution.
 
 ## Stage reference site
 

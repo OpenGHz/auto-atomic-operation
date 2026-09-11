@@ -141,6 +141,7 @@ To discover which configs are runnable tasks, use [`aao-info`](#aao-info).
 | `[+]execution.interval_selection...` | mapping | unset | Run between states immediately before or after configured `stage` / `phase` / `waypoint` keypoints |
 | `[+]execution.interval_selection.{start,stop}.side=...` | enum | `before` / `after` | Endpoint side relative to its keypoint; the start default is `before`, while the stop default is `after` |
 | `[+]execution.interval_selection.max_fast_forward_updates=N` | int | 10000 | Per-environment controller-update limit while `reset()` advances to the interval start boundary |
+| `[+]execution.keypoint_selection=[...]` | list | unset | Ordered list of `{stage, phase?, waypoint?}` entries to execute; unlisted keypoints are skipped. Mutually exclusive with `interval_selection` |
 
 Any key present in the YAML config can be overridden on the command line following Hydra syntax:
 
@@ -176,7 +177,21 @@ aao-demo --config-name pick_and_place \
 
 The shipped `pick_and_place` config leaves this example commented out, so the
 command adds the paths with `+`. When a selected config already defines a
-path, override it without `+`. The public update boundary choices are:
+path, override it without `+`.
+
+Run only an ordered subset of stages, skipping the rest, by replacing the
+contiguous interval with a keypoint selection:
+
+```bash
+aao-demo --config-name place_blocks_on_disk_airbot_play_g2 \
+  ~execution.interval_selection \
+  +execution.keypoint_selection="[{stage: pick_cube_yellow_2}, {stage: place_cube_orange_3_in_disk}]"
+```
+
+Hydra expands a list only when the whole path is assigned, so a keypoint
+selection is overridden as one `[...]` value rather than entry by entry.
+
+The public update boundary choices are:
 
 - `control_tick`: return after one controller update; this default preserves
   the previous behavior.

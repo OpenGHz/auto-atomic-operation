@@ -1051,6 +1051,7 @@ class TaskRunner:
             use_configured_identity=(
                 self._require_context().is_object_only
                 or self._require_timeline().interval_selection is not None
+                or self._require_timeline().keypoint_selection is not None
                 or self._require_timeline().update_boundary
                 != UpdateBoundary.CONTROL_TICK
             ),
@@ -2412,6 +2413,9 @@ class TaskRunner:
         selection = (
             self._timeline.interval_selection if self._timeline is not None else None
         )
+        keypoint_selection = (
+            self._timeline.keypoint_selection if self._timeline is not None else None
+        )
         stage_index: List[int] = []
         stage_name: List[str] = []
         status: List[StageExecutionStatus] = []
@@ -2462,6 +2466,22 @@ class TaskRunner:
                     int(selection.max_fast_forward_updates),
                 )
                 state_details["interval_selection"] = interval_details
+            if keypoint_selection is not None:
+                selection_details = dict(state_details.get("keypoint_selection", {}))
+                if not self._has_reset[env_index]:
+                    default_event = "keypoint_selection_pending"
+                elif state.done and not state.success:
+                    default_event = "keypoint_selection_failed"
+                elif state.done:
+                    default_event = "keypoint_selection_succeeded"
+                else:
+                    default_event = "keypoint_selection_running"
+                selection_details.setdefault("event", default_event)
+                selection_details.setdefault(
+                    "keypoints",
+                    [entry.model_dump(mode="json") for entry in keypoint_selection],
+                )
+                state_details["keypoint_selection"] = selection_details
             if env_index < len(self._last_execution_details):
                 state_details["execution"] = dict(
                     self._last_execution_details[env_index]

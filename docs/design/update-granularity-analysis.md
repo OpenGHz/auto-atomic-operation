@@ -1,6 +1,7 @@
 # TaskRunner Update 粒度与关键点步进方案分析
 
-> `execution.update_boundary`、`execution.interval_selection` 与 viewer 边界刷新
+> `execution.update_boundary`、`execution.interval_selection`、
+> `execution.keypoint_selection` 与 viewer 边界刷新
 > 均已实现。本文同时保留其他实现方案的对比，以及内部观测 callback 的后续
 > 演进建议。
 
@@ -76,6 +77,11 @@ execution:
   `after -> after` 是 reset 中完成的空区间，`after -> before` 顺序非法；
 - arc 的内部拆分不会暴露为多个可选择 waypoint；`eef` 使用唯一索引 0。
 
+除连续区间外，`execution.keypoint_selection` 提供**非连续子集**选择：按顺序列出若干
+关键点范围（`stage`，可选细化到 `phase`、`waypoint`），只有被列出的关键点会执行，
+其余一律跳过；因为它直接裁剪编译后的执行程序，`reset()` 不做任何快进，被跳过的
+stage 也不会仿真。它与 `interval_selection` 互斥。
+
 两个安全上限相互独立：
 
 - `max_internal_updates_per_update` 限制一次公开 `update()` 内每个环境的内部
@@ -88,7 +94,8 @@ execution:
 fast-forward timeout；修改其中一个不会影响另一个。
 
 详细配置与校验规则见
-[Stages & Waypoints](../task-configuration/stages_and_waypoints.md#task-interval-boundary-selection)。
+[Stages & Waypoints](../task-configuration/stages_and_waypoints.md#task-interval-boundary-selection)
+与 [Task keypoint selection](../task-configuration/stages_and_waypoints.md#task-keypoint-selection)。
 
 ## 当前任务与执行粒度
 

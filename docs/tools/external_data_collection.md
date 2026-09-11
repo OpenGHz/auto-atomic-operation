@@ -105,6 +105,25 @@ condition. The start default is `before`; the stop default is `after`. This
 example spells out both sides because its start deliberately overrides
 the default.
 
+When the collection target is not one contiguous interval, replace
+`interval_selection` with `execution.keypoint_selection`. It lists the
+keypoint ranges to execute in order and skips everything else, and it needs
+no prefix fast-forward because skipped stages never run:
+
+```python
+overrides=[
+    "~execution.interval_selection",
+    "+execution.keypoint_selection="
+    "[{stage: pick_cube_yellow_2}, {stage: place_cube_yellow_2_in_disk},"
+    " {stage: pick_cube_orange_3}, {stage: place_cube_orange_3_in_disk}]",
+]
+```
+
+Hydra accepts a list only as one assigned `[...]` value, so the entries cannot
+be overridden individually. Both selections are `TaskRunner`/`aao-demo` only
+and mutually exclusive; see
+[Stages & Waypoints](../task-configuration/stages_and_waypoints.md#task-keypoint-selection).
+
 `execution.update_boundary` supports four collection granularities:
 
 | Value | One host-visible `runner.update()` |

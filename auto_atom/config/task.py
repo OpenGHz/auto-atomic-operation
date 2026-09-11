@@ -16,6 +16,7 @@ from typing_extensions import Self
 
 from auto_atom.config.execution import (
     ExecutionConfig,
+    KeypointRangeConfig,
     KeypointSide,
     TaskKeypointConfig,
     TaskPhase,
@@ -299,6 +300,7 @@ class TaskFileConfig(BaseModel):
             return value
         for field_name in (
             "interval_selection",
+            "keypoint_selection",
             "update_boundary",
             "render_internal_updates",
             "max_internal_updates_per_update",
@@ -402,4 +404,88 @@ class TaskFileConfig(BaseModel):
                 "execution.interval_selection.start must not come after "
                 "execution.interval_selection.stop in task execution order"
             )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_keypoint_selection(self) -> "TaskFileConfig":
+        entries = self.execution.keypoint_selection
+        if not entries:
+            return self
+
+        stages_by_name: Dict[str, List[Tuple[int, StageConfig]]] = {}
+        for index, stage in enumerate(self.task.stages):
+            effective_name = stage.name or f"stage_{index}"
+            stages_by_name.setdefault(effective_name, []).append((index, stage))
+
+        phase_order = {
+            TaskPhase.PRE_MOVE: 0,
+            TaskPhase.EEF: 1,
+            TaskPhase.POST_MOVE: 2,
+        }
+
+        def resolve(
+            field_name: str,
+            entry: KeypointRangeConfig,
+        ) -> Tuple[Tuple[int, int, int], Tuple[int, int, int]]:
+            matches = stages_by_name.get(entry.stage, [])
+            if not matches:
+                available = ", ".join(stages_by_name) or "<none>"
+                raise ValueError(
+                    f"execution.{field_name}.stage {entry.stage!r} does not match "
+                    f"a task stage; available stages: {available}"
+                )
+            if len(matches) > 1:
+                raise ValueError(
+                    f"execution.{field_name}.stage {entry.stage!r} is ambiguous "
+                    "because multiple stages use that name"
+                )
+
+            stage_index, stage = matches[0]
+            if entry.phase is None:
+                selected = [
+                    (phase_order[phase], waypoint)
+                    for phase in phase_order
+                    for waypoint in range(_phase_waypoint_count(stage, phase))
+                ]
+                if not selected:
+                    raise ValueError(
+                        f"execution.{field_name} selects stage {entry.stage!r}, "
+                        "which does not execute any keypoint"
+                    )
+            else:
+                count = _phase_waypoint_count(stage, entry.phase)
+                if count == 0:
+                    raise ValueError(
+                        f"execution.{field_name} references phase "
+                        f"{entry.phase.value!r}, but stage {entry.stage!r} "
+                        "does not execute that phase"
+                    )
+                if entry.waypoint is None:
+                    selected = [
+                        (phase_order[entry.phase], waypoint)
+                        for waypoint in range(count)
+                    ]
+                else:
+                    if entry.waypoint >= count:
+                        raise ValueError(
+                            f"execution.{field_name}.waypoint {entry.waypoint} is "
+                            f"out of range for {entry.stage}.{entry.phase.value}; "
+                            f"expected 0..{count - 1}"
+                        )
+                    selected = [(phase_order[entry.phase], int(entry.waypoint))]
+
+            return (
+                (stage_index, *min(selected)),
+                (stage_index, *max(selected)),
+            )
+
+        previous_stop: Optional[Tuple[int, int, int]] = None
+        for index, entry in enumerate(entries):
+            start, stop = resolve(f"keypoint_selection[{index}]", entry)
+            if previous_stop is not None and start <= previous_stop:
+                raise ValueError(
+                    f"execution.keypoint_selection[{index}] must select keypoints "
+                    "after the previous entry in task execution order"
+                )
+            previous_stop = stop
         return self

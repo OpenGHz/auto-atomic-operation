@@ -17,6 +17,7 @@ from typing import Any, List, Mapping, Optional
 from auto_atom.config.execution import (
     ExecutionMode,
     IntervalSelectionConfig,
+    KeypointRangeConfig,
     KeypointSide,
     TaskKeypointConfig,
     TaskPhase,
@@ -342,6 +343,7 @@ class ExecutionTimeline:
     keypoints: tuple[CompiledKeypoint, ...]
     _stage_action_templates: tuple[tuple[PrimitiveAction, ...], ...] = field(repr=False)
     interval_selection: Optional[IntervalSelectionConfig] = None
+    keypoint_selection: Optional[tuple[KeypointRangeConfig, ...]] = None
     update_boundary: UpdateBoundary = UpdateBoundary.CONTROL_TICK
     max_internal_updates_per_update: int = 10_000
     _keypoint_indices: Mapping[_ResolvedTaskKeypoint, int] = field(
@@ -375,16 +377,21 @@ class ExecutionTimeline:
 
         execution = context.task_file.execution
         compiled_plans: list[StageExecutionPlan] = []
-        templates: list[tuple[PrimitiveAction, ...]] = []
-        compiled_keypoints: list[CompiledKeypoint] = []
-        stage_ranges: list[tuple[int, int]] = []
+        nominal_templates: list[tuple[PrimitiveAction, ...]] = []
+        nominal_keypoints: list[CompiledKeypoint] = []
         last_orientation = None
-        primitive_offset = 0
+        nominal_offset = 0
+        keypoint_selection = (
+            tuple(execution.keypoint_selection)
+            if validate_boundaries and execution.keypoint_selection
+            else None
+        )
         strict = bool(
             validate_boundaries
             and (
                 execution.update_boundary == UpdateBoundary.KEYPOINT
                 or execution.interval_selection is not None
+                or keypoint_selection is not None
             )
         )
 
@@ -408,20 +415,61 @@ class ExecutionTimeline:
             # Deep-copy the complete list so relative arc primitives retain
             # their intentional shared ArcExecutionSnapshot alias.
             nominal_actions = tuple(deepcopy(actions))
-            templates.append(nominal_actions)
-            stage_ranges.append(
-                (primitive_offset, primitive_offset + len(nominal_actions))
-            )
-            if strict:
-                _validate_stage_actions(builder, plan, list(nominal_actions))
-            compiled_keypoints.extend(
+            nominal_templates.append(nominal_actions)
+            nominal_keypoints.extend(
                 _collect_keypoints(
                     plan,
                     list(nominal_actions),
+                    primitive_offset=nominal_offset,
+                )
+            )
+            nominal_offset += len(nominal_actions)
+
+        selected_keypoints: Optional[frozenset[_ResolvedTaskKeypoint]] = None
+        if keypoint_selection is not None:
+            selected_keypoints = _resolve_keypoint_selection(
+                builder,
+                keypoint_selection,
+                tuple(item.identity for item in nominal_keypoints),
+            )
+
+        # The compiled program is the nominal task with every unselected
+        # keypoint removed. The static orientation-inheritance chain above is
+        # always resolved on the nominal task, so a selection never changes how
+        # an individual stage's actions are built.
+        templates: list[tuple[PrimitiveAction, ...]] = []
+        compiled_keypoints: list[CompiledKeypoint] = []
+        stage_ranges: list[tuple[int, int]] = []
+        stage_plans: list[StageExecutionPlan] = []
+        primitive_offset = 0
+        for plan, nominal_actions in zip(compiled_plans, nominal_templates):
+            if strict:
+                # Validate the builder's contract on the nominal program so a
+                # malformed primitive cannot be hidden by dropping its
+                # keypoint from the selected program.
+                _validate_stage_actions(builder, plan, list(nominal_actions))
+            actions = nominal_actions
+            if selected_keypoints is not None:
+                actions = tuple(
+                    action
+                    for action in nominal_actions
+                    if _action_keypoint(plan, action) in selected_keypoints
+                )
+                if not actions:
+                    templates.append(())
+                    stage_ranges.append((primitive_offset, primitive_offset))
+                    continue
+            templates.append(actions)
+            stage_ranges.append((primitive_offset, primitive_offset + len(actions)))
+            stage_plans.append(plan)
+            compiled_keypoints.extend(
+                _collect_keypoints(
+                    plan,
+                    list(actions),
                     primitive_offset=primitive_offset,
                 )
             )
-            primitive_offset += len(nominal_actions)
+            primitive_offset += len(actions)
 
         resolved_keypoints = tuple(compiled_keypoints)
         identities = tuple(item.identity for item in resolved_keypoints)
@@ -440,10 +488,11 @@ class ExecutionTimeline:
             _validate_interval_selection(builder, selection, identities)
 
         return cls(
-            stage_plans=tuple(compiled_plans),
+            stage_plans=tuple(stage_plans),
             keypoints=resolved_keypoints,
             _stage_action_templates=tuple(templates),
             interval_selection=selection,
+            keypoint_selection=keypoint_selection,
             update_boundary=execution.update_boundary,
             max_internal_updates_per_update=int(
                 execution.max_internal_updates_per_update
@@ -682,3 +731,78 @@ def _validate_interval_selection(
             "execution.interval_selection.start must not come after "
             "execution.interval_selection.stop in the active TaskFlowBuilder"
         )
+
+
+def _action_keypoint(
+    plan: StageExecutionPlan,
+    action: PrimitiveAction,
+) -> _ResolvedTaskKeypoint:
+    """Return the keypoint identity one emitted primitive belongs to."""
+    return _ResolvedTaskKeypoint(
+        stage_index=plan.stage_index,
+        stage_name=plan.stage_name,
+        phase=action.phase,
+        waypoint=action.waypoint,
+    )
+
+
+def _range_matches(
+    keypoint: _ResolvedTaskKeypoint,
+    entry: KeypointRangeConfig,
+) -> bool:
+    """Report whether one emitted keypoint falls inside a selection entry."""
+    if keypoint.stage_name != entry.stage:
+        return False
+    if entry.phase is not None and keypoint.phase != entry.phase:
+        return False
+    if entry.waypoint is not None and keypoint.waypoint != entry.waypoint:
+        return False
+    return True
+
+
+def _resolve_keypoint_selection(
+    builder: "TaskFlowBuilder",
+    selection: tuple[KeypointRangeConfig, ...],
+    keypoints: tuple[_ResolvedTaskKeypoint, ...],
+) -> frozenset[_ResolvedTaskKeypoint]:
+    """Return exactly the keypoints named by ``execution.keypoint_selection``."""
+
+    def label(entry: KeypointRangeConfig) -> str:
+        parts = [entry.stage]
+        if entry.phase is not None:
+            parts.append(entry.phase.value)
+        if entry.waypoint is not None:
+            parts.append(str(entry.waypoint))
+        return ".".join(parts)
+
+    selected: dict[int, _ResolvedTaskKeypoint] = {}
+    previous_span: Optional[tuple[int, int]] = None
+    for index, entry in enumerate(selection):
+        matching = [
+            position
+            for position, keypoint in enumerate(keypoints)
+            if _range_matches(keypoint, entry)
+        ]
+        field_name = f"keypoint_selection[{index}]"
+        if not matching:
+            raise ValueError(
+                f"execution.{field_name} is not emitted by "
+                f"{type(builder).__name__}: {label(entry)}"
+            )
+        span = (min(matching), max(matching))
+        if len(matching) != span[1] - span[0] + 1:
+            raise ValueError(
+                f"execution.{field_name} selects keypoints "
+                f"{label(entry)} that are not contiguous in the active "
+                f"{type(builder).__name__} program"
+            )
+        if previous_span is not None and span[0] <= previous_span[1]:
+            raise ValueError(
+                f"execution.{field_name} must select keypoints after the "
+                "previous entry in the active "
+                f"{type(builder).__name__} program"
+            )
+        previous_span = span
+        for position in matching:
+            selected[position] = keypoints[position]
+    return frozenset(selected.values())

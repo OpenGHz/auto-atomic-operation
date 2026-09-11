@@ -435,6 +435,19 @@ See
 [Stages & Waypoints](stages_and_waypoints.md#task-interval-boundary-selection)
 for the schema, validation, and reporting details.
 
+## Keypoint selection
+
+`execution.keypoint_selection` does not add another endpoint pair: it removes
+every keypoint outside its listed ranges from the compiled program before the
+execution flow above starts. A retained stage therefore runs its normal
+completion flow, a stage with no retained keypoint is never started, and a
+partially retained stage stops checking its operation conditions at the last
+retained boundary. Because the skipped keypoints are never simulated, `reset()`
+has no prefix to fast-forward and `max_fast_forward_updates` does not apply.
+See
+[Stages & Waypoints](stages_and_waypoints.md#task-keypoint-selection) for the
+schema and validation rules.
+
 ## Flowchart
 
 ```mermaid
