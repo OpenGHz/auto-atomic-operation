@@ -106,16 +106,25 @@ example spells out both sides because its start deliberately overrides
 the default.
 
 When the collection target is not one contiguous interval, replace
-`interval_selection` with `execution.keypoint_selection`. It lists the
-keypoint ranges to execute in order and skips everything else, and it needs
-no prefix fast-forward because skipped stages never run:
+`interval_selection` with `execution.keypoint_selection`. It lists the keypoints
+to execute in order and skips everything else, and it needs no prefix
+fast-forward because skipped stages never run. Entries are task-wide keypoint
+ordinals or `stage` / `phase` / `waypoint` scopes, and negative indexes count
+from the end:
+
+```python
+overrides=[
+    "~execution.interval_selection",
+    "+execution.keypoint_selection=[0, -1]",
+]
+```
 
 ```python
 overrides=[
     "~execution.interval_selection",
     "+execution.keypoint_selection="
     "[{stage: pick_cube_yellow_2}, {stage: place_cube_yellow_2_in_disk},"
-    " {stage: pick_cube_orange_3}, {stage: place_cube_orange_3_in_disk}]",
+    " {stage: pick_cube_orange_3}, {stage: place_cube_orange_3_in_disk, waypoint: -1}]",
 ]
 ```
 

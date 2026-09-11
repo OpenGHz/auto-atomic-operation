@@ -2483,7 +2483,12 @@ class TaskRunner:
                 selection_details.setdefault("event", default_event)
                 selection_details.setdefault(
                     "keypoints",
-                    [entry.model_dump(mode="json") for entry in keypoint_selection],
+                    [
+                        entry
+                        if isinstance(entry, int)
+                        else entry.model_dump(mode="json")
+                        for entry in keypoint_selection
+                    ],
                 )
                 state_details["keypoint_selection"] = selection_details
             if env_index < len(self._last_execution_details):

@@ -208,27 +208,45 @@ skipped rather than simulated.
 ```yaml
 execution:
   keypoint_selection:
-    - { stage: pick_cube_yellow_2 }                    # whole stage
-    - { stage: place_cube_yellow_2_in_disk }
-    - { stage: pick_cube_orange_3, phase: pre_move }   # one phase of a stage
-    - { stage: place_cube_orange_3_in_disk, phase: post_move, waypoint: 0 }
+    - 0                                               # task keypoint ordinal
+    - -1                                              # last task keypoint
+    - { stage: pick_cube_orange_3 }                    # whole stage
+    - { stage: place_cube_orange_3_in_disk, phase: post_move }
+    - { stage: pick_cube_yellow_2, phase: pre_move, waypoint: 0 }
 ```
 
-Each entry is a keypoint reference with optional refinement:
+An entry takes one of two forms:
+
+| Entry | Meaning |
+| --- | --- |
+| an integer | Zero-based keypoint ordinal in the task's keypoint sequence; negative indexes count from the end, so `-1` is the task's last keypoint |
+| a mapping | A `stage` scope with the optional refinements below |
+
+Mapping fields:
 
 | Field | Meaning |
 | --- | --- |
 | `stage` | Required exact stage `name`; unnamed stages can use their generated `stage_N` name |
-| `phase` | Optional `pre_move`, `eef`, or `post_move`; omitting it selects every keypoint of the stage |
-| `waypoint` | Optional zero-based index inside `phase`; it requires `phase` and selects that single keypoint |
+| `phase` | Optional `pre_move`, `eef`, or `post_move`; omitting it addresses every keypoint of the stage |
+| `waypoint` | Optional keypoint index inside the addressed scope; negative indexes count from the end of that scope, and omitting it selects every keypoint of the scope |
 
-Each entry selects the contiguous run of keypoints it names, and the entries
-execute in the order they are listed:
+The task keypoint sequence is the stage order, and inside one stage it is
+`pre_move[0]`, `pre_move[1]`, …, `eef`, `post_move[0]`, … . Attribute-free
+indexes make the edges of a task cheap to name:
 
-- Entries must follow task execution order without overlapping. Selecting
-  `third` before `first`, or repeating one entry, is rejected during config
-  validation, as are unknown or ambiguous stage names, a phase the stage never
-  executes, and out-of-range waypoint indexes.
+- `[0, -1]` selects exactly the task's first and last keypoint.
+- `{ stage: place_plate, waypoint: -1 }` selects the last keypoint of that
+  stage, whichever phase it belongs to.
+- `{ stage: pick_plate, phase: pre_move, waypoint: -1 }` selects that stage's
+  last `pre_move` waypoint without counting waypoints.
+
+Selection rules:
+
+- Entries must follow task execution order and must not select one keypoint
+  twice. Selecting `third` before `first`, repeating an entry, or writing
+  `[-1, 0]` is rejected during config validation, as are unknown or ambiguous
+  stage names, a phase the stage never executes, and out-of-range indexes
+  (an index range is reported as, for example, `-1..0`).
 - `reset()` performs no fast-forward. The rollout starts from the backend reset
   state and executes only the selected keypoints, so a skipped stage is never
   simulated — unlike `interval_selection`, which replays its prefix to reach the

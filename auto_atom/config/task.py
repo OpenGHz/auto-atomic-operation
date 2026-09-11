@@ -16,7 +16,8 @@ from typing_extensions import Self
 
 from auto_atom.config.execution import (
     ExecutionConfig,
-    KeypointRangeConfig,
+    KeypointSelector,
+    KeypointSelectorConfig,
     KeypointSide,
     TaskKeypointConfig,
     TaskPhase,
@@ -420,10 +421,34 @@ class TaskFileConfig(BaseModel):
             TaskPhase.POST_MOVE: 2,
         }
 
-        def resolve(
+        # Nominal task keypoint order: the same order the execution timeline
+        # compiles each stage into.
+        keypoints: List[Tuple[str, TaskPhase]] = []
+        for index, stage in enumerate(self.task.stages):
+            effective_name = stage.name or f"stage_{index}"
+            for phase in phase_order:
+                keypoints.extend(
+                    [(effective_name, phase)] * _phase_waypoint_count(stage, phase)
+                )
+
+        def require_index(
             field_name: str,
-            entry: KeypointRangeConfig,
-        ) -> Tuple[Tuple[int, int, int], Tuple[int, int, int]]:
+            index: int,
+            count: int,
+            scope: str,
+        ) -> int:
+            resolved = index + count if index < 0 else index
+            if not 0 <= resolved < count:
+                raise ValueError(
+                    f"execution.{field_name} {index} is out of range for {scope}; "
+                    f"expected {-count}..{count - 1}"
+                )
+            return resolved
+
+        def positions_for_stage(
+            field_name: str,
+            entry: KeypointSelectorConfig,
+        ) -> List[int]:
             matches = stages_by_name.get(entry.stage, [])
             if not matches:
                 available = ", ".join(stages_by_name) or "<none>"
@@ -437,52 +462,62 @@ class TaskFileConfig(BaseModel):
                     "because multiple stages use that name"
                 )
 
-            stage_index, stage = matches[0]
+            _, stage = matches[0]
             if entry.phase is None:
-                selected = [
-                    (phase_order[phase], waypoint)
-                    for phase in phase_order
-                    for waypoint in range(_phase_waypoint_count(stage, phase))
-                ]
-                if not selected:
+                if not any(name == entry.stage for name, _ in keypoints):
                     raise ValueError(
                         f"execution.{field_name} selects stage {entry.stage!r}, "
                         "which does not execute any keypoint"
                     )
-            else:
-                count = _phase_waypoint_count(stage, entry.phase)
-                if count == 0:
-                    raise ValueError(
-                        f"execution.{field_name} references phase "
-                        f"{entry.phase.value!r}, but stage {entry.stage!r} "
-                        "does not execute that phase"
-                    )
-                if entry.waypoint is None:
-                    selected = [
-                        (phase_order[entry.phase], waypoint)
-                        for waypoint in range(count)
-                    ]
-                else:
-                    if entry.waypoint >= count:
-                        raise ValueError(
-                            f"execution.{field_name}.waypoint {entry.waypoint} is "
-                            f"out of range for {entry.stage}.{entry.phase.value}; "
-                            f"expected 0..{count - 1}"
-                        )
-                    selected = [(phase_order[entry.phase], int(entry.waypoint))]
-
-            return (
-                (stage_index, *min(selected)),
-                (stage_index, *max(selected)),
-            )
-
-        previous_stop: Optional[Tuple[int, int, int]] = None
-        for index, entry in enumerate(entries):
-            start, stop = resolve(f"keypoint_selection[{index}]", entry)
-            if previous_stop is not None and start <= previous_stop:
+            elif _phase_waypoint_count(stage, entry.phase) == 0:
                 raise ValueError(
-                    f"execution.keypoint_selection[{index}] must select keypoints "
-                    "after the previous entry in task execution order"
+                    f"execution.{field_name} references phase "
+                    f"{entry.phase.value!r}, but stage {entry.stage!r} "
+                    "does not execute that phase"
                 )
-            previous_stop = stop
+
+            return [
+                position
+                for position, (name, phase) in enumerate(keypoints)
+                if name == entry.stage and (entry.phase is None or phase == entry.phase)
+            ]
+
+        def resolve(field_name: str, entry: KeypointSelector) -> List[int]:
+            if isinstance(entry, int):
+                return [
+                    require_index(
+                        field_name,
+                        entry,
+                        len(keypoints),
+                        "the task keypoint sequence",
+                    )
+                ]
+
+            positions = positions_for_stage(field_name, entry)
+            if entry.waypoint is None:
+                return positions
+            scope = entry.stage
+            if entry.phase is not None:
+                scope = f"{entry.stage}.{entry.phase.value}"
+            return [
+                positions[
+                    require_index(
+                        field_name + ".waypoint",
+                        entry.waypoint,
+                        len(positions),
+                        scope,
+                    )
+                ]
+            ]
+
+        previous: Optional[int] = None
+        for index, entry in enumerate(entries):
+            field_name = f"keypoint_selection[{index}]"
+            for position in resolve(field_name, entry):
+                if previous is not None and position <= previous:
+                    raise ValueError(
+                        f"execution.{field_name} must select keypoints after the "
+                        "previous entry in task execution order"
+                    )
+                previous = position
         return self

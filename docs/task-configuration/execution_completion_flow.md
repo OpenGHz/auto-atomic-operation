@@ -438,7 +438,7 @@ for the schema, validation, and reporting details.
 ## Keypoint selection
 
 `execution.keypoint_selection` does not add another endpoint pair: it removes
-every keypoint outside its listed ranges from the compiled program before the
+every keypoint outside its entries from the compiled program before the
 execution flow above starts. A retained stage therefore runs its normal
 completion flow, a stage with no retained keypoint is never started, and a
 partially retained stage stops checking its operation conditions at the last

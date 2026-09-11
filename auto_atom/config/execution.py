@@ -2,7 +2,7 @@
 
 from collections.abc import Mapping
 from enum import Enum
-from typing import List, Optional
+from typing import List, Optional, Union
 
 from pydantic import (
     BaseModel,
@@ -65,12 +65,12 @@ class TaskKeypointConfig(BaseModel, frozen=True):
     ``stop``."""
 
 
-class KeypointRangeConfig(BaseModel, frozen=True):
-    """One entry of ``execution.keypoint_selection``.
+class KeypointSelectorConfig(BaseModel, frozen=True):
+    """One scoped entry of ``execution.keypoint_selection``.
 
-    An entry selects a contiguous run of configured keypoints to execute: a
-    whole stage, one phase of a stage, or one YAML waypoint. Keypoints outside
-    every entry are skipped instead of executed.
+    A scoped entry addresses a stage, optionally narrowed to one phase, and
+    optionally narrowed to keypoint indexes inside that scope. Keypoints
+    outside every entry are skipped instead of executed.
     """
 
     model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid")
@@ -78,10 +78,10 @@ class KeypointRangeConfig(BaseModel, frozen=True):
     stage: str = Field(min_length=1)
     """The stage name. Unnamed stages use their generated ``stage_N`` name."""
     phase: Optional[TaskPhase] = None
-    """Optional phase. Omit to select every keypoint of the stage."""
-    waypoint: Optional[NonNegativeInt] = None
-    """Optional zero-based YAML waypoint index inside ``phase``; it selects
-    that single keypoint and requires ``phase``."""
+    """Optional phase. Omit to address every keypoint of the stage."""
+    waypoint: Optional[int] = None
+    """Optional keypoint index inside the addressed scope; ``-1`` is its last
+    keypoint, and omitting it selects every keypoint of the scope."""
 
     @model_validator(mode="before")
     @classmethod
@@ -93,13 +93,14 @@ class KeypointRangeConfig(BaseModel, frozen=True):
             )
         return value
 
-    @model_validator(mode="after")
-    def _require_phase_for_waypoint(self) -> "KeypointRangeConfig":
-        if self.waypoint is not None and self.phase is None:
-            raise ValueError(
-                "a keypoint_selection entry with waypoint must also set phase"
-            )
-        return self
+
+KeypointSelector = Union[int, KeypointSelectorConfig]
+"""One ``execution.keypoint_selection`` entry.
+
+An ``int`` addresses a keypoint by its zero-based ordinal in the task's
+keypoint sequence, counting from the end when negative. A mapping scopes the
+same addressing to one stage, or to one phase of a stage.
+"""
 
 
 class IntervalSelectionConfig(BaseModel, frozen=True):
@@ -186,10 +187,12 @@ class ExecutionConfig(BaseModel, frozen=True):
     interval_selection: Optional[IntervalSelectionConfig] = None
     """Optional task interval. ``reset()`` advances to the configured start
     boundary, and execution succeeds at the configured stop boundary."""
-    keypoint_selection: Optional[List[KeypointRangeConfig]] = None
-    """Ordered keypoint ranges to execute instead of the full task. Selected
-    ranges must be non-overlapping and in task execution order; every keypoint
-    outside them is skipped. Mutually exclusive with ``interval_selection``."""
+    keypoint_selection: Optional[List[KeypointSelector]] = None
+    """Ordered keypoints to execute instead of the full task. Each entry is
+    either a task-wide keypoint ordinal or a ``stage`` / ``phase`` / ``waypoint``
+    mapping; negative indexes count from the end of the addressed sequence.
+    Selected keypoints must follow task execution order; every keypoint outside
+    the selection is skipped. Mutually exclusive with ``interval_selection``."""
     update_boundary: UpdateBoundary = UpdateBoundary.CONTROL_TICK
     """Boundary at which each public runner update returns."""
     render_internal_updates: bool = True
@@ -210,6 +213,6 @@ class ExecutionConfig(BaseModel, frozen=True):
             )
         if selection is not None and not selection:
             raise ValueError(
-                "execution.keypoint_selection must list at least one keypoint range"
+                "execution.keypoint_selection must list at least one keypoint"
             )
         return self

@@ -19,14 +19,15 @@ One configured task point identified by stage, phase, and YAML waypoint index; o
 keypoint may expand into multiple primitives.
 _Avoid_: Primitive, control point
 
-**Keypoint range**:
-One `execution.keypoint_selection` entry naming a stage, optionally a phase, and
-optionally a single waypoint; it covers the contiguous run of keypoints it names.
+**Keypoint selector**:
+One `execution.keypoint_selection` entry. It is either a task-wide keypoint ordinal
+or a stage/phase scope with an optional keypoint index; a negative index counts
+from the end of the addressed sequence.
 _Avoid_: Stage subset, waypoint slice
 
 **Keypoint selection**:
-An ordered list of keypoint ranges that replaces a task's nominal program for one
-rollout: the covered keypoints execute in order and every other keypoint is
+An ordered list of keypoint selectors that replaces a task's nominal program for
+one rollout: the selected keypoints execute in order and every other keypoint is
 skipped. Unlike an interval selection, it never replays the prefix and is
 mutually exclusive with it.
 _Avoid_: Stage filter, partial rollout

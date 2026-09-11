@@ -265,6 +265,82 @@ def test_waypoint_selection_keeps_a_single_keypoint() -> None:
         runner.close()
 
 
+def test_ordinal_selection_keeps_the_first_and_last_keypoint() -> None:
+    runner = TaskRunner().from_config(
+        TaskFileConfig.model_validate(_task_payload(selection=[0, -1]))
+    )
+    try:
+        update, visited = _drive(runner)
+
+        assert update.success.tolist() == [True]
+        assert visited[-1] == pytest.approx(0.91)
+        assert all(abs(position - 0.55) > 1e-9 for position in visited)
+        assert [record.stage_name for record in runner.records] == ["first", "third"]
+    finally:
+        runner.close()
+
+
+def test_scoped_negative_index_addresses_the_end_of_the_scope() -> None:
+    stages = [_move_stage("only", 0.11, 0.22, post_move=(0.77, 0.88))]
+    runner = TaskRunner().from_config(
+        TaskFileConfig.model_validate(
+            _task_payload(
+                stages=stages,
+                selection=[{"stage": "only", "waypoint": -1}],
+            )
+        )
+    )
+    try:
+        final_update, visited = _drive(runner)
+
+        # The scope is the whole stage: its last keypoint is post_move[1].
+        assert final_update.success.tolist() == [True]
+        assert visited[-1] == pytest.approx(0.88)
+        assert all(abs(position - 0.11) > 1e-9 for position in visited)
+        assert all(abs(position - 0.77) > 1e-9 for position in visited)
+    finally:
+        runner.close()
+
+
+def test_phase_relative_negative_index_addresses_the_phase_end() -> None:
+    stages = [_move_stage("only", 0.11, 0.22, post_move=(0.77, 0.88))]
+    runner = TaskRunner().from_config(
+        TaskFileConfig.model_validate(
+            _task_payload(
+                stages=stages,
+                selection=[{"stage": "only", "phase": "pre_move", "waypoint": -1}],
+            )
+        )
+    )
+    try:
+        final_update, visited = _drive(runner)
+
+        assert final_update.success.tolist() == [True]
+        assert visited[-1] == pytest.approx(0.22)
+        assert all(abs(position - 0.11) > 1e-9 for position in visited)
+        assert all(abs(position - 0.88) > 1e-9 for position in visited)
+    finally:
+        runner.close()
+
+
+def test_ordinal_and_scoped_entries_can_be_mixed() -> None:
+    runner = TaskRunner().from_config(
+        TaskFileConfig.model_validate(
+            _task_payload(
+                selection=[0, {"stage": "third", "phase": "pre_move", "waypoint": 0}]
+            )
+        )
+    )
+    try:
+        update, visited = _drive(runner)
+
+        assert update.success.tolist() == [True]
+        assert visited[-1] == pytest.approx(0.91)
+        assert [record.stage_name for record in runner.records] == ["first", "third"]
+    finally:
+        runner.close()
+
+
 def test_selection_applies_to_every_environment() -> None:
     runner = TaskRunner().from_config(
         TaskFileConfig.model_validate(
@@ -316,7 +392,7 @@ def test_object_only_mode_keeps_only_the_selected_stages() -> None:
 
 def test_selection_details_report_configured_entries() -> None:
     selection = [
-        {"stage": "first"},
+        0,
         {"stage": "third", "phase": "pre_move", "waypoint": 0},
     ]
     runner = TaskRunner().from_config(
@@ -328,7 +404,7 @@ def test_selection_details_report_configured_entries() -> None:
         details = update.details[0]["keypoint_selection"]
         assert details["event"] == "keypoint_selection_succeeded"
         assert details["keypoints"] == [
-            {"stage": "first", "phase": None, "waypoint": None},
+            0,
             {"stage": "third", "phase": "pre_move", "waypoint": 0},
         ]
     finally:
@@ -342,7 +418,13 @@ def test_selection_details_report_configured_entries() -> None:
         ([{"stage": "first"}, {"stage": "first"}], "after the previous entry"),
         ([{"stage": "missing"}], "does not match a task stage"),
         ([{"stage": "first", "side": "before"}], "has no side"),
-        ([{"stage": "first", "waypoint": 0}], "must also set phase"),
+        ([{"stage": "first", "waypoint": 3}], "out of range"),
+        ([{"stage": "first", "waypoint": -2}], "out of range"),
+        ([3], "out of range"),
+        ([-4], "out of range"),
+        ([-1, 0], "after the previous entry"),
+        ([0, 0], "after the previous entry"),
+        ([1, 0], "after the previous entry"),
         ([{"stage": "first", "phase": "eef"}], "does not execute that phase"),
         (
             [{"stage": "first", "phase": "pre_move", "waypoint": 4}],
@@ -373,7 +455,7 @@ def test_phase_selection_order_is_validated_against_the_task_order() -> None:
 
 
 def test_empty_selection_is_rejected() -> None:
-    with pytest.raises(ValidationError, match="at least one keypoint range"):
+    with pytest.raises(ValidationError, match="at least one keypoint"):
         TaskFileConfig.model_validate(_task_payload(selection=[]))
 
 

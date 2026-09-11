@@ -78,7 +78,8 @@ execution:
 - arc 的内部拆分不会暴露为多个可选择 waypoint；`eef` 使用唯一索引 0。
 
 除连续区间外，`execution.keypoint_selection` 提供**非连续子集**选择：按顺序列出若干
-关键点范围（`stage`，可选细化到 `phase`、`waypoint`），只有被列出的关键点会执行，
+关键点（整个任务的序号，或 `stage` / `phase` / `waypoint` 作用域；下标可为负，负数
+自作用域末尾计数），只有被选中的关键点会执行，
 其余一律跳过；因为它直接裁剪编译后的执行程序，`reset()` 不做任何快进，被跳过的
 stage 也不会仿真。它与 `interval_selection` 互斥。
 

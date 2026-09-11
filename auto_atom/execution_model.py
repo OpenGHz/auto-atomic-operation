@@ -16,7 +16,7 @@ import numpy as np
 
 from auto_atom.config.execution import (
     IntervalSelectionConfig,
-    KeypointRangeConfig,
+    KeypointSelector,
     TaskKeypointConfig,
     TaskPhase,
     UpdateBoundary,
@@ -222,7 +222,7 @@ class ExecutionTimelineProtocol(Protocol):
 
     stage_plans: tuple[StageExecutionPlan, ...]
     interval_selection: Optional[IntervalSelectionConfig]
-    keypoint_selection: Optional[tuple[KeypointRangeConfig, ...]]
+    keypoint_selection: Optional[tuple[KeypointSelector, ...]]
     update_boundary: UpdateBoundary
     max_internal_updates_per_update: int
 

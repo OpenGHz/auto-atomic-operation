@@ -17,7 +17,8 @@ from typing import Any, List, Mapping, Optional
 from auto_atom.config.execution import (
     ExecutionMode,
     IntervalSelectionConfig,
-    KeypointRangeConfig,
+    KeypointSelector,
+    KeypointSelectorConfig,
     KeypointSide,
     TaskKeypointConfig,
     TaskPhase,
@@ -343,7 +344,7 @@ class ExecutionTimeline:
     keypoints: tuple[CompiledKeypoint, ...]
     _stage_action_templates: tuple[tuple[PrimitiveAction, ...], ...] = field(repr=False)
     interval_selection: Optional[IntervalSelectionConfig] = None
-    keypoint_selection: Optional[tuple[KeypointRangeConfig, ...]] = None
+    keypoint_selection: Optional[tuple[KeypointSelector, ...]] = None
     update_boundary: UpdateBoundary = UpdateBoundary.CONTROL_TICK
     max_internal_updates_per_update: int = 10_000
     _keypoint_indices: Mapping[_ResolvedTaskKeypoint, int] = field(
@@ -746,28 +747,24 @@ def _action_keypoint(
     )
 
 
-def _range_matches(
+def _selector_matches(
     keypoint: _ResolvedTaskKeypoint,
-    entry: KeypointRangeConfig,
+    entry: KeypointSelectorConfig,
 ) -> bool:
-    """Report whether one emitted keypoint falls inside a selection entry."""
+    """Report whether one emitted keypoint falls inside a scoped entry."""
     if keypoint.stage_name != entry.stage:
         return False
-    if entry.phase is not None and keypoint.phase != entry.phase:
-        return False
-    if entry.waypoint is not None and keypoint.waypoint != entry.waypoint:
-        return False
-    return True
+    return entry.phase is None or keypoint.phase == entry.phase
 
 
 def _resolve_keypoint_selection(
     builder: "TaskFlowBuilder",
-    selection: tuple[KeypointRangeConfig, ...],
+    selection: tuple[KeypointSelector, ...],
     keypoints: tuple[_ResolvedTaskKeypoint, ...],
 ) -> frozenset[_ResolvedTaskKeypoint]:
     """Return exactly the keypoints named by ``execution.keypoint_selection``."""
 
-    def label(entry: KeypointRangeConfig) -> str:
+    def label(entry: KeypointSelectorConfig) -> str:
         parts = [entry.stage]
         if entry.phase is not None:
             parts.append(entry.phase.value)
@@ -775,34 +772,56 @@ def _resolve_keypoint_selection(
             parts.append(str(entry.waypoint))
         return ".".join(parts)
 
-    selected: dict[int, _ResolvedTaskKeypoint] = {}
-    previous_span: Optional[tuple[int, int]] = None
+    selected: list[_ResolvedTaskKeypoint] = []
+    previous: Optional[int] = None
+
+    def accept(field_name: str, position: int, description: str) -> None:
+        nonlocal previous
+        if previous is not None and position <= previous:
+            raise ValueError(
+                f"execution.{field_name} must select keypoints after the "
+                f"previous entry in the active {type(builder).__name__} "
+                f"program: {description}"
+            )
+        previous = position
+        selected.append(keypoints[position])
+
     for index, entry in enumerate(selection):
+        field_name = f"keypoint_selection[{index}]"
+        if isinstance(entry, int):
+            count = len(keypoints)
+            position = entry + count if entry < 0 else entry
+            if not 0 <= position < count:
+                raise ValueError(
+                    f"execution.{field_name} {entry} is out of range for the "
+                    f"{type(builder).__name__} program; expected "
+                    f"{-count}..{count - 1}"
+                )
+            accept(field_name, position, str(entry))
+            continue
+
         matching = [
             position
             for position, keypoint in enumerate(keypoints)
-            if _range_matches(keypoint, entry)
+            if _selector_matches(keypoint, entry)
         ]
-        field_name = f"keypoint_selection[{index}]"
         if not matching:
             raise ValueError(
                 f"execution.{field_name} is not emitted by "
                 f"{type(builder).__name__}: {label(entry)}"
             )
-        span = (min(matching), max(matching))
-        if len(matching) != span[1] - span[0] + 1:
+        if entry.waypoint is None:
+            for position in matching:
+                accept(field_name, position, label(entry))
+            continue
+        offset = (
+            entry.waypoint + len(matching) if entry.waypoint < 0 else entry.waypoint
+        )
+        if not 0 <= offset < len(matching):
             raise ValueError(
-                f"execution.{field_name} selects keypoints "
-                f"{label(entry)} that are not contiguous in the active "
-                f"{type(builder).__name__} program"
+                f"execution.{field_name} {entry.waypoint} is out of range for "
+                f"{type(builder).__name__} {label(entry)}; expected "
+                f"{-len(matching)}..{len(matching) - 1}"
             )
-        if previous_span is not None and span[0] <= previous_span[1]:
-            raise ValueError(
-                f"execution.{field_name} must select keypoints after the "
-                "previous entry in the active "
-                f"{type(builder).__name__} program"
-            )
-        previous_span = span
-        for position in matching:
-            selected[position] = keypoints[position]
-    return frozenset(selected.values())
+        accept(field_name, matching[offset], label(entry))
+    return frozenset(selected)
