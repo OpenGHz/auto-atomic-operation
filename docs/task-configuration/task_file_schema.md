@@ -312,7 +312,6 @@ The following optional fields live under `task`:
 | `initial_pose` | Per-object `PoseOverrideConfig` values applied after backend reset and before randomization. |
 | `randomization` | A `RandomizationScopeConfig` container: global default `distribution` / `constraints` plus a per-entity `entities` map and a per-camera `cameras` map. Object entries accept a direct pose range or an advanced spec; operator entries use nested `base` and/or `eef` blocks; camera entries accept a direct pose range, inherit only `distribution`, and reject `constraints`. The scope-wide placement strategy is `strategy` (default `rsa`), and the scope-wide master switch is `enabled` (default `true`; `false` samples nothing, including per-waypoint randomization, while the entries stay validated). |
 | `camera_initial_pose` | Per-camera `PoseOverrideConfig` values applied after backend reset and before camera randomization. |
-| `randomization_debug` | Cycles through configured extrema before ordinary random sampling when enabled. |
 
 Operator home joints, base/EEF poses, camera fields, pose references, region
 sampling, and reset behavior are documented in

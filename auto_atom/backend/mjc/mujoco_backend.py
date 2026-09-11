@@ -1097,7 +1097,6 @@ class MujocoTaskBackend(SceneBackend):
         default_factory=dict
     )
     random_seed: Optional[int] = None
-    randomization_debug: bool = False
     _rng: np.random.Generator = field(init=False, repr=False)
     _reset_index: int = field(init=False, repr=False, default=0)
     _last_reset_diagnostics: Dict[int, List[Dict[str, Any]]] = field(
@@ -2520,6 +2519,5 @@ def build_mujoco_backend(
             if operator.initial_state is not None
         },
         random_seed=config.seed,
-        randomization_debug=config.randomization_debug,
     )
     return backend

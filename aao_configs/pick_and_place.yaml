@@ -25,7 +25,6 @@ env:
 #     max_fast_forward_updates: 10000
 
 task:
-  # randomization_debug: true
   # Pose randomization applied at each reset.
   # source_block has a free joint so its x/y and yaw are randomised.
   # target_pedestal is a static body (no free joint) — omit it here.

@@ -286,7 +286,6 @@ acceptance rates need not appear equally often.
 ```yaml
 task:
   seed: 42                     # randomization seed
-  # randomization_debug: true  # see "Debug Mode" below
   randomization:
     entities:
       source_block:
@@ -879,7 +878,6 @@ Semantics:
 - Per-waypoint randomization is independent from entity randomization and does
   not participate in `collision_radius` rejection; keep ranges small enough that
   the resulting motion stays reachable.
-- Debug mode (`randomization_debug: true`) also cycles per-waypoint extremes.
 
 ## Camera Initial Pose Overrides
 
@@ -1043,24 +1041,6 @@ Success rate: 8/10
     source_block: pos=[-0.028, 0.015, 0.06]
     ...
 ============================================================
-```
-
-## Debug Mode
-
-Set `randomization_debug: true` to cycle through extreme poses before random
-sampling. The sequence is:
-
-1. All entities at all-axis **minimum** simultaneously.
-2. All entities at all-axis **maximum** simultaneously.
-3. For each entity, for each non-trivial axis (where min != max):
-   one case at axis min, one at axis max (others at default).
-
-After exhausting all extreme cases, subsequent resets switch to normal random
-sampling. This is useful for verifying that configured ranges don't cause
-unreachable grasps or collisions.
-
-```bash
-aao-demo task.randomization_debug=true rounds=20
 ```
 
 ## Reproducibility

@@ -82,7 +82,6 @@ class AutoAtomConfig(BaseModel):
             position: [2.4, 0.6, -0.1]
             orientation: [-0.5, 0.5, 0.5, 0.5]   # xyzw
     """
-    randomization_debug: bool = False
 
     @field_validator(
         "initial_pose",
@@ -114,8 +113,6 @@ class AutoAtomConfig(BaseModel):
             return value
 
         return _strip(v)
-
-    """When True the first N resets cycle through extreme poses (each axis at its min/max, then all-min and all-max) before switching to random sampling.  Use this to verify that configured ranges are not too large."""
 
 
 class OperatorInitialState(BaseModel, frozen=True):

@@ -92,7 +92,8 @@ task:
 - 每次 reset 先恢复原始场景，再应用新的尺寸样本，不能让上一个 reset 的尺寸
   继续累乘。
 - 实际采用的倍率应进入随机化诊断或 reset metadata，便于复现和排查。
-- `randomization_debug` 如果扩展到该能力，应能检查最小倍率、最大倍率和普通样本。
+- 极值检查由 `examples/tune_randomization_extremes.py` 检查器承担；若本能力落地，
+  检查器应能检查最小倍率、最大倍率和普通样本。
 
 ### 5.2 作用范围
 
