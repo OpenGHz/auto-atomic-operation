@@ -15,6 +15,7 @@ different asset family does not require changing ``EnvConfig`` or the viewer.
 """
 
 from .adapters import register_asset_adapter, register_scene_assembler
+from .cameras import CameraElementSpec, create_camera_elements
 from .composer import (
     SceneComposer,
     compile_scene,
@@ -51,6 +52,7 @@ __all__ = [
     "AssetAnchorConfig",
     "AssetAnchorCoordinateConfig",
     "AssetScaleRuleConfig",
+    "CameraElementSpec",
     "MjcfLayerConfig",
     "SceneConfig",
     "SceneLayerConfig",
@@ -61,6 +63,7 @@ __all__ = [
     "SceneComposer",
     "compile_scene",
     "compose_scene",
+    "create_camera_elements",
     "load_composed_scene",
     "materialize_scene",
     "register_asset_adapter",

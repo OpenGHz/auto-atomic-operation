@@ -27,7 +27,7 @@ from pydantic import (
     model_validator,
 )
 
-from auto_atom.scene_composition import SceneConfig
+from auto_atom.scene_composition import CameraElementSpec, SceneConfig
 
 
 class DataType(str, Enum):
@@ -288,6 +288,24 @@ class CameraSpec(BaseModel, frozen=True):
             or self.enable_depth
             or self.enable_mask
             or self.enable_heat_map
+        )
+
+    def to_camera_element(self) -> CameraElementSpec:
+        """Describe the MJCF camera element this camera needs.
+
+        ``calibration`` carries the mount frame's optics and pose, so a camera
+        the composed scene does not author is created from those fields alone
+        and needs no hand-written ``<camera>`` next to the body it rides.
+        """
+        calibration = self.calibration
+        extrinsics = calibration.extrinsics if calibration is not None else None
+        return CameraElementSpec(
+            name=self.name,
+            parent_frame=self.parent_frame,
+            position=extrinsics.position if extrinsics is not None else None,
+            orientation=extrinsics.orientation if extrinsics is not None else None,
+            fovy_deg=calibration.fovy_deg if calibration is not None else None,
+            object_mount=self.role == "object",
         )
 
     @model_validator(mode="after")
@@ -582,6 +600,18 @@ class EnvConfig(BaseModel, frozen=True):
         if v is not None and v.disable:
             return None
         return v
+
+    def camera_elements(self) -> tuple[CameraElementSpec, ...]:
+        """Describe the MJCF cameras this environment needs materialized.
+
+        Camera declarations are inert without the camera sensor — the same rule
+        that decides whether their names are resolved against the model — so an
+        environment that captures no camera stream leaves the scene's cameras
+        exactly as authored.
+        """
+        if DataType.CAMERA not in self.enabled_sensors:
+            return ()
+        return tuple(camera.to_camera_element() for camera in self.cameras)
 
     @model_validator(mode="after")
     def validate_batch(self):

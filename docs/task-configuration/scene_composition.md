@@ -80,10 +80,16 @@ env:
 
 批环境会先编译一次 `SceneArtifact`，再为每个 replica 从同一份 XML artifact
 创建独立的 `MjModel/MjData`；因此 batch size 不会把 manifest/OBJ 解析工作重复
-放大，物理状态仍彼此隔离。
+放大，物理状态仍相互隔离。
 
 这种合并规则让第二个 adapter 复用同一 seam，也避免旧 `_merge_fragment` 只认识
 少数 sections 而静默丢失物理约束。
+
+`load_composed_scene` 走 `mujoco.MjSpec`（`from_file` + `compile`）而不是
+`mjModel.from_xml_path`，唯一原因是可以先往 spec 上补元素：`env.cameras` 里
+声明、而场景 MJCF 没有定义的相机，会在编译前按 `parent_frame` 挂到对应
+site/body 上（见 `scene_composition/cameras.py`）。这条路径能覆盖
+`<attach>` 展开出来的子树，改 XML 文本做不到；没有待补相机时两者产出同一个模型。
 
 ## 编译期几何缩放与锚点
 

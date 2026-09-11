@@ -5,13 +5,14 @@ from __future__ import annotations
 import hashlib
 import tempfile
 import xml.etree.ElementTree as ET
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from copy import deepcopy
 from pathlib import Path
 
 from .adapters import compile_asset_layer
 from .adapters.mjcf import load_mjcf_fragment
+from .cameras import CameraElementSpec, create_camera_elements
 from .config import AssetAssemblyLayerConfig, MjcfLayerConfig, SceneConfig
 from .contracts import SceneArtifact, SceneContribution
 
@@ -136,18 +137,32 @@ def materialize_scene(
         path.unlink(missing_ok=True)
 
 
-def load_composed_scene(config: SceneConfig, artifact: SceneArtifact | None = None):
-    """Compile and load a scene through the single MuJoCo entry point."""
+def load_composed_scene(
+    config: SceneConfig,
+    artifact: SceneArtifact | None = None,
+    *,
+    cameras: Sequence[CameraElementSpec] = (),
+):
+    """Compile a declarative scene into a MuJoCo model.
 
+    ``cameras`` are the cameras the task config needs; the ones the scene does
+    not author are created on their mount frames before compilation.  The scene
+    is loaded through :class:`mujoco.MjSpec` for that reason — with no such
+    camera this is the same model the XML alone describes.
+    """
     try:
         import mujoco
     except ImportError as exc:  # pragma: no cover - optional dependency boundary
         raise RuntimeError("MuJoCo is required to load a composed scene") from exc
 
     if not config.layers and artifact is None:
-        return mujoco.MjModel.from_xml_path(str(config.base.expanduser().resolve()))
+        spec = mujoco.MjSpec.from_file(str(config.base.expanduser().resolve()))
+        create_camera_elements(spec, cameras)
+        return spec.compile()
     with materialize_scene(config, artifact) as path:
-        return mujoco.MjModel.from_xml_path(str(path))
+        spec = mujoco.MjSpec.from_file(str(path))
+        create_camera_elements(spec, cameras)
+        return spec.compile()
 
 
 def _merge_fragment(host: ET.Element, fragment: ET.Element) -> None:

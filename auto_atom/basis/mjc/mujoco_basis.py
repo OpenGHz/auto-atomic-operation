@@ -39,6 +39,7 @@ from auto_atom.contracts import (
 )
 from auto_atom.randomization import RandomizationConstraintEvaluator
 from auto_atom.scene_composition import (
+    CameraElementSpec,
     SceneArtifact,
     SceneConfig,
     compile_scene,
@@ -70,7 +71,11 @@ class MujocoBasis:
         self.scene_artifact = scene_artifact or (
             compile_scene(config.scene) if config.scene.layers else None
         )
-        self.model, self.data = self._load_model(config.scene, self.scene_artifact)
+        self.model, self.data = self._load_model(
+            config.scene,
+            self.scene_artifact,
+            config.camera_elements(),
+        )
         if config.sim_freq is not None:
             self.model.opt.timestep = 1.0 / config.sim_freq
 
@@ -492,8 +497,9 @@ class MujocoBasis:
     def _load_model(
         scene: SceneConfig,
         artifact: SceneArtifact | None = None,
+        cameras: tuple[CameraElementSpec, ...] = (),
     ) -> tuple[Any, Any]:
-        model = load_composed_scene(scene, artifact)
+        model = load_composed_scene(scene, artifact, cameras=cameras)
         data = mujoco.MjData(model)
         return model, data
 

@@ -58,6 +58,15 @@ camera scene for the appropriate output pass and restores the model's global
 clip state afterward. Gaussian Splatting applies the same independent ranges
 to its injected RGB and depth outputs.
 
+A camera the scene's MJCF does not define is created while the scene loads, so
+`env.cameras` is the only place a camera has to be described: `parent_frame`
+names its mount (site, body, or empty for the world frame) and `calibration`
+provides the mount pose (`extrinsics.position` / `orientation`) and optics
+(`fovy_deg`). Any camera the MJCF does define keeps its authored element and
+only the config-side aspects apply. Creation is inert unless `camera` is in
+`env.enabled_sensors`; a camera that has to be created without a complete mount
+pose fails at construction.
+
 ```yaml
 env:
   cameras:
@@ -139,13 +148,16 @@ physically, with no per-step tracking.
 - `parent_frame` names the object as a site or body. A logical object name also
   resolves to its Gaussian-Splatting body (`cup` → `cup_gs`). When it is empty,
   the mount frame is the camera's MJCF parent body, so declaring the camera
-  under the object in XML works as well.
+  under the object in XML works as well. A camera the scene does not author is
+  created on the resolved object body, which makes `parent_frame` the only mount
+  source it needs.
 - The mount must resolve to a scene body. A camera left at the world body fails
   at construction instead of silently rendering from a fixed viewpoint.
 - The camera's local pose is the *install offset* in the mount frame.
   `calibration.extrinsics` keeps its usual meaning (relative to
   `parent_frame`); omitted extrinsics keep the XML `cam_pos`/`cam_quat`, read in
-  the mount frame.
+  the mount frame — a camera the scene does not author must set them, because
+  there is no authored pose to fall back on.
 - `is_static` must stay `False`: the viewpoint moves with the object, so a
   cached GS background would go stale.
 - `task.camera_initial_pose` entries are rejected for object cameras — see
