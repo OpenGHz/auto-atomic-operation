@@ -321,6 +321,32 @@ def test_scope_applies_combines_the_master_switch_and_emptiness() -> None:
     )
 
 
+def test_constraint_config_stays_hashable_with_listed_cameras() -> None:
+    """The executor groups actions by constraint object, so it must hash.
+
+    A frozen ``RandomizationConstraintConfig`` hashes its fields, so
+    ``visible_in.cameras`` has to be immutable even though the YAML spells it
+    as a list; a mutable list made every listed-camera reset raise
+    ``TypeError: unhashable type: 'list'`` at the grouping step.
+    """
+    constraints = RandomizationConstraintConfig(
+        visible_in={"cameras": ["head_cam", "side_cam"], "margin_px": 8}
+    )
+    assert constraints.visible_in is not None
+    assert constraints.visible_in.cameras == ("head_cam", "side_cam")
+
+    same = RandomizationConstraintConfig(
+        visible_in={"cameras": ["head_cam", "side_cam"], "margin_px": 8}
+    )
+    assert hash(constraints) == hash(same)
+    assert len({constraints, same}) == 1
+
+    # ``all`` stays the literal sentinel rather than becoming a one-item tuple.
+    all_cameras = RandomizationConstraintConfig(visible_in={"cameras": "all"})
+    assert all_cameras.visible_in is not None
+    assert all_cameras.visible_in.cameras == "all"
+
+
 def test_scope_defaults_inherited_and_strategy_resolved() -> None:
     scope = RandomizationScopeConfig(
         distribution=RandomizationDistributionConfig(

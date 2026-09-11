@@ -113,6 +113,11 @@ class _RecordingHost:
         # Cameras the host reports as rigidly mounted on an object; empty means
         # every camera is a fixed world pose.
         self.object_cameras: Set[str] = set()
+        # Clip range of the reported camera model. The default is degenerate, so
+        # every candidate box is provably outside the frustum; tests that need a
+        # visible candidate widen it.
+        self.camera_near = 5.0
+        self.camera_far = 1.0
         self.poses: Dict[str, PoseState] = {
             f"{ARM}.base": PoseState(position=(0.0, 0.0, 0.0)),
             f"{ARM}.eef": PoseState(position=(0.0, 0.0, 0.0)),
@@ -184,17 +189,18 @@ class _RecordingHost:
         self.poses[CAMERA] = pose
 
     def get_camera_model(self, camera_name: str, env_index: int) -> CameraModel:
-        # A degenerate clip range: every box is provably outside the frustum, so
-        # a ``visible_in`` region is deterministically infeasible. That is what
-        # lets a test observe the executor's preflight without a simulator.
+        # The default clip range is degenerate: every box is provably outside the
+        # frustum, so a ``visible_in`` region is deterministically infeasible.
+        # That is what lets a test observe the executor's preflight without a
+        # simulator.
         return CameraModel(
             name=camera_name,
             pose=PoseState(),
             width=640,
             height=480,
             fovy_radians=1.0,
-            near=5.0,
-            far=1.0,
+            near=self.camera_near,
+            far=self.camera_far,
         )
 
     def get_support_geometry(self, entity_name: str, env_index: int) -> SupportGeometry:
@@ -207,6 +213,12 @@ class _RecordingHost:
         env_index: int,
     ) -> SupportGeometry:
         return SupportGeometry(center=(0.0, 0.0, 0.0), radius=0.01)
+
+    def move(self, label: str, position: tuple[float, float, float]) -> None:
+        """Move a target and its recorded reset baseline together."""
+        pose = PoseState(position=position)
+        self.poses[label] = pose
+        self._baselines[label] = pose
 
     def set_target_pose(self, kind, owner, pose, env_mask) -> None:
         # The host addresses an element part, not a randomization action: it
@@ -360,6 +372,26 @@ def test_executor_owned_preflight_rejects_a_region_that_can_never_be_visible() -
     )
     assert f"apply:{CUP}" not in host.events
     assert host.diagnostics[0]["generator"] == "deterministic_infeasible"
+
+
+def test_a_listed_visibility_camera_reaches_the_constraint_loop() -> None:
+    """A named ``visible_in.cameras`` list must survive action grouping.
+
+    The executor groups pending actions by their constraint object, so a frozen
+    constraint config has to stay hashable when it lists cameras by name.
+    """
+    host = _RecordingHost()
+    host.camera_near, host.camera_far = 0.1, 10.0
+    # Move the target in front of the host camera so it can be witnessed.
+    host.move(CUP, (0.0, 0.0, -1.0))
+    executor = RandomizationExecutor(
+        host,
+        _config(RandomizationStrategy.RSA, visible=True),
+    )
+
+    executor.apply_randomization(np.asarray([True], dtype=bool))
+
+    assert f"apply:{CUP}" in host.events
 
 
 def test_placement_strategy_comes_from_the_config() -> None:

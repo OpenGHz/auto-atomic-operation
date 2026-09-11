@@ -336,8 +336,14 @@ class RandomizationVisibilityConfig(BaseModel, frozen=True):
 
     model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid")
 
-    cameras: Union[Literal["all"], List[str]] = "all"
-    """Camera names to satisfy, or ``all`` for the backend's observation set."""
+    cameras: Union[Literal["all"], Tuple[str, ...]] = "all"
+    """Camera names to satisfy, or ``all`` for the backend's observation set.
+
+    Immutable by construction: the executor groups pending actions by their
+    whole constraint object, and a frozen ``RandomizationConstraintConfig``
+    hashes that object, so a mutable name list here would make a listed camera
+    unusable as a grouping key.
+    """
 
     geometry: RandomizationVisibilityGeometry = (
         RandomizationVisibilityGeometry.BOUNDING_SPHERE
@@ -356,13 +362,13 @@ class RandomizationVisibilityConfig(BaseModel, frozen=True):
     @field_validator("cameras", mode="after")
     @classmethod
     def _validate_cameras(
-        cls, value: Union[Literal["all"], List[str]]
-    ) -> Union[Literal["all"], List[str]]:
+        cls, value: Union[Literal["all"], Tuple[str, ...]]
+    ) -> Union[Literal["all"], Tuple[str, ...]]:
         if value == "all":
             return value
         if not value or any(not str(name).strip() for name in value):
             raise ValueError("visibility cameras must be 'all' or non-empty names")
-        return [str(name) for name in value]
+        return tuple(str(name) for name in value)
 
     @field_validator("min_visible_fraction", mode="after")
     @classmethod
