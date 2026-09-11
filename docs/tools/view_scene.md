@@ -36,6 +36,7 @@ python examples/view_scene.py --config-name open_door_airbot_play_back_gs
 python examples/view_scene.py --config-name open_door_p7_ik
 python examples/view_scene.py --debug --config-name open_door_p7_ik
 python examples/view_scene.py --show-object-frames --config-name open_door_p7_ik
+python examples/view_scene.py --no-show-cameras --config-name open_door_p7_ik
 ```
 
 Press `Ctrl+C` in the terminal to close the viewer and tear down the backend;
@@ -75,6 +76,29 @@ supported by the selected backend. The standalone viewer does not duplicate
 those operations or reinterpret their references; use `aao-demo` when you
 need to validate task execution after the static scene inspection.
 
+## Camera previews
+
+Unless `--no-show-cameras` is passed, the viewer draws one live tile per camera
+declared in `env.cameras` inside the MuJoCo window itself, right-aligned in the
+bottom-right corner of the scene viewport. The strip stays a single row while
+tiles can remain legible, wraps upwards in a narrower window, and scales with
+the window.
+
+Each tile comes from `MujocoBasis.render_camera_rgb`, the environment's own
+native camera seam: same `mujoco.Renderer`, scene option, and
+`hide_operators_in_camera` rule as the observation stream. Sensor noise and the
+configured `rgb_clip_range_m` / `depth_clip_range_m` windows are observation
+only and are not applied to the preview. Tiles are native MuJoCo renders even
+when the config routes a camera's channels to Gaussian rendering (in which case
+a preview-only renderer is allocated for that camera), so the preview always
+shows the camera's geometry rather than the Gaussian appearance.
+
+The tiles are pushed as viewer overlay images, so there is no extra window to
+manage, and they survive a reload: the overlay re-reads the backend that the
+reload installed. If a preview cannot be drawn (no cameras declared, or a
+render error), the overlay disables itself with a `[warn]` line and the scene
+viewer keeps running.
+
 ## Gaussian Splatting mode
 
 When the chosen config carries an `env.gaussian_render` section with at least one body
@@ -86,7 +110,8 @@ and opens a second OpenCV window titled
 The GS window re-renders the scene from the same free-camera pose as the
 MuJoCo viewer every step, so orbit / pan / zoom in the MuJoCo viewer drives
 the GS preview live. The window defaults to 640×480; use the OpenCV window
-controls (or close the MuJoCo viewer) to exit.
+controls (or close the MuJoCo viewer) to exit. The camera-preview tiles
+described above are drawn in the MuJoCo window in GS mode too.
 
 Detection is content-based: the script looks for `env.gaussian_render` with
 either `body_gaussians` or `background_ply` populated, so it works whether
@@ -134,6 +159,7 @@ dimensions, for example:
 
 ```
 [info] model  : nq=23 nv=22 nu=8 nbody=14 ngeom=37
+[info] camera overlay: previewing wrist_cam, env1_cam, env0_cam inside the MuJoCo window.
 ```
 
 Pass `--debug` before Hydra arguments to print full tracebacks for Gaussian

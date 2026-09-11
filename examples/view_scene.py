@@ -34,6 +34,9 @@ class ViewSceneCliConfig(BaseModel, frozen=True):
     show_object_frames: bool = False
     """Show MuJoCo body coordinate frames immediately when the viewer opens."""
 
+    show_cameras: bool = True
+    """Draw a live tile per configured camera inside the MuJoCo window."""
+
 
 _CLI_CONFIG = ViewSceneCliConfig()
 
@@ -49,6 +52,8 @@ def _parse_script_cli_config(argv: list[str]) -> ViewSceneCliConfig:
         "--no-debug",
         "--show-object-frames",
         "--no-show-object-frames",
+        "--show-cameras",
+        "--no-show-cameras",
     }
     for arg in argv:
         if arg == "--":
@@ -141,12 +146,14 @@ def main(cfg: DictConfig) -> None:
                 reload_callback=reload_backend,
                 debug=_CLI_CONFIG.debug,
                 show_object_frames=_CLI_CONFIG.show_object_frames,
+                show_cameras=_CLI_CONFIG.show_cameras,
             )
         else:
             backend = run_native_viewer(
                 backend,
                 reload_callback=reload_backend,
                 show_object_frames=_CLI_CONFIG.show_object_frames,
+                show_cameras=_CLI_CONFIG.show_cameras,
             )
     except KeyboardInterrupt:
         print("[info] interrupted; closing viewer.", flush=True)

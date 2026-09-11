@@ -165,6 +165,11 @@ class MujocoBasis:
 
         self._camera_specs = {c.name: c for c in config.cameras}
         self._renderers: Dict[str, mujoco.Renderer] = {}
+        # Extra native renderers allocated on demand by display-only seams such
+        # as ``render_camera_rgb`` for cameras whose observation channels are
+        # all Gaussian-rendered.  They never feed observations, so the config
+        # keeps skipping them during setup.
+        self._preview_renderers: Dict[str, mujoco.Renderer] = {}
         self._camera_ids = {}
         # Object-mounted cameras: the camera follows the reference object body
         # because MuJoCo derives cam_xpos/cam_xmat from cam_bodyid each forward
@@ -1059,6 +1064,49 @@ class MujocoBasis:
             ):
                 scene_geom.type = hidden_type
 
+    def render_camera_rgb(self, camera_name: str) -> np.ndarray:
+        """Render one camera's current frame with the native rasterizer.
+
+        Display seam for camera diagnostics (viewers and preview tools): the
+        frame comes from this environment's own per-camera renderer, scene
+        option, and operator-hiding rule, so a preview shows the same geometry
+        the camera stream captures instead of a second rendering recipe.
+        Cameras whose observation channels are all Gaussian-rendered still get
+        a preview: a preview-only renderer is allocated on first use at the
+        camera's configured resolution.
+
+        Sensor noise and the configured ``rgb_clip_range_m`` /
+        ``depth_clip_range_m`` windows stay observation-only.  The clip range
+        rewrites model-wide near/far values for the duration of a render, which
+        must not happen while an interactive viewer draws the same model.
+        """
+        renderer = self._renderers.get(camera_name)
+        if renderer is None:
+            renderer = self._preview_renderer(camera_name)
+        renderer.update_scene(
+            self.data,
+            camera=self._camera_ids[camera_name],
+            scene_option=self._renderer_scene_option,
+        )
+        self._hide_operator_geoms_from_camera_scene(renderer)
+        renderer.disable_depth_rendering()
+        renderer.disable_segmentation_rendering()
+        return np.asarray(renderer.render(), dtype=np.uint8)
+
+    def _preview_renderer(self, camera_name: str) -> mujoco.Renderer:
+        """Return the display-only renderer for one configured camera."""
+
+        renderer = self._preview_renderers.get(camera_name)
+        if renderer is None:
+            spec = self._camera_specs[camera_name]
+            renderer = mujoco.Renderer(
+                self.model,
+                height=spec.height,
+                width=spec.width,
+            )
+            self._preview_renderers[camera_name] = renderer
+        return renderer
+
     # ------------------------------------------------------------------
     # Info / lifecycle
     # ------------------------------------------------------------------
@@ -1337,6 +1385,10 @@ class MujocoBasis:
             if hasattr(renderer, "close"):
                 renderer.close()
         self._renderers.clear()
+        for renderer in self._preview_renderers.values():
+            if hasattr(renderer, "close"):
+                renderer.close()
+        self._preview_renderers.clear()
         if self._viewer is not None:
             hold = self.config.viewer.hold_seconds
             if hold > 0.0:

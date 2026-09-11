@@ -8,7 +8,8 @@ import signal
 import threading
 import time
 import traceback
-from typing import Callable
+from math import ceil
+from typing import Any, Callable
 
 import mujoco
 import mujoco.viewer
@@ -92,6 +93,7 @@ def _launch_native_viewer_interruptibly(
     loader: Callable[[], tuple[mujoco.MjModel, mujoco.MjData]],
     *,
     show_object_frames: bool = False,
+    on_simulate_ready: Callable[[Any], None] | None = None,
 ) -> None:
     """Run MuJoCo's native viewer while making its C++ loop interruptible.
 
@@ -101,6 +103,10 @@ def _launch_native_viewer_interruptibly(
     ``Simulate`` instance to exit, after which the normal Python
     ``KeyboardInterrupt`` cleanup path can run. Physics, rendering, pause,
     speed controls, and reload therefore remain owned by the native viewer.
+
+    ``on_simulate_ready`` receives the captured ``_Simulate`` instance from the
+    thread that constructs it, which is how a native launch hands the live
+    viewer to an overlay that must run on a helper thread.
     """
 
     original_simulate = getattr(mujoco.viewer, "_Simulate", None)
@@ -121,6 +127,8 @@ def _launch_native_viewer_interruptibly(
         simulate = original_simulate(*args, **kwargs)
         active_simulate["value"] = simulate
         simulate_ready.set()
+        if on_simulate_ready is not None:
+            on_simulate_ready(simulate)
         return simulate
 
     can_interrupt = (
@@ -200,16 +208,347 @@ def gaussian_config(backend: MujocoTaskBackend):
     return config
 
 
+_OVERLAY_LABEL_BG = (18, 18, 18)
+"""Label plate colour.  Overlay arrays are RGB, not OpenCV's BGR."""
+
+_OVERLAY_LABEL_FG = (240, 240, 240)
+"""Label text colour (RGB)."""
+
+_OVERLAY_LABEL_BAR_PX = 17
+"""Height of the per-tile label plate in pixels."""
+
+_OVERLAY_SPACING_PX = 6
+"""Gap between tiles, in pixels."""
+
+
+def _viewer_simulate(viewer):
+    """Return the live ``_Simulate`` behind a passive handle or a raw launch.
+
+    ``Handle._get_sim`` is the handle's own aliveness check: it yields ``None``
+    once the window is closing, which keeps a dying viewer from being treated as
+    a preview failure.
+    """
+
+    if isinstance(viewer, mujoco.viewer.Handle):
+        try:
+            return viewer._get_sim()
+        except mujoco.UnexpectedError:
+            return None
+    return viewer
+
+
+def _upload_overlay_images(simulate, tiles) -> None:
+    """Publish RGB tiles as viewer overlay images.
+
+    ``_Simulate.set_images`` expects bottom-up rows — which is exactly why the
+    public ``Handle.set_images`` flips its input arrays.  Replicating that flip
+    here lets the native and passive viewers share one upload path.
+    """
+
+    simulate.set_images(
+        [
+            (viewport, np.ascontiguousarray(np.flip(image, axis=0)))
+            for viewport, image in tiles
+        ]
+    )
+
+
+class CameraOverlay:
+    """Tiled live preview of every camera, drawn inside the MuJoCo window.
+
+    One tile per configured camera keeps the scene viewport as the single 3D
+    view instead of opening an OpenCV window per camera, and the tiles scale
+    with the viewer window.  Frames come from
+    ``MujocoBasis.render_camera_rgb``, so the preview shows the camera stream's
+    geometry and operator visibility rather than a second rendering recipe.
+
+    The environment is re-resolved on every push, so a viewer reload that swaps
+    the backend for a new ``MjModel`` rebinds without rebuilding the overlay.
+    """
+
+    tile_height: int = 180
+    """Largest tile height in pixels; the width follows each camera's aspect."""
+
+    min_tile_height: int = 96
+    """Tile height below which the strip wraps into more rows."""
+
+    max_tiles_per_row: int = 3
+    """Tiles per row before the strip wraps upwards."""
+
+    max_height_fraction: float = 0.5
+    """Largest share of the scene viewport height the whole strip may cover."""
+
+    margin: int = 12
+    """Gap between the tile strip and the scene viewport edges, in pixels."""
+
+    min_interval_s: float = 1.0 / 15.0
+    """Minimum time between two pushes, so callers may push every frame."""
+
+    def __init__(self, env_provider: Callable[[], Any]) -> None:
+        self._env_provider = env_provider
+        self._env: Any = None
+        self._sizes: dict[str, tuple[int, int]] = {}
+        self._names: list[str] = []
+        self._last_push = 0.0
+        self._disabled_reason: str | None = None
+
+    @property
+    def disabled(self) -> bool:
+        """Whether the overlay stopped pushing because it could not draw."""
+
+        return self._disabled_reason is not None
+
+    def show(self, viewer) -> bool:
+        """Render and publish the tile strip; ``False`` when nothing was drawn.
+
+        A failing preview must never take the scene viewer down with it, so
+        every error disables the overlay once instead of propagating.
+        """
+
+        if self._disabled_reason is not None:
+            return False
+        now = time.perf_counter()
+        if now - self._last_push < self.min_interval_s:
+            return False
+        self._last_push = now
+        simulate = _viewer_simulate(viewer)
+        if simulate is None:
+            return False
+        try:
+            env = self._env_provider()
+            if env is not self._env:
+                self._bind(env)
+            with simulate.lock():
+                tiles = self._build_tiles(simulate.viewport)
+            if not tiles:
+                return False
+            _upload_overlay_images(simulate, tiles)
+        except Exception as error:  # noqa: BLE001 - see docstring
+            self._disable(f"{type(error).__name__}: {error}")
+            return False
+        return True
+
+    def _disable(self, reason: str) -> None:
+        """Stop pushing tiles and report the reason exactly once."""
+
+        if self._disabled_reason is not None:
+            return
+        self._disabled_reason = reason
+        print(f"[warn] camera overlay disabled: {reason}", flush=True)
+
+    def _bind(self, env) -> None:
+        """Adopt the cameras declared by one environment."""
+
+        self._env = env
+        specs = list(getattr(env.config, "cameras", None) or [])
+        self._sizes = {
+            spec.name: (max(int(spec.width), 1), max(int(spec.height), 1))
+            for spec in specs
+        }
+        self._names = [spec.name for spec in specs]
+        if not self._names:
+            self._disable("this config declares no cameras")
+            return
+        print(
+            "[info] camera overlay: previewing "
+            + ", ".join(self._names)
+            + " inside the MuJoCo window.",
+            flush=True,
+        )
+
+    def _build_tiles(self, viewport):
+        """Render every camera and place the tiles inside *viewport*."""
+
+        frames = self._render_frames()
+        if not frames:
+            return []
+        aspects = [self._aspect(name) for name, _ in frames]
+        per_row, height = self._plan_layout(aspects, viewport)
+        sizes = [(max(int(round(height * aspect)), 1), height) for aspect in aspects]
+        rects = self._layout_rects(sizes, per_row, viewport)
+        return [
+            (rect, self._draw_tile(name, frame, rect))
+            for (name, frame), rect in zip(frames, rects)
+        ]
+
+    def _aspect(self, camera_name: str) -> float:
+        """Return one camera's width/height ratio, defaulting to 4:3."""
+
+        width, height = self._sizes.get(camera_name, (4, 3))
+        return width / height
+
+    def _plan_layout(self, aspects: list[float], viewport) -> tuple[int, int]:
+        """Choose tiles per row and tile height for the scene viewport.
+
+        Layouts are tried from the fewest rows upwards, so the strip stays a
+        single row whenever tiles can still be legible; only when one row
+        cannot hold them at ``min_tile_height`` does the strip wrap.  When even
+        wrapping cannot reach that height, the fewest-row layout is used anyway
+        rather than dropping tiles.
+        """
+
+        count = len(aspects)
+        first: tuple[int, int] | None = None
+        for per_row in range(min(count, self.max_tiles_per_row), 0, -1):
+            height = self._fitted_tile_height(aspects, per_row, viewport)
+            if first is None:
+                first = (per_row, height)
+            if height >= self.min_tile_height:
+                return per_row, int(height)
+        per_row, height = first
+        return per_row, max(int(height), 32)
+
+    def _fitted_tile_height(
+        self,
+        aspects: list[float],
+        per_row: int,
+        viewport,
+    ) -> float:
+        """Return the tile height allowed by the width and height budgets."""
+
+        count = len(aspects)
+        rows = ceil(count / per_row)
+        available_w = max(int(viewport.width) - 2 * self.margin, 1)
+        strip_limit = max(
+            int(int(viewport.height) * self.max_height_fraction) - 2 * self.margin,
+            1,
+        )
+        widest_row = max(
+            sum(aspects[start : start + per_row]) for start in range(0, count, per_row)
+        )
+        return min(
+            self.tile_height,
+            (available_w - _OVERLAY_SPACING_PX * (per_row - 1)) / widest_row,
+            (strip_limit - _OVERLAY_SPACING_PX * (rows - 1)) / rows,
+        )
+
+    def _render_frames(self) -> list[tuple[str, np.ndarray]]:
+        """Render every bound camera through the env's native camera seam."""
+
+        return [(name, self._env.render_camera_rgb(name)) for name in self._names]
+
+    def _layout_rects(
+        self,
+        sizes: list[tuple[int, int]],
+        per_row: int,
+        viewport,
+    ) -> list[mujoco.MjrRect]:
+        """Right-align the strip in the scene viewport and wrap it upwards."""
+
+        right = int(viewport.left) + int(viewport.width) - self.margin
+        bottom = int(viewport.bottom) + self.margin
+        rects: list[mujoco.MjrRect] = []
+        for start in range(0, len(sizes), per_row):
+            row = sizes[start : start + per_row]
+            row_width = sum(width for width, _ in row) + _OVERLAY_SPACING_PX * (
+                len(row) - 1
+            )
+            row_height = max(height for _, height in row)
+            left = right - row_width
+            for width, height in row:
+                rects.append(
+                    mujoco.MjrRect(
+                        left,
+                        bottom + (row_height - height) // 2,
+                        width,
+                        height,
+                    )
+                )
+                left += width + _OVERLAY_SPACING_PX
+            bottom += row_height + _OVERLAY_SPACING_PX
+        return rects
+
+    def _draw_tile(
+        self,
+        camera_name: str,
+        frame: np.ndarray,
+        rect: mujoco.MjrRect,
+    ) -> np.ndarray:
+        """Resize one frame and stamp its camera name onto it."""
+
+        import cv2
+
+        tile = cv2.resize(
+            frame,
+            (rect.width, rect.height),
+            interpolation=cv2.INTER_AREA,
+        )
+        tile = np.ascontiguousarray(tile)
+        limit = max(tile.shape[1] - 10, 1)
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        label = camera_name
+        truncated = False
+        while label and cv2.getTextSize(label, font, 0.42, 1)[0][0] > limit:
+            label = label[:-1]
+            truncated = True
+        if truncated and label:
+            label = label[:-1] + "+"
+        cv2.rectangle(
+            tile,
+            (0, 0),
+            (tile.shape[1] - 1, _OVERLAY_LABEL_BAR_PX),
+            _OVERLAY_LABEL_BG,
+            -1,
+        )
+        cv2.putText(
+            tile,
+            label,
+            (5, _OVERLAY_LABEL_BAR_PX - 4),
+            font,
+            0.42,
+            _OVERLAY_LABEL_FG,
+            1,
+            cv2.LINE_AA,
+        )
+        return tile
+
+
+def _run_camera_overlay(
+    overlay: CameraOverlay,
+    simulate,
+    stop: threading.Event,
+) -> None:
+    """Push camera tiles into a native viewer from a helper thread.
+
+    ``mujoco.viewer.launch`` owns the calling thread inside MuJoCo's C++ loop,
+    so a native viewer can only be updated from another thread.  Rendering is
+    serialized against physics by ``_Simulate.lock`` — the same mutex the
+    viewer's physics thread holds around ``mj_step`` — while the image upload
+    stays outside the lock because ``set_images`` is a documented cross-thread
+    call (the passive viewer calls it that way too).
+    """
+
+    while not stop.wait(overlay.min_interval_s):
+        if not overlay.show(simulate) and overlay.disabled:
+            return
+
+
 def run_native_viewer(
     backend: MujocoTaskBackend,
     reload_callback: Callable[[], MujocoTaskBackend],
     *,
     show_object_frames: bool = False,
+    show_cameras: bool = True,
 ) -> MujocoTaskBackend:
     """Launch the native viewer and rebuild the backend on reload."""
 
     active = backend
     first_load = True
+    overlay = CameraOverlay(lambda: _viewer_env(active)) if show_cameras else None
+    overlay_stop = threading.Event()
+    overlay_thread: threading.Thread | None = None
+
+    def start_overlay(simulate) -> None:
+        nonlocal overlay_thread
+        if overlay is None:
+            return
+        overlay_thread = threading.Thread(
+            target=_run_camera_overlay,
+            args=(overlay, simulate, overlay_stop),
+            name="view-scene-camera-overlay",
+            daemon=True,
+        )
+        overlay_thread.start()
 
     def loader() -> tuple[mujoco.MjModel, mujoco.MjData]:
         nonlocal active, first_load
@@ -225,10 +564,16 @@ def run_native_viewer(
         env = _viewer_env(active)
         return env.model, env.data
 
-    _launch_native_viewer_interruptibly(
-        loader,
-        show_object_frames=show_object_frames,
-    )
+    try:
+        _launch_native_viewer_interruptibly(
+            loader,
+            show_object_frames=show_object_frames,
+            on_simulate_ready=start_overlay,
+        )
+    finally:
+        overlay_stop.set()
+        if overlay_thread is not None:
+            overlay_thread.join(timeout=1.0)
     return active
 
 
@@ -261,12 +606,14 @@ def run_gs_synced_viewer(
     *,
     debug: bool = False,
     show_object_frames: bool = False,
+    show_cameras: bool = True,
 ) -> MujocoTaskBackend:
     """Passive MuJoCo viewer + cv2 window showing the GS render of the same
     free-camera pose, refreshed every step."""
     import cv2
     import torch
 
+    overlay = CameraOverlay(lambda: _viewer_env(backend)) if show_cameras else None
     win = "GS view (synced with MuJoCo viewer)"
     cv2.namedWindow(win, cv2.WINDOW_NORMAL)
     cv2.resizeWindow(win, width, height)
@@ -557,6 +904,8 @@ def run_gs_synced_viewer(
                             "Use --debug for a full traceback.",
                         ],
                     )
+                if overlay is not None:
+                    overlay.show(v)
                 key = cv2.waitKey(1) & 0xFF
                 if key == 27:
                     v.close()

@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import contextlib
 import os
 import signal
 import threading
+import time
 from types import SimpleNamespace
 
 import mujoco
+import numpy as np
 import pytest
 from omegaconf import OmegaConf
 
@@ -120,7 +123,12 @@ def test_native_viewer_reload_replaces_and_tears_down_backend(monkeypatch) -> No
     replacement, replacement_env = _backend()
     loaded = {}
 
-    def launch_interruptibly(loader, *, show_object_frames=False):
+    def launch_interruptibly(
+        loader,
+        *,
+        show_object_frames=False,
+        on_simulate_ready=None,
+    ):
         loaded["show_object_frames"] = show_object_frames
         model, data = loader()
         loaded["initial_model"] = model
@@ -139,6 +147,7 @@ def test_native_viewer_reload_replaces_and_tears_down_backend(monkeypatch) -> No
         current,
         lambda: replacement,
         show_object_frames=True,
+        show_cameras=False,
     )
 
     assert active is replacement
@@ -221,3 +230,213 @@ def test_gaussian_config_comes_from_backend_environment() -> None:
     )
 
     assert view_scene.gaussian_config(backend) is env.config.gaussian_render
+
+
+class _FakeCameraEnv:
+    """Environment stub exposing the camera surface the overlay consumes."""
+
+    def __init__(self, cameras=(("cam_a", 640, 480), ("cam_b", 640, 480))) -> None:
+        self.config = SimpleNamespace(
+            cameras=[
+                SimpleNamespace(name=name, width=width, height=height)
+                for name, width, height in cameras
+            ]
+        )
+        self.rendered: list[str] = []
+
+    def render_camera_rgb(self, camera_name: str) -> np.ndarray:
+        self.rendered.append(camera_name)
+        return np.full((48, 64, 3), 60 + len(camera_name), dtype=np.uint8)
+
+
+class _FakeSimulate:
+    """Stands in for MuJoCo's ``_Simulate``: lock, viewport, set_images."""
+
+    def __init__(self, viewport: mujoco.MjrRect) -> None:
+        self.viewport = viewport
+        self.uploads: list[list[tuple[mujoco.MjrRect, np.ndarray]]] = []
+        self.lock_calls = 0
+
+    def lock(self):
+        self.lock_calls += 1
+        return contextlib.nullcontext()
+
+    def set_images(self, images) -> None:
+        self.uploads.append(list(images))
+
+
+def _viewport(width: int = 1200, height: int = 700) -> mujoco.MjrRect:
+    return mujoco.MjrRect(0, 0, width, height)
+
+
+def test_camera_overlay_publishes_one_labelled_tile_per_camera() -> None:
+    env = _FakeCameraEnv()
+    overlay = viewer_module.CameraOverlay(lambda: env)
+    simulate = _FakeSimulate(_viewport())
+
+    assert overlay.show(simulate) is True
+
+    assert env.rendered == ["cam_a", "cam_b"]
+    assert simulate.lock_calls == 1
+    assert len(simulate.uploads) == 1
+    tiles = simulate.uploads[0]
+    assert [rect.height for rect, _ in tiles] == [180, 180]
+    assert [rect.width for rect, _ in tiles] == [240, 240]
+    assert [rect.bottom for rect, _ in tiles] == [12, 12]
+    # Right-aligned inside the scene viewport, preserving config order.
+    assert [rect.left for rect, _ in tiles] == [702, 948]
+    assert [rect.left + rect.width for rect, _ in tiles] == [942, 1188]
+    for rect, image in tiles:
+        assert image.shape == (rect.height, rect.width, 3)
+        # Uploaded rows are bottom-up, so the label plate lands last.
+        assert tuple(image[-1, 0]) == viewer_module._OVERLAY_LABEL_BG
+        assert (image > 200).all(axis=-1).any()
+
+
+def test_camera_overlay_wraps_into_rows_when_one_row_is_too_wide() -> None:
+    env = _FakeCameraEnv(
+        cameras=tuple((f"cam_{index}", 640, 480) for index in range(4))
+    )
+    overlay = viewer_module.CameraOverlay(lambda: env)
+    simulate = _FakeSimulate(_viewport(width=560, height=420))
+
+    assert overlay.show(simulate) is True
+
+    tiles = simulate.uploads[0]
+    assert len(tiles) == 4
+    assert len({rect.bottom for rect, _ in tiles}) == 2
+
+
+def test_camera_overlay_throttles_and_rebinds_after_an_env_swap() -> None:
+    first = _FakeCameraEnv(cameras=(("cam_a", 640, 480),))
+    current = {"env": first}
+    overlay = viewer_module.CameraOverlay(lambda: current["env"])
+    simulate = _FakeSimulate(_viewport())
+
+    assert overlay.show(simulate) is True
+    assert overlay.show(simulate) is False
+    assert len(simulate.uploads) == 1
+
+    overlay.min_interval_s = 0.0
+    second = _FakeCameraEnv(cameras=(("cam_x", 320, 240),))
+    current["env"] = second
+
+    assert overlay.show(simulate) is True
+    assert second.rendered == ["cam_x"]
+    assert first.rendered == ["cam_a"]
+
+
+def test_camera_overlay_disables_itself_when_the_config_has_no_cameras(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    overlay = viewer_module.CameraOverlay(lambda: _FakeCameraEnv(cameras=()))
+    simulate = _FakeSimulate(_viewport())
+
+    assert overlay.show(simulate) is False
+    assert overlay.disabled
+    assert simulate.uploads == []
+    assert "declares no cameras" in capsys.readouterr().out
+
+
+def test_camera_overlay_reports_render_failures_once(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    class _BrokenEnv(_FakeCameraEnv):
+        def render_camera_rgb(self, camera_name: str) -> np.ndarray:
+            raise RuntimeError("no GL context")
+
+    overlay = viewer_module.CameraOverlay(lambda: _BrokenEnv())
+    simulate = _FakeSimulate(_viewport())
+
+    assert overlay.show(simulate) is False
+    assert overlay.disabled
+    assert overlay.show(simulate) is False
+    assert capsys.readouterr().out.count("camera overlay disabled") == 1
+
+
+def test_native_viewer_runs_and_joins_the_camera_overlay_thread(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    backend, _env = _backend()
+    shown: list[tuple[object, str]] = []
+
+    class _Overlay:
+        min_interval_s = 0.01
+
+        def __init__(self, env_provider) -> None:
+            self.env_provider = env_provider
+
+        def show(self, simulate) -> bool:
+            shown.append((simulate, threading.current_thread().name))
+            return True
+
+        @property
+        def disabled(self) -> bool:
+            return False
+
+    monkeypatch.setattr(viewer_module, "CameraOverlay", _Overlay)
+
+    def launch(loader, *, show_object_frames=False, on_simulate_ready=None):
+        loader()
+        assert on_simulate_ready is not None
+        on_simulate_ready("simulate")
+        deadline = time.monotonic() + 2.0
+        while not shown and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert shown
+
+    monkeypatch.setattr(
+        viewer_module,
+        "_launch_native_viewer_interruptibly",
+        launch,
+    )
+
+    assert view_scene.run_native_viewer(backend, lambda: backend) is backend
+
+    assert shown[0][0] == "simulate"
+    assert shown[0][1] == "view-scene-camera-overlay"
+    assert not any(
+        thread.name == "view-scene-camera-overlay" and thread.is_alive()
+        for thread in threading.enumerate()
+    )
+
+
+def test_native_viewer_skips_the_camera_overlay_when_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    backend, _env = _backend()
+
+    def fail_overlay(_env_provider):
+        raise AssertionError("camera overlay must not be built")
+
+    monkeypatch.setattr(viewer_module, "CameraOverlay", fail_overlay)
+
+    def launch(loader, *, show_object_frames=False, on_simulate_ready=None):
+        loader()
+        assert on_simulate_ready is not None
+        on_simulate_ready("simulate")
+
+    monkeypatch.setattr(
+        viewer_module,
+        "_launch_native_viewer_interruptibly",
+        launch,
+    )
+
+    active = view_scene.run_native_viewer(
+        backend,
+        lambda: backend,
+        show_cameras=False,
+    )
+
+    assert active is backend
+
+
+def test_script_cli_config_controls_camera_previews() -> None:
+    assert view_scene.ViewSceneCliConfig().show_cameras is True
+
+    argv = ["view_scene.py", "--no-show-cameras", "--config-name", "pick_and_place"]
+
+    config = view_scene._parse_script_cli_config(argv)
+
+    assert config.show_cameras is False
+    assert argv == ["view_scene.py", "--config-name", "pick_and_place"]
