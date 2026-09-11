@@ -101,18 +101,21 @@ task:
       arm: null
       # `object_only` transports the plate kinematically, so its source pose is
       # free scene state rather than a physical resting pose: the plate is
-      # sampled as a floating world-frame box in front of the rack view instead
-      # of being leaned back into the four-post stand, which is scenery here.
-      # The whole disc must stay in `rack_camera_front` with an 8 px margin
-      # (`visible_in`), measured against the plate's conservative support sphere
-      # -- that camera, not the stand, is what bounds the box below.  The three
+      # sampled as a floating world-frame box instead of being leaned back into
+      # the four-post stand, which is scenery here.  The box is the
+      # `rack_camera_front` visibility region itself -- every centre here keeps
+      # the plate's conservative support sphere (radius 0.124 m) inside the
+      # 640 x 352 frame with an 8 px margin -- trimmed at z=0.13 so the plate
+      # stays above the floor instead of being clipped by it.  The disc
+      # therefore fills the view from edge to edge instead of one corner patch,
+      # and `visible_in` below is the guarantee for every sample.  The three
       # orientation axes are free, so the plate may arrive at any attitude.
       object:
         proposal:
           reference: absolute_world
-          x: [-0.430, -0.250]
-          y: [-0.100, 0.100]
-          z: [0.130, 0.280]
+          x: [-1.050, 1.050]
+          y: [-0.550, 0.550]
+          z: [0.130, 0.370]
           roll: [-3.14159, 3.14159]
           pitch: [-3.14159, 3.14159]
           yaw: [-3.14159, 3.14159]
@@ -122,13 +125,26 @@ task:
             cameras: [rack_camera_front]
             geometry: bounding_sphere
             margin_px: 8
-      # The place target is the settled centre of the rack's first slot.  The
-      # two bounding ribs leave a ~32 mm opening and the plate is inserted
-      # edge-on (~4 mm thick), so the sampled centre can move a few millimetres
-      # without the released plate reaching a rib.
-      rack_target:
-        x: [-0.006, 0.006]
-        collision_radius: 0.03
+      # Scene variety lives in the scenery: the rack the plate is placed into
+      # and the stand it is picked from.  Both rest on the floor, so they only
+      # slide and turn -- keeping roll/pitch at their authored zero avoids
+      # sinking a corner through the table -- and the rack's yaw stays small
+      # because the place waypoints approach the slot along world axes.
+      # `collision_radius: -1` derives each radius from its own support
+      # geometry, so the plate is kept clear of the real footprint.
+      rack:
+        x: [-0.050, 0.050]
+        y: [-0.050, 0.050]
+        yaw: [-0.050, 0.050]
+        collision_radius: -1
+      plate_stand:
+        x: [-0.060, 0.060]
+        y: [-0.060, 0.060]
+        yaw: [-0.150, 0.150]
+        collision_radius: -1
+      # `rack_target` deliberately has no entry: the placement point is a child
+      # body of the rack (`rack_target` rides `rack` in the scene), so it is
+      # never sampled on its own and stays the slot centre by construction.
     cameras:
       # Static rack view: plain world-frame viewpoint jitter.
       rack_camera_front:

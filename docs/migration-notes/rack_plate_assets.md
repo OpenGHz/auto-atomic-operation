@@ -51,6 +51,19 @@ the real 20 mm-thick mesh instead of forcing it into an upright cylinder proxy.
 The source stand is separated from the first rack rib, preventing the free plate
 from rolling into the rack before the pick stage starts.
 
+Two authored frames are structural rather than geometric, so the migrated world
+positions are unchanged while the bodies become usable randomization entities:
+
+- `rack_target` is a **child body of `rack`**. It is the settled centre of the
+  rack's first slot — a property of the rack, not an independent scene object —
+  so a randomized rack carries the placement point with it and no task has to
+  re-sample the target to keep the slot and the target aligned.
+- `plate_stand` carries **its own centre as body origin** (`pos="-0.4 0 0"`, the
+  geoms keep the source world positions as local offsets). A body origin at the
+  world origin would make a randomized yaw swing the stand around the world
+  origin, and it would make the stand's collision radius meaningless for
+  clearance checks.
+
 The task's pick stage uses two waypoints expressed in the plate's `object`
 reference frame: it first moves above the plate front, then extends along the
 same 25 mm shallow front offset for the two-sided grasp. The gripper orientation

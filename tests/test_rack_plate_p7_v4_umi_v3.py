@@ -17,6 +17,8 @@ from auto_atom.runtime import ComponentRegistry, TaskRunner
 _ROOT = Path(__file__).resolve().parents[1]
 _MAX_UPDATES = 600
 _SETTLE_SECONDS = 0.5
+_CAM_WIDTH = 640
+_CAM_HEIGHT = 352
 _RACK_RIB_PREFIX = "rack_rib_"
 _STAND_GUIDES = {
     "plate_stand_post_front_left",
@@ -59,6 +61,27 @@ def _plate_relative_camera_pose(
         rotation.T
         @ (np.asarray(data.cam_xpos[camera], dtype=np.float64) - data.xpos[plate]),
         rotation.T @ np.asarray(data.cam_xmat[camera], dtype=np.float64).reshape(3, 3),
+    )
+
+
+def _pixel_of_body(
+    model: mujoco.MjModel,
+    data: mujoco.MjData,
+    camera_name: str,
+    body_name: str,
+) -> tuple[float, float]:
+    """Project one body origin into a camera's image plane, in pixels."""
+
+    camera = _id(model, mujoco.mjtObj.mjOBJ_CAMERA, camera_name)
+    body = _id(model, mujoco.mjtObj.mjOBJ_BODY, body_name)
+    camera_position = np.asarray(data.cam_xpos[camera], dtype=np.float64)
+    camera_rotation = np.asarray(data.cam_xmat[camera], dtype=np.float64).reshape(3, 3)
+    local = camera_rotation.T @ (np.asarray(data.xpos[body]) - camera_position)
+    focal = 0.5 * _CAM_HEIGHT / np.tan(np.radians(float(model.cam_fovy[camera])) / 2.0)
+    depth = -float(local[2])
+    return (
+        0.5 * _CAM_WIDTH + focal * float(local[0]) / depth,
+        0.5 * _CAM_HEIGHT - focal * float(local[1]) / depth,
     )
 
 
@@ -477,3 +500,63 @@ def test_plate_camera_rides_the_plate_through_object_only_transport() -> None:
     finally:
         runner.close()
         ComponentRegistry.clear()
+
+
+def test_randomization_moves_the_scenery_not_the_slot_centre() -> None:
+    """The slot centre rides the rack, and the plate spreads over the view.
+
+    ``rack_target`` is a child of ``rack``, so rack randomization must not
+    detach the placement point from the slot, and the plate's source pose must
+    land across the rack camera's frame instead of in one corner patch.
+    """
+
+    plate_pixels: list[tuple[float, float]] = []
+    target_offsets: list[np.ndarray] = []
+    rack_positions: list[np.ndarray] = []
+    for seed in (3, 11, 23, 31, 47, 59):
+        ComponentRegistry.clear()
+        with initialize_config_dir(
+            version_base=None,
+            config_dir=str(_ROOT / "aao_configs"),
+        ):
+            config = compose(
+                config_name="rack_plate_p7_v4_umi_v3",
+                overrides=[
+                    "env.viewer=null",
+                    "execution.mode=object_only",
+                    f"task.seed={seed}",
+                ],
+            )
+        runner = TaskRunner().from_config(prepare_task_file(config))
+        try:
+            env = runner.get_env().envs[0]
+            model, data = env.model, env.data
+            runner.reset()
+            mujoco.mj_forward(model, data)
+            rack = _id(model, mujoco.mjtObj.mjOBJ_BODY, "rack")
+            target = _id(model, mujoco.mjtObj.mjOBJ_SITE, "rack_target_site")
+            rack_rotation = np.asarray(data.xmat[rack]).reshape(3, 3)
+            target_offsets.append(
+                rack_rotation.T @ (np.asarray(data.site_xpos[target]) - data.xpos[rack])
+            )
+            rack_positions.append(np.asarray(data.xpos[rack], dtype=np.float64).copy())
+            plate_pixels.append(
+                _pixel_of_body(model, data, "rack_camera_front", "object")
+            )
+        finally:
+            runner.close()
+            ComponentRegistry.clear()
+
+    # The rack really is sampled, and the slot centre stays welded to it.
+    rack_positions = np.asarray(rack_positions)
+    assert float(np.ptp(rack_positions[:, 0])) > 0.005
+    for offset in target_offsets:
+        np.testing.assert_allclose(offset, [-0.126322355, 0.0, 0.0405], atol=1.0e-6)
+
+    # Every sample renders inside the frame, and the samples span a wide part
+    # of it (the plate used to be confined to one corner patch).
+    pixels = np.asarray(plate_pixels)
+    assert np.all(pixels[:, 0] > 0.0) and np.all(pixels[:, 0] < _CAM_WIDTH)
+    assert np.all(pixels[:, 1] > 0.0) and np.all(pixels[:, 1] < _CAM_HEIGHT)
+    assert float(np.ptp(pixels[:, 0])) > 150.0
+    assert float(np.ptp(pixels[:, 1])) > 60.0

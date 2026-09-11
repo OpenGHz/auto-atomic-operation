@@ -57,17 +57,19 @@
       <geom name="rack_rib_8" type="box"
             pos="0.144524425 0 0" size="0.003075575 0.045100000 0.047600000"
             rgba="0 0 0 0"/>
-    </body>
 
-    <!-- Semantic target frame is at the centre of the first open slot.  The
-         pad remains below the plate's centre so the green marker is visible
-         without becoming a second collision obstacle. -->
-    <body name="rack_target" pos="-0.126322355 0 0.088000000">
-      <site name="rack_target_site" pos="0 0 0" size="0.006"
-            material="rack_plate_target"/>
-      <geom name="rack_target_pad" type="box" pos="0 0 -0.087500000"
-            size="0.015 0.020 0.0005" material="rack_plate_target"
-            contype="0" conaffinity="0"/>
+      <!-- Semantic target frame is at the centre of the first open slot.  It is
+           a child of the rack because it is a property of the rack rather than
+           an independent scene object: moving the rack moves the placement
+           point with it.  The pad remains below the plate's centre so the green
+           marker is visible without becoming a second collision obstacle. -->
+      <body name="rack_target" pos="-0.126322355 0 0.040500000">
+        <site name="rack_target_site" pos="0 0 0" size="0.006"
+              material="rack_plate_target"/>
+        <geom name="rack_target_pad" type="box" pos="0 0 -0.087500000"
+              size="0.015 0.020 0.0005" material="rack_plate_target"
+              contype="0" conaffinity="0"/>
+      </body>
     </body>
     <geom name="rack_plate_guard" type="box" pos="0 0 -0.026"
           size="0.70 0.70 0.014" rgba="0 0 0 0"
@@ -75,21 +77,24 @@
 
     <!-- A compact four-post stand keeps the plate leaned in place before the
          P7 approaches.  The posts sit just inside the plate diameter and the
-         narrow front/back gap lets the real plate mesh settle against them. -->
-    <body name="plate_stand" pos="0 0 0">
-      <geom name="plate_stand_base" type="box" pos="-0.400 0 0.0375"
+         narrow front/back gap lets the real plate mesh settle against them.
+         The body origin is the stand's own centre (the geoms keep the source
+         world positions as local offsets), so a randomized pose slides and
+         turns the stand about itself rather than about the world origin. -->
+    <body name="plate_stand" pos="-0.400 0 0">
+      <geom name="plate_stand_base" type="box" pos="0 0 0.0375"
             size="0.035 0.112 0.005" material="rack_plate_stand"/>
       <geom name="plate_stand_post_front_left" type="box"
-            pos="-0.414 -0.090 0.0875" size="0.004 0.004 0.045"
+            pos="-0.014 -0.090 0.0875" size="0.004 0.004 0.045"
             material="rack_plate_stand"/>
       <geom name="plate_stand_post_front_right" type="box"
-            pos="-0.386 -0.090 0.0875" size="0.004 0.004 0.045"
+            pos="0.014 -0.090 0.0875" size="0.004 0.004 0.045"
             material="rack_plate_stand"/>
       <geom name="plate_stand_post_back_left" type="box"
-            pos="-0.414 0.090 0.0875" size="0.004 0.004 0.045"
+            pos="-0.014 0.090 0.0875" size="0.004 0.004 0.045"
             material="rack_plate_stand"/>
       <geom name="plate_stand_post_back_right" type="box"
-            pos="-0.386 0.090 0.0875" size="0.004 0.004 0.045"
+            pos="0.014 0.090 0.0875" size="0.004 0.004 0.045"
             material="rack_plate_stand"/>
     </body>
 

@@ -111,14 +111,37 @@ def test_robotless_scene_loads_and_preserves_source_geometry_contract() -> None:
         tuple(np.round(model.geom_pos[post], 6)) for post in stand_posts
     )
     assert post_positions == [
+        (-0.014, -0.09, 0.0875),
+        (-0.014, 0.09, 0.0875),
+        (0.014, -0.09, 0.0875),
+        (0.014, 0.09, 0.0875),
+    ]
+    # The stand body is centred on itself (geoms are local offsets) so a
+    # randomized pose slides and turns it about the stand, not the world.
+    stand_body = _id(model, mujoco.mjtObj.mjOBJ_BODY, "plate_stand")
+    stand_origin = np.asarray(model.body_pos[stand_body], dtype=np.float64)
+    np.testing.assert_allclose(stand_origin, [-0.4, 0.0, 0.0], atol=1.0e-6)
+    world_post_positions = sorted(
+        tuple(np.round(stand_origin + model.geom_pos[post], 6)) for post in stand_posts
+    )
+    assert world_post_positions == [
         (-0.414, -0.09, 0.0875),
         (-0.414, 0.09, 0.0875),
         (-0.386, -0.09, 0.0875),
         (-0.386, 0.09, 0.0875),
     ]
+    # The placement target is a child of the rack, so it rides the rack instead
+    # of being an independently placeable scene object.  Both bodies are pure
+    # translations, so their authored offsets add up to the migrated world
+    # position with no rotation to compose.
+    rack_body = _id(model, mujoco.mjtObj.mjOBJ_BODY, "rack")
     target_body = _id(model, mujoco.mjtObj.mjOBJ_BODY, "rack_target")
+    assert int(model.body_parentid[target_body]) == rack_body
     np.testing.assert_allclose(
-        model.body_pos[target_body], [-0.126322355, 0.0, 0.088], atol=1.0e-6
+        np.asarray(model.body_pos[rack_body], dtype=np.float64)
+        + np.asarray(model.body_pos[target_body], dtype=np.float64),
+        [-0.126322355, 0.0, 0.088],
+        atol=1.0e-6,
     )
     freejoint = _id(model, mujoco.mjtObj.mjOBJ_JOINT, "object_free")
     address = int(model.jnt_qposadr[freejoint])
