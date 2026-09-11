@@ -74,18 +74,29 @@ task:
       # reach both the source stand (x=-0.40) and the rack (x=-0.126), so the
       # arm is deliberately left at its home pose for now.
       arm: null
-      # The plate stands leaned against the four-post stand, and that balance
-      # is marginal: the two admissible directions below are the ones measured
-      # not to topple it.  `-x` seats the disc deeper into the post pair while
-      # `+x` walks its rim off the posts, a world-frame `yaw` rotates the lean
-      # out of the post gap, and `y` pushes the rim through the posts it is
-      # preloaded against.  `z` is the release height above the stand base and
-      # `roll` is an in-plane spin of the disc (its normal is world `+x`).
+      # `object_only` transports the plate kinematically, so its source pose is
+      # free scene state rather than a physical resting pose: the plate is
+      # sampled as a floating world-frame box in front of the rack view instead
+      # of being leaned back into the four-post stand, which is scenery here.
+      # The whole disc must stay in `rack_camera_front` with an 8 px margin
+      # (`visible_in`), measured against the plate's conservative support sphere
+      # -- that camera, not the stand, is what bounds the box below.  The three
+      # orientation axes are free, so the plate may arrive at any attitude.
       object:
-        x: [-0.002, 0.0]
-        z: [0.0, 0.005]
-        roll: [-0.0175, 0.0175]
-        collision_radius: 0.088
+        proposal:
+          reference: absolute_world
+          x: [-0.430, -0.250]
+          y: [-0.100, 0.100]
+          z: [0.130, 0.280]
+          roll: [-3.14159, 3.14159]
+          pitch: [-3.14159, 3.14159]
+          yaw: [-3.14159, 3.14159]
+          collision_radius: 0.088
+        constraints:
+          visible_in:
+            cameras: [rack_camera_front]
+            geometry: bounding_sphere
+            margin_px: 8
       # The place target is the settled centre of the rack's first slot.  The
       # two bounding ribs leave a ~32 mm opening and the plate is inserted
       # edge-on (~4 mm thick), so the sampled centre can move a few millimetres
