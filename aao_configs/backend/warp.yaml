@@ -1,0 +1,22 @@
+# @package _global_
+#
+# GPU (mujoco_warp) backend.  Select it from the command line without editing
+# any task config:
+#
+#     aao-demo --config-name <task> +backend@_global_=warp
+#
+# The append form (`+backend@_global_=`) is required rather than a plain
+# `backend=warp`: every robot basis config re-asserts its own CPU builder in
+# its `_self_`, which composes after an inherited defaults entry and would
+# overwrite the group.  An appended group composes last, so it wins on any
+# task config regardless of how deep its inheritance chain is.
+#
+# `njmax` is the constraint budget; 512 clears the rack_plate arm.  Scenes
+# with more contacts or more worlds may need it raised -- too low shows up as
+# an `nefc overflow` on the first physical step.  Raise it per run with
+# `env.njmax=<n>`.  The Warp env has no interactive viewer path.
+env:
+  _target_: auto_atom.basis.mjwarp.env.MjWarpObjectOnlyEnv
+  njmax: 512
+  viewer: null
+backend: auto_atom.backend.mjwarp.backend.build_mjwarp_backend

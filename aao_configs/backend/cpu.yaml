@@ -1,0 +1,10 @@
+# @package _global_
+#
+# CPU MuJoCo -- the default backend; selecting it explicitly is a no-op:
+#
+#     aao-demo --config-name <task> +backend@_global_=cpu
+#
+# This option is intentionally empty.  Each robot basis config sets its own
+# robot-specific CPU builder (for example `build_p7_v3_umi_v3_backend`) and
+# `env._target_` in its `_self_`, and this baseline must not clobber those.
+# See `warp.yaml` for the GPU counterpart.
