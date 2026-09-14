@@ -306,9 +306,38 @@ geom_xpos_out[worldid, geomid] = xpos + math.rot_vec_quat(geom_pos[..., geomid],
 geom_xmat_out[worldid, geomid] = math.quat_to_mat(math.mul_quat(xquat, geom_quat[..., geomid]))
 ```
 
-所以"写入后自己补算 `geom_xpos`/`geom_xmat`"不再是猜着复刻未知算术，而是对被跳过
-的那些 geom 套用同样两行。这使它成为首选修法：不改场景语义、不重建 device 模型、
-不牺牲轮 3a 的 reset 加速。
+所以"写入后自己补算 `geom_xpos`/`geom_xmat`"不是猜着复刻未知算术，而是对被跳过
+的那些 geom 套用同样两行。**已实现**（`_refresh_static_geom_frames` →
+`_refresh_pending_static_geoms`），与原生逐元素一致（float32 容差）。
+
+一处实现上的坑值得记下：补算读的是**这一趟 kinematics 产出的** `xpos`，因此它只能
+在真实 pass 之后跑。若直接写在 `set_static_body_pose` 末尾，`deferred_forward`
+块内 `forward()` 会提前返回，补算就会用**写入前**的 body 位姿——而 reset 正是走
+deferral、也正是随机化写静态 body 的地方，即最要紧的那条路会静默算错。因此改成
+"记录待补算的 body → 每次真实 `forward` 后统一 drain"，三处真实 `forward` 调用点
+全部经由 `_run_forward`。
+
+**但这只修好了一半，必须说清楚**：它恢复的是 **frame**（`geom_xpos`/`geom_xmat`），
+因此读取与**渲染**正确了；**碰撞没有恢复**。实测：补算后的 `geom_xpos` 能活过
+`step()` 与显式 `mjw.collision()`，`geom_rbound` 也正确，但 `nacon` 始终为 0——
+即 **broadphase 对 world-welded geom 不读 `geom_xpos`**（同一次写入原生产生 4 个
+接触）。broadphase 另有一份静态 geom 的位置来源，尚未定位。
+
+因此现状是：
+
+| 消费者 | 静态 body 移动后 |
+|---|---|
+| `get_body_pose`（`xpos`） | ✓ 一直是对的 |
+| `geom_xpos` / `geom_xmat` 读取 | ✓ 本轮修好 |
+| 渲染（读 body/geom 变换） | ✓ 本轮修好 |
+| **碰撞 / 接触** | **✗ 仍然陈旧** |
+
+`tests/test_mjwarp_state.py::test_refreshed_geometry_actually_collides` 以
+`xfail(strict=True)` 钉住这条限制：一旦上游开始刷新静态 geom，该测试会因"意外通过"
+而报错，从而提醒我们回来收尾。
+
+**对轮 4 的结论不变**：抓取判定读接触，所以**静态目标的抓取判定仍不可信**，只有
+free joint 目标可信。要真正修完碰撞，需要先定位 broadphase 的静态位置来源（下一步）。
 
 **原先并列的三个候选（现已因根因明确而收敛）**：
 

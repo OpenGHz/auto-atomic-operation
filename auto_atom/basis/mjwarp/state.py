@@ -108,6 +108,11 @@ class MjWarpSceneState:
         # Reference-counted so nested deferral blocks collapse into one pass.
         self._defer_depth = 0
         self._forward_pending = False
+        # Bodies whose static geoms need world transforms recomputed by hand,
+        # because MJWarp's kinematics skips them (see
+        # _refresh_pending_static_geoms). Drained after each *real* pass, since
+        # the recomputation reads the xpos that pass produces.
+        self._pending_static_geom_bodies: set[int] = set()
         # Bodies written since the last kinematics pass, so a write that reads a
         # parent's world pose can tell whether that pose is still valid.
         self._dirty_bodies: set[int] = set()
@@ -535,7 +540,18 @@ class MjWarpSceneState:
         if self._defer_depth > 0:
             self._forward_pending = True
             return
+        self._run_forward()
+
+    def _run_forward(self) -> None:
+        """Run one real kinematics pass, then fix up what it skips.
+
+        Every actual ``mjw.forward`` goes through here so the static-geom
+        recomputation cannot be missed: it has to read the ``xpos`` the pass just
+        produced, so it can only run after a real pass, never after a deferred
+        no-op.
+        """
         self._mjw.forward(self.model, self.data)
+        self._refresh_pending_static_geoms()
 
     @contextmanager
     def deferred_forward(self) -> Iterator[None]:
@@ -565,7 +581,7 @@ class MjWarpSceneState:
                 self._dirty_bodies.clear()
                 if self._forward_pending:
                     self._forward_pending = False
-                    self._mjw.forward(self.model, self.data)
+                    self._run_forward()
 
     def _mark_dirty(self, body_id: int) -> None:
         """Record that a body's world pose is stale until the next pass."""
@@ -594,7 +610,7 @@ class MjWarpSceneState:
         if self._defer_depth > 0 and int(body_id) in self._dirty_bodies:
             self._forward_pending = False
             self._dirty_bodies.clear()
-            self._mjw.forward(self.model, self.data)
+            self._run_forward()
 
     def step(self) -> None:
         """Advance physics by one timestep for every world (``mj_step``).
@@ -1133,7 +1149,98 @@ class MjWarpSceneState:
         self.model.body_pos.assign(body_pos)
         self.model.body_quat.assign(body_quat)
         self._mark_dirty(body)
+        self._pending_static_geom_bodies.add(int(body))
         self.forward()
+
+    def _refresh_pending_static_geoms(self) -> None:
+        """Recompute geom world transforms MJWarp's kinematics deliberately skips.
+
+        ``mujoco_warp``'s ``_geom_local_to_global`` kernel opens with an early
+        return (``smooth.py:197``) for any geom whose body is welded to world
+        (``body_weldid == 0``) and is not mocap-descended: for those, the comment
+        states ``geom_xpos``/``geom_xmat`` are computed only once during
+        ``make_data``. Under stock MuJoCo that assumption holds, because nothing
+        mutates ``body_pos`` at runtime. MJWarp itself breaks it by making
+        ``body_pos`` a batch-writable model field, which is exactly what
+        randomization writes -- so after a static-body write the body frame moves
+        while its collision and render geometry stay behind.
+
+        This applies the same formula that kernel would have applied (its lines
+        204-205) to the geoms it skipped, so nothing here is reverse-engineered:
+
+            geom_xpos = xpos + rot(geom_pos, xquat)
+            geom_xmat = mat(xquat * geom_quat)
+
+        Only the written body's own geoms are refreshed. Its descendants cannot
+        be static in this sense -- a body welded to world has no joint between
+        it and world, so any child that moved with it is welded too and is
+        covered by the same walk below.
+        """
+        if not self._pending_static_geom_bodies:
+            return
+
+        import mujoco
+
+        weldid = self.host_model.body_weldid
+        rootid = self.host_model.body_rootid
+        mocapid = self.host_model.body_mocapid
+
+        subtree: set[int] = set()
+        for body_id in self._pending_static_geom_bodies:
+            subtree |= self.descendant_body_ids(
+                mujoco.mj_id2name(
+                    self.host_model, mujoco.mjtObj.mjOBJ_BODY, int(body_id)
+                )
+            )
+        self._pending_static_geom_bodies.clear()
+
+        skipped = [
+            body
+            for body in subtree
+            if int(weldid[body]) == 0 and int(mocapid[int(rootid[body])]) == -1
+        ]
+        if not skipped:
+            return
+
+        geom_bodyid = np.asarray(self.host_model.geom_bodyid)
+        geoms = np.flatnonzero(np.isin(geom_bodyid, skipped))
+        if geoms.size == 0:
+            return
+
+        xpos = self.data.xpos.numpy()
+        xquat = self.data.xquat.numpy()
+        geom_pos = self.model.geom_pos.numpy()
+        geom_quat = self.model.geom_quat.numpy()
+        geom_xpos = self.data.geom_xpos.numpy().copy()
+        geom_xmat = self.data.geom_xmat.numpy().copy()
+
+        for world in range(self.nworld):
+            for geom in geoms:
+                body = int(geom_bodyid[geom])
+                body_quat_wxyz = np.asarray(xquat[world][body], dtype=np.float64)
+                # geom_pos/geom_quat may carry a leading batch axis of 1 or
+                # nworld; the kernel indexes them modulo their own length.
+                local_pos = np.asarray(
+                    geom_pos[world % geom_pos.shape[0]][geom], dtype=np.float64
+                )
+                local_quat = np.asarray(
+                    geom_quat[world % geom_quat.shape[0]][geom], dtype=np.float64
+                )
+
+                rotated = np.empty(3, dtype=np.float64)
+                mujoco.mju_rotVecQuat(rotated, local_pos, body_quat_wxyz)
+                geom_xpos[world][geom] = (
+                    np.asarray(xpos[world][body], dtype=np.float64) + rotated
+                )
+
+                composed = np.empty(4, dtype=np.float64)
+                mujoco.mju_mulQuat(composed, body_quat_wxyz, local_quat)
+                matrix = np.empty(9, dtype=np.float64)
+                mujoco.mju_quat2Mat(matrix, composed)
+                geom_xmat[world][geom] = matrix.reshape(geom_xmat[world][geom].shape)
+
+        self.data.geom_xpos.assign(geom_xpos)
+        self.data.geom_xmat.assign(geom_xmat)
 
     def set_object_pose(
         self,

@@ -1577,3 +1577,175 @@ def test_step_and_forward_deferral_are_independent(actuated_model):
     finally:
         state._mjw.forward = original_forward
         restore_step()
+
+
+# ----------------------------------------------------------------------
+# Static-geom frame refresh (upstream skips these; design doc 3.9)
+# ----------------------------------------------------------------------
+
+# A static body with a *rotated* frame and an *offset* geom, so a refresh that
+# forgot either the rotation or the local offset produces a visibly wrong
+# transform rather than accidentally matching.
+_STATIC_GEOM_XML = """
+<mujoco>
+  <option timestep="0.002" integrator="implicitfast"/>
+  <worldbody>
+    <geom name="floor" type="plane" size="2 2 0.05"/>
+    <body name="static_b" pos="0 0 0.4" quat="0.9238795 0 0.3826834 0">
+      <geom name="static_g" type="box" size="0.02 0.02 0.02" pos="0.01 0.02 0.03"/>
+      <body name="static_child" pos="0.05 0 0">
+        <geom name="child_g" type="box" size="0.01 0.01 0.01"/>
+      </body>
+    </body>
+    <!-- A free-joint prober placed where static_g's centre lands after the
+         move below. It has to be free-joint rather than another static body:
+         MuJoCo filters contacts between geoms whose bodies share a weldid, and
+         every world-welded body shares weldid 0 -- so a static geom can never
+         touch the floor or another static geom, in either backend. -->
+    <body name="prober" pos="0.51 0.52 0.53">
+      <freejoint name="prober_free"/>
+      <geom name="prober_g" type="box" size="0.02 0.02 0.02"/>
+    </body>
+  </worldbody>
+</mujoco>
+"""
+
+_TARGET_POS = np.array([0.9, 0.5, 0.7])
+_TARGET_QUAT = np.array([0.0, 0.0, 0.3826834, 0.9238795])
+
+
+def _native_geom_frame(geom_name):
+    """What native MuJoCo computes for the same write."""
+    host = mujoco.MjModel.from_xml_string(_STATIC_GEOM_XML)
+    body = mujoco.mj_name2id(host, mujoco.mjtObj.mjOBJ_BODY, "static_b")
+    geom = mujoco.mj_name2id(host, mujoco.mjtObj.mjOBJ_GEOM, geom_name)
+    host.body_pos[body] = _TARGET_POS
+    host.body_quat[body] = _TARGET_QUAT[[3, 0, 1, 2]]
+    data = mujoco.MjData(host)
+    mujoco.mj_forward(host, data)
+    return data.geom_xpos[geom].copy(), data.geom_xmat[geom].copy()
+
+
+@pytest.fixture
+def static_geom_state():
+    host = mujoco.MjModel.from_xml_string(_STATIC_GEOM_XML)
+    state = MjWarpSceneState(host, nworld=2)
+    state.forward()
+    return state
+
+
+def _geom_id(state, name):
+    return mujoco.mj_name2id(state.host_model, mujoco.mjtObj.mjOBJ_GEOM, name)
+
+
+def test_static_write_refreshes_geom_frames_to_match_native(static_geom_state):
+    """The whole point: MJWarp's kinematics skips these geoms, so we recompute.
+
+    Without the refresh geom_xpos stays at its authored value while xpos moves,
+    which leaves collision and render geometry behind the body.
+    """
+    state = static_geom_state
+    want_pos, want_mat = _native_geom_frame("static_g")
+
+    state.set_static_body_pose("static_b", _TARGET_POS, _TARGET_QUAT)
+
+    geom = _geom_id(state, "static_g")
+    got_pos = state.data.geom_xpos.numpy()[0][geom]
+    got_mat = np.asarray(state.data.geom_xmat.numpy()[0][geom]).reshape(-1)
+    np.testing.assert_allclose(got_pos, want_pos, rtol=1e-5, atol=1e-6)
+    np.testing.assert_allclose(got_mat, want_mat.reshape(-1), rtol=1e-5, atol=1e-6)
+
+
+def test_refresh_survives_deferral(static_geom_state):
+    """Reset defers its kinematics, and reset is where randomization writes.
+
+    The recomputation reads the xpos a real pass produces, so a naive version
+    that ran inline would compute from the pre-write pose inside a deferred
+    block -- silently wrong on exactly the path that matters most.
+    """
+    state = static_geom_state
+    want_pos, _ = _native_geom_frame("static_g")
+
+    with state.deferred_forward():
+        state.set_static_body_pose("static_b", _TARGET_POS, _TARGET_QUAT)
+
+    geom = _geom_id(state, "static_g")
+    np.testing.assert_allclose(
+        state.data.geom_xpos.numpy()[0][geom], want_pos, rtol=1e-5, atol=1e-6
+    )
+
+
+def test_refresh_covers_the_static_subtree(static_geom_state):
+    """A child of a static body is static too, and is skipped the same way."""
+    state = static_geom_state
+    want_pos, _ = _native_geom_frame("child_g")
+
+    state.set_static_body_pose("static_b", _TARGET_POS, _TARGET_QUAT)
+
+    geom = _geom_id(state, "child_g")
+    np.testing.assert_allclose(
+        state.data.geom_xpos.numpy()[0][geom], want_pos, rtol=1e-5, atol=1e-6
+    )
+
+
+def test_refresh_applies_per_world(static_geom_state):
+    """A masked write leaves the unwritten world's geometry where it was."""
+    state = static_geom_state
+    geom = _geom_id(state, "static_g")
+    before = state.data.geom_xpos.numpy()[1][geom].copy()
+
+    state.set_static_body_pose(
+        "static_b", _TARGET_POS, _TARGET_QUAT, world_mask=np.array([True, False])
+    )
+
+    after = state.data.geom_xpos.numpy()
+    assert not np.allclose(after[0][geom], before), "world 0 must move"
+    np.testing.assert_allclose(after[1][geom], before, atol=1e-7)
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "Known upstream limitation, design doc 3.9: refreshing geom_xpos/geom_xmat "
+        "restores the frame (so reads and rendering are correct) but does NOT "
+        "restore collision. Verified: the written geom_xpos survives step() and an "
+        "explicit mjw.collision(), geom_rbound is correct, yet nacon stays 0 -- so "
+        "broadphase does not read geom_xpos for world-welded geoms. Native produces "
+        "4 contacts for the same write. Strict xfail so this fails loudly if "
+        "upstream starts refreshing static geoms."
+    ),
+)
+def test_refreshed_geometry_actually_collides(static_geom_state):
+    """The consequence that motivates the fix: contacts follow the geometry.
+
+    Reading geom_xpos is one thing; the reason it matters is that collision
+    detection uses it. Moving a static body onto the floor must produce contact.
+    """
+    state = static_geom_state
+    static_geom = _geom_id(state, "static_g")
+    prober_geom = _geom_id(state, "prober_g")
+    assert not state.get_contact_geom_pairs(0).size, "must start clear of the prober"
+
+    # Identity orientation keeps the arithmetic obvious: the geom's centre lands
+    # at body_pos + its local offset (0.01, 0.02, 0.03) = the prober's position.
+    state.set_static_body_pose(
+        "static_b", np.array([0.50, 0.50, 0.50]), np.array([0.0, 0.0, 0.0, 1.0])
+    )
+    state.step()
+
+    pairs = state.get_contact_geom_pairs(0)
+    assert pairs.size > 0, "moved static geometry must collide with the prober"
+    touching = {tuple(sorted(pair)) for pair in pairs.tolist()}
+    assert tuple(sorted((static_geom, prober_geom))) in touching
+
+
+def test_free_joint_writes_do_not_need_the_refresh(host_model):
+    """Free-joint bodies are not skipped upstream, so nothing is queued for them."""
+    state = MjWarpSceneState(host_model, nworld=1)
+    state.forward()
+
+    state.set_free_joint_pose(
+        "mover_free", np.array([0.1, 0.2, 0.3]), np.array([0.0, 0.0, 0.0, 1.0])
+    )
+
+    assert not state._pending_static_geom_bodies
