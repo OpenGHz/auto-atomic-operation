@@ -213,3 +213,46 @@ def test_world_index_is_bounds_checked():
 def test_nworld_must_be_positive():
     with pytest.raises(ValueError, match="nworld must be >= 1"):
         StallScaler(nworld=0)
+
+
+def test_joint_delta_clamp_scales_the_whole_vector():
+    """The intermediate pose must stay on the joint-space line to the solution.
+
+    Clipping each joint independently would bend that path and can steer the arm
+    somewhere neither the seed nor the solution intended.
+    """
+    from auto_atom.backend.mjwarp.motion_shaping import clamp_joint_delta
+
+    seed = np.zeros(3)
+    solved = np.array([1.0, 0.5, -0.25])  # worst joint moves 1.0 rad
+
+    got = clamp_joint_delta(solved, seed, 0.35)
+
+    np.testing.assert_allclose(got, [0.35, 0.175, -0.0875], atol=1e-12)
+    # Direction preserved: got is a scalar multiple of the original delta.
+    assert float(np.max(np.abs(got))) == pytest.approx(0.35)
+
+
+def test_joint_delta_within_the_bound_is_untouched():
+    from auto_atom.backend.mjwarp.motion_shaping import clamp_joint_delta
+
+    seed = np.array([0.1, 0.2])
+    solved = np.array([0.2, 0.25])
+
+    np.testing.assert_allclose(clamp_joint_delta(solved, seed, 0.35), solved)
+
+
+def test_joint_delta_clamp_can_be_disabled():
+    from auto_atom.backend.mjwarp.motion_shaping import clamp_joint_delta
+
+    seed = np.zeros(2)
+    solved = np.array([5.0, 0.0])
+
+    np.testing.assert_allclose(clamp_joint_delta(solved, seed, 0.0), solved)
+
+
+def test_joint_delta_clamp_handles_an_empty_arm():
+    from auto_atom.backend.mjwarp.motion_shaping import clamp_joint_delta
+
+    empty = np.empty(0)
+    assert clamp_joint_delta(empty, empty, 0.35).size == 0

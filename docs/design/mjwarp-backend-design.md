@@ -290,7 +290,7 @@ float32，量化在写入 device 的边界上必然发生一次，宿主端再�
 | 4c-2 | operator 注册与 eef/base 位姿访问器（`MjWarpOperatorState`，仅 joint 模式） | 已实现 |
 | 4c-3a | IK 调用层（`MjWarpIkCaller`，**per-world** 失败计数与日志节流） | 已实现 |
 | 4c-3b-1 | 运动整形（笛卡尔步长夹紧、per-world stall 缩放、步长界限解析） | 已实现 |
-| 4c-3b-2 | `move_to_pose` 状态机（IK 驱动、unreachable 判定、容差裁决） | 未开始 |
+| 4c-3b-2 | `MjWarpArmControl`：`move_to_pose` 状态机（仅 `per_step_ik`） | 已实现 |
 | 4c-3c | `physical` 模式 env / backend 组装 | 未开始 |
 | 4d | 触觉（52 个 `contype=0` 触觉单元的读取路径） | 未开始 |
 

@@ -70,6 +70,39 @@ def clamp_cartesian_step(
     return position, orientation
 
 
+def clamp_joint_delta(
+    solved: np.ndarray,
+    seed: np.ndarray,
+    max_delta: float,
+) -> np.ndarray:
+    """Bound how far one control step may move any single joint.
+
+    IK is free to return a solution on a different kinematic branch than the
+    seed -- elbow flipped, wrist rolled the other way -- which is a valid pose
+    for the target but reaches it by sweeping the arm through a large motion.
+    Clamping the per-step displacement suppresses that: the arm walks toward the
+    new branch over several ticks instead of lunging at it.
+
+    The clamp scales the *whole* delta vector by the worst single joint, rather
+    than clipping each joint independently, so the intermediate pose stays on
+    the straight line in joint space toward the solution. Clipping per joint
+    would bend that path and can steer the arm somewhere neither pose intended.
+
+    A non-positive ``max_delta`` disables the clamp.
+    """
+    solved = np.asarray(solved, dtype=np.float64)
+    seed = np.asarray(seed, dtype=np.float64)
+    if max_delta <= 0.0:
+        return solved
+    delta = solved - seed
+    if delta.size == 0:
+        return solved
+    largest = float(np.max(np.abs(delta)))
+    if largest > max_delta:
+        return seed + delta * (max_delta / largest)
+    return solved
+
+
 @dataclass
 class StallScaler:
     """Per-world step scaling that reacts to progress.
