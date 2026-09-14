@@ -56,10 +56,14 @@ class MjWarpObjectOnlyBackend(SceneBackend):
         env: MjWarpObjectOnlyEnv,
         object_handlers: Mapping[str, MjWarpObjectHandler],
         randomization: Optional["ResolvedRandomizationConfig"] = None,
+        operator_handlers: Optional[Mapping[str, Any]] = None,
     ) -> None:
         self.config = config
         self.env = env
         self.object_handlers: Dict[str, MjWarpObjectHandler] = dict(object_handlers)
+        # Empty for ``execution.mode: object_only``, which strips the operator
+        # layer at the Hydra boundary; populated for physical execution.
+        self.operator_handlers: Dict[str, Any] = dict(operator_handlers or {})
         # The *resolved* config, not the raw scope: `.applies` folds the master
         # switch and emptiness into one decision, and a backend is not supposed
         # to hold a raw randomization config at all.
@@ -143,14 +147,19 @@ class MjWarpObjectOnlyBackend(SceneBackend):
         return self.object_handlers.get(name)
 
     def get_operator_handler(self, name: str) -> OperatorHandler:
-        """Always fails: object-only execution has no embodied operator.
+        """The physical operator handler, or a loud failure when there is none.
 
-        The runtime substitutes its own ``ObjectOnlyOperatorHandler`` for this
-        mode, so reaching here means something expected a physical operator.
-        Failing loudly beats returning a stub whose empty grasp state would read
-        as a legitimate "not grasping".
+        ``execution.mode: object_only`` strips the operator layer at the Hydra
+        boundary and the runtime substitutes its own
+        ``ObjectOnlyOperatorHandler``, so an empty mapping means something
+        expected a physical operator that this task does not have. Failing beats
+        returning a stub whose empty grasp state would read as a legitimate "not
+        grasping".
         """
-        raise KeyError(_OPERATOR_UNSUPPORTED.format(name=name))
+        handler = self.operator_handlers.get(name)
+        if handler is None:
+            raise KeyError(_OPERATOR_UNSUPPORTED.format(name=name))
+        return handler
 
     # ------------------------------------------------------------------
     # Grasp and contact queries
@@ -562,12 +571,7 @@ def build_mjwarp_object_only_backend(
         if isinstance(task, AutoAtomConfig)
         else AutoAtomConfig.model_validate(task)
     )
-    if operators:
-        raise ValueError(
-            "The MJWarp backend supports execution.mode=object_only, which has "
-            f"no operators, but received: {sorted(operators)}. Physical "
-            "execution on MJWarp is not implemented yet."
-        )
+    operator_configs = dict(operators or {})
 
     env = ComponentRegistry.get_env(config.env_name)
     if not isinstance(env, MjWarpObjectOnlyEnv):
@@ -592,4 +596,105 @@ def build_mjwarp_object_only_backend(
         randomization=ResolvedRandomizationConfig.from_scope_config(
             config.randomization
         ),
+        operator_handlers=_build_operator_handlers(env, operator_configs),
     )
+
+
+def _build_operator_handlers(
+    env: MjWarpObjectOnlyEnv,
+    operator_configs: Mapping[str, Any],
+) -> Dict[str, Any]:
+    """Assemble one ``MjWarpOperatorHandler`` per configured operator.
+
+    Empty for ``object_only``, whose ``task_operators`` the Hydra boundary
+    clears, so this is a no-op there rather than a branch.
+
+    Control parameters come from the task side (``task_operators.<name>.control``
+    and ``.ik``), which ``OperatorConfig`` carries in ``model_extra`` because it
+    is declared ``extra="allow"`` -- the same place the native builder reads them
+    from. The gripper's own limits are *not* taken from there: they are derived
+    from the actuator's ``ctrlrange`` by
+    :meth:`MjWarpEefControl.for_operator`, because a config that omits them would
+    otherwise inherit robotiq-shaped defaults that are wrong by two orders of
+    magnitude for other grippers (see design doc 5.1).
+    """
+    from auto_atom.backend.mjwarp.arm_control import MjWarpArmControl
+    from auto_atom.backend.mjwarp.eef_control import MjWarpEefControl
+    from auto_atom.backend.mjwarp.ik import MjWarpIkCaller
+    from auto_atom.backend.mjwarp.operator_handler import MjWarpOperatorHandler
+
+    if operator_configs and not env.operator_names:
+        # The task wants physical execution but the env registered nothing, which
+        # means the two were composed under different execution modes: object_only
+        # strips the operator MJCF layers, so the scene has no arm to drive. Say
+        # that, rather than letting the per-operator lookup fail with a bare
+        # "not registered" from inside the assembly.
+        raise ValueError(
+            f"Task requests operators {sorted(operator_configs)} but the "
+            f"environment '{env.config.name}' registered none. The env was "
+            "composed under execution.mode=object_only, which strips the "
+            "operator layer, so there is no arm in the scene to drive. Compose "
+            "the env with execution.mode=physical to match the task."
+        )
+
+    handlers: Dict[str, Any] = {}
+    for name, operator_config in operator_configs.items():
+        extra = getattr(operator_config, "model_extra", None) or {}
+        control = dict(extra.get("control") or {})
+        ik_block = dict(extra.get("ik") or {})
+        tolerance = dict(control.get("tolerance") or {})
+        grasp = dict(control.get("grasp") or {})
+
+        operator = env.get_operator_state(name)
+        # joint_control_mode / max_joint_delta live on the task side, but the
+        # operator state is what the control classes read, so they are applied
+        # here rather than duplicated as separate handler fields.
+        if "joint_control_mode" in ik_block:
+            operator.joint_control_mode = str(ik_block["joint_control_mode"])
+        if "max_joint_delta" in ik_block:
+            operator.max_joint_delta = float(ik_block["max_joint_delta"])
+
+        arm = MjWarpArmControl(
+            state=env.state,
+            operator=operator,
+            ik=MjWarpIkCaller(
+                solver=operator.ik_solver,
+                nworld=env.batch_size,
+                operator_name=name,
+            ),
+            position_tolerance=tolerance.get("position", 0.01),
+            orientation_tolerance=float(tolerance.get("orientation", 0.08)),
+            timeout_steps=int(control.get("timeout_steps", 100)),
+            max_linear_step=float(control.get("cartesian_max_linear_step", 0.0)),
+            max_angular_step=float(control.get("cartesian_max_angular_step", 0.0)),
+            adaptive_step_scaling=bool(control.get("adaptive_step_scaling", False)),
+            ik_unreachable_threshold=int(control.get("ik_unreachable_threshold", 30)),
+        )
+
+        eef_overrides: Dict[str, Any] = {
+            "timeout_steps": int(control.get("timeout_steps", 100)),
+            "settle_steps": int(grasp.get("settle_steps", 5)),
+            "release_settle_steps": int(grasp.get("release_settle_steps", 0)),
+            "lateral_threshold": float(grasp.get("lateral_threshold", 0.0)),
+            "grasp_axis": int(grasp.get("grasp_axis", 2)),
+        }
+        if "eef" in tolerance:
+            # An explicit tolerance wins over the ctrlrange-derived one.
+            eef_overrides["eef_tolerance"] = float(tolerance["eef"])
+
+        placed = control.get("placed") or tolerance.get("placed") or {}
+        handlers[name] = MjWarpOperatorHandler(
+            state=env.state,
+            operator=operator,
+            arm=arm,
+            eef=MjWarpEefControl.for_operator(env.state, operator, **eef_overrides),
+            placed_position_tolerance=placed.get("position"),
+            placed_orientation_tolerance=placed.get("orientation"),
+        )
+    return handlers
+
+
+# Canonical name now that the backend serves physical execution too. The
+# object-only name is kept because task files reference it in their ``backend:``
+# field, and breaking that would be a config-visible change for no gain.
+build_mjwarp_backend = build_mjwarp_object_only_backend

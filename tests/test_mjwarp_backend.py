@@ -265,8 +265,15 @@ def test_reset_results_do_not_depend_on_deferral(backend):
     np.testing.assert_allclose(deferred, eager, rtol=1e-6, atol=1e-7)
 
 
-def test_builder_rejects_operators():
-    """A non-empty task_operators means the task wants physical execution."""
+def test_builder_rejects_operators_the_env_cannot_drive():
+    """A physical task composed against an object_only env is a mode mismatch.
+
+    The builder used to refuse *all* operators because physical execution was
+    unimplemented. It now assembles them, so the remaining error case is
+    narrower and worth a specific message: object_only strips the operator MJCF
+    layers, so the scene genuinely has no arm, and the previous behaviour was a
+    bare "not registered" KeyError from inside the assembly.
+    """
     ComponentRegistry.clear()
     with initialize_config_dir(
         config_dir=str(_REPO_ROOT / "aao_configs"), version_base=None
@@ -287,7 +294,7 @@ def test_builder_rejects_operators():
         OmegaConf.to_container(prepared.task, resolve=True)
     )
 
-    with pytest.raises(ValueError, match="no operators"):
+    with pytest.raises(ValueError, match="registered none"):
         build_mjwarp_object_only_backend(task, {"arm": {}})
 
 
@@ -418,3 +425,147 @@ def test_object_only_operator_surface_still_refuses(backend):
     ):
         with pytest.raises(KeyError):
             call()
+
+
+# ----------------------------------------------------------------------
+# Physical handler assembly through the builder
+# ----------------------------------------------------------------------
+
+
+def _build_via_builder(batch_size: int = 2):
+    """Build in physical mode through the real builder, as a task file would."""
+    ComponentRegistry.clear()
+    with initialize_config_dir(
+        config_dir=str(_REPO_ROOT / "aao_configs"), version_base=None
+    ):
+        cfg = compose(
+            config_name=_CONFIG_NAME,
+            overrides=[
+                "execution.mode=physical",
+                f"env.batch_size={batch_size}",
+                "env.viewer=null",
+            ],
+        )
+    prepared = prepare_task_config_for_instantiation(cfg)
+    env_node = OmegaConf.to_container(prepared.env, resolve=True)
+    env_node.pop("_target_", None)
+    MjWarpObjectOnlyEnv(EnvConfig.model_validate(env_node), njmax=512)
+
+    task = AutoAtomConfig.model_validate(
+        OmegaConf.to_container(prepared.task, resolve=True)
+    )
+    # task_operators is a top-level node on the prepared config, not part of the
+    # narrower AutoAtomConfig the backend receives, so the runtime passes it to
+    # the builder separately -- which is why the builder takes it as an argument.
+    from auto_atom.config.task import OperatorConfig
+
+    operators = {
+        name: OperatorConfig.model_validate({"name": name, **(node or {})})
+        for name, node in (
+            OmegaConf.to_container(
+                OmegaConf.select(prepared, "task_operators", default={}), resolve=True
+            )
+            or {}
+        ).items()
+    }
+    backend = build_mjwarp_object_only_backend(task, operators)
+    backend.setup(task)
+    return backend, operators
+
+
+@pytest.fixture(scope="module")
+def assembled():
+    backend, operators = _build_via_builder()
+    yield backend, operators
+    backend.teardown()
+
+
+def test_builder_assembles_an_operator_handler(assembled):
+    """The seam the runtime asks for now exists in physical mode."""
+    from auto_atom.contracts import OperatorHandler
+
+    backend, _ = assembled
+    handler = backend.get_operator_handler("arm")
+
+    assert isinstance(handler, OperatorHandler)
+    assert handler.name == "arm"
+
+
+def test_assembled_handler_carries_both_control_halves(assembled):
+    backend, _ = assembled
+    handler = backend.get_operator_handler("arm")
+
+    assert handler.arm is not None, "move_to_pose needs the arm half"
+    assert handler.eef is not None, "control_eef needs the gripper half"
+    assert handler.arm.ik.failure_streak(0) == 0
+
+
+def test_control_parameters_come_from_the_task_config(assembled):
+    """The task's control block reaches the state machines, not defaults."""
+    backend, operators = assembled
+    handler = backend.get_operator_handler("arm")
+    control = (operators["arm"].model_extra or {}).get("control") or {}
+
+    assert handler.arm.timeout_steps == int(control["timeout_steps"])
+    assert handler.arm.max_linear_step == pytest.approx(
+        float(control["cartesian_max_linear_step"])
+    )
+    tolerance = control["tolerance"]
+    assert handler.arm.orientation_tolerance == pytest.approx(
+        float(tolerance["orientation"])
+    )
+    # `placed` is nested under `tolerance` in this config; the builder accepts it
+    # in either position, so the test reads it where the config actually puts it.
+    assert handler.get_placed_tolerances()[0] == pytest.approx(
+        float(tolerance["placed"]["position"])
+    )
+
+
+def test_ik_parameters_reach_the_operator_state(assembled):
+    """joint_control_mode and max_joint_delta live on the task side."""
+    backend, operators = assembled
+    handler = backend.get_operator_handler("arm")
+    ik_block = (operators["arm"].model_extra or {}).get("ik") or {}
+
+    assert handler.operator.joint_control_mode == ik_block["joint_control_mode"]
+    assert handler.operator.max_joint_delta == pytest.approx(
+        float(ik_block["max_joint_delta"])
+    )
+
+
+def test_gripper_limits_are_derived_not_defaulted(assembled):
+    """The real UMI claw is ctrlrange 0..0.0165, not robotiq's 0..0.82.
+
+    Inheriting the robotiq default close value would command an unreachable
+    target; inheriting the default tolerance would exceed the whole travel.
+    """
+    backend, operators = assembled
+    handler = backend.get_operator_handler("arm")
+    control = (operators["arm"].model_extra or {}).get("control") or {}
+    configured_eef_tolerance = (control.get("tolerance") or {}).get("eef")
+
+    assert handler.eef.eef_close_value < 0.1, "must not be robotiq's 0.82"
+    assert handler.eef.eef_close_value > 0.0
+    if configured_eef_tolerance is not None:
+        # The config states one, so it wins over the derived value.
+        assert handler.eef.eef_tolerance == pytest.approx(
+            float(configured_eef_tolerance)
+        )
+    else:
+        assert handler.eef.eef_tolerance < handler.eef.eef_close_value
+
+
+def test_grasp_queries_work_through_the_assembled_backend(assembled):
+    backend, _ = assembled
+
+    assert not backend.is_operator_grasping("arm").any()
+    assert backend.get_grasped_object_name("arm", 0) is None
+
+
+def test_canonical_builder_alias_is_the_same_callable():
+    from auto_atom.backend.mjwarp.backend import (
+        build_mjwarp_backend,
+        build_mjwarp_object_only_backend as legacy,
+    )
+
+    assert build_mjwarp_backend is legacy
