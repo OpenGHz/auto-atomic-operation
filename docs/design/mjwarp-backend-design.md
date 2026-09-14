@@ -182,7 +182,7 @@ float32 精确表示的**运气**，不是转换的性质，因此也一并放�
 | 2h | `MjWarpObjectOnlyBackend`：`SceneBackend` + `RandomizationHost` + builder | 已实现 |
 | 2i | 观测采集（渲染）：每个 clip range 一个 `RenderContext` | 已实现 |
 | 3a | reset 的 forward pass 合并（6 → 2 次 kernel launch，1.84x） | 已实现 |
-| 3b | 批量模型的其余优化（readback 合并等） | 未开始 |
+| 3b | readback 合并 —— **实测不值得做，已放弃**（见 6.3） | 不做 |
 | 4 | physical 模式：执行器、IK、接触、触觉 | 未开始 |
 
 **轮 2a**（`auto_atom/basis/mjwarp/state.py`）是后续各轮的读写底座：它持有
@@ -475,6 +475,30 @@ readback。
 no-op 后两者立刻失败**（相机落到 `[0.2, 0.35, 0.95]` 而非 `[0.35, 0.05, 0.55]`，
 约 0.5 m 偏差），确认它确实承重而非装饰。
 
+### 6.3 readback 合并：实测不值得做
+
+3a 之后重新剖析一次 reset（`batch_size=2`，逐数组包装 `.numpy()` / `.assign()` 计时）：
+
+| 项 | 时间 | 占比 | 调用次数 |
+|---|---|---|---|
+| readback（`.numpy()`） | 1.67 ms | **6.6%** | 41 |
+| assign（`.assign()`） | 0.33 ms | 1.3% | 14 |
+| 其余 | 23.27 ms | 92.1% | — |
+| **reset 总计** | 25.28 ms | | |
+
+调用次数看着多（`data.xpos` 9 次、`data.xquat` 9 次），但**每个调用点在自己那次调用
+里只读一次**——9 次来自 9 个不同的方法调用，不存在同一方法内的重复读取可以消除。
+把它们合并成"一次批量 readback"需要在 state 里引入一层缓存并管理失效，而天花板
+只有 6.6%。
+
+**因此 3b 放弃**：这是在 8% 的上限上做有失效风险的重构，不划算。真正的 23 ms 在
+randomization 自身的采样与约束评估（纯 CPU、与后端无关），要优化应该去那一层，
+而不是 MJWarp 适配层。
+
+> 这也修正了我最初对 3b 的判断——早先说"reset 的 numpy round-trip 值得合并、约
+> 11 ms"。那个 11 ms 是 3a 之前把 forward pass 也算进"其余"得到的数字；3a 之后
+> 真正的 readback 开销只有 1.67 ms。
+
 ## 7. 本机环境注意事项
 
 `nvidia-smi` 报驱动 12.4，warp 1.17.0 编译使用 CUDA Toolkit 12.9。清空 warp
@@ -526,6 +550,35 @@ python scripts/check_mjwarp_compat.py --probe-python /path/to/mjwarp-venv/bin/py
 直接报错而非隐性失败。新增任务配置或改动机器人 XML 后可直接重跑做回归。
 
 ## 9. 范围外发现
+
+### 9.1 `rack_plate` 连续 reset 到第 4 次必然失败（既存 bug，与本移植无关）
+
+**两个后端表现完全一致**：原生与 MJWarp 都是 3/8 次 reset 成功，第 4 次抛
+`RandomizationFailureError: Randomization for 'rack' failed after 100 attempts:
+rack:collides:plate_stand; minimum_clearance=-0.0025`。因此这不是移植引入的问题，
+而是共享随机化层 + 配置本身的几何问题。
+
+根因是**范围可以吃掉全部余量**：
+
+| 量 | 值 |
+|---|---|
+| authored 中心距 | 0.40241 m |
+| 需要的分离距离（`r_rack + r_stand`，两者都是 `collision_radius: -1` 自动求得） | 0.36936 m |
+| authored 余量 | **+0.03305 m** |
+| `rack.x` ± / `plate_stand.x` ± | 0.05 / 0.06 → 最坏靠近 **0.11 m** |
+| 最坏情况中心距 | 0.29241 m → **无解** |
+
+所以部分采样组合在几何上不可能满足，而 `failure.mode` 默认 `ERROR`（fail-closed）
+会直接让这一轮失败，而不是换一组重采。
+
+`rounds` 默认是 1，所以日常 demo 一直没暴露；但数据采集要跑很多轮，必然踩到。
+`collision_radius: -1` 目前只有 `rack_plate` 在用，所以影响面限于这一个配置。
+
+**已按用户决定：只记录，暂不改配置。** 可选修法（未实施）：把两者 x 范围收紧到
+最坏情况仍可满足（约 ±0.015），保持 fail-closed 语义不变；或改
+`failure.mode: best_effort` 让无解时退化为最优候选——但那会静默接受轻微穿模。
+
+### 9.2 触觉传感器的 NaN 风险
 
 `assets/xmls/sensors/tactile_sensor.xml` 声明的触觉单元是**可碰撞的**
 （`contype=conaffinity=1`），却带 `friction="0 0 0"` 与 `condim="4"`，MJWarp 报
