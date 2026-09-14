@@ -1,16 +1,15 @@
 # MJWarp（GPU MuJoCo）后端设计方案
 
-> **状态：`object_only` 已实现并跑通；`physical` 模式（轮 4）全部单元已实现并测试，
-> 端到端在 MJWarp 上真实跑起来了（栈咬合、无崩溃、sim 时间精确对账、arm 归位到毫米、
-> IK 在可达目标上成功）。`rack_plate` 在 physical 下仍失败，但原因是该配置的随机化
-> 范围为 `object_only` 相机可见性设计、超出机械臂工作空间——是配置问题而非移植缺陷
-> （见 5.3）；需要一个为 physical 收窄范围的配置变体才能真正通过。**
+> **当前状态：支持 mocap、关节 `per_step_ik` 和 `solve_once_interpolate`。
+> `pick_and_place` 与 `cup_on_coaster_airbot_p7_umi` 已在 Warp 的两个 world 中
+> 完成抓取和放置；rack 仅验收 `object_only`，其 physical 失败暂不处理。**
+> 下方早期轮次保留历史观察；当前控制与初始化语义以本状态栏及 5.4 为准。
 >
 > 本文描述把 [MJWarp](https://github.com/google-deepmind/mujoco_warp) 接为 AAO
 > 后端的设计边界与实现进度。已落地的部分：`auto_atom/basis/mjwarp/`
 > （state / env / render）与 `auto_atom/backend/mjwarp/backend.py`。
-> `pyproject.toml` 尚未新增 `mjwarp` extra（见 6.1），故 `mujoco_warp`
-> 仍按可选依赖惰性导入。轮次与状态见第 5 节。
+> `pyproject.toml` 提供 `mjwarp` extra；`mujoco_warp` 仍按可选依赖惰性导入。
+> 轮次与状态见第 5 节。
 >
 > 本文结论均来自 `scripts/check_mjwarp_compat.py` 的实测与一次 `object_only`
 > 真实运行的方法级 tracing，而非阅读推断。复现方式见文末。
@@ -246,15 +245,15 @@ float32，量化在写入 device 的边界上必然发生一次，宿主端再�
 时间与控制指令双双错位。这不是性能问题，是正确性问题，且**不会立刻报错**：仿真
 照样运行，只是每个 tick 的 dt 变成了 `batch_size × timestep`。
 
-**结论：不能按 env 逐个步进，必须把一次 control tick 的所有 world 指令先攒起来、
-再步进一次。** 这与轮 3a 的做法同构：3a 把多次 `forward()` 合并成一次
-（`deferred_forward`），这里要把多次 `step()` 合并成一次。因此实现方向是
-`deferred_step`——每个 env 的调用只写自己 world 的 `ctrl` 并累计"需要步进"的标记，
-在一次 `update()` 的所有 env 都写完之后统一 `step()` 一次。
+**当前实现：同步推进 mask 中的 world，并保留其他 world 的完整积分状态。**
+`MjWarpSceneState.step(nstep, world_mask=...)` 用 MJWarp 的 `get_state` /
+`set_state` 保存和恢复未选中的时间、关节状态、执行器动态、warmstart、外力和 mocap
+输入；恢复后刷新派生位姿与接触。机械臂和夹爪都推进 `sim_freq / update_freq` 个
+物理子步，完成判定读取该控制步的结果。
 
-注意这条同时约束 `move_to_pose`：它也在同一个 one-hot 循环里，也调
-`step_operator_toward_target` 间接步进物理。两者必须共用同一个 deferral 边界，
-否则一次 tick 里 eef 与 arm 的步进次数会不一致。
+`deferred_step` 仍可显式合并同等时长的请求，但运行时无需依赖它才能保证 mask
+语义。代价是逐 world 调用仍会执行整批 GPU 内核；这保证正确性，吞吐不能直接按
+整批同步控制的理想值估算。
 
 ### 3.9 静态 body 写入不更新 `geom_xpos`：轮 2c 遗留缺陷（已修复）
 
@@ -703,7 +702,10 @@ grep 确认：`override_base_pose`（轮 4c-2 写的）**除自己的测试外�
 失败模式随之从"max_updates 超时、IK 全程成功"变成 **`ik_unreachable`**——手臂现在
 朝**真实**的 pick 目标控制，只是够不到。即 5.2 记录的"控到错误基座系"这个 bug 已消除。
 
-### 5.3 剩余失败是配置本身，不是移植缺陷
+### 5.3 早期 rack physical 失败记录（本轮暂不处理）
+
+本节保留先前运行记录。后续发现并修复了步长、控制子步和初始化缺陷，故不能由
+该记录推出“移植不存在缺陷”。当前只验收 rack 的 `object_only` 模式。
 
 复跑后两个 world 都因 `ik_unreachable` 失败（连续 30 次 IK 失败）。根因在配置，不在
 栈：`object` 的随机化框（见 §config 注释）是为 `object_only` 的**相机可见性**设计的
@@ -725,6 +727,28 @@ roll/pitch/yaw: 全范围
 在可达目标上成功、不可达时正确报错）。要让 `rack_plate` 在 physical 下真正跑通，需要
 一个**为 physical 收窄了随机化范围**的配置变体——但用户已明确"不改
 `rack_plate_p7_v4_umi_v3.yaml` 及其随机化范围"，因此这一步留给用户定夺。
+
+### 5.4 完整控制与初始化（已实现）
+
+- `sim_freq` 在设备模型创建前应用；控制更新按 `n_substeps` 推进。
+- CPU 与 Warp 共享 keyframe、home joints 和 mocap weld 初始化。被动连杆的
+  固定关节收敛阶段隔离场景接触，结束后恢复碰撞与重力；任务运行保持真实碰撞。
+- mocap 控制保留虚拟基座，正确组合工具与 weld 的相对变换；reset、EEF home 和
+  base/EEF 随机化支持独立 world。反向 weld 与非零锚点有回归覆盖。
+- `solve_once_interpolate` 对最终目标求解一次 IK，按 `joint_interp_speed`
+  线性推进关节计划；等价的四元数正负号不触发重规划，目标变化及 reset 会更新计划。
+- `+backend=warp` 默认 `njmax=2048`、`nconmax=1024`，分别提供每个 world 的
+  约束行与候选接触容量。复杂场景仍需根据实际峰值配置容量。
+- MJWarp 尚无 noslip 后处理，设备上传时禁用该选项并明确警告切向滑移风险。
+  CPU 的共享 MJCF 配置保留原选项。
+
+复现当前三个验收模式：
+
+```bash
+aao-demo --config-name pick_and_place +backend=warp
+aao-demo --config-name cup_on_coaster_airbot_p7_umi +backend=warp
+aao-demo --config-name rack_plate_p7_v4_umi_v3 +backend=warp execution.mode=object_only
+```
 
 ### 5.0 轮 4d-2（触觉层接入）的交接说明
 

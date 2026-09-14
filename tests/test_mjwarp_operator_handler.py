@@ -276,7 +276,7 @@ def test_control_tick_collapses_both_halves_into_one_step(handler):
         handler.control_eef(EefControlConfig(close=True), None, env_mask=mask)
 
     after = handler.state.data.time.numpy()
-    np.testing.assert_allclose(after - before, timestep, rtol=1e-6)
+    np.testing.assert_allclose(after - before, timestep * mask, rtol=1e-6)
 
 
 def test_missing_eef_control_is_refused(model):
