@@ -366,6 +366,23 @@ class MjWarpSceneState:
         )
         return position, orientation
 
+    def get_joint_angle(self, joint_name: str, world_index: int = 0) -> float:
+        """Scalar ``qpos`` value of a named joint, for one world.
+
+        Door and latch arcs address a hinge by name and read its angle to decide
+        how far the effect trajectory has progressed.
+        """
+        import mujoco
+
+        world = self._check_world(world_index)
+        joint = int(
+            mujoco.mj_name2id(self.host_model, mujoco.mjtObj.mjOBJ_JOINT, joint_name)
+        )
+        if joint < 0:
+            raise KeyError(f"No joint named '{joint_name}' found in the MuJoCo model.")
+        qpos_adr = int(self.host_model.jnt_qposadr[joint])
+        return float(self.data.qpos.numpy()[world][qpos_adr])
+
     def get_joint_frame_pose(
         self,
         joint_name: str,

@@ -153,7 +153,8 @@ float32 精确表示的**运气**，不是转换的性质，因此也一并放�
 | 2e | `MjWarpObjectHandler`：满足 `ObjectHandler` 契约（`apply_object_pose` 的落点） | 已实现 |
 | 2f | `MjWarpObjectOnlyEnv`：满足 `EnvProtocol` / `PoseConstraintEnvProtocol` | 已实现 |
 | 2g | 相机位姿写入（mount / world 系）+ geom / joint frame 读取 | 已实现 |
-| 2h | `object_only` MJWarp backend（`SceneBackend` + `RandomizationHost`） | 未开始 |
+| 2h | `MjWarpObjectOnlyBackend`：`SceneBackend` + `RandomizationHost` + builder | 已实现 |
+| 2i | 观测采集（渲染）：每个 clip range 一个 `RenderContext` | 未开始 |
 | 3 | per-world 批量模型取代 N 份 `MjModel` | 未开始 |
 | 4 | physical 模式：执行器、IK、接触、触觉 | 未开始 |
 
@@ -298,6 +299,39 @@ context"的设计。`object_only` 执行路径本身不渲染（采集是显式�
 geom → joint 共四级，而轮 2f 只实现了前两级。`motion_goal.py` 与 `runtime.py` 都
 通过它解析命名 frame（`controlled_frame`、门/闩的 arc 支点），因此缺失的两级是真实
 缺口，现已补齐并与原生同序。
+
+**轮 2h**（`auto_atom/backend/mjwarp/backend.py`）合上了 `object_only` 后端：
+`MjWarpObjectOnlyBackend` 同时满足 `SceneBackend` 与 `RandomizationHost`，
+`build_mjwarp_object_only_backend` 是任务文件 `backend:` 字段的构造入口。
+
+实测（`tests/test_mjwarp_backend.py`，走真实 `rack_plate_p7_v4_umi_v3` 任务文件）：
+
+- `dt_per_update = 0.08` = timestep 0.002 x 40 substep（`sim_freq/update_freq` =
+  1200/30），与原生推导一致；
+- handler 收集到 `object` / `rack` / `rack_target` / `plate_stand` 四个——`rack`
+  与 `plate_stand` 从不作为 stage 目标出现，但随机化要移动它们，所以必须有 handler；
+- 刚性归属判定给出 place stage 需要的语义：`object_site` **属于** `object`，
+  `rack_target_site` **不属于**（它骑在 rack 上）；
+- **reset 跑通了带约束的逐 world 随机化**：两个 world 各自采到不同的位姿，且都落在
+  配置的 proposal box 内。采样成功本身意味着 `evaluate_pose_constraints` 接受了它，
+  因此 `visible_in: rack_camera_front, margin_px: 8` 这条约束路径也被执行到了。
+  **这条只有在轮 2a/2c 的写入形状被修正（5.1）之后才可能成立**——否则两个 world 会
+  拿到同一个广播位姿。
+- 固定 seed 下两次独立构造的采样结果一致，即 run 可复现。
+
+**operator 查询一律抛错，而不是返回空值**。`object_only` 没有实体 operator，运行时
+会替换自己的 `ObjectOnlyOperatorHandler`；一个"未抓取"的空状态看起来完全像一个
+合法答案，会静默掩盖配置错误的 physical run。唯一例外是 `get_operator_contacts`
+返回 `None`——契约本身把 `None` 定义为"该后端不支持接触观测"，而且它是运行时
+机会性调用的诊断路径，不参与控制决策。
+
+一处构造期的坑：后端持有的必须是 `ResolvedRandomizationConfig`（由
+`from_scope_config` 包装）而非原始 scope config——`.applies` 只在前者上，它把总开关
+与"是否为空"合成一个判断。直接用 `config.randomization` 会在 reset 时
+`AttributeError`。
+
+`MjWarpObjectOnlyEnv` 现在也会用 `config.name` 注册到 `ComponentRegistry`，与原生
+env 同样的接线方式；否则 builder 的 `get_env` 找不到 Hydra 已经实例化的那个 env。
 
 **轮 1** 的动机：MJWarp 门禁拒绝 mesh/box CCD pair 上的非零 margin。编译后场景
 中 59 个非零 margin geom 里只有 7 个可碰撞（`link1..link7`），其余 52 个是

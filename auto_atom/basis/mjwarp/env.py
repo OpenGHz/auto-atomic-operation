@@ -81,6 +81,16 @@ class MjWarpObjectOnlyEnv:
         self._randomization_constraints = RandomizationConstraintEvaluator()
         self._interest_object_operations: Dict[str, str] = {}
 
+        if config.name:
+            # Registered under the config name so a task file's ``backend:``
+            # builder can find the env Hydra already instantiated, which is how
+            # the native env is wired too. Imported here rather than at module
+            # scope because ``runtime`` pulls in the contracts and config
+            # layers, and this module sits below them.
+            from auto_atom.runtime import ComponentRegistry
+
+            ComponentRegistry.register_env(config.name, self)
+
     # ------------------------------------------------------------------
     # EnvProtocol
     # ------------------------------------------------------------------
@@ -88,6 +98,17 @@ class MjWarpObjectOnlyEnv:
     @property
     def batch_size(self) -> int:
         return self.state.nworld
+
+    @property
+    def n_substeps(self) -> int:
+        """Physics steps advanced per ``update()``.
+
+        Derived from ``sim_freq / update_freq`` as the native basis does, so
+        ``dt_per_update`` agrees across backends for the same config.
+        """
+        if self.config.sim_freq is None or self.config.update_freq is None:
+            return 1
+        return int(self.config.sim_freq / self.config.update_freq)
 
     # ------------------------------------------------------------------
     # Construction helpers
