@@ -27,6 +27,12 @@ _SCENE_XML = """
     <body name="holder" pos="0.1 -0.2 0.3" quat="0.9238795 0 0.3826834 0">
       <geom name="holder_geom" type="box" size="0.05 0.04 0.03"/>
       <site name="holder_site" pos="0.01 0.02 0.03"/>
+      <!-- Static and *nested* below a parent with non-identity pos and quat.
+           A world->parent-local conversion bug is invisible on a direct child
+           of worldbody, whose parent frame is the identity. -->
+      <body name="nested_static" pos="0.06 0.01 0.02" quat="0.7071068 0 0 0.7071068">
+        <geom name="nested_geom" type="box" size="0.01 0.01 0.01"/>
+      </body>
     </body>
     <body name="mover" pos="-0.4 0.15 0.5" quat="0.8446232 0.1913417 0.4619398 0.1913417">
       <freejoint name="mover_free"/>
@@ -259,3 +265,114 @@ def test_randomization_reads_raise_keyerror_like_native(native_basis, warp_state
         warp_state.get_support_geometry("nope")
     with pytest.raises(KeyError, match="Camera 'nope' not found"):
         warp_state.get_camera_pose("nope")
+
+
+# ----------------------------------------------------------------------
+# Static-body placement (the world -> parent-local path)
+# ----------------------------------------------------------------------
+
+
+def test_free_joint_id_resolution(host_model):
+    """Free-joint bodies resolve a joint; static bodies resolve -1."""
+    state = MjWarpSceneState(host_model, nworld=1)
+
+    assert state.resolve_free_joint_id("mover") >= 0
+    assert state.resolve_free_joint_id("mover", "mover_free") >= 0
+    assert state.resolve_free_joint_id("holder") == -1
+    assert state.resolve_free_joint_id("nested_static") == -1
+    # An override naming a joint that does not exist falls back to inspection.
+    assert state.resolve_free_joint_id("mover", "no_such_joint") >= 0
+
+
+def test_static_pose_round_trips_through_nested_parent(host_model):
+    """A nested static body lands at the requested *world* pose.
+
+    This is the assertion that catches a world->parent-local error: the parent
+    has both a translation and a rotation, so writing the world pose directly
+    into body_pos/body_quat would land somewhere else entirely.
+    """
+    state = MjWarpSceneState(host_model, nworld=2)
+    target_pos = np.array([0.42, -0.13, 0.37])
+    target_quat = np.array([0.1913417, 0.4619398, 0.1913417, 0.8446232])
+
+    state.set_static_body_pose("nested_static", target_pos, target_quat)
+
+    for world in range(2):
+        got_pos, got_quat = state.get_body_pose("nested_static", world_index=world)
+        np.testing.assert_allclose(got_pos, target_pos, atol=1e-6)
+        assert np.allclose(got_quat, target_quat, atol=1e-6) or np.allclose(
+            got_quat, -target_quat, atol=1e-6
+        )
+
+
+def test_static_pose_matches_native_handler_math(host_model):
+    """The conversion agrees with the native object handler's, step for step."""
+    target_pos = np.array([0.42, -0.13, 0.37])
+    target_quat_xyzw = np.array([0.1913417, 0.4619398, 0.1913417, 0.8446232])
+
+    # Native: reproduce MujocoObjectHandler.set_pose's static branch verbatim.
+    native_model = mujoco.MjModel.from_xml_string(_SCENE_XML)
+    native_data = mujoco.MjData(native_model)
+    mujoco.mj_forward(native_model, native_data)
+    bid = mujoco.mj_name2id(native_model, mujoco.mjtObj.mjOBJ_BODY, "nested_static")
+    parent_id = int(native_model.body_parentid[bid])
+    parent_pos = native_data.xpos[parent_id].astype(np.float64)
+    parent_mat = native_data.xmat[parent_id].reshape(3, 3).astype(np.float64)
+    native_model.body_pos[bid] = parent_mat.T @ (target_pos - parent_pos)
+    world_quat_wxyz = target_quat_xyzw[[3, 0, 1, 2]]
+    inverse_parent = np.empty(4, dtype=np.float64)
+    mujoco.mju_negQuat(inverse_parent, native_data.xquat[parent_id].astype(np.float64))
+    local_quat = np.empty(4, dtype=np.float64)
+    mujoco.mju_mulQuat(local_quat, inverse_parent, world_quat_wxyz)
+    native_model.body_quat[bid] = local_quat
+    mujoco.mj_forward(native_model, native_data)
+
+    state = MjWarpSceneState(host_model, nworld=1)
+    state.set_static_body_pose("nested_static", target_pos, target_quat_xyzw)
+
+    np.testing.assert_allclose(
+        state.model.body_pos.numpy()[0][bid], native_model.body_pos[bid], atol=1e-9
+    )
+    np.testing.assert_allclose(
+        state.model.body_quat.numpy()[0][bid], native_model.body_quat[bid], atol=1e-9
+    )
+
+
+def test_static_pose_honours_world_mask(host_model):
+    """Per-world scenery placement: one shared model, independent worlds.
+
+    The native path needs one MjModel per replica to express this, because
+    body_pos is model state there rather than a batched field.
+    """
+    state = MjWarpSceneState(host_model, nworld=2)
+    before_pos, _ = state.get_body_pose("nested_static", world_index=1)
+    target = np.array([0.42, -0.13, 0.37])
+
+    state.set_static_body_pose(
+        "nested_static",
+        target,
+        np.array([0.0, 0.0, 0.0, 1.0]),
+        world_mask=np.array([True, False]),
+    )
+
+    moved, _ = state.get_body_pose("nested_static", world_index=0)
+    untouched, _ = state.get_body_pose("nested_static", world_index=1)
+    np.testing.assert_allclose(moved, target, atol=1e-6)
+    np.testing.assert_allclose(untouched, before_pos, atol=1e-6)
+    assert not np.allclose(moved, untouched, atol=1e-6)
+
+
+@pytest.mark.parametrize("body", ["mover", "holder", "nested_static"])
+def test_set_object_pose_dispatches_by_body_kind(host_model, body):
+    """One entry point places a body whichever mechanism it has."""
+    state = MjWarpSceneState(host_model, nworld=1)
+    target_pos = np.array([0.2, 0.3, 0.45])
+    target_quat = np.array([0.0, 0.3826834, 0.0, 0.9238795])
+
+    state.set_object_pose(body, target_pos, target_quat)
+
+    got_pos, got_quat = state.get_body_pose(body)
+    np.testing.assert_allclose(got_pos, target_pos, atol=1e-6)
+    assert np.allclose(got_quat, target_quat, atol=1e-6) or np.allclose(
+        got_quat, -target_quat, atol=1e-6
+    )

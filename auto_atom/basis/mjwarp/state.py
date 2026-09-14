@@ -348,15 +348,129 @@ class MjWarpSceneState:
         # support scatter assignment through a numpy view.
         qpos = self.data.qpos.numpy().copy()
         qvel = self.data.qvel.numpy().copy()
-        worlds = (
-            range(self.nworld)
-            if world_mask is None
-            else np.flatnonzero(np.asarray(world_mask, dtype=bool))
-        )
-        for world in worlds:
+        for world in self._worlds(world_mask):
             qpos[world, qpos_adr : qpos_adr + 3] = pos
             qpos[world, qpos_adr + 3 : qpos_adr + 7] = quat_wxyz
             qvel[world, dof_adr : dof_adr + 6] = 0.0
         self.data.qpos.assign(qpos)
         self.data.qvel.assign(qvel)
         self.forward()
+
+    def _worlds(self, world_mask: Optional[np.ndarray]) -> np.ndarray:
+        """World indices a write applies to; all worlds when unmasked."""
+        if world_mask is None:
+            return np.arange(self.nworld)
+        return np.flatnonzero(np.asarray(world_mask, dtype=bool))
+
+    def resolve_free_joint_id(
+        self,
+        body_name: str,
+        freejoint_name: Optional[str] = None,
+    ) -> int:
+        """Return the free joint driving ``body_name``, or ``-1`` when static.
+
+        ``freejoint_name`` is an explicit override; otherwise the body's own
+        joints are inspected, so a scene owns its joint names
+        (``object_free``, ``cup_joint``, ...) instead of the backend guessing a
+        naming convention. Topology comes from the host model and is static.
+        """
+        import mujoco
+
+        if freejoint_name:
+            joint = int(
+                mujoco.mj_name2id(
+                    self.host_model, mujoco.mjtObj.mjOBJ_JOINT, freejoint_name
+                )
+            )
+            if joint >= 0:
+                return joint
+
+        body = int(
+            mujoco.mj_name2id(self.host_model, mujoco.mjtObj.mjOBJ_BODY, body_name)
+        )
+        if body < 0:
+            return -1
+        first = int(self.host_model.body_jntadr[body])
+        for candidate in range(first, first + int(self.host_model.body_jntnum[body])):
+            if int(self.host_model.jnt_type[candidate]) == int(
+                mujoco.mjtJoint.mjJNT_FREE
+            ):
+                return candidate
+        return -1
+
+    def set_static_body_pose(
+        self,
+        body_name: str,
+        position: np.ndarray,
+        orientation_xyzw: np.ndarray,
+        world_mask: Optional[np.ndarray] = None,
+    ) -> None:
+        """Place a body that has no free joint, by world-frame pose.
+
+        ``body_pos``/``body_quat`` are stored in the *parent* body's frame, and
+        static scene assets are frequently nested below another body, so writing
+        the requested world pose straight in would silently misplace them. The
+        world -> parent-local conversion here mirrors the native object
+        handler's, including its use of ``mju_negQuat``/``mju_mulQuat``, so the
+        two backends land a body in the same place.
+
+        Both fields are batched, so each world converts against *its own*
+        parent pose and a masked write leaves other worlds untouched. This is
+        what lets one shared device model express per-world scenery
+        randomization that the native path needs one ``MjModel`` per replica
+        for.
+        """
+        import mujoco
+
+        body = self.body_id(body_name)
+        parent = int(self.host_model.body_parentid[body])
+        world_pos = np.asarray(position, dtype=np.float64).reshape(3)
+        quat_xyzw = np.asarray(orientation_xyzw, dtype=np.float64).reshape(4)
+        world_quat_wxyz = quat_xyzw[[3, 0, 1, 2]]
+
+        body_pos = self.model.body_pos.numpy().copy()
+        body_quat = self.model.body_quat.numpy().copy()
+        xpos = self.data.xpos.numpy()
+        xmat = self.data.xmat.numpy()
+        xquat = self.data.xquat.numpy()
+
+        for world in self._worlds(world_mask):
+            parent_pos = np.asarray(xpos[world][parent], dtype=np.float64)
+            parent_mat = np.asarray(xmat[world][parent], dtype=np.float64).reshape(3, 3)
+            body_pos[world][body] = parent_mat.T @ (world_pos - parent_pos)
+
+            parent_quat_wxyz = np.asarray(xquat[world][parent], dtype=np.float64)
+            inverse_parent = np.empty(4, dtype=np.float64)
+            mujoco.mju_negQuat(inverse_parent, parent_quat_wxyz)
+            local_quat = np.empty(4, dtype=np.float64)
+            mujoco.mju_mulQuat(local_quat, inverse_parent, world_quat_wxyz)
+            body_quat[world][body] = local_quat
+
+        self.model.body_pos.assign(body_pos)
+        self.model.body_quat.assign(body_quat)
+        self.forward()
+
+    def set_object_pose(
+        self,
+        body_name: str,
+        position: np.ndarray,
+        orientation_xyzw: np.ndarray,
+        world_mask: Optional[np.ndarray] = None,
+        freejoint_name: Optional[str] = None,
+    ) -> None:
+        """Place a body by world pose, via whichever mechanism it has.
+
+        Dispatches to the free-joint or static path exactly as the native
+        object handler does, so a caller does not need to know which kind of
+        body it is holding.
+        """
+        joint = self.resolve_free_joint_id(body_name, freejoint_name)
+        if joint >= 0:
+            import mujoco
+
+            joint_name = mujoco.mj_id2name(
+                self.host_model, mujoco.mjtObj.mjOBJ_JOINT, joint
+            )
+            self.set_free_joint_pose(joint_name, position, orientation_xyzw, world_mask)
+            return
+        self.set_static_body_pose(body_name, position, orientation_xyzw, world_mask)

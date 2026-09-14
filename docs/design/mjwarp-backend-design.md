@@ -131,7 +131,8 @@ cam_pos   cam_quat   cam_fovy   jnt_range  qpos0
 | 1 | 移除 P7 机械臂 default class 的非零 `margin` | 已实现 `393b2fd` |
 | 2a | `MjWarpSceneState`：frame 读取、free joint 写入 + 等价性测试 | 已实现 |
 | 2b | `MjWarpSceneState`：随机化约束读取（相机位姿/fovy/clip、support geometry） | 已实现 |
-| 2c | `object_only` MJWarp env/backend，满足现有接缝，不新增协议 | 未开始 |
+| 2c | `MjWarpSceneState`：静态 body 放置（world → parent-local）与统一入口 | 已实现 |
+| 2d | `object_only` MJWarp env/backend，满足现有接缝，不新增协议 | 未开始 |
 | 3 | per-world 批量模型取代 N 份 `MjModel` | 未开始 |
 | 4 | physical 模式：执行器、IK、接触、触觉 | 未开始 |
 
@@ -160,6 +161,23 @@ device `Model`/`Data`，并以与原生路径相同的单位、dtype 与约定�
 `default_clip_range_m()` 返回**米**而非 `vis.map` 的归一化值：device model 有
 `stat` 但没有 `vis`，而 MJWarp `RenderContext` 又只在创建时固定单个 znear、
 完全没有 zfar（见 3.3），返回米让调用方不必关心任一种表示。
+
+**轮 2c** 补上无 free joint 的 body 放置——`rack_plate` 里 `rack` 与
+`plate_stand` 的随机化走的正是这条路径。`body_pos`/`body_quat` 存的是**父 body
+局部系**下的值，而静态场景资产经常嵌套在别的 body 之下，因此直接写入请求的世界
+位姿会把它放到别处。转换逐字对齐原生 object handler（含
+`mju_negQuat`/`mju_mulQuat`），两个后端因此把同一个 body 放在同一处。
+
+测试场景为此专门加了一个嵌套在非单位位姿父级下的 `nested_static`：**直接挂在
+worldbody 下的 body 无法暴露这类 bug**，因为它的父系就是单位系，转换退化为恒等。
+
+这一轮同时把 3.5 预测的收益从断言变成了实测：`body_pos` 形状为
+`(nworld, nbody, 3)`，掩码写入只移动被选中的 world，且 world 0 与宿主同样写入
+的结果逐位一致。**原生路径要表达同一件事需要每个副本一份 `MjModel`**，因为那里
+`body_pos` 是模型状态而非批量字段。
+
+`set_object_pose()` 按 body 的实际机制分派到 free joint 或静态路径，与原生
+handler 一致，调用方不需要知道自己拿的是哪一种。
 
 **轮 1** 的动机：MJWarp 门禁拒绝 mesh/box CCD pair 上的非零 margin。编译后场景
 中 59 个非零 margin geom 里只有 7 个可碰撞（`link1..link7`），其余 52 个是
