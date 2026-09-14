@@ -6,14 +6,9 @@ because the gripper path depends only on pieces that already exist (actuator
 writes, both halves of the grasp verdict, the eef-pose accessors) while the arm
 path does not.
 
-The structural difference from the native handler is where stepping happens.
-Native steps one ``MjData`` per env inside its own loop, because the runtime
-hands each call a one-hot mask (``stage_execution._mask_for_env``). MJWarp's
-``step`` has no mask and advances every world, so this handler *requests* a step
-through :meth:`~auto_atom.basis.mjwarp.state.MjWarpSceneState.deferred_step`
-instead of taking one, and the caller's tick boundary decides when the single
-batched step happens. See the design doc's 3.8 for why a direct port would
-otherwise run the simulation at ``batch_size x timestep`` per tick.
+Each call advances a complete control update for the selected worlds before
+evaluating completion. The scene-state adapter preserves inactive worlds when
+the runtime dispatches one environment at a time.
 """
 
 from __future__ import annotations
@@ -52,6 +47,7 @@ class MjWarpEefControl:
     release_settle_steps: int = 0
     lateral_threshold: float = 0.0
     grasp_axis: int = 2
+    n_substeps: int = 1
 
     _steps: np.ndarray = field(init=False, repr=False)
     _last_command_key: List[Optional[str]] = field(init=False, repr=False)
@@ -132,9 +128,8 @@ class MjWarpEefControl:
     ) -> ControlResult:
         """Advance the gripper one control tick for the selected worlds.
 
-        Writes each selected world's gripper command and asks for a step; the
-        step itself is coalesced by the caller's ``deferred_step`` block, so
-        calling this once per world in a tick still advances physics once.
+        Writes each selected world's gripper command and advances its configured
+        number of physical substeps, leaving other worlds unchanged.
 
         ``target_body_name`` is the grasp target. It is required for
         ``require_grasp``: without a target there is nothing to confirm a grasp
@@ -188,7 +183,7 @@ class MjWarpEefControl:
         self.state.set_ctrl(
             eef_ids, np.full(eef_ids.size, command, dtype=np.float64), world_mask=mask
         )
-        self.state.step()
+        self.state.step(self.n_substeps, world_mask=mask)
         self._steps[worlds] += 1
 
         self._evaluate(

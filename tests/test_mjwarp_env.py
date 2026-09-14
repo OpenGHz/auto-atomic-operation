@@ -419,11 +419,7 @@ def test_kinematic_action_pins_joints_exactly(physical_env):
 
 
 def test_one_step_per_tick_regardless_of_call_count(physical_env):
-    """Two operators-worth of calls in one tick still advance physics once.
-
-    This is the 3.8 contract at the env level: apply_joint_action requests a
-    step, and the tick boundary collapses the requests.
-    """
+    """Deferred action calls advance one complete control update."""
     width = _joint_width(physical_env)
     timestep = float(physical_env.state.host_model.opt.timestep)
     before = physical_env.state.data.time.numpy().copy()
@@ -433,7 +429,9 @@ def test_one_step_per_tick_regardless_of_call_count(physical_env):
         physical_env.apply_joint_action("arm", np.zeros(width))
 
     after = physical_env.state.data.time.numpy()
-    np.testing.assert_allclose(after - before, timestep, rtol=1e-6)
+    np.testing.assert_allclose(
+        after - before, timestep * physical_env.n_substeps, rtol=1e-5
+    )
 
 
 def test_a_wrong_width_action_is_refused_not_truncated(physical_env):

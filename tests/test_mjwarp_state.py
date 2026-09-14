@@ -1561,6 +1561,44 @@ def test_undeferred_step_would_advance_per_call(actuated_model):
     np.testing.assert_allclose(after - before, 2.0 * timestep, rtol=1e-6)
 
 
+def test_masked_substeps_preserve_inactive_integration_state(actuated_model):
+    state = MjWarpSceneState(actuated_model, nworld=2)
+    qidx, vidx = state.actuator_joint_indices(state.actuator_ids(["a1", "a2"]))
+    state.set_joint_positions(qidx, np.array([0.2, -0.1]), vidx)
+    state.set_ctrl(state.actuator_ids(["a1", "a2"]), np.array([0.4, 0.3]))
+    before = {
+        name: getattr(state.data, name).numpy().copy()
+        for name in ("time", "qpos", "qvel", "ctrl", "qacc_warmstart")
+    }
+
+    state.step(20, world_mask=np.array([True, False]))
+
+    for name, baseline in before.items():
+        np.testing.assert_array_equal(getattr(state.data, name).numpy()[1], baseline[1])
+    assert state.data.time.numpy()[0] == pytest.approx(20 * actuated_model.opt.timestep)
+    assert not np.allclose(state.data.qpos.numpy()[0], before["qpos"][0])
+
+
+def test_masked_steps_match_independent_world_evolution(actuated_model):
+    batched = MjWarpSceneState(actuated_model, nworld=2)
+    standalone = MjWarpSceneState(actuated_model)
+    ids = batched.actuator_ids(["a1", "a2"])
+    batched.set_ctrl(ids, np.array([0.2, -0.1]))
+    standalone.set_ctrl(ids, np.array([0.2, -0.1]))
+    for _ in range(3):
+        batched.step(5, world_mask=np.array([True, False]))
+        batched.step(5, world_mask=np.array([False, True]))
+        standalone.step(5)
+    np.testing.assert_allclose(
+        batched.data.qpos.numpy(),
+        np.repeat(standalone.data.qpos.numpy(), 2, axis=0),
+        atol=1e-6,
+    )
+    np.testing.assert_allclose(
+        batched.data.time.numpy(), standalone.data.time.numpy()[0]
+    )
+
+
 def test_nested_step_deferral_still_steps_once(actuated_model):
     state = MjWarpSceneState(actuated_model, nworld=1)
     calls, restore = _count_steps(state)

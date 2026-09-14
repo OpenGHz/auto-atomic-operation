@@ -12,11 +12,9 @@ sub-target a bounded distance away; completion is always measured against the
 final waypoint. Measuring completion against the sub-target would advance the
 stage as soon as the arm reached the first few millimetres of a long move.
 
-Like the gripper path, this *requests* a step rather than taking one, so the
-caller's :meth:`~auto_atom.basis.mjwarp.state.MjWarpSceneState.deferred_step`
-boundary collapses a tick's per-env calls into the single batched step MJWarp
-offers (design doc 3.8). Both halves must share that boundary, or the arm and
-the gripper would advance a different number of steps per tick.
+Like the gripper path, this advances a complete control update for the selected
+worlds before evaluating completion. The scene-state adapter preserves inactive
+worlds when the runtime dispatches one environment at a time.
 
 ``solve_once_interpolate`` is not implemented. It plans a joint trajectory once
 per waypoint and advances it without re-solving, which is a genuinely different
@@ -64,6 +62,7 @@ class MjWarpArmControl:
     max_angular_step: float = 0.0
     adaptive_step_scaling: bool = False
     ik_unreachable_threshold: int = 30
+    n_substeps: int = 1
 
     _steps: np.ndarray = field(init=False, repr=False)
     _last_command_key: List[Optional[str]] = field(init=False, repr=False)
@@ -146,7 +145,7 @@ class MjWarpArmControl:
             self.state.set_ctrl(
                 self.operator.arm_actuator_ids, targets, world_mask=world_only
             )
-        self.state.step()
+        self.state.step(self.n_substeps, world_mask=mask)
 
         self._evaluate(
             worlds=worlds,

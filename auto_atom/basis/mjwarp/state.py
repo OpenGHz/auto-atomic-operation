@@ -161,6 +161,9 @@ class MjWarpSceneState:
         # passes across entities. The two nest independently.
         self._step_defer_depth = 0
         self._step_pending = False
+        self._pending_step_count = 0
+        self._pending_step_mask = np.zeros(self.nworld, dtype=bool)
+        self._integration_scratch = None
 
     # ------------------------------------------------------------------
     # Name resolution (host model; the device model has no name table)
@@ -652,18 +655,71 @@ class MjWarpSceneState:
             self._dirty_bodies.clear()
             self._run_forward()
 
-    def step(self) -> None:
-        """Advance physics by one timestep for every world (``mj_step``).
+    def step(self, nstep: int = 1, *, world_mask: Optional[np.ndarray] = None) -> None:
+        """Advance selected worlds by ``nstep`` physical timesteps.
 
         Inside a :meth:`deferred_step` block this only records that a step is
-        wanted; the actual step runs once when the outermost block exits. That
-        is what makes the runtime's per-env control loop correct on MJWarp --
-        see :meth:`deferred_step` for why.
+        wanted. Equal-duration requests are merged by world and run when the
+        outermost block exits. Outside a block the result is available before
+        returning, as required by synchronous controller completion checks.
         """
-        if self._step_defer_depth > 0:
-            self._step_pending = True
+        if not isinstance(nstep, int) or nstep < 1:
+            raise ValueError(f"nstep must be a positive integer; got {nstep}.")
+        mask = (
+            np.ones(self.nworld, dtype=bool)
+            if world_mask is None
+            else np.asarray(world_mask, dtype=bool)
+        )
+        if mask.shape != (self.nworld,):
+            raise ValueError(f"world_mask must have shape ({self.nworld},).")
+        if not mask.any():
             return
-        self._mjw.step(self.model, self.data)
+        if self._step_defer_depth > 0:
+            if self._step_pending and self._pending_step_count != nstep:
+                raise ValueError("Deferred step requests must have the same nstep.")
+            self._step_pending = True
+            self._pending_step_count = nstep
+            self._pending_step_mask |= mask
+            return
+        self._run_steps(nstep, mask)
+
+    def _run_steps(self, nstep: int, mask: np.ndarray) -> None:
+        """Preserve inactive worlds using MJWarp's integration-state contract.
+
+        MJWarp steps all worlds. Its get/set_state API includes time, actuator
+        dynamics, warmstart, external forces and mocap inputs as well as qpos
+        and qvel, so a masked call can restore the entire inactive simulation
+        state. Forward then refreshes derived poses and contacts for readers.
+        """
+        import mujoco
+        import warp as wp
+
+        inactive = None
+        signature = int(mujoco.mjtState.mjSTATE_INTEGRATION)
+        if not mask.all():
+            if self._integration_scratch is None:
+                self._integration_scratch = wp.empty(
+                    (self.nworld, mujoco.mj_stateSize(self.host_model, signature)),
+                    dtype=wp.float32,
+                    device=self.data.qpos.device,
+                )
+            inactive = wp.array(~mask, dtype=wp.bool, device=self.data.qpos.device)
+            self._mjw.get_state(
+                self.model, self.data, self._integration_scratch, signature, inactive
+            )
+        try:
+            for _ in range(nstep):
+                self._mjw.step(self.model, self.data)
+        finally:
+            if inactive is not None:
+                self._mjw.set_state(
+                    self.model,
+                    self.data,
+                    self._integration_scratch,
+                    signature,
+                    inactive,
+                )
+                self.forward()
 
     @contextmanager
     def deferred_step(self) -> Iterator[None]:
@@ -697,7 +753,11 @@ class MjWarpSceneState:
             self._step_defer_depth -= 1
             if self._step_defer_depth == 0 and self._step_pending:
                 self._step_pending = False
-                self._mjw.step(self.model, self.data)
+                nstep = self._pending_step_count
+                mask = self._pending_step_mask.copy()
+                self._pending_step_count = 0
+                self._pending_step_mask[:] = False
+                self._run_steps(nstep, mask)
 
     # ------------------------------------------------------------------
     # Contacts

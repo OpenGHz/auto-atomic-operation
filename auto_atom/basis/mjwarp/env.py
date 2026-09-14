@@ -191,10 +191,8 @@ class MjWarpObjectOnlyEnv:
         randomized pose has to be reached exactly regardless of what the
         controller would have done.
 
-        The physics branch *requests* a step rather than taking one, so a caller
-        driving several operators or several worlds in one tick wraps the whole
-        sweep in ``state.deferred_step()`` and gets exactly one step -- see the
-        design doc's 3.8 for why per-call stepping is wrong here.
+        The physics branch advances one complete control update for the selected
+        worlds. Explicit step deferral can merge equal-duration requests.
         """
         state = self.get_operator_state(operator)
         actuator_ids = np.concatenate(
@@ -220,7 +218,7 @@ class MjWarpObjectOnlyEnv:
             return
 
         self.state.set_ctrl(actuator_ids, rows, world_mask=mask)
-        self.state.step()
+        self.state.step(self.n_substeps, world_mask=mask)
 
     def step(
         self,
@@ -275,8 +273,7 @@ class MjWarpObjectOnlyEnv:
             clamped,
             world_mask=self._normalize_mask(env_mask),
         )
-        for _ in range(self.n_substeps):
-            self.state.step()
+        self.state.step(self.n_substeps, world_mask=self._normalize_mask(env_mask))
 
     def _joint_action_rows(
         self,

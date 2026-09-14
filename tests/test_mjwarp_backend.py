@@ -574,6 +574,8 @@ def test_control_parameters_come_from_the_task_config(assembled):
     control = (operators["arm"].model_extra or {}).get("control") or {}
 
     assert handler.arm.timeout_steps == int(control["timeout_steps"])
+    assert handler.arm.n_substeps == backend.env.n_substeps
+    assert handler.eef.n_substeps == backend.env.n_substeps
     assert handler.arm.max_linear_step == pytest.approx(
         float(control["cartesian_max_linear_step"])
     )

@@ -722,6 +722,7 @@ def _build_operator_handlers(
             max_angular_step=float(control.get("cartesian_max_angular_step", 0.0)),
             adaptive_step_scaling=bool(control.get("adaptive_step_scaling", False)),
             ik_unreachable_threshold=int(control.get("ik_unreachable_threshold", 30)),
+            n_substeps=env.n_substeps,
         )
 
         eef_overrides: Dict[str, Any] = {
@@ -730,6 +731,7 @@ def _build_operator_handlers(
             "release_settle_steps": int(grasp.get("release_settle_steps", 0)),
             "lateral_threshold": float(grasp.get("lateral_threshold", 0.0)),
             "grasp_axis": int(grasp.get("grasp_axis", 2)),
+            "n_substeps": env.n_substeps,
         }
         if "eef" in tolerance:
             # An explicit tolerance wins over the ctrlrange-derived one.
