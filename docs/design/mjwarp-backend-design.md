@@ -184,6 +184,36 @@ float32 精确表示的**运气**，不是转换的性质，因此也一并放�
 
 这条同时限定了任何 CPU/GPU 数值对比的判据：只能在 float32 精度上要求一致。
 
+### 3.7 执行器：`ctrl` 有 world 轴，但模型侧的批量轴不统一
+
+轮 4a 的实测结论（`scripts/` 之外的一次性 probe，结果记录在此）：
+
+| 字段 | 形状 | 说明 |
+|---|---|---|
+| `data.ctrl` | `(nworld, nu)` | 每个 world 一条独立指令，控制路径就落在这里 |
+| `data.qpos` / `qvel` | `(nworld, nq)` / `(nworld, nv)` | 同上 |
+| `model.actuator_trnid` | `(nu, 2)` | **没有** batch 轴 |
+| `model.actuator_ctrlrange` | `(1, nu, 2)` | **有** 前导 batch 轴 |
+
+即模型侧哪些字段带批量轴取决于 `put_model(batch_sizes=...)` 与该字段本身，不能
+假定统一。名称解析仍走宿主模型（device 模型无名称表），因此
+`actuator_ids` / `actuator_joint_indices` 都读 `host_model`。
+
+两条与原生对齐的语义，都是实测而非推断：
+
+1. **写入不夹紧。** MuJoCo 在 step 内按 `actuator_ctrlrange` 夹紧，`data.ctrl`
+   保持原值；MJWarp 行为相同（越界指令 `[5.0, 5.0]` 下两者 settled `qpos`
+   一致，`ctrl` 回读仍是 `5.0`）。因此写入层不夹紧——否则两条路径会对"下发了
+   什么"给出不同答案。
+2. **`ctrl` 驱动物理的结果与原生一致到 float32。** 两个 world 分别下发
+   `[0.5, 0.3]` 与 `[-0.9, 0.7]`，400 步后 `qpos` 为 `0.18904203` vs 原生
+   `0.18904201`。
+
+一处**测试前提**的教训：`kp=50` 对 0.16 kg 连杆而言撑不住重力，被 pin 住的关节
+在恢复物理后必然下沉（20 步内从 0.3 掉到 0.1366）。原生同样下沉到
+`0.13655685`，warp 是 `0.136557`。因此"pin 住后保持不动"是那个玩具场景的性质、
+不是写入层的性质，断言必须对齐原生轨迹而不是对齐绝对角度。
+
 ## 4. 不受影响的部分
 
 - **场景组合**：`MjSpec` 编译在宿主侧完成，`put_model` 只消费编译产物。
@@ -213,7 +243,10 @@ float32 精确表示的**运气**，不是转换的性质，因此也一并放�
 | 3a | reset 的 forward pass 合并（6 → 2 次 kernel launch，1.84x） | 已实现 |
 | 3b | readback 合并 —— **实测不值得做，已放弃**（见 6.3） | 不做 |
 | 4-pre | world 过滤的接触遍历（`get_contact_geom_pairs` / `get_contact_body_pairs`） | 已实现 `6216f88` |
-| 4 | physical 模式：执行器、IK、接触、触觉 | 未开始 |
+| 4a | 执行器/关节写入层（`actuator_ids`、`set_ctrl`、`set_joint_positions`） | 已实现 |
+| 4b | `MjWarpOperatorHandler`：`move_to_pose` / `control_eef` / 抓取判定 | 未开始 |
+| 4c | IK 与 `physical` 模式 env / backend 组装 | 未开始 |
+| 4d | 触觉（52 个 `contype=0` 触觉单元的读取路径） | 未开始 |
 
 **轮 2a**（`auto_atom/basis/mjwarp/state.py`）是后续各轮的读写底座：它持有
 device `Model`/`Data`，并以与原生路径相同的单位、dtype 与约定回答 frame 查询。

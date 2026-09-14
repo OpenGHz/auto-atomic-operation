@@ -26,7 +26,7 @@ therefore the package -- does not require the GPU dependency to be installed.
 from __future__ import annotations
 
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Any, Iterator, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Iterator, Optional, Sequence, Tuple
 
 import numpy as np
 
@@ -567,6 +567,17 @@ class MjWarpSceneState:
         if self._defer_depth > 0:
             self._dirty_bodies.add(int(body_id))
 
+    def _mark_all_dirty(self) -> None:
+        """Record that every body's world pose is stale.
+
+        A joint write moves the whole subtree below that joint, so naming one
+        body would understate what went stale. Marking everything keeps the
+        stale-parent guard conservative: a later write that converts against
+        any parent pose flushes rather than trusting a pre-write frame.
+        """
+        if self._defer_depth > 0:
+            self._dirty_bodies.update(range(int(self.host_model.nbody)))
+
     def _require_fresh_parent(self, body_id: int) -> None:
         """Flush a deferred pass when ``body_id``'s pose is needed but stale.
 
@@ -624,6 +635,175 @@ class MjWarpSceneState:
             return np.empty((0, 2), dtype=np.int32)
         geom_bodyid = np.asarray(self.model.geom_bodyid.numpy(), dtype=np.int32)
         return geom_bodyid[pairs]
+
+    # ------------------------------------------------------------------
+    # Actuators and actuated joints
+    # ------------------------------------------------------------------
+
+    def actuator_ids(self, actuator_names: Sequence[str]) -> np.ndarray:
+        """Resolve actuator names to ids, erroring with what *is* available.
+
+        Mirrors the native ``_resolve_actuator_indices``: a missing actuator is
+        a config error worth naming the alternatives for, not a silent skip
+        that would leave a limb unactuated.
+        """
+        import mujoco
+
+        ids = []
+        for name in actuator_names:
+            actuator = mujoco.mj_name2id(
+                self.host_model, mujoco.mjtObj.mjOBJ_ACTUATOR, name
+            )
+            if actuator < 0:
+                available = [
+                    mujoco.mj_id2name(self.host_model, mujoco.mjtObj.mjOBJ_ACTUATOR, i)
+                    for i in range(int(self.host_model.nu))
+                ]
+                raise ValueError(
+                    f"Actuator '{name}' not found in the compiled model. "
+                    f"Available actuators: {available}"
+                )
+            ids.append(actuator)
+        return np.asarray(ids, dtype=np.int32)
+
+    def actuator_joint_indices(
+        self,
+        actuator_ids: Sequence[int],
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """``(qpos_indices, dof_indices)`` for the joints those actuators drive.
+
+        Actuators that drive no joint (``trnid < 0``, e.g. a tendon or general
+        transmission) are skipped rather than reported as index ``-1``, which
+        is what the native path does -- so the returned arrays may be shorter
+        than ``actuator_ids``.
+        """
+        qpos_indices = []
+        dof_indices = []
+        for actuator in actuator_ids:
+            joint = int(self.host_model.actuator_trnid[int(actuator), 0])
+            if joint < 0:
+                continue
+            qpos_indices.append(int(self.host_model.jnt_qposadr[joint]))
+            dof_indices.append(int(self.host_model.jnt_dofadr[joint]))
+        return (
+            np.asarray(qpos_indices, dtype=np.int32),
+            np.asarray(dof_indices, dtype=np.int32),
+        )
+
+    def get_ctrl(self) -> np.ndarray:
+        """Every world's actuator command, shaped ``(nworld, nu)``.
+
+        Returned as float64 even though the device stores float32, so callers
+        compare against the same dtype the native path hands them.
+        """
+        return np.asarray(self.data.ctrl.numpy(), dtype=np.float64)
+
+    def set_ctrl(
+        self,
+        actuator_ids: Sequence[int],
+        values: np.ndarray,
+        world_mask: Optional[np.ndarray] = None,
+    ) -> None:
+        """Write actuator commands for selected actuators and worlds.
+
+        ``values`` is one row broadcast to every written world, or one row per
+        world indexed by **absolute world index** -- the same convention as
+        :meth:`_pose_rows`, since a batched controller sends each environment a
+        different command.
+
+        Out-of-range commands are deliberately *not* clamped here: MuJoCo
+        clamps against ``actuator_ctrlrange`` inside the step and leaves
+        ``data.ctrl`` untouched, and MJWarp was verified to match that (same
+        settled ``qpos`` for an out-of-range command, ``ctrl`` unchanged on
+        readback). Clamping on write would make the two paths disagree about
+        what was commanded.
+        """
+        ids = np.asarray(actuator_ids, dtype=np.int32)
+        rows = self._actuator_rows(values, ids.size)
+        ctrl = self.data.ctrl.numpy().copy()
+        for world in self._worlds(world_mask):
+            ctrl[world, ids] = rows[world]
+        self.data.ctrl.assign(ctrl)
+
+    def _actuator_rows(self, values: np.ndarray, width: int) -> np.ndarray:
+        """Normalize an actuator-command argument to one row per world."""
+        array = np.asarray(values, dtype=np.float64)
+        array = array.reshape(1, -1) if array.ndim == 1 else array
+        if array.shape[1] != width:
+            raise ValueError(
+                f"Expected {width} value(s) per world; got {array.shape[1]}."
+            )
+        if array.shape[0] == 1:
+            return np.repeat(array, self.nworld, axis=0)
+        if array.shape[0] != self.nworld:
+            raise ValueError(
+                f"Value batch must be 1 or nworld ({self.nworld}); "
+                f"got {array.shape[0]}."
+            )
+        return array
+
+    def get_joint_positions(self, qpos_indices: Sequence[int]) -> np.ndarray:
+        """``qpos`` at the given addresses for every world, ``(nworld, n)``."""
+        indices = np.asarray(qpos_indices, dtype=np.int32)
+        if indices.size == 0:
+            return np.empty((self.nworld, 0), dtype=np.float64)
+        return np.asarray(self.data.qpos.numpy()[:, indices], dtype=np.float64)
+
+    def get_joint_velocities(self, dof_indices: Sequence[int]) -> np.ndarray:
+        """``qvel`` at the given addresses for every world, ``(nworld, n)``."""
+        indices = np.asarray(dof_indices, dtype=np.int32)
+        if indices.size == 0:
+            return np.empty((self.nworld, 0), dtype=np.float64)
+        return np.asarray(self.data.qvel.numpy()[:, indices], dtype=np.float64)
+
+    def set_joint_positions(
+        self,
+        qpos_indices: Sequence[int],
+        positions: np.ndarray,
+        dof_indices: Optional[Sequence[int]] = None,
+        actuator_ids: Optional[Sequence[int]] = None,
+        world_mask: Optional[np.ndarray] = None,
+    ) -> None:
+        """Pin joints to exact angles, the kinematic counterpart of stepping.
+
+        Follows the native kinematic branch: write ``qpos``, zero the matching
+        ``qvel`` so no momentum survives the teleport, and mirror the same
+        values into ``ctrl`` so switching back to physics does not snap the
+        limb toward a stale command.
+
+        The native path additionally runs a settle loop when the model carries
+        equality constraints (parallel-linkage grippers), re-pinning the
+        actuated joints each step so only passive joints drift. That belongs to
+        the home-pose entry point rather than here, because it needs to know
+        which joints are the actuated ones to re-pin.
+        """
+        indices = np.asarray(qpos_indices, dtype=np.int32)
+        rows = self._actuator_rows(positions, indices.size)
+        worlds = self._worlds(world_mask)
+
+        qpos = self.data.qpos.numpy().copy()
+        for world in worlds:
+            qpos[world, indices] = rows[world]
+        self.data.qpos.assign(qpos)
+
+        if dof_indices is not None:
+            dofs = np.asarray(dof_indices, dtype=np.int32)
+            if dofs.size:
+                qvel = self.data.qvel.numpy().copy()
+                for world in worlds:
+                    qvel[world, dofs] = 0.0
+                self.data.qvel.assign(qvel)
+
+        if actuator_ids is not None:
+            ids = np.asarray(actuator_ids, dtype=np.int32)
+            if ids.size:
+                # Only as many commands as there are actuators to receive them:
+                # the native path writes action[:n] into ctrl[all_aidx[:n]].
+                width = min(ids.size, indices.size)
+                self.set_ctrl(ids[:width], rows[:, :width], world_mask)
+
+        self._mark_all_dirty()
+        self.forward()
 
     def set_free_joint_pose(
         self,

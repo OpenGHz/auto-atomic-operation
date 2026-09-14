@@ -1005,6 +1005,52 @@ def test_world_camera_write_matches_native_conversion(host_model):
     )
 
 
+# ----------------------------------------------------------------------
+# Actuators and actuated joints
+# ----------------------------------------------------------------------
+
+# Two actuated hinges plus one unactuated passive hinge, so the index mapping
+# has something to *exclude*: a mapping that simply enumerated joints would pass
+# on a fully actuated model and fail here.
+_ACTUATED_XML = """
+<mujoco>
+  <option timestep="0.002" integrator="implicitfast"/>
+  <worldbody>
+    <body name="link1" pos="0 0 0.5">
+      <joint name="j1" type="hinge" axis="0 0 1" range="-1.5 1.5"/>
+      <geom name="g1" type="box" size="0.05 0.02 0.02"/>
+      <body name="link2" pos="0.1 0 0">
+        <joint name="j2" type="hinge" axis="0 1 0" range="-1 1"/>
+        <geom name="g2" type="box" size="0.05 0.02 0.02"/>
+        <body name="link3" pos="0.1 0 0">
+          <joint name="j_passive" type="hinge" axis="0 1 0" range="-1 1"/>
+          <geom name="g3" type="box" size="0.05 0.02 0.02"/>
+        </body>
+      </body>
+    </body>
+  </worldbody>
+  <actuator>
+    <position name="a1" joint="j1" kp="50" ctrlrange="-1.2 1.2"/>
+    <position name="a2" joint="j2" kp="50" ctrlrange="-0.8 0.8"/>
+  </actuator>
+</mujoco>
+"""
+
+
+@pytest.fixture(scope="module")
+def actuated_model():
+    return mujoco.MjModel.from_xml_string(_ACTUATED_XML)
+
+
+@pytest.fixture(scope="module")
+def actuated_basis(actuated_model):
+    """Native basis carrying only what the actuator index helpers touch."""
+    basis = MujocoBasis.__new__(MujocoBasis)
+    basis.model = actuated_model
+    basis.data = mujoco.MjData(actuated_model)
+    return basis
+
+
 @pytest.mark.parametrize("body", ["mover", "holder", "nested_static"])
 def test_set_object_pose_dispatches_by_body_kind(host_model, body):
     """One entry point places a body whichever mechanism it has."""
@@ -1019,3 +1065,235 @@ def test_set_object_pose_dispatches_by_body_kind(host_model, body):
     assert np.allclose(got_quat, target_quat, atol=1e-6) or np.allclose(
         got_quat, -target_quat, atol=1e-6
     )
+
+
+def test_actuator_ids_match_native_resolution(actuated_basis, actuated_model):
+    """Name -> id resolution agrees with the native helper it replaces."""
+    state = MjWarpSceneState(actuated_model, nworld=2)
+
+    want = actuated_basis._resolve_actuator_indices(["a1", "a2"])
+    got = state.actuator_ids(["a1", "a2"])
+
+    np.testing.assert_array_equal(got, want)
+
+
+def test_actuator_ids_name_the_alternatives_when_missing(actuated_model):
+    """A typo'd actuator is a config error, so the message lists what exists."""
+    state = MjWarpSceneState(actuated_model, nworld=1)
+
+    with pytest.raises(ValueError, match="Available actuators.*a1.*a2"):
+        state.actuator_ids(["a1", "nonexistent"])
+
+
+def test_actuator_joint_indices_match_native(actuated_basis, actuated_model):
+    """qpos/dof addresses for actuated joints agree with the native helper.
+
+    The scene's third hinge is unactuated, so this also pins that the mapping
+    reports only actuated joints rather than every joint in the model.
+    """
+    state = MjWarpSceneState(actuated_model, nworld=1)
+    ids = state.actuator_ids(["a1", "a2"])
+
+    want_q, want_v = actuated_basis._actuator_joint_indices(ids.tolist())
+    got_q, got_v = state.actuator_joint_indices(ids)
+
+    np.testing.assert_array_equal(got_q, want_q)
+    np.testing.assert_array_equal(got_v, want_v)
+    assert got_q.size == 2, "model has 3 joints but only 2 actuators"
+
+
+def test_actuator_joint_indices_skip_jointless_transmissions(actuated_model):
+    """An actuator driving no joint is skipped, not reported as index -1.
+
+    A ``-1`` would index the last element of qpos, silently corrupting an
+    unrelated joint, so this is the difference between a skip and a bug.
+    """
+    state = MjWarpSceneState(actuated_model, nworld=1)
+    host = state.host_model
+    saved = int(host.actuator_trnid[0, 0])
+    host.actuator_trnid[0, 0] = -1
+    try:
+        got_q, got_v = state.actuator_joint_indices([0, 1])
+    finally:
+        host.actuator_trnid[0, 0] = saved
+
+    assert got_q.size == 1 and got_v.size == 1
+    assert -1 not in got_q.tolist()
+
+
+def test_ctrl_drives_physics_the_same_way_native_does(actuated_model):
+    """A written command settles the joints where native settles them.
+
+    This is the load-bearing equivalence for the whole control path: if ctrl
+    did not reach the device, or reached the wrong world axis, the arm would
+    simply never move and every downstream motion test would fail obscurely.
+    """
+    state = MjWarpSceneState(actuated_model, nworld=2)
+    ids = state.actuator_ids(["a1", "a2"])
+
+    # Per-world *different* commands: a broadcast bug is invisible when both
+    # worlds are commanded alike.
+    state.set_ctrl(ids, np.array([[0.5, 0.3], [-0.9, 0.7]]))
+    for _ in range(400):
+        state.step()
+
+    got = state.data.qpos.numpy()
+    for world, command in enumerate(([0.5, 0.3], [-0.9, 0.7])):
+        native = mujoco.MjData(actuated_model)
+        native.ctrl[:] = command
+        for _ in range(400):
+            mujoco.mj_step(actuated_model, native)
+        # float32 device storage against float64 host: see design doc 3.6.
+        np.testing.assert_allclose(
+            got[world][:2], native.qpos[:2], rtol=1e-4, atol=1e-4
+        )
+
+
+def test_ctrl_is_not_clamped_on_write(actuated_model):
+    """An out-of-range command is stored verbatim, as MuJoCo stores it.
+
+    MuJoCo clamps against ``actuator_ctrlrange`` inside the step and leaves
+    ``data.ctrl`` alone. Clamping on write would make the two backends disagree
+    about what was commanded while agreeing about the resulting motion.
+    """
+    state = MjWarpSceneState(actuated_model, nworld=1)
+    ids = state.actuator_ids(["a1", "a2"])
+
+    state.set_ctrl(ids, np.array([5.0, 5.0]))
+
+    np.testing.assert_allclose(state.get_ctrl()[0][:2], [5.0, 5.0])
+    native = mujoco.MjData(actuated_model)
+    native.ctrl[:] = [5.0, 5.0]
+    for _ in range(400):
+        mujoco.mj_step(actuated_model, native)
+    for _ in range(400):
+        state.step()
+    np.testing.assert_allclose(
+        state.data.qpos.numpy()[0][:2], native.qpos[:2], rtol=1e-4, atol=1e-4
+    )
+    np.testing.assert_allclose(state.get_ctrl()[0][:2], [5.0, 5.0])
+
+
+def test_ctrl_write_respects_a_world_mask(actuated_model):
+    """An unmasked world keeps its previous command."""
+    state = MjWarpSceneState(actuated_model, nworld=2)
+    ids = state.actuator_ids(["a1", "a2"])
+
+    state.set_ctrl(ids, np.array([0.1, 0.2]))
+    state.set_ctrl(ids, np.array([0.9, 0.9]), world_mask=np.array([False, True]))
+
+    got = state.get_ctrl()
+    np.testing.assert_allclose(got[0][:2], [0.1, 0.2])
+    np.testing.assert_allclose(got[1][:2], [0.9, 0.9])
+
+
+def test_ctrl_write_rejects_a_wrong_width(actuated_model):
+    state = MjWarpSceneState(actuated_model, nworld=2)
+
+    with pytest.raises(ValueError, match="Expected 2 value"):
+        state.set_ctrl([0, 1], np.array([0.1, 0.2, 0.3]))
+
+
+def test_ctrl_write_rejects_a_batch_that_is_neither_1_nor_nworld(actuated_model):
+    state = MjWarpSceneState(actuated_model, nworld=2)
+
+    with pytest.raises(ValueError, match="must be 1 or nworld"):
+        state.set_ctrl([0, 1], np.zeros((3, 2)))
+
+
+def test_joint_positions_round_trip(actuated_model):
+    """What was written is what is read back, per world."""
+    state = MjWarpSceneState(actuated_model, nworld=2)
+    qidx, vidx = state.actuator_joint_indices(state.actuator_ids(["a1", "a2"]))
+
+    state.set_joint_positions(qidx, np.array([[0.4, -0.2], [-0.7, 0.5]]), vidx)
+
+    np.testing.assert_allclose(
+        state.get_joint_positions(qidx),
+        [[0.4, -0.2], [-0.7, 0.5]],
+        rtol=1e-6,
+        atol=1e-7,
+    )
+
+
+def test_joint_write_zeros_velocity_so_no_momentum_survives(actuated_model):
+    """A kinematic teleport must not leave the limb coasting.
+
+    Without this the joint would carry whatever velocity it had into the next
+    step and drift away from the angle that was just commanded.
+    """
+    state = MjWarpSceneState(actuated_model, nworld=1)
+    qidx, vidx = state.actuator_joint_indices(state.actuator_ids(["a1", "a2"]))
+
+    # Build up real velocity first, so zeroing has something to undo.
+    state.set_ctrl(state.actuator_ids(["a1", "a2"]), np.array([1.0, 0.7]))
+    for _ in range(50):
+        state.step()
+    assert np.abs(state.get_joint_velocities(vidx)).max() > 1e-3
+
+    state.set_joint_positions(qidx, np.array([0.1, 0.1]), vidx)
+
+    np.testing.assert_allclose(state.get_joint_velocities(vidx), [[0.0, 0.0]])
+
+
+def test_joint_write_mirrors_into_ctrl_to_avoid_a_snap(actuated_model):
+    """ctrl follows qpos, so resuming physics does not yank the limb back.
+
+    The native kinematic branch does the same thing for the same reason: a
+    stale ctrl would command the old angle on the very next step.
+    """
+    state = MjWarpSceneState(actuated_model, nworld=1)
+    ids = state.actuator_ids(["a1", "a2"])
+    qidx, vidx = state.actuator_joint_indices(ids)
+
+    state.set_ctrl(ids, np.array([-1.0, -0.5]))
+    state.set_joint_positions(qidx, np.array([0.3, 0.2]), vidx, actuator_ids=ids)
+
+    np.testing.assert_allclose(state.get_ctrl()[0][:2], [0.3, 0.2], atol=1e-6)
+
+    # Resuming physics then tracks native exactly. Note the joints do *not*
+    # hold at 0.3/0.2: these links are 0.16 kg against kp=50, so gravity wins
+    # and both backends sag together. Asserting they stay put would assert a
+    # property of this toy model, not of the mirroring; what matters is that
+    # the stale -1.0/-0.5 command is gone, which a snap would reveal as a
+    # divergence from native.
+    native = mujoco.MjData(actuated_model)
+    native.qpos[qidx] = [0.3, 0.2]
+    native.qvel[vidx] = 0.0
+    native.ctrl[:2] = [0.3, 0.2]
+    mujoco.mj_forward(actuated_model, native)
+    for _ in range(20):
+        state.step()
+        mujoco.mj_step(actuated_model, native)
+
+    np.testing.assert_allclose(
+        state.get_joint_positions(qidx)[0], native.qpos[qidx], rtol=1e-3, atol=1e-4
+    )
+
+
+def test_joint_write_refreshes_derived_frames(actuated_model):
+    """A joint write moves the subtree, so world poses must reflect it."""
+    state = MjWarpSceneState(actuated_model, nworld=1)
+    qidx, vidx = state.actuator_joint_indices(state.actuator_ids(["a1", "a2"]))
+    before, _ = state.get_body_pose("link3")
+
+    state.set_joint_positions(qidx, np.array([1.2, 0.6]), vidx)
+
+    after, _ = state.get_body_pose("link3")
+    assert np.linalg.norm(after - before) > 1e-3
+
+    native = mujoco.MjData(actuated_model)
+    native.qpos[qidx] = [1.2, 0.6]
+    mujoco.mj_forward(actuated_model, native)
+    want = native.xpos[
+        mujoco.mj_name2id(actuated_model, mujoco.mjtObj.mjOBJ_BODY, "link3")
+    ]
+    np.testing.assert_allclose(after, want, rtol=1e-5, atol=1e-6)
+
+
+def test_empty_index_arrays_read_back_empty(actuated_model):
+    """An operator with no eef actuators reads as (nworld, 0), not an error."""
+    state = MjWarpSceneState(actuated_model, nworld=2)
+
+    assert state.get_joint_positions([]).shape == (2, 0)
+    assert state.get_joint_velocities([]).shape == (2, 0)
