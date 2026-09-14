@@ -81,6 +81,8 @@ class MjWarpObjectOnlyEnv:
             if host_model is not None
             else load_composed_scene(config.scene, cameras=config.camera_elements())
         )
+        if config.sim_freq is not None:
+            self.host_model.opt.timestep = 1.0 / config.sim_freq
         self.state = MjWarpSceneState(
             self.host_model,
             nworld=int(config.batch_size),

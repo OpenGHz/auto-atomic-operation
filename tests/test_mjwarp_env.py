@@ -83,6 +83,23 @@ def test_satisfies_env_capability_protocols(warp_env):
     assert warp_env.batch_size == 1
 
 
+def test_configured_step_duration_matches_native(single_world_config, native_env):
+    env = MjWarpObjectOnlyEnv(single_world_config, njmax=512)
+    try:
+        assert env.host_model.opt.timestep == pytest.approx(
+            native_env.model.opt.timestep
+        )
+        before = env.state.data.time.numpy().copy()
+        env.step(np.zeros(env.host_model.nu))
+        np.testing.assert_allclose(
+            env.state.data.time.numpy() - before,
+            1.0 / env.config.update_freq,
+            atol=1e-7,
+        )
+    finally:
+        env.close()
+
+
 def test_operator_layer_is_absent_under_object_only(warp_env):
     """object_only strips the operator, so its camera must not be present."""
     assert set(warp_env.camera_names()) == {"rack_camera_front", "plate_cam"}
