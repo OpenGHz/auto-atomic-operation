@@ -404,7 +404,8 @@ freejoint 目标来验证"verdict 随状态变化"。
 | 4c-3c-3b | operator 自动注册（读 `OperatorBinding`，构造真实 IK solver） | 已实现 |
 | 4c-3c-3c | `apply_joint_action`（`JointActionEnvProtocol`）+ `step`（`StepEnvProtocol`） | 已实现 |
 | 4c-3c-3d | `physical` 模式 backend 组装（builder、handler 装配） | 已实现 |
-| 4c-3c-3e | 真实 `rack_plate` physical 跑通（唯一能验证以上各件互相咬合的事） | 未开始 |
+| 4c-3c-3e | 真实 `rack_plate` physical 跑通 | **已跑，栈能咬合但任务失败**（见 5.2） |
+| 4c-3c-3f | 应用 operator `initial_state`（base_pose / eef_pose / 关节 home） | 未开始，**这是 3e 失败的根因** |
 | 修复 | 静态 body 写入不更新 `geom_xpos`（见 3.9，轮 2c 遗留缺陷） | 已修复（frame + 渲染 + 碰撞） |
 | 4d-1 | 传感器读取（`get_sensor_values` / `_batch`，触觉唯一的 device 依赖） | 已实现 |
 | 4d-2 | 触觉层接入（panel 分组 / PCA / wrench 汇总，复用宿主侧既有实现） | 未开始 |
@@ -641,6 +642,57 @@ camera sensor 时相机声明是惰性的，既不会被materialize 进场景也
 收敛为仅 camera），是验证新后端接缝的最小面。
 
 **轮 4** 最大：后端里 20 处 per-env 串行循环需要向量化成沿 world 轴的操作。
+
+### 5.2 轮 4c-3c-3e 首次 physical 实跑：栈能咬合，但 `initial_state` 从未被应用
+
+**命令**（`batch_size=2`，未改任何配置）：
+
+```bash
+python -m auto_atom.runner.demo --config-name rack_plate_p7_v4_umi_v3 \
+  execution.mode=physical env.batch_size=2 env.viewer=null \
+  env._target_=auto_atom.basis.mjwarp.env.MjWarpObjectOnlyEnv \
+  backend=auto_atom.backend.mjwarp.backend.build_mjwarp_backend
+```
+
+**好消息（栈本身是通的）**：600 次 `update()` 全部跑完、无崩溃、无异常，
+51.7 Hz（599 步计时 11.583 s），sim 时间 48.000 s。后者是**精确对账**的：
+`n_substeps = sim_freq/update_freq = 1200/30 = 40`，`40 × 0.002 × 600 = 48.000`，
+说明**物理推进步数完全正确**——3.8 那条 one-hot mask 的双步隐患没有发生。
+
+**坏消息**：两个 world 都在 `pick_plate` 上耗尽 `max_updates=600` 失败。**不是**
+IK 不可达（`ik_failure_streak` 全程 0），而是**手臂朝错误方向运动**：
+
+| tick | position_error |
+|---|---|
+| 1 | 0.10000 |
+| 5 | 0.28924 |
+| 10 | **0.64121** |
+| 40 | 0.35998 |
+| 60 | 0.32547 |
+
+用一个"当前 eef 正下方 10 cm"的目标单独驱动（`/tmp/diag_arm.py`），误差从 0.100
+涨到 0.641——手臂确实动了 0.253 m，但是**远离**目标。
+
+**根因**：`initial_state` 从未被应用。实测 eef 起始世界位姿是
+`[1.3489, 0.4, -0.0737]`，而配置写的是 base 在 `[-0.20, -0.5, 0.075]`（绕 z 转
+90°）、home eef 在 base 系 `[0.605, 0, 0.0552]`，复合出来应该约
+`[-0.20, 0.105, 0.13]`。手臂根本不在配置说的地方。
+
+grep 确认：`override_base_pose`（轮 4c-2 写的）**除自己的测试外没有任何调用者**，
+且整个 mjwarp 包**没有一处读 `initial_state`**。于是：
+
+1. base frame 用的是 MJCF 里 root body 的原始位姿，不是配置指定的 base；
+2. `world_to_base` 因此把目标转到了**错误的基座系**，IK 求解的是另一个问题——它
+   "成功"了，只是解的不是我们要的姿态，所以 `ik_failure_streak` 一直是 0；
+3. `home_arm_qpos` 是注册时对**当时 qpos** 的快照，配置里的关节 home 同样没进去。
+
+**这正是端到端跑存在的意义**：十五个单元各自与原生对齐、每一个的测试都通过，但
+"谁来应用 `initial_state`" 落在所有单元的缝隙里——没有任何单元测试会失败，因为
+每个单元都只测自己那一段。轮 4c-3c-3f 修这件事。
+
+**另记一条范围外观察**：`mujoco_warp/_src/io.py:338` 对 geom 108/109/110 报
+`friction[0/1] (0.0) < MJ_MINMU (1e-05) with condim=4 may cause NaN`。本次运行没有
+出现 NaN，但这是 MJWarp 特有的告警（原生不报），属于独立事项。
 
 ### 5.0 轮 4d-2（触觉层接入）的交接说明
 
