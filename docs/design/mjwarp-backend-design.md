@@ -406,7 +406,8 @@ freejoint 目标来验证"verdict 随状态变化"。
 | 4c-3c-3d | `physical` 模式 backend 组装（builder、handler 装配） | 已实现 |
 | 4c-3c-3e | 真实 `rack_plate` physical 跑通（唯一能验证以上各件互相咬合的事） | 未开始 |
 | 修复 | 静态 body 写入不更新 `geom_xpos`（见 3.9，轮 2c 遗留缺陷） | 已修复（frame + 渲染 + 碰撞） |
-| 4d | 触觉（52 个 `contype=0` 触觉单元的读取路径） | 未开始 |
+| 4d-1 | 传感器读取（`get_sensor_values` / `_batch`，触觉唯一的 device 依赖） | 已实现 |
+| 4d-2 | 触觉层接入（panel 分组 / PCA / wrench 汇总，复用宿主侧既有实现） | 未开始 |
 
 **轮 2a**（`auto_atom/basis/mjwarp/state.py`）是后续各轮的读写底座：它持有
 device `Model`/`Data`，并以与原生路径相同的单位、dtype 与约定回答 frame 查询。
