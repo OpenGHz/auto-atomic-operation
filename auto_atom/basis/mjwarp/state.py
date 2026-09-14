@@ -307,6 +307,44 @@ class MjWarpSceneState:
         return SupportGeometry(center=center, radius=radius)
 
     # ------------------------------------------------------------------
+    # Batched frame reads (one readback covers every world)
+    # ------------------------------------------------------------------
+
+    def get_body_pose_batch(
+        self,
+        body_name: str,
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """Every world's pose for one body, as ``(nworld, 3)`` / ``(nworld, 4)``.
+
+        This is the shape ``PoseState`` wants, and it costs one device readback
+        rather than one per world -- which matters because the runtime reads
+        object poses on every control tick.
+        """
+        body = self.body_id(body_name)
+        positions = np.asarray(self.data.xpos.numpy()[:, body, :], dtype=np.float32)
+        quats_wxyz = np.asarray(self.data.xquat.numpy()[:, body, :], dtype=np.float32)
+        return positions, quats_wxyz[:, [1, 2, 3, 0]]
+
+    def get_site_pose_batch(
+        self,
+        site_name: str,
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """Every world's pose for one site, in the same batched shape.
+
+        ``mju_mat2Quat`` is scalar, so the conversion loops per world, but the
+        device readback still happens once.
+        """
+        site = self.site_id(site_name)
+        positions = np.asarray(
+            self.data.site_xpos.numpy()[:, site, :], dtype=np.float32
+        )
+        mats = self.data.site_xmat.numpy()[:, site]
+        quats = np.stack(
+            [self._rotmat_to_quat_xyzw(mats[world]) for world in range(self.nworld)]
+        )
+        return positions, quats
+
+    # ------------------------------------------------------------------
     # Advancing state
     # ------------------------------------------------------------------
 

@@ -459,6 +459,66 @@ def test_pose_batch_shape_is_validated(host_model):
         state.set_free_joint_pose("mover_free", np.zeros((2, 4)), good_quat)
 
 
+# ----------------------------------------------------------------------
+# Batched reads (the shape PoseState wants)
+# ----------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("body_name", ["holder", "mover", "nested_static"])
+def test_body_pose_batch_agrees_with_per_world_reads(warp_state, body_name):
+    """The batched read is the per-world read stacked, in PoseState's shape."""
+    positions, orientations = warp_state.get_body_pose_batch(body_name)
+
+    assert positions.shape == (warp_state.nworld, 3)
+    assert orientations.shape == (warp_state.nworld, 4)
+    for world in range(warp_state.nworld):
+        want_pos, want_quat = warp_state.get_body_pose(body_name, world_index=world)
+        np.testing.assert_allclose(positions[world], want_pos, atol=1e-6)
+        np.testing.assert_allclose(orientations[world], want_quat, atol=1e-6)
+
+
+@pytest.mark.parametrize("site_name", ["holder_site", "mover_site"])
+def test_site_pose_batch_agrees_with_per_world_reads(warp_state, site_name):
+    positions, orientations = warp_state.get_site_pose_batch(site_name)
+
+    assert positions.shape == (warp_state.nworld, 3)
+    assert orientations.shape == (warp_state.nworld, 4)
+    for world in range(warp_state.nworld):
+        want_pos, want_quat = warp_state.get_site_pose(site_name, world_index=world)
+        np.testing.assert_allclose(positions[world], want_pos, atol=1e-6)
+        np.testing.assert_allclose(orientations[world], want_quat, atol=1e-6)
+
+
+def test_batch_read_reflects_per_world_distinct_writes(host_model):
+    """A batched read must not collapse worlds that hold different poses."""
+    state = MjWarpSceneState(host_model, nworld=2)
+    positions = np.array([[0.10, 0.20, 0.30], [-0.40, 0.50, 0.60]])
+    orientations = np.tile(np.array([0.0, 0.0, 0.0, 1.0]), (2, 1))
+
+    state.set_free_joint_pose("mover_free", positions, orientations)
+    got_positions, _ = state.get_body_pose_batch("mover")
+
+    np.testing.assert_allclose(got_positions, positions, atol=1e-6)
+    assert not np.allclose(got_positions[0], got_positions[1], atol=1e-6)
+
+
+def test_batch_read_matches_native_stacked_read(host_model, native_basis):
+    """One world's batched row equals what the native env reports.
+
+    The native batched env stacks per-replica get_body_pose results; with one
+    world the stack is a single row, which is the comparison that pins the
+    shape and dtype convention against the native path.
+    """
+    state = MjWarpSceneState(host_model, nworld=1)
+    positions, orientations = state.get_body_pose_batch("holder")
+    want_pos, want_quat = native_basis.get_body_pose("holder")
+
+    assert positions.shape == (1, 3)
+    np.testing.assert_allclose(positions[0], want_pos, atol=1e-6)
+    np.testing.assert_allclose(orientations[0], want_quat, atol=1e-6)
+    assert positions.dtype == want_pos.dtype
+
+
 @pytest.mark.parametrize("body", ["mover", "holder", "nested_static"])
 def test_set_object_pose_dispatches_by_body_kind(host_model, body):
     """One entry point places a body whichever mechanism it has."""

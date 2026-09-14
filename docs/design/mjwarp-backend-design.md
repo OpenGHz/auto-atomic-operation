@@ -132,7 +132,8 @@ cam_pos   cam_quat   cam_fovy   jnt_range  qpos0
 | 2a | `MjWarpSceneState`：frame 读取、free joint 写入 + 等价性测试 | 已实现 |
 | 2b | `MjWarpSceneState`：随机化约束读取（相机位姿/fovy/clip、support geometry） | 已实现 |
 | 2c | `MjWarpSceneState`：静态 body 放置（world → parent-local）与统一入口 | 已实现 |
-| 2d | `object_only` MJWarp env/backend，满足现有接缝，不新增协议 | 未开始 |
+| 2d | `MjWarpSceneState`：批量 frame 读取（`PoseState` 形状，单次 readback） | 已实现 |
+| 2e | `object_only` MJWarp env/backend，满足现有接缝，不新增协议 | 未开始 |
 | 3 | per-world 批量模型取代 N 份 `MjModel` | 未开始 |
 | 4 | physical 模式：执行器、IK、接触、触觉 | 未开始 |
 
@@ -202,6 +203,15 @@ assign、一次 `forward()`，开销不随 world 数增长。
 `test_free_joint_accepts_one_pose_per_world` 等 4 项测试对修正前的实现会失败
 （报 `cannot reshape array of size 9 into shape (3,)`），因此它们确实钉住了这个
 形状约定，而不是碰巧通过。
+
+**轮 2d** 补上读取侧的对称形状：`get_body_pose_batch` / `get_site_pose_batch`
+直接返回 `(nworld, 3)` / `(nworld, 4)`，即 `PoseState` 想要的形状，且**只做一次
+device readback**而不是每个 world 一次——运行时每个控制 tick 都要读物体位姿，
+所以这条路径的开销不能随 world 数增长。原生批量 env 的 `get_body_pose` 是把各
+副本的结果 stack 起来，语义相同。
+
+（`mju_mat2Quat` 是标量接口，因此 site 的矩阵转四元数仍按 world 循环，但 readback
+只有一次。）
 
 **轮 1** 的动机：MJWarp 门禁拒绝 mesh/box CCD pair 上的非零 margin。编译后场景
 中 59 个非零 margin geom 里只有 7 个可碰撞（`link1..link7`），其余 52 个是
