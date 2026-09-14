@@ -299,3 +299,122 @@ def test_element_pose_and_joint_angle_reach_the_scene(backend):
     assert backend.get_joint_angle("object_free") == pytest.approx(
         float(backend.env.state.data.qpos.numpy()[0][0])
     )
+
+
+# ----------------------------------------------------------------------
+# Grasp and contact queries in physical mode
+# ----------------------------------------------------------------------
+
+
+def _build_physical(batch_size: int = 2):
+    """Build the backend directly against a physical-mode env.
+
+    The builder still refuses a non-empty operator mapping (that is 4c-3c-3d),
+    so the backend is constructed directly here. That is the only way to exercise
+    the operator surface today, and it is worth exercising now rather than
+    waiting: these four methods answer stage post-conditions, so a wrong answer
+    would silently pass or fail stages later.
+    """
+    from auto_atom.backend.mjwarp.handlers import MjWarpObjectHandler
+    from auto_atom.config.randomization import ResolvedRandomizationConfig
+
+    ComponentRegistry.clear()
+    with initialize_config_dir(
+        config_dir=str(_REPO_ROOT / "aao_configs"), version_base=None
+    ):
+        cfg = compose(
+            config_name=_CONFIG_NAME,
+            overrides=[
+                "execution.mode=physical",
+                f"env.batch_size={batch_size}",
+                "env.viewer=null",
+            ],
+        )
+    prepared = prepare_task_config_for_instantiation(cfg)
+
+    env_node = OmegaConf.to_container(prepared.env, resolve=True)
+    env_node.pop("_target_", None)
+    env = MjWarpObjectOnlyEnv(EnvConfig.model_validate(env_node), njmax=512)
+
+    task = AutoAtomConfig.model_validate(
+        OmegaConf.to_container(prepared.task, resolve=True)
+    )
+    handlers = {
+        "object": MjWarpObjectHandler(
+            name="object", state=env.state, body_name="object"
+        )
+    }
+    backend = MjWarpObjectOnlyBackend(
+        config=task,
+        env=env,
+        object_handlers=handlers,
+        randomization=ResolvedRandomizationConfig.from_scope_config(task.randomization),
+    )
+    backend.setup(task)
+    return backend
+
+
+@pytest.fixture(scope="module")
+def physical_backend():
+    built = _build_physical()
+    yield built
+    built.teardown()
+
+
+def test_grasp_queries_answer_per_world(physical_backend):
+    """Every query returns one answer per world, which is what stages index."""
+    got = physical_backend.is_object_grasped("arm", "object")
+
+    assert got.shape == (physical_backend.batch_size,)
+    assert got.dtype == bool
+
+
+def test_nothing_is_grasped_at_rest(physical_backend):
+    """The arm starts at its home pose, nowhere near the plate."""
+    assert not physical_backend.is_object_grasped("arm", "object").any()
+    assert not physical_backend.is_operator_grasping("arm").any()
+    assert physical_backend.get_grasped_object_name("arm", 0) is None
+
+
+def test_operator_is_not_contacting_at_rest(physical_backend):
+    assert not physical_backend.is_operator_contacting("arm", "object").any()
+
+
+def test_an_unknown_object_is_not_grasped_rather_than_an_error(physical_backend):
+    """A stage may ask about an object this scene does not contain."""
+    got = physical_backend.is_object_grasped("arm", "no_such_object")
+
+    assert got.shape == (physical_backend.batch_size,)
+    assert not got.any()
+    assert not physical_backend.is_operator_contacting("arm", "no_such_object").any()
+
+
+def test_grasp_queries_are_cached_per_operator(physical_backend):
+    """Topology is static, so one build per operator -- not one per tick."""
+    first = physical_backend._grasp_queries("arm")
+    second = physical_backend._grasp_queries("arm")
+
+    assert first is second
+
+
+def test_unknown_operator_still_fails_loudly(physical_backend):
+    """A stub answering 'not grasping' would be worse than an error."""
+    with pytest.raises(KeyError):
+        physical_backend.is_object_grasped("nonexistent", "object")
+
+
+def test_grasped_object_index_is_bounds_checked(physical_backend):
+    with pytest.raises(IndexError, match="env_index must be in"):
+        physical_backend.get_grasped_object_name("arm", physical_backend.batch_size)
+
+
+def test_object_only_operator_surface_still_refuses(backend):
+    """object_only strips the operator layer, so these must fail, not answer."""
+    for call in (
+        lambda: backend.is_object_grasped("arm", "object"),
+        lambda: backend.is_operator_grasping("arm"),
+        lambda: backend.is_operator_contacting("arm", "object"),
+        lambda: backend.get_grasped_object_name("arm", 0),
+    ):
+        with pytest.raises(KeyError):
+            call()

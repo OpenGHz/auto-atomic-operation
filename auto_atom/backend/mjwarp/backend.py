@@ -76,6 +76,9 @@ class MjWarpObjectOnlyBackend(SceneBackend):
         self._baseline_camera_poses: Dict[str, PoseState] = {}
         self._last_reset_diagnostics: Dict[int, List[Dict[str, Any]]] = {}
         self._randomization_executor: Any = None
+        # One grasp-query object per operator, built lazily: it resolves static
+        # topology at construction and post-conditions ask every control tick.
+        self._grasp_query_cache: Dict[str, Any] = {}
 
     # ------------------------------------------------------------------
     # SceneBackend lifecycle
@@ -153,25 +156,92 @@ class MjWarpObjectOnlyBackend(SceneBackend):
     # Grasp and contact queries
     # ------------------------------------------------------------------
 
+    def _grasp_queries(self, operator_name: str) -> Any:
+        """Grasp-query object for one operator, built once and cached.
+
+        Cached because it resolves operator topology (body subtree, finger-geom
+        classification) at construction, and a stage post-condition asks these
+        questions on every control tick. Topology is static, so one build per
+        operator is correct as well as cheaper.
+
+        Raises the same ``KeyError`` the object-only path raises when no operator
+        is registered -- which is what ``execution.mode: object_only`` produces,
+        since it strips the operator layer at the Hydra boundary. Failing loudly
+        beats a stub whose empty grasp state would read as a legitimate "not
+        grasping".
+        """
+        cached = self._grasp_query_cache.get(operator_name)
+        if cached is not None:
+            return cached
+
+        from auto_atom.backend.mjwarp.grasp_queries import MjWarpGraspQueries
+
+        try:
+            operator = self.env.get_operator_state(operator_name)
+        except KeyError:
+            raise KeyError(_OPERATOR_UNSUPPORTED.format(name=operator_name)) from None
+
+        queries = MjWarpGraspQueries(self.env.state, operator)
+        self._grasp_query_cache[operator_name] = queries
+        return queries
+
+    def _object_body_names(self) -> Dict[str, str]:
+        """Logical object name -> MJCF body name, for every known object.
+
+        Contacts are keyed on the body, and the two names differ whenever a
+        config names an object differently from its body, so the mapping has to
+        be carried rather than assumed identical.
+        """
+        return {
+            name: handler.body_name for name, handler in self.object_handlers.items()
+        }
+
     def is_object_grasped(self, operator_name: str, object_name: str) -> np.ndarray:
-        raise KeyError(_OPERATOR_UNSUPPORTED.format(name=operator_name))
+        """``(batch_size,)`` bool: is this object held in each world.
+
+        An unknown object is *not grasped* rather than an error, matching native:
+        a stage may ask about an object that this scene does not contain.
+        """
+        handler = self.object_handlers.get(object_name)
+        if handler is None:
+            return np.zeros(self.batch_size, dtype=bool)
+        return self._grasp_queries(operator_name).is_object_grasped(handler.body_name)
 
     def is_operator_grasping(self, operator_name: str) -> np.ndarray:
-        raise KeyError(_OPERATOR_UNSUPPORTED.format(name=operator_name))
+        return self._grasp_queries(operator_name).is_operator_grasping(
+            self._object_body_names()
+        )
 
     def get_grasped_object_name(
         self,
         operator_name: str,
         env_index: int,
     ) -> Optional[str]:
-        raise KeyError(_OPERATOR_UNSUPPORTED.format(name=operator_name))
+        if not 0 <= env_index < self.batch_size:
+            raise IndexError(
+                f"env_index must be in [0, {self.batch_size}), got {env_index}"
+            )
+        return self._grasp_queries(operator_name).grasped_object_name(
+            self._object_body_names(), env_index
+        )
 
     def is_operator_contacting(
         self,
         operator_name: str,
         object_name: str,
     ) -> np.ndarray:
-        raise KeyError(_OPERATOR_UNSUPPORTED.format(name=operator_name))
+        """``(batch_size,)`` bool: does any operator geom touch this object.
+
+        Weaker than a grasp deliberately -- a ``press`` or ``push``
+        post-condition is satisfied by one finger brushing the target, with
+        neither two-sided contact nor centring required.
+        """
+        handler = self.object_handlers.get(object_name)
+        if handler is None:
+            return np.zeros(self.batch_size, dtype=bool)
+        return self._grasp_queries(operator_name).is_operator_contacting(
+            handler.body_name
+        )
 
     def get_operator_contacts(
         self,
