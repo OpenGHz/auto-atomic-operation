@@ -184,6 +184,13 @@ float32 精确表示的**运气**，不是转换的性质，因此也一并放�
 
 这条同时限定了任何 CPU/GPU 数值对比的判据：只能在 float32 精度上要求一致。
 
+一处**有意不照抄原生**的地方（轮 4c-1）：原生的 `_world_to_base` /
+`_base_to_world` 会把结果 cast 成 `float32`。MJWarp 侧不做这个 cast，宿主算术
+全程 float64。理由是那个 cast 在这条路径上没有收益——device 模型本来就是
+float32，量化在写入 device 的边界上必然发生一次，宿主端再提前量化一次只是让
+转换本身多引入一次误差。因此帧转换与原生的等价性按 float32 容差断言
+（`rtol=1e-6, atol=1e-7`），即本节给出的那个统一判据。
+
 ### 3.7 执行器：`ctrl` 有 world 轴，但模型侧的批量轴不统一
 
 轮 4a 的实测结论（`scripts/` 之外的一次性 probe，结果记录在此）：
@@ -247,7 +254,9 @@ float32 精确表示的**运气**，不是转换的性质，因此也一并放�
 | 4b-1 | 抓取判定基元（子树 body、左右指分类、接触半判定） | 已实现 |
 | 4b-2 | 抓取判定几何半判定（`lateral_grasp_error` / `_ok`，eef 系横向距离） | 已实现 |
 | 4b-3 | `MjWarpOperatorHandler`：`control_eef` 状态机（合成两半判定） | 未开始 |
-| 4c | IK 与 `physical` 模式 env / backend 组装（`move_to_pose`） | 未开始 |
+| 4c-1 | world ↔ operator base 帧转换（`world_to_base` / `_batch`） | 已实现 |
+| 4c-2 | operator 注册与 eef/base 位姿访问器 | 未开始 |
+| 4c-3 | IK 与 `move_to_pose`、`physical` 模式 env / backend 组装 | 未开始 |
 | 4d | 触觉（52 个 `contype=0` 触觉单元的读取路径） | 未开始 |
 
 **轮 2a**（`auto_atom/basis/mjwarp/state.py`）是后续各轮的读写底座：它持有
