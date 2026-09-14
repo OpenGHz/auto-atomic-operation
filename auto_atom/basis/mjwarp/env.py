@@ -97,6 +97,8 @@ class MjWarpObjectOnlyEnv:
         ]
         self._renderer: Optional["MjWarpBatchRenderer"] = None
         self._mask_pairs: Optional[Dict[str, set]] = None
+        self._operators: Dict[str, Any] = {}
+        self._auto_register_operators()
 
         if config.name:
             # Registered under the config name so a task file's ``backend:``
@@ -107,6 +109,65 @@ class MjWarpObjectOnlyEnv:
             from auto_atom.runtime import ComponentRegistry
 
             ComponentRegistry.register_env(config.name, self)
+
+    # ------------------------------------------------------------------
+    # Operator registration
+    # ------------------------------------------------------------------
+
+    def _auto_register_operators(self) -> None:
+        """Register operators that declare a ``root_body``, as native does.
+
+        ``root_body`` is the trigger rather than the presence of actuators,
+        matching ``UnifiedMujocoEnv._auto_register_operators``: an operator
+        without a base frame has nothing to express targets in, so it is left
+        unregistered rather than half-built.
+
+        A config with no operators -- which is what ``execution.mode:
+        object_only`` produces at the Hydra boundary -- registers nothing and
+        costs nothing, so this runs unconditionally for both modes.
+        """
+        from auto_atom.backend.mjwarp.operator_state import register_operator
+
+        for binding in self.config.operators.values():
+            if not binding.root_body:
+                continue
+
+            ik_solver = None
+            if binding.arm_actuators and binding.ik_factory is not None:
+                # The solver's joint order is the config's arm-actuator order;
+                # see MjWarpSceneState.actuator_joint_names.
+                ik_solver = binding.ik_factory(
+                    model=self.host_model,
+                    arm_joint_names=self.state.actuator_joint_names(
+                        self.state.actuator_ids(binding.arm_actuators)
+                    ),
+                    **binding.ik_params,
+                )
+
+            self._operators[binding.name] = register_operator(
+                self.state,
+                name=binding.name,
+                root_body=binding.root_body,
+                eef_site=binding.pose_site,
+                arm_actuators=tuple(binding.arm_actuators),
+                eef_actuators=tuple(binding.eef_actuators),
+                ik_solver=ik_solver,
+            )
+
+    @property
+    def operator_names(self) -> Tuple[str, ...]:
+        """Registered operator names, in config order."""
+        return tuple(self._operators)
+
+    def get_operator_state(self, name: str) -> Any:
+        """Registered operator state, or a clear error naming what exists."""
+        try:
+            return self._operators[name]
+        except KeyError:
+            known = ", ".join(self._operators) or "<none>"
+            raise KeyError(
+                f"Operator '{name}' is not registered. Registered: {known}."
+            ) from None
 
     # ------------------------------------------------------------------
     # EnvProtocol

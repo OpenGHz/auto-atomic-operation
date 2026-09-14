@@ -206,3 +206,107 @@ def test_interest_operations_are_validated(warp_env):
         warp_env.set_interest_objects_and_operations(["object"], [])
     with pytest.raises(ValueError, match="not configured in operations"):
         warp_env.set_interest_objects_and_operations(["object"], ["teleport"])
+
+
+# ----------------------------------------------------------------------
+# Operator registration (physical mode keeps the operator layer)
+# ----------------------------------------------------------------------
+
+
+def _physical_env_config(batch_size: int) -> EnvConfig:
+    """The same real config, but with the operator layer left in place.
+
+    ``object_only`` strips ``task_operators`` at the Hydra boundary, so it cannot
+    exercise registration at all. Physical mode keeps the P7 arm's actuators and
+    its analytical IK factory, which is what registration has to consume.
+    """
+    config_dir = str(_REPO_ROOT / "aao_configs")
+    with initialize_config_dir(config_dir=config_dir, version_base=None):
+        cfg = compose(
+            config_name=_CONFIG_NAME,
+            overrides=[
+                "execution.mode=physical",
+                f"env.batch_size={batch_size}",
+                "env.viewer=null",
+            ],
+        )
+    prepared = prepare_task_config_for_instantiation(cfg)
+    node = OmegaConf.to_container(prepared.env, resolve=True)
+    node.pop("_target_", None)
+    return EnvConfig.model_validate(node)
+
+
+@pytest.fixture(scope="module")
+def physical_env():
+    return MjWarpObjectOnlyEnv(_physical_env_config(2))
+
+
+def test_registration_binds_the_configured_operator(physical_env):
+    """The real config's operator is registered, keyed by its config name."""
+    assert physical_env.operator_names == ("arm",)
+
+    operator = physical_env.get_operator_state("arm")
+    assert operator.name == "arm"
+    assert operator.joint_mode, "the P7 arm is actuator-driven"
+
+
+def test_registration_constructs_the_real_ik_solver(physical_env):
+    """ik_factory is invoked with the joint names its solver expects.
+
+    This is the first point in the port where the real analytical IK solver is
+    built, so a wrong joint-name list or a missing ik_params surfaces here rather
+    than at the first control tick.
+    """
+    operator = physical_env.get_operator_state("arm")
+
+    assert operator.ik_solver is not None
+    assert hasattr(operator.ik_solver, "solve")
+
+
+def test_registered_joint_names_match_native_derivation(physical_env):
+    """Joint order defines the solver's mapping, so it must match native."""
+    operator = physical_env.get_operator_state("arm")
+    state = physical_env.state
+
+    got = state.actuator_joint_names(operator.arm_actuator_ids)
+    host = state.host_model
+    want = [
+        mujoco.mj_id2name(
+            host,
+            mujoco.mjtObj.mjOBJ_JOINT,
+            int(host.actuator_trnid[int(actuator), 0]),
+        )
+        for actuator in operator.arm_actuator_ids
+    ]
+
+    assert got == want
+    assert len(got) == 7, "the P7 is a 7-DOF arm"
+
+
+def test_registered_base_pose_matches_the_root_body(physical_env):
+    """The base frame is the root body's pose, per world."""
+    operator = physical_env.get_operator_state("arm")
+    want_pos, want_quat = physical_env.state.get_body_pose_batch(
+        operator.root_body_name
+    )
+
+    np.testing.assert_allclose(operator.base_position, want_pos, rtol=1e-6, atol=1e-7)
+    np.testing.assert_allclose(
+        operator.base_orientation, want_quat, rtol=1e-6, atol=1e-7
+    )
+    assert operator.base_position.shape == (2, 3), "per world, not shared"
+
+
+def test_object_only_registers_nothing(warp_env):
+    """The same code path costs nothing in the mode that has no operators.
+
+    ``object_only`` clears ``task_operators`` at the Hydra boundary, so the
+    registration loop finds no bindings -- which is why it can run
+    unconditionally for both modes.
+    """
+    assert warp_env.operator_names == ()
+
+
+def test_unknown_operator_names_what_is_registered(physical_env):
+    with pytest.raises(KeyError, match="Registered: arm"):
+        physical_env.get_operator_state("nonexistent")
