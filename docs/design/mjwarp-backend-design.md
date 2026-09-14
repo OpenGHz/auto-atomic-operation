@@ -288,7 +288,9 @@ float32，量化在写入 device 的边界上必然发生一次，宿主端再�
 | 4b-3 | `MjWarpEefControl`：`control_eef` 状态机（合成两半判定） | 已实现 |
 | 4c-1 | world ↔ operator base 帧转换（`world_to_base` / `_batch`） | 已实现 |
 | 4c-2 | operator 注册与 eef/base 位姿访问器（`MjWarpOperatorState`，仅 joint 模式） | 已实现 |
-| 4c-3 | IK 与 `move_to_pose`、`physical` 模式 env / backend 组装 | 未开始 |
+| 4c-3a | IK 调用层（`MjWarpIkCaller`，**per-world** 失败计数与日志节流） | 已实现 |
+| 4c-3b | `move_to_pose`（笛卡尔步长夹紧、stall 缩放、unreachable 判定） | 未开始 |
+| 4c-3c | `physical` 模式 env / backend 组装 | 未开始 |
 | 4d | 触觉（52 个 `contype=0` 触觉单元的读取路径） | 未开始 |
 
 **轮 2a**（`auto_atom/basis/mjwarp/state.py`）是后续各轮的读写底座：它持有
