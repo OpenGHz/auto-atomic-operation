@@ -85,13 +85,25 @@ MJWarp 用一个跨 world 共享的扁平接触池（`naconmax`），按 `contac
 `MjData` 带正确的 `ncon`（实测 physical 37、object_only 2）。可以先用它跑通，
 再把热路径改成 world 过滤扫描——那是优化，不是前提。
 
-### 3.2 接触力
+### 3.2 接触力：**不是轮 4 的前置**（早先判断有误）
 
 `mujoco.mj_contactForce`（`mujoco_backend.py:2209`）没有直接对应物。MJWarp 侧
 是 `support.contact_force`，或经 `get_data_into` 回读宿主再算。
 
-**未决**：MJWarp 的接触力数值是否足够接近 `mj_contactForce`，能支撑
-`_is_target_grasped` 的抓取判定阈值。需要同场景 CPU/GPU 数值对比，属轮 4。
+本文早先两次把"接触力数值一致性"列为轮 4 的前置验证，**这是错的**。实际读代码：
+
+- `mj_contactForce` 在整个仓库里**只出现一次**，在 `get_operator_contacts` 内；
+- `get_operator_contacts` 的**唯一调用者**是 `stage_execution.py:154`，用于给
+  **失败诊断**拼一个 `contact_snapshot`，包在 `try` 里，且契约允许返回 `None`
+  （"该后端不支持接触观测"）；
+- 抓取判定 `_is_target_grasped` **完全不读力**：它按 `data.contact` 里的
+  geom 配对判断左右指是否各自接触到目标 body，再加一个 EEF 系下的横向距离阈值
+  （`lateral_threshold`）。
+
+**因此轮 4 需要的是接触的"存在性 + geom 配对"，而不是力的数值精度。** 力只影响
+失败报告里多一条还是少一条诊断信息。真正的前置是 3.1 那件事：把
+`range(data.ncon)` 改成按 `contact.worldid` 过滤的扫描，并确保 geom 配对与
+`geom_bodyid` 映射在 device 上取到的与原生一致。
 
 ### 3.3 相机 clip range：唯一的结构性缺口
 
@@ -152,8 +164,7 @@ cam_pos   cam_quat   cam_fovy   jnt_range  qpos0
 `set_static_body_pose` 的同类断言恰好能在 `1e-9` 下通过，但那是该位姿的值刚好可被
 float32 精确表示的**运气**，不是转换的性质，因此也一并放宽。
 
-这条同时限定了 3.2 里那个未决问题的判据：接触力的 CPU/GPU 数值对比也只能在 float32
-精度上要求一致。
+这条同时限定了任何 CPU/GPU 数值对比的判据：只能在 float32 精度上要求一致。
 
 ## 4. 不受影响的部分
 
@@ -425,7 +436,8 @@ camera sensor 时相机声明是惰性的，既不会被materialize 进场景也
    `mujoco>=3.12.0`。实测 mujoco 3.12.0 + mujoco_warp 3.13.0 可共存，因此可新增
    `mjwarp` extra 而不动现有 pin。后端模块必须**惰性导入** `mujoco_warp`，
    保证未安装时项目照常可用（`check_mjwarp_compat.py` 已是这个写法）。
-2. **接触力数值一致性**（见 3.2）。轮 4 的前置验证。
+2. ~~**接触力数值一致性**~~ —— 早先误判为轮 4 前置，**已排除**，见 3.2。真正的
+   前置是接触遍历（3.1）：`range(data.ncon)` 要改成按 `contact.worldid` 过滤。
 3. ~~**单 world 是否值得**~~ —— **已实测，结论与预期相反**，见 6.1。
 
 ### 6.1 实测吞吐：渲染即使在单 world 也更快，reset 曾是瓶颈
