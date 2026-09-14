@@ -684,10 +684,19 @@ operator 面**——没有 `register_operator`、没有 `step(action, env_mask)`
 
 **这对本目标配置是致命的**：UMI 的 `claw_joint` 是 `ctrlrange="0 0.0165"`，而
 `MjWarpEefControl` 当前的默认值是 robotiq 形状的（`eef_close_value=0.82`、
-`eef_tolerance=0.03`）。0.03 的容差**比 UMI 的全行程 0.0165 还大**，于是
-`actual >= command - tolerance` 在夹爪完全张开时就成立——**每次闭合都会在第一个
-tick 直接报 REACHED，手指根本没动**。这正是 4b-3 记下的那条符号/量纲假设会翻车的
-方式：不报错，只是抓取判定永远"成功"。
+`eef_tolerance=0.03`）。
+
+危险的组合**不是**"默认值全都不对"（那种情况下 command=0.82 对 0.0165 行程的执行器
+本就不可达，rung 2 不会触发，实测报 RUNNING——我最初把机制说错了，已实测纠正）。
+真正会静默出错的是**指令正确但容差过大**：一旦 open/close 按 ctrlrange 推导成
+`0 / 0.0165`、而 `tolerance.eef` 仍留在默认 0.03，则
+`actual >= command - tolerance` 变成 `actual >= -0.0135`，**夹爪完全张开时就成立
+——每次闭合在第一个 tick 直接报 REACHED，手指根本没动**。
+
+**所以"夹容差"和"推导 open/close"必须同时做，只做后者反而更危险**：不推导时命令
+不可达、至少不会假成功；推导了却不夹容差，就会变成永远成功的抓取判定。这也是原生
+为什么两件都做。`tests/test_mjwarp_eef_control.py` 用一个 `eef_close_value=0.0165
++ eef_tolerance=0.03` 的实例把这条钉住。
 
 因此 4c-3c-3d 的 handler 装配必须：
 

@@ -259,3 +259,118 @@ def test_missing_eef_actuator_is_refused(gripper_model):
 
     with pytest.raises(ValueError, match="no eef_actuators"):
         control.control(close=True)
+
+
+# ----------------------------------------------------------------------
+# Deriving gripper limits from ctrlrange
+# ----------------------------------------------------------------------
+
+# A narrow-travel gripper in the shape of the real UMI claw (ctrlrange 0 0.0165),
+# where the robotiq-shaped class defaults are actively wrong.
+_NARROW_XML = _GRIPPER_XML.replace(
+    '<position name="act_grip" joint="j_left" kp="80"/>',
+    '<position name="act_grip" joint="j_left" kp="80" ctrlrange="0 0.0165"/>',
+).replace('range="0 0.06"', 'range="0 0.0165"')
+
+
+@pytest.fixture
+def narrow_operator(gripper_model):
+    state = MjWarpSceneState(mujoco.MjModel.from_xml_string(_NARROW_XML), nworld=1)
+    state.forward()
+    operator = register_operator(
+        state,
+        name="arm",
+        root_body="arm_base",
+        eef_site="eef_pose",
+        arm_actuators=("act_j1",),
+        eef_actuators=("act_grip",),
+        ik_solver=_StubIK(),
+    )
+    return state, operator
+
+
+def test_limits_are_derived_from_the_actuator_ctrlrange(narrow_operator):
+    """Open/close come from the gripper's own travel, not a robotiq default."""
+    state, operator = narrow_operator
+
+    control = MjWarpEefControl.for_operator(state, operator)
+
+    assert control.eef_open_value == pytest.approx(0.0)
+    assert control.eef_close_value == pytest.approx(0.0165)
+
+
+def test_tolerance_is_clamped_to_a_fifth_of_travel(narrow_operator):
+    """The default 0.03 exceeds this gripper's whole travel.
+
+    Left at the default, `actual >= command - tolerance` holds with the gripper
+    fully open, so every close would report REACHED on the first tick with the
+    fingers unmoved -- silently, since nothing errors.
+    """
+    state, operator = narrow_operator
+
+    control = MjWarpEefControl.for_operator(state, operator)
+
+    assert control.eef_tolerance == pytest.approx(0.0165 * 0.2)
+    assert control.eef_tolerance < 0.0165, "must be inside the travel"
+
+
+def test_a_narrow_gripper_does_not_report_reached_at_rest(narrow_operator):
+    """The consequence the derivation exists to prevent.
+
+    With the robotiq default tolerance this same call reports REACHED without the
+    fingers having moved; with the derived tolerance it reports RUNNING.
+    """
+    state, operator = narrow_operator
+    derived = MjWarpEefControl.for_operator(state, operator, settle_steps=1000)
+
+    with state.deferred_step():
+        result = derived.control(close=True)
+    assert result.signals[0] == ControlSignal.RUNNING
+
+    # The dangerous combination is a *correct* command with an oversized
+    # tolerance, which is why native clamps the tolerance rather than only
+    # deriving open/close: 0.0165 - 0.03 is negative, so the comparison holds
+    # with the fingers fully open.
+    unclamped = MjWarpEefControl(
+        state=state,
+        operator=operator,
+        eef_close_value=0.0165,
+        eef_tolerance=0.03,
+        settle_steps=1000,
+    )
+    with state.deferred_step():
+        wrong = unclamped.control(close=True)
+    assert wrong.signals[0] == ControlSignal.REACHED, (
+        "documents the bug the tolerance clamp avoids"
+    )
+
+
+def test_explicit_overrides_win(narrow_operator):
+    """A config that states a value keeps it."""
+    state, operator = narrow_operator
+
+    control = MjWarpEefControl.for_operator(
+        state, operator, eef_tolerance=0.001, timeout_steps=7
+    )
+
+    assert control.eef_tolerance == pytest.approx(0.001)
+    assert control.timeout_steps == 7
+
+
+def test_an_operator_without_a_gripper_keeps_defaults(gripper_model):
+    """No eef actuator means nothing to derive from, so defaults stand."""
+    state = MjWarpSceneState(gripper_model, nworld=1)
+    state.forward()
+    operator = register_operator(
+        state,
+        name="arm",
+        root_body="arm_base",
+        eef_site="eef_pose",
+        arm_actuators=("act_j1",),
+        eef_actuators=(),
+        ik_solver=_StubIK(),
+    )
+
+    control = MjWarpEefControl.for_operator(state, operator)
+
+    assert control.eef_close_value == pytest.approx(0.82)

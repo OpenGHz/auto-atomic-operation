@@ -61,6 +61,47 @@ class MjWarpEefControl:
         self._steps = np.zeros(nworld, dtype=np.int64)
         self._last_command_key = [None] * nworld
 
+    @classmethod
+    def for_operator(
+        cls,
+        state: MjWarpSceneState,
+        operator: MjWarpOperatorState,
+        **overrides: Any,
+    ) -> "MjWarpEefControl":
+        """Build with open/close/tolerance derived from the gripper's ctrlrange.
+
+        The class defaults are robotiq-shaped (0 → 0.82) and are wrong by two
+        orders of magnitude for other grippers. The UMI claw is
+        ``ctrlrange="0 0.0165"``, where the default 0.03 tolerance exceeds the
+        entire travel: ``actual >= command - tolerance`` then holds with the
+        gripper fully open, so every close reports REACHED on the first tick with
+        the fingers unmoved. Nothing errors -- the grasp check simply always
+        succeeds. Native derives these per robot for the same reason
+        (``mujoco_backend.py:2390-2408``), and this is the MJWarp equivalent.
+
+        Tolerance is clamped to a fifth of the travel, bounded to
+        ``[1e-4, 0.03]``, matching native: a fifth is loose enough to accept a
+        gripper that has effectively closed, tight enough not to accept one that
+        has barely moved.
+
+        Explicit ``overrides`` win, so a config that states a value keeps it.
+        """
+        derived: dict[str, Any] = {}
+        eef_ids = operator.eef_actuator_ids
+        if eef_ids.size:
+            actuator = int(eef_ids[0])
+            low, high = (
+                float(v) for v in state.host_model.actuator_ctrlrange[actuator]
+            )
+            span = high - low
+            if span > 0:
+                derived["eef_open_value"] = low
+                derived["eef_close_value"] = high
+                derived["eef_tolerance"] = min(0.03, max(1e-4, span * 0.2))
+
+        derived.update(overrides)
+        return cls(state=state, operator=operator, **derived)
+
     # ------------------------------------------------------------------
     # Command resolution
     # ------------------------------------------------------------------
