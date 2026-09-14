@@ -129,8 +129,9 @@ cam_pos   cam_quat   cam_fovy   jnt_range  qpos0
 | 轮 | 内容 | 状态 |
 |---|---|---|
 | 1 | 移除 P7 机械臂 default class 的非零 `margin` | 已实现 `393b2fd` |
-| 2a | `MjWarpSceneState`：device 状态读写 + 与原生路径的等价性测试 | 已实现 |
-| 2b | `object_only` MJWarp env/backend，满足现有接缝，不新增协议 | 未开始 |
+| 2a | `MjWarpSceneState`：frame 读取、free joint 写入 + 等价性测试 | 已实现 |
+| 2b | `MjWarpSceneState`：随机化约束读取（相机位姿/fovy/clip、support geometry） | 已实现 |
+| 2c | `object_only` MJWarp env/backend，满足现有接缝，不新增协议 | 未开始 |
 | 3 | per-world 批量模型取代 N 份 `MjModel` | 未开始 |
 | 4 | physical 模式：执行器、IK、接触、触觉 | 未开始 |
 
@@ -143,6 +144,22 @@ device `Model`/`Data`，并以与原生路径相同的单位、dtype 与约定�
 其中一条约定值得单独固定：MJWarp 把 MuJoCo 的 wxyz 存在 `wp.quat` 里，而
 `wp.quat` 的 Warp 原生序是 xyzw。直接返回原始数组会**错但看起来合理**，
 `test_body_orientation_is_xyzw_not_wxyz` 专门钉住这一点。
+
+**轮 2b** 补上 `RandomizationHost` 需要的读取：相机位姿、fovy、默认 clip range
+与 support geometry。两点值得记录：
+
+- **不同的矩阵转四元数辅助函数不能互相替换**。原生 `get_camera_model` 用
+  `quaternion_from_matrix_3x3`，而 `get_site_pose` 用 `mju_mat2Quat`。适配器
+  逐方法对齐各自对应的辅助函数，而不是统一成一个——否则相机位姿会与原生
+  路径产生微小但真实的偏差。
+- **原生路径的异常类型不一致，适配器照样复现**。frame 读取抛 `ValueError`，
+  随机化读取抛 `KeyError`。这里不做统一，以免调用方现有的 except 分支失效；
+  `test_randomization_reads_raise_keyerror_like_native` 同时对原生与适配器
+  断言，把这个差异钉成有意行为而非疏漏。
+
+`default_clip_range_m()` 返回**米**而非 `vis.map` 的归一化值：device model 有
+`stat` 但没有 `vis`，而 MJWarp `RenderContext` 又只在创建时固定单个 znear、
+完全没有 zfar（见 3.3），返回米让调用方不必关心任一种表示。
 
 **轮 1** 的动机：MJWarp 门禁拒绝 mesh/box CCD pair 上的非零 margin。编译后场景
 中 59 个非零 margin geom 里只有 7 个可碰撞（`link1..link7`），其余 52 个是

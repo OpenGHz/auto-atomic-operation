@@ -33,6 +33,11 @@ _SCENE_XML = """
       <geom name="mover_geom" type="box" size="0.02 0.02 0.02"/>
       <site name="mover_site" pos="0 0.01 0.02"/>
     </body>
+    <!-- No geoms: exercises the zero-radius support-geometry branch. -->
+    <body name="marker" pos="0.3 0.4 0.6">
+      <site name="marker_site"/>
+    </body>
+    <camera name="side_cam" pos="0.8 -0.9 0.5" xyaxes="1 0 0 0 0.5 0.87" fovy="47"/>
   </worldbody>
 </mujoco>
 """
@@ -177,3 +182,80 @@ def test_free_joint_write_rejects_non_free_joint(host_model):
 def test_nworld_must_be_positive(host_model):
     with pytest.raises(ValueError, match="nworld must be >= 1"):
         MjWarpSceneState(host_model, nworld=0)
+
+
+# ----------------------------------------------------------------------
+# Randomization-constraint reads
+# ----------------------------------------------------------------------
+
+
+def test_camera_pose_matches_native_derivation(host_model, native_basis, warp_state):
+    """Camera pose agrees with what the native get_camera_model computes.
+
+    get_camera_model itself also folds in per-camera config (clip ranges,
+    enabled streams), which is env-level state rather than simulator state, so
+    the comparison targets the simulator reads it performs.
+    """
+    from auto_atom.utils.pose import quaternion_from_matrix_3x3
+
+    cam_id = mujoco.mj_name2id(host_model, mujoco.mjtObj.mjOBJ_CAMERA, "side_cam")
+    want_pos = np.asarray(native_basis.data.cam_xpos[cam_id], dtype=np.float64)
+    want_quat = quaternion_from_matrix_3x3(
+        np.asarray(native_basis.data.cam_xmat[cam_id], dtype=np.float64).reshape(3, 3)
+    )
+
+    got_pos, got_quat = warp_state.get_camera_pose("side_cam")
+
+    np.testing.assert_allclose(got_pos, want_pos, atol=1e-6)
+    np.testing.assert_allclose(got_quat, want_quat, atol=1e-6)
+
+
+def test_camera_fovy_converts_degrees_to_radians(host_model, warp_state):
+    got = warp_state.get_camera_fovy_radians("side_cam")
+    assert got == pytest.approx(np.deg2rad(47.0))
+
+
+def test_default_clip_range_matches_native_derivation(host_model, warp_state):
+    """Near/far in metres, derived as the native camera model derives them."""
+    want_near = float(host_model.vis.map.znear) * float(host_model.stat.extent)
+    want_far = float(host_model.vis.map.zfar) * float(host_model.stat.extent)
+
+    near, far = warp_state.default_clip_range_m()
+
+    assert near == pytest.approx(want_near)
+    assert far == pytest.approx(want_far)
+    assert 0.0 < near < far
+
+
+@pytest.mark.parametrize("entity", ["holder", "mover"])
+def test_support_geometry_matches_native_basis(native_basis, warp_state, entity):
+    want = native_basis.get_support_geometry(entity)
+    got = warp_state.get_support_geometry(entity)
+
+    np.testing.assert_allclose(got.center, want.center, atol=1e-6)
+    assert got.radius == pytest.approx(want.radius, abs=1e-6)
+
+
+def test_support_geometry_of_geomless_body_matches_native(native_basis, warp_state):
+    """A body with no geoms yields a zero-radius sphere at its origin."""
+    want = native_basis.get_support_geometry("marker")
+    got = warp_state.get_support_geometry("marker")
+
+    np.testing.assert_allclose(got.center, want.center, atol=1e-6)
+    assert got.radius == pytest.approx(want.radius, abs=1e-9)
+    assert got.radius == 0.0
+
+
+def test_randomization_reads_raise_keyerror_like_native(native_basis, warp_state):
+    """Unknown names raise KeyError, matching the native contract.
+
+    This differs from the frame readers, which raise ValueError -- the native
+    path is inconsistent here and the adapter reproduces it per method rather
+    than unifying it, so a caller's except clause keeps working.
+    """
+    with pytest.raises(KeyError):
+        native_basis.get_support_geometry("nope")
+    with pytest.raises(KeyError):
+        warp_state.get_support_geometry("nope")
+    with pytest.raises(KeyError, match="Camera 'nope' not found"):
+        warp_state.get_camera_pose("nope")

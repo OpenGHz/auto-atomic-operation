@@ -188,6 +188,125 @@ class MjWarpSceneState:
         return pos, quat
 
     # ------------------------------------------------------------------
+    # Randomization-constraint reads
+    # ------------------------------------------------------------------
+
+    def camera_id(self, camera_name: str) -> int:
+        import mujoco
+
+        cam_id = mujoco.mj_name2id(
+            self.host_model, mujoco.mjtObj.mjOBJ_CAMERA, camera_name
+        )
+        if cam_id < 0:
+            raise KeyError(f"Camera '{camera_name}' not found in the MuJoCo model.")
+        return int(cam_id)
+
+    def get_camera_pose(
+        self,
+        camera_name: str,
+        world_index: int = 0,
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """World-frame camera pose as ``(position, orientation_xyzw)``.
+
+        This mirrors the native ``get_camera_model``, which converts
+        ``cam_xmat`` with :func:`quaternion_from_matrix_3x3` -- a *different*
+        helper from the ``mju_mat2Quat`` used for site poses. Each read matches
+        the native helper it corresponds to rather than standardizing on one.
+        """
+        from auto_atom.utils.pose import quaternion_from_matrix_3x3
+
+        world = self._check_world(world_index)
+        cam = self.camera_id(camera_name)
+        position = np.asarray(self.data.cam_xpos.numpy()[world][cam], dtype=np.float64)
+        orientation = quaternion_from_matrix_3x3(
+            np.asarray(
+                self.data.cam_xmat.numpy()[world][cam], dtype=np.float64
+            ).reshape(3, 3)
+        )
+        return position, orientation
+
+    def get_camera_fovy_radians(
+        self,
+        camera_name: str,
+        world_index: int = 0,
+    ) -> float:
+        """Vertical field of view in radians.
+
+        ``cam_fovy`` is a batched model field, so it carries a world axis and
+        can differ per world under camera randomization.
+        """
+        world = self._check_world(world_index)
+        cam = self.camera_id(camera_name)
+        from math import pi
+
+        return float(self.model.cam_fovy.numpy()[world][cam]) * pi / 180.0
+
+    def default_clip_range_m(self) -> Tuple[float, float]:
+        """Model-default near/far clip planes, in metres.
+
+        Read from the *host* model: the device model exposes ``stat`` but not
+        ``vis``, and MJWarp's ``RenderContext`` fixes a single ``znear`` at
+        creation with no ``zfar`` at all. Returning metres keeps callers free of
+        both representations.
+        """
+        vis_map = self.host_model.vis.map
+        extent = float(self.host_model.stat.extent)
+        return float(vis_map.znear) * extent, float(vis_map.zfar) * extent
+
+    def get_support_geometry(
+        self,
+        entity_name: str,
+        world_index: int = 0,
+    ) -> Any:
+        """Conservative bounding sphere over one body's geoms.
+
+        Matches the native implementation including its failure mode: a
+        ``KeyError`` for an unknown entity, and a zero-radius sphere at the body
+        origin for a body that carries no geoms. ``geom_size`` is batched, so
+        the radius can differ per world under geometry randomization.
+        """
+        from auto_atom.contracts import SupportGeometry
+
+        world = self._check_world(world_index)
+        try:
+            body = self.body_id(entity_name)
+        except ValueError as exc:
+            raise KeyError(
+                f"Entity '{entity_name}' not found as a MuJoCo body."
+            ) from exc
+
+        geom_bodyid = self.model.geom_bodyid.numpy()
+        geom_ids = [
+            gid
+            for gid in range(int(self.host_model.ngeom))
+            if int(geom_bodyid[gid]) == body
+        ]
+        geom_xpos = self.data.geom_xpos.numpy()[world]
+        if not geom_ids:
+            return SupportGeometry(
+                center=np.asarray(
+                    self.data.xpos.numpy()[world][body], dtype=np.float64
+                ),
+                radius=0.0,
+            )
+
+        center = np.mean(
+            np.asarray([geom_xpos[gid] for gid in geom_ids], dtype=np.float64),
+            axis=0,
+        )
+        geom_size = self.model.geom_size.numpy()[world]
+        radius = 0.0
+        for gid in geom_ids:
+            geom_center = np.asarray(geom_xpos[gid], dtype=np.float64)
+            size = np.asarray(geom_size[gid], dtype=np.float64)
+            radius = max(
+                radius,
+                float(np.linalg.norm(geom_center - center))
+                + float(np.linalg.norm(size)),
+            )
+        return SupportGeometry(center=center, radius=radius)
+
+    # ------------------------------------------------------------------
     # Advancing state
     # ------------------------------------------------------------------
 
