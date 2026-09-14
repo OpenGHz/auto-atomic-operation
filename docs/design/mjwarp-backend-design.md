@@ -402,7 +402,7 @@ freejoint 目标来验证"verdict 随状态变化"。
 | 4c-3c-2 | 后端级抓取/接触查询（`MjWarpGraspQueries`，批量回答 stage 后置条件） | 已实现 |
 | 4c-3c-3a | 关节名解析（`actuator_joint_names`，IK 构造所需） | 已实现 |
 | 4c-3c-3b | operator 自动注册（读 `OperatorBinding`，构造真实 IK solver） | 已实现 |
-| 4c-3c-3c | `step(action, env_mask)`（`StepEnvProtocol`）与 tick 边界串接 | 未开始 |
+| 4c-3c-3c | `apply_joint_action`（`JointActionEnvProtocol`）+ `step`（`StepEnvProtocol`） | 已实现 |
 | 4c-3c-3d | `physical` 模式 backend 组装（builder、handler 装配） | 未开始 |
 | 修复 | 静态 body 写入不更新 `geom_xpos`（见 3.9，轮 2c 遗留缺陷） | 已修复（frame + 渲染 + 碰撞） |
 | 4d | 触觉（52 个 `contype=0` 触觉单元的读取路径） | 未开始 |
