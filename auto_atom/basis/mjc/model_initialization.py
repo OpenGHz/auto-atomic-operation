@@ -137,6 +137,11 @@ def apply_initial_joint_positions(
 ) -> tuple[str, ...]:
     """Apply configured home joints and settle constrained passive linkages.
 
+    The linkage solve isolates scene contacts: task-level base placement has
+    not run yet, so the authored mount may intersect scene geometry. Contacts
+    must not deform passive joints while their driven joints are pinned.
+    Contact flags and gravity are restored before returning to physical use.
+
     ``actuator_ids`` identifies the operator actuators whose position targets
     must hold the initialized state.  Motor, velocity, tendon, and site
     actuators are deliberately ignored because their controls are not joint
@@ -193,7 +198,9 @@ def apply_initial_joint_positions(
         free_snapshot = data.qpos[free_addrs].copy() if free_addrs else None
         target = data.qpos[pin_addrs].copy()
         saved_gravity = model.opt.gravity.copy()
+        saved_disableflags = model.opt.disableflags
         model.opt.gravity[:] = 0.0
+        model.opt.disableflags |= int(mujoco.mjtDisableBit.mjDSBL_CONTACT)
         try:
             for _ in range(500):
                 mujoco.mj_step(model, data)
@@ -202,6 +209,7 @@ def apply_initial_joint_positions(
                     data.qpos[free_addrs] = free_snapshot
         finally:
             model.opt.gravity[:] = saved_gravity
+            model.opt.disableflags = saved_disableflags
         data.qvel[:] = 0.0
 
     for address, values in multi_dof:
