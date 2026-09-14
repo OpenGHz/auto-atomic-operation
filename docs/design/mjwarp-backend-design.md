@@ -133,7 +133,8 @@ cam_pos   cam_quat   cam_fovy   jnt_range  qpos0
 | 2b | `MjWarpSceneState`：随机化约束读取（相机位姿/fovy/clip、support geometry） | 已实现 |
 | 2c | `MjWarpSceneState`：静态 body 放置（world → parent-local）与统一入口 | 已实现 |
 | 2d | `MjWarpSceneState`：批量 frame 读取（`PoseState` 形状，单次 readback） | 已实现 |
-| 2e | `object_only` MJWarp env/backend，满足现有接缝，不新增协议 | 未开始 |
+| 2e | `MjWarpObjectHandler`：满足 `ObjectHandler` 契约（`apply_object_pose` 的落点） | 已实现 |
+| 2f | `object_only` MJWarp env/backend，满足现有接缝，不新增协议 | 未开始 |
 | 3 | per-world 批量模型取代 N 份 `MjModel` | 未开始 |
 | 4 | physical 模式：执行器、IK、接触、触觉 | 未开始 |
 
@@ -212,6 +213,23 @@ device readback**而不是每个 world 一次——运行时每个控制 tick �
 
 （`mju_mat2Quat` 是标量接口，因此 site 的矩阵转四元数仍按 world 循环，但 readback
 只有一次。）
+
+**轮 2e**（`auto_atom/backend/mjwarp/handlers.py`）是 `apply_object_pose` 的落点，
+也就是 `execution.mode: object_only` 的**全部**搬运机制。handler 刻意做得很薄：
+名称解析、free joint / 静态路径分派、world → parent-local 转换、批量 readback 都
+已经在 `MjWarpSceneState` 里，这一层只负责把运行时的批量 `PoseState` 与
+`env_mask` 桥接过去。
+
+与原生 handler 的一处差异值得记录：原生每个副本一份 `MjModel`/`MjData` 并逐个
+循环，其 `_stateful_pose_indices` 的存在是为了把带掩码的写入**收敛到单个物理
+行**——那是 Gaussian-Splatting 共享物理批次的需求。MJWarp 是一个 device 模型
+带真正的 per-world 状态，没有别名可收敛，因此 `env_mask` 直接映射为
+`world_mask`，不需要对应的收敛逻辑。
+
+掩码形状的报错信息与原生逐字一致（`env_mask must have shape (2,)`）：
+`tests/test_backend_contracts.py` 钉住了原生这条信息，因此
+`test_mask_rejection_message_matches_the_native_handler` 用**同一个正则**同时断言
+两个后端，让依赖这条信息的调用方跨后端都能继续工作。
 
 **轮 1** 的动机：MJWarp 门禁拒绝 mesh/box CCD pair 上的非零 margin。编译后场景
 中 59 个非零 margin geom 里只有 7 个可碰撞（`link1..link7`），其余 52 个是
