@@ -12,6 +12,21 @@
 
 ## 1. 结论先行
 
+### 1.0 `object_only` 已经在 MJWarp 上跑通
+
+原始问题——`aao-demo --config-name rack_plate_p7_v4_umi_v3
+execution.mode=object_only` 所配置的功能能否跑通——答案是**能**，且已实测：
+
+```
+backend = build_mjwarp_object_only_backend
+after reset: stage=['pick_plate', 'pick_plate'] done=[False False]
+updates=8 done=[True True] success=[True True]
+records=4
+```
+
+两个 world 全部成功，8 次 `update()`、4 条记录（2 stage x 2 world），与原生路径
+一致。轮 1 与轮 2a–2h 已实现；**尚未实现的是观测采集（渲染）**，见 3.3 与轮 2i。
+
 **接缝已经在正确的位置**，移植工作量比按文件行数估算的小得多。
 
 对 `rack_plate_p7_v4_umi_v3` 做 `object_only` 全流程 tracing（instrument
