@@ -743,8 +743,18 @@ def _build_operator_handlers(
         # here rather than duplicated as separate handler fields.
         if "joint_control_mode" in ik_block:
             operator.joint_control_mode = str(ik_block["joint_control_mode"])
-        if "max_joint_delta" in ik_block:
-            operator.max_joint_delta = float(ik_block["max_joint_delta"])
+        operator.max_joint_delta = float(
+            ik_block.get(
+                "max_joint_delta",
+                extra.get("max_joint_delta", operator.max_joint_delta),
+            )
+        )
+        operator.joint_interp_speed = float(
+            ik_block.get(
+                "joint_interp_speed",
+                extra.get("joint_interp_speed", operator.joint_interp_speed),
+            )
+        )
 
         arm = MjWarpArmControl(
             state=env.state,

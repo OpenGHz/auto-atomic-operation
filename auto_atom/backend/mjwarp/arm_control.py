@@ -16,11 +16,9 @@ Like the gripper path, this advances a complete control update for the selected
 worlds before evaluating completion. The scene-state adapter preserves inactive
 worlds when the runtime dispatches one environment at a time.
 
-``solve_once_interpolate`` is not implemented. It plans a joint trajectory once
-per waypoint and advances it without re-solving, which is a genuinely different
-control strategy rather than a variation, so it is refused explicitly instead of
-silently behaving like ``per_step_ik`` -- the same choice made for mocap mode in
-:mod:`auto_atom.backend.mjwarp.operator_state`.
+``solve_once_interpolate`` solves the final waypoint once and advances a cached
+joint trajectory. Cartesian shaping and per-step joint clamping belong only to
+the ``per_step_ik`` strategy.
 """
 
 from __future__ import annotations
@@ -49,8 +47,28 @@ from auto_atom.utils.pose import position_within_tolerance, quaternion_angular_d
 
 
 @dataclass
+class _JointPlan:
+    target_position: np.ndarray
+    target_orientation: np.ndarray
+    start: np.ndarray
+    goal: np.ndarray
+    steps: int
+    progress: int = 0
+
+    def matches(self, position: np.ndarray, orientation: np.ndarray) -> bool:
+        return bool(
+            np.allclose(position, self.target_position, atol=1e-6, rtol=0)
+            and abs(float(np.dot(orientation, self.target_orientation))) >= 1.0 - 1e-6
+        )
+
+    def advance(self) -> np.ndarray:
+        self.progress = min(self.progress + 1, self.steps)
+        return self.start + (self.goal - self.start) * (self.progress / self.steps)
+
+
+@dataclass
 class MjWarpArmControl:
-    """Per-world cartesian arm motion driven by per-step IK."""
+    """Per-world pose control using mocap, per-step IK or joint interpolation."""
 
     state: MjWarpSceneState
     operator: MjWarpOperatorState
@@ -68,24 +86,26 @@ class MjWarpArmControl:
     _steps: np.ndarray = field(init=False, repr=False)
     _last_command_key: List[Optional[str]] = field(init=False, repr=False)
     _scaler: StallScaler = field(init=False, repr=False)
+    _plans: List[Optional[_JointPlan]] = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
-        if (
-            self.operator.joint_mode
-            and self.operator.joint_control_mode != "per_step_ik"
-        ):
+        if self.operator.joint_mode and self.operator.joint_control_mode not in {
+            "per_step_ik",
+            "solve_once_interpolate",
+        }:
             raise ValueError(
                 f"Operator '{self.operator.name}' uses joint_control_mode "
-                f"'{self.operator.joint_control_mode}', which the MJWarp backend "
-                "does not implement. Only 'per_step_ik' is supported: "
-                "'solve_once_interpolate' plans a joint trajectory once per "
-                "waypoint and advances it without re-solving, a different "
-                "control strategy rather than a variation."
+                f"'{self.operator.joint_control_mode}', which the MJWarp backend does not implement."
             )
+        if self.operator.joint_mode and self.ik is None:
+            raise ValueError("Joint-mode control requires an IK caller.")
+        if self.operator.joint_interp_speed <= 0:
+            raise ValueError("joint_interp_speed must be positive.")
         nworld = self.state.nworld
         self._steps = np.zeros(nworld, dtype=np.int64)
         self._last_command_key = [None] * nworld
         self._scaler = StallScaler(nworld=nworld, enabled=self.adaptive_step_scaling)
+        self._plans = [None] * nworld
 
     def move(
         self,
@@ -186,6 +206,10 @@ class MjWarpArmControl:
         does. Holding rather than zeroing matters: a zeroed command would drop
         the arm under gravity on an IK miss.
         """
+        if self.operator.joint_control_mode == "solve_once_interpolate":
+            return self._interpolated_target(
+                world, goal_position, goal_orientation, seed
+            )
         shaped_position, shaped_orientation = self._shaped_goal(
             world,
             current_position,
@@ -207,6 +231,42 @@ class MjWarpArmControl:
         if solution is None:
             return None
         return clamp_joint_delta(solution, seed, self.operator.max_joint_delta)
+
+    def _interpolated_target(
+        self,
+        world: int,
+        position: np.ndarray,
+        orientation: np.ndarray,
+        seed: np.ndarray,
+    ) -> Optional[np.ndarray]:
+        """Solve once per distinct final target and advance that world's plan."""
+        position_b, orientation_b = world_to_base(
+            position,
+            orientation,
+            self.operator.base_position[world],
+            self.operator.base_orientation[world],
+        )
+        plan = self._plans[world]
+        if plan is None or not plan.matches(position_b, orientation_b):
+            solution = self.ik.solve(
+                world, position_b, orientation_b, seed, "solve_once_interpolate"
+            )
+            if solution is None:
+                return None
+            goal = np.asarray(solution, dtype=np.float64)
+            count = max(
+                1,
+                int(
+                    np.ceil(
+                        np.max(np.abs(goal - seed)) / self.operator.joint_interp_speed
+                    )
+                ),
+            )
+            plan = _JointPlan(
+                position_b.copy(), orientation_b.copy(), seed.copy(), goal.copy(), count
+            )
+            self._plans[world] = plan
+        return plan.advance()
 
     def _shaped_goal(
         self,
@@ -361,6 +421,7 @@ class MjWarpArmControl:
         for world in indices:
             self._steps[world] = 0
             self._last_command_key[world] = None
+            self._plans[world] = None
             self._scaler.reset(world)
             if self.ik is not None:
                 self.ik.reset(world)

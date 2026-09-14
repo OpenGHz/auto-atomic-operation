@@ -355,8 +355,8 @@ def test_mask_shape_is_validated(arm_model):
         )
 
 
-def test_solve_once_interpolate_is_refused(arm_model):
-    """Refused explicitly rather than silently behaving like per_step_ik."""
+def test_solve_once_interpolate_solves_the_final_target_once(arm_model):
+    """Interpolation bypasses Cartesian and joint-delta shaping and holds its goal."""
     state = MjWarpSceneState(arm_model, nworld=1)
     state.forward()
     operator = register_operator(
@@ -367,11 +367,48 @@ def test_solve_once_interpolate_is_refused(arm_model):
         arm_actuators=("act_j1", "act_j2"),
         ik_solver=object(),
         joint_control_mode="solve_once_interpolate",
+        joint_interp_speed=0.2,
+        max_joint_delta=0.001,
     )
+    solver = _StubSolver(np.array([1.0, -0.4]))
+    control = MjWarpArmControl(
+        state=state,
+        operator=operator,
+        ik=MjWarpIkCaller(solver=solver, nworld=1),
+        max_linear_step=0.001,
+        max_angular_step=0.001,
+    )
+    goal = np.array([0.4, 0.2, 0.3])
+    orientation = np.array([0, 0, 0, 1])
+    commands = []
+    for tick in range(8):
+        control.move(goal, orientation if tick < 4 else -orientation)
+        commands.append(state.get_ctrl()[0, operator.arm_actuator_ids].copy())
+    assert len(solver.targets) == 1
+    np.testing.assert_allclose(
+        solver.targets[0][0], goal - operator.base_position[0], atol=1e-7
+    )
+    np.testing.assert_allclose(commands[0], [0.2, -0.08], atol=1e-7)
+    np.testing.assert_allclose(commands[4:], [[1.0, -0.4]] * 4, atol=1e-7)
 
-    with pytest.raises(ValueError, match="does not implement"):
-        MjWarpArmControl(
-            state=state,
-            operator=operator,
-            ik=MjWarpIkCaller(solver=_StubSolver(), nworld=1),
-        )
+
+def test_interpolation_replans_only_changed_world_and_clears_on_reset(arm_model):
+    state, operator, control, solver = _build(arm_model, np.array([0.5, -0.2]))
+    operator.joint_control_mode = "solve_once_interpolate"
+    operator.joint_interp_speed = 0.1
+    goal = np.array([0.4, 0.2, 0.3])
+    orientation = np.array([0, 0, 0, 1])
+    first = np.array([True, False])
+    second = np.array([False, True])
+    for _ in range(2):
+        control.move(goal, orientation, world_mask=first)
+    assert len(solver.targets) == 1
+    control.move(goal, orientation, world_mask=second)
+    assert len(solver.targets) == 2
+    control.move(goal + [0.01, 0, 0], orientation, world_mask=first)
+    assert len(solver.targets) == 3
+    control.move(goal, orientation, world_mask=second)
+    assert len(solver.targets) == 3
+    control.reset([1])
+    control.move(goal, orientation, world_mask=second)
+    assert len(solver.targets) == 4

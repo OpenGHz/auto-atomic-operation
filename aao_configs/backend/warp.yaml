@@ -16,8 +16,8 @@
 # No `@_global_` is needed on the command line: the `# @package _global_`
 # header above already places this file's content at the config root.
 #
-# Physical execution supports mocap operators and joint-mode `per_step_ik`.
-# `solve_once_interpolate` (e.g. cup_on_coaster_airbot_p7_umi) is not implemented.
+# Physical execution supports mocap operators and joint-mode `per_step_ik`
+# or `solve_once_interpolate`, selected by the task's existing control config.
 # Object-only execution is also available with `execution.mode=object_only`.
 # The Warp env has no interactive viewer path.
 #
