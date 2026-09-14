@@ -25,13 +25,16 @@ therefore the package -- does not require the GPU dependency to be installed.
 
 from __future__ import annotations
 
+import logging
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Any, Iterator, Optional, Sequence, Tuple
+from typing import TYPE_CHECKING, Any, Iterator, List, Optional, Sequence, Tuple
 
 import numpy as np
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     import mujoco
+
+logger = logging.getLogger(__name__)
 
 
 def _require_mujoco_warp() -> Any:
@@ -45,6 +48,38 @@ def _require_mujoco_warp() -> Any:
             "native MuJoCo backend does not need it."
         ) from exc
     return mujoco_warp
+
+
+def adapt_options_for_warp(host_model: "mujoco.MjModel") -> List[str]:
+    """Neutralise solver options MJWarp rejects, in place, and report each one.
+
+    The host model seeds ``put_data`` and backs the tactile scratch, so it must
+    agree with the device model. Adaptation belongs here to preserve the solver
+    options in the MJCF shared with the native backend.
+
+    Only ``noslip_iterations`` is disabled: MJWarp lacks the post-solve pass
+    that removes residual tangential slip in contacts. Other unsupported
+    features still raise from ``put_model``. Returns one human-readable line
+    per adjustment, empty when the model needed none.
+    """
+    adjustments: List[str] = []
+
+    noslip = int(host_model.opt.noslip_iterations)
+    if noslip > 0:
+        host_model.opt.noslip_iterations = 0
+        adjustments.append(
+            f"noslip_iterations {noslip} -> 0 (MJWarp has no noslip solver; "
+            "grasped objects may show tangential creep under load)"
+        )
+
+    if adjustments:
+        logger.warning(
+            "MJWarp does not support every solver option this scene requests; "
+            "adapted %d option(s): %s",
+            len(adjustments),
+            "; ".join(adjustments),
+        )
+    return adjustments
 
 
 # Model fields the randomization layer writes per environment. Batching these
@@ -72,7 +107,7 @@ class MjWarpSceneState:
 
     ``njmax`` must be supplied for scenes whose constraint count exceeds the
     default budget; MJWarp reports ``nefc overflow`` on the first step
-    otherwise, and the value scales with ``nworld``.
+    otherwise. The budget is per world; its memory cost scales with ``nworld``.
     """
 
     def __init__(
@@ -91,6 +126,11 @@ class MjWarpSceneState:
         self._mjw = mjw
         self.host_model = host_model
         self.nworld = int(nworld)
+
+        # Before put_model, which refuses a model asking for an unimplemented
+        # feature. Mutates host_model, so it also covers the put_data seed below
+        # and the tactile host scratch.
+        self.option_adjustments = adapt_options_for_warp(host_model)
 
         batch_sizes = {name: self.nworld for name in batched_fields}
         self.model = mjw.put_model(host_model, batch_sizes=batch_sizes)

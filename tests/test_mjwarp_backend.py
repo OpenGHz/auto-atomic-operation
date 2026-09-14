@@ -21,10 +21,12 @@ from omegaconf import OmegaConf  # noqa: E402
 
 from auto_atom.backend.mjwarp.backend import (  # noqa: E402
     MjWarpObjectOnlyBackend,
+    _collect_object_names,
     build_mjwarp_object_only_backend,
 )
 from auto_atom.basis.mjwarp.env import MjWarpObjectOnlyEnv  # noqa: E402
 from auto_atom.config.env_config import EnvConfig  # noqa: E402
+from auto_atom.config.reference import RandomizationReference  # noqa: E402
 from auto_atom.config.task import AutoAtomConfig  # noqa: E402
 from auto_atom.contracts import SceneBackend  # noqa: E402
 from auto_atom.execution_config import (  # noqa: E402
@@ -34,6 +36,71 @@ from auto_atom.runtime import ComponentRegistry  # noqa: E402
 
 _CONFIG_NAME = "rack_plate_p7_v4_umi_v3"
 _REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+@pytest.mark.parametrize("spec_form", ["range", "regions", "proposal"])
+def test_object_collection_includes_operator_pose_references(spec_form):
+    """Base/EEF and per-axis references can name otherwise unlisted scenery."""
+    base = {
+        "reference": "base_support",
+        "x": {"range": [0, 0], "reference": "axis_support"},
+    }
+    eef = {"reference": "eef_support"}
+    if spec_form == "regions":
+        base = {"regions": [base, {"reference": "region_support"}]}
+        eef = {"regions": [eef]}
+    elif spec_form == "proposal":
+        base = {"proposal": {"regions": [base, {"reference": "region_support"}]}}
+        eef = {"proposal": eef}
+    task = AutoAtomConfig.model_validate(
+        {
+            "env_name": "test",
+            "stages": [],
+            "initial_pose": {"initial_scenery": {"position": [0, 0, 0]}},
+            "randomization": {
+                "entities": {
+                    "arm": {"base": base, "eef": eef},
+                    "object": {"reference": "object_support"},
+                    "missing_body": {"reference": "missing_reference"},
+                }
+            },
+        }
+    )
+    bodies = {
+        "object",
+        "base_support",
+        "axis_support",
+        "eef_support",
+        "region_support",
+        "object_support",
+        "initial_scenery",
+    }
+    expected = bodies if spec_form != "range" else bodies - {"region_support"}
+
+    assert _collect_object_names(task, bodies.__contains__) == expected
+
+
+@pytest.mark.parametrize("parts", [(), ("base",), ("eef",), ("base", "eef")])
+def test_object_collection_ignores_reference_modes_and_absent_operator_specs(parts):
+    """Reference modes must not become handlers, even with colliding body names."""
+    task = AutoAtomConfig.model_validate(
+        {
+            "env_name": "test",
+            "stages": [],
+            "randomization": {
+                "entities": {
+                    "arm": {part: {"reference": "absolute_base"} for part in parts},
+                    "object": {
+                        "reference": "relative",
+                        "x": {"range": [0, 0], "reference": "absolute_world"},
+                    },
+                }
+            },
+        }
+    )
+    bodies = {"object", *(reference.value for reference in RandomizationReference)}
+
+    assert _collect_object_names(task, bodies.__contains__) == {"object"}
 
 
 def _build(batch_size: int = 2) -> MjWarpObjectOnlyBackend:

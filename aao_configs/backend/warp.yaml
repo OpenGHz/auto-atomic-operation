@@ -16,12 +16,21 @@
 # No `@_global_` is needed on the command line: the `# @package _global_`
 # header above already places this file's content at the config root.
 #
-# `njmax` is the constraint budget; 512 clears the rack_plate arm.  Scenes
-# with more contacts or more worlds may need it raised -- too low shows up as
-# an `nefc overflow` on the first physical step.  Raise it per run with
-# `env.njmax=<n>`.  The Warp env has no interactive viewer path.
+# Physical execution supports joint-mode operators using `per_step_ik`.
+# Mocap control (e.g. pick_and_place) and `solve_once_interpolate`
+# (e.g. cup_on_coaster_airbot_p7_umi) raise explicit unsupported-mode errors.
+# Object-only execution is also available with `execution.mode=object_only`.
+# The Warp env has no interactive viewer path.
+#
+# MJWarp disables `noslip_iterations` on its compiled model with a warning;
+# grasped objects may creep under load. Shared MJCF and CPU physics retain it.
+#
+# `njmax` is the constraint budget per world. 2048 provides headroom over the
+# previous 512 default; contact-heavy scenes may still need `env.njmax=<n>`.
+# Insufficient capacity raises `njmax overflow` at construction or reports
+# `nefc overflow` during stepping. Memory cost scales with the world count.
 env:
   _target_: auto_atom.basis.mjwarp.env.MjWarpObjectOnlyEnv
-  njmax: 512
+  njmax: 2048
   viewer: null
 backend: auto_atom.backend.mjwarp.backend.build_mjwarp_backend

@@ -23,7 +23,11 @@ import numpy as np
 
 from auto_atom.backend.mjwarp.handlers import MjWarpObjectHandler
 from auto_atom.basis.mjwarp.env import MjWarpObjectOnlyEnv
-from auto_atom.config.randomization import ResolvedRandomizationConfig
+from auto_atom.config.randomization import (
+    OperatorRandomizationConfig,
+    ResolvedRandomizationConfig,
+)
+from auto_atom.config.reference import RandomizationReference
 from auto_atom.config.task import AutoAtomConfig
 from auto_atom.contracts import (
     CameraModel,
@@ -560,6 +564,9 @@ def _collect_object_names(
     body may never appear in a stage and still needs a handler for pose
     get/set -- so those are collected too, then filtered to bodies the compiled
     model actually has.
+
+    Operator entries declare pose specifications under ``base`` and ``eef``;
+    both can reference scenery that needs an object handler.
     """
     from auto_atom.randomization import declared_randomization_references
 
@@ -567,9 +574,23 @@ def _collect_object_names(
 
     candidates: Set[str] = set(config.randomization.entities)
     for entity_range in config.randomization.entities.values():
-        for reference in declared_randomization_references(entity_range):
-            if isinstance(reference, str):
-                candidates.add(reference)
+        if isinstance(entity_range, OperatorRandomizationConfig):
+            specs = [
+                spec
+                for spec in (entity_range.base, entity_range.eef)
+                if spec is not None
+            ]
+        else:
+            specs = [entity_range]
+        for spec in specs:
+            for reference in declared_randomization_references(spec):
+                # RandomizationReference subclasses str, so a bare isinstance
+                # check would admit enum members ('absolute_world', ...) as body
+                # names. Only free-form strings name an entity.
+                if isinstance(reference, str) and not isinstance(
+                    reference, RandomizationReference
+                ):
+                    candidates.add(reference)
     candidates.update(config.initial_pose)
 
     names.update(name for name in candidates if body_exists(name))

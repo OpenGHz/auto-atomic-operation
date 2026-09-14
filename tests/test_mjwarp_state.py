@@ -15,7 +15,10 @@ mujoco = pytest.importorskip("mujoco")
 pytest.importorskip("mujoco_warp")
 
 from auto_atom.basis.mjc.mujoco_basis import MujocoBasis  # noqa: E402
-from auto_atom.basis.mjwarp.state import MjWarpSceneState  # noqa: E402
+from auto_atom.basis.mjwarp.state import (  # noqa: E402
+    MjWarpSceneState,
+    adapt_options_for_warp,
+)
 
 # A deliberately asymmetric pose: an identity or axis-aligned orientation would
 # pass even with a wrong quaternion component order.
@@ -64,6 +67,56 @@ _SCENE_XML = """
 @pytest.fixture(scope="module")
 def host_model():
     return mujoco.MjModel.from_xml_string(_SCENE_XML)
+
+
+@pytest.mark.parametrize("noslip_iterations", [0, 5])
+def test_scene_construction_adapts_noslip_before_device_upload(
+    caplog, noslip_iterations
+):
+    """Authored noslip must not block real device upload and physical stepping."""
+    xml = _SCENE_XML.replace(
+        'integrator="implicitfast"',
+        f'integrator="implicitfast" noslip_iterations="{noslip_iterations}"',
+    )
+    model = mujoco.MjModel.from_xml_string(xml)
+    state = MjWarpSceneState(model, nworld=2)
+    state.step()
+
+    assert state.host_model is model
+    assert model.opt.noslip_iterations == 0
+    assert len(state.option_adjustments) == int(noslip_iterations > 0)
+    np.testing.assert_allclose(state.data.time.numpy(), model.opt.timestep)
+    assert np.isfinite(state.data.qpos.numpy()).all()
+    if noslip_iterations:
+        assert "noslip_iterations 5 -> 0" in caplog.text
+        assert "tangential creep" in caplog.text
+    else:
+        assert "adapted" not in caplog.text
+
+    # A native load from the same source keeps the authored contact solver.
+    native_model = mujoco.MjModel.from_xml_string(xml)
+    assert native_model.opt.noslip_iterations == noslip_iterations
+
+
+def test_noslip_adaptation_is_idempotent_and_preserves_other_options(caplog):
+    model = mujoco.MjModel.from_xml_string(_SCENE_XML)
+    model.opt.noslip_iterations = 3
+    fields = (
+        "timestep",
+        "integrator",
+        "cone",
+        "solver",
+        "iterations",
+        "tolerance",
+        "noslip_tolerance",
+    )
+    before = {field: getattr(model.opt, field) for field in fields}
+
+    assert len(adapt_options_for_warp(model)) == 1
+    caplog.clear()
+    assert adapt_options_for_warp(model) == []
+    assert not caplog.records
+    assert {field: getattr(model.opt, field) for field in fields} == before
 
 
 @pytest.fixture(scope="module")
