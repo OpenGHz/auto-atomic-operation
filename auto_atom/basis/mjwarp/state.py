@@ -584,6 +584,47 @@ class MjWarpSceneState:
         """Advance physics by one timestep for every world (``mj_step``)."""
         self._mjw.step(self.model, self.data)
 
+    # ------------------------------------------------------------------
+    # Contacts
+    # ------------------------------------------------------------------
+
+    def get_contact_geom_pairs(self, world_index: int = 0) -> np.ndarray:
+        """Colliding geom-id pairs for one world, shaped ``(ncon, 2)``.
+
+        MJWarp has no per-world ``ncon``: every world's contacts share one flat
+        pool of length ``nacon``, tagged by ``contact.worldid``. A naive
+        ``range(data.ncon)`` port therefore cannot work -- the field does not
+        exist -- and iterating the whole pool would attribute other worlds'
+        contacts to this one.
+
+        Verified against native MuJoCo on a two-box scene: filtering by world
+        recovers exactly the native contact count and the same geom pairs, and
+        ``geom_bodyid`` resolves identically on host and device. That is what the
+        grasp check needs, which reads contact *existence* and geom pairing
+        rather than contact force.
+        """
+        world = self._check_world(world_index)
+        nacon = int(self.data.nacon.numpy()[0])
+        if nacon == 0:
+            return np.empty((0, 2), dtype=np.int32)
+        selected = self.data.contact.worldid.numpy()[:nacon] == world
+        return np.asarray(
+            self.data.contact.geom.numpy()[:nacon][selected], dtype=np.int32
+        )
+
+    def get_contact_body_pairs(self, world_index: int = 0) -> np.ndarray:
+        """Colliding body-id pairs for one world, shaped ``(ncon, 2)``.
+
+        Bodies rather than geoms are what a grasp or contact query compares
+        against, since a target is addressed as a body and its whole geom set
+        counts.
+        """
+        pairs = self.get_contact_geom_pairs(world_index)
+        if pairs.size == 0:
+            return np.empty((0, 2), dtype=np.int32)
+        geom_bodyid = np.asarray(self.model.geom_bodyid.numpy(), dtype=np.int32)
+        return geom_bodyid[pairs]
+
     def set_free_joint_pose(
         self,
         joint_name: str,

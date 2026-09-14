@@ -356,6 +356,158 @@ def test_nested_deferral_still_runs_one_pass(host_model):
         restore()
 
 
+# ----------------------------------------------------------------------
+# World-filtered contact iteration
+# ----------------------------------------------------------------------
+
+# Two boxes resting on a plane and touching each other, so there are real
+# contacts to count, all of them between distinct bodies. The main scene does
+# produce contacts (its swing arm overlaps its own base) but they are all the
+# same pair, so it cannot tell a correct world filter from a broken one.
+_CONTACT_XML = """
+<mujoco>
+  <option timestep="0.002" integrator="implicitfast"/>
+  <worldbody>
+    <geom name="floor" type="plane" size="2 2 0.05"/>
+    <body name="a" pos="0 0 0.05">
+      <freejoint name="a_j"/>
+      <geom name="a_g" type="box" size="0.05 0.05 0.05"/>
+    </body>
+    <body name="b" pos="0.099 0 0.05">
+      <freejoint name="b_j"/>
+      <geom name="b_g" type="box" size="0.05 0.05 0.05"/>
+    </body>
+  </worldbody>
+</mujoco>
+"""
+
+
+@pytest.fixture(scope="module")
+def contact_scene():
+    """Settled native and MJWarp copies of the same contact-rich scene."""
+    host = mujoco.MjModel.from_xml_string(_CONTACT_XML)
+    # Non-zero margin on mesh CCD pairs is what round 1 removed from the robots;
+    # MULTICCD is disabled here only because these are box-box pairs.
+    host.opt.disableflags |= int(mujoco.mjtDisableBit.mjDSBL_MULTICCD)
+
+    native = mujoco.MjData(host)
+    for _ in range(50):
+        mujoco.mj_step(host, native)
+
+    state = MjWarpSceneState(host, nworld=2, njmax=512)
+    for _ in range(50):
+        state.step()
+    return host, native, state
+
+
+def _native_geom_pairs(host, native):
+    return sorted(
+        tuple(sorted((int(native.contact[i].geom1), int(native.contact[i].geom2))))
+        for i in range(native.ncon)
+    )
+
+
+def test_contact_scan_matches_native_per_world(contact_scene):
+    """Filtering the flat pool by world recovers exactly native's contacts.
+
+    MJWarp has no per-world ``ncon``: all worlds share one ``nacon``-length pool
+    tagged by ``worldid``. Iterating the pool unfiltered would attribute other
+    worlds' contacts to this one, so the filter is what makes the port possible
+    at all rather than an optimisation.
+    """
+    host, native, state = contact_scene
+    want = _native_geom_pairs(host, native)
+    assert len(want) > 0, "scene must actually produce contacts"
+
+    for world in range(state.nworld):
+        pairs = state.get_contact_geom_pairs(world)
+        got = sorted(tuple(sorted((int(a), int(b)))) for a, b in pairs)
+        assert got == want, f"world {world}"
+
+
+def test_contact_pool_holds_every_world(contact_scene):
+    """The pool is the sum across worlds, not one world's worth."""
+    _, native, state = contact_scene
+    nacon = int(state.data.nacon.numpy()[0])
+
+    assert nacon == native.ncon * state.nworld
+    per_world = [
+        state.get_contact_geom_pairs(world).shape[0] for world in range(state.nworld)
+    ]
+    assert per_world == [native.ncon] * state.nworld
+
+
+def test_contact_body_pairs_resolve_through_geom_bodyid(contact_scene):
+    """Body pairing is what a grasp check compares, and it matches native."""
+    host, native, state = contact_scene
+    geom_bodyid = np.asarray(host.geom_bodyid)
+
+    want = sorted(
+        tuple(
+            sorted(
+                (
+                    int(geom_bodyid[native.contact[i].geom1]),
+                    int(geom_bodyid[native.contact[i].geom2]),
+                )
+            )
+        )
+        for i in range(native.ncon)
+    )
+    got = sorted(
+        tuple(sorted((int(a), int(b)))) for a, b in state.get_contact_body_pairs(0)
+    )
+    assert got == want
+
+
+def test_geom_bodyid_is_identical_on_device(contact_scene):
+    host, _, state = contact_scene
+    np.testing.assert_array_equal(
+        np.asarray(host.geom_bodyid), state.model.geom_bodyid.numpy()
+    )
+
+
+# One box floating clear of a plane: nothing touches, so nacon stays 0 while the
+# contact pool itself is still allocated at its worst-case length. Reading that
+# pool without gating on nacon would report the preallocated rows as contacts.
+_CONTACT_FREE_XML = """
+<mujoco>
+  <option timestep="0.002" integrator="implicitfast"/>
+  <worldbody>
+    <geom name="floor" type="plane" size="2 2 0.05"/>
+    <body name="floater" pos="0 0 1.0">
+      <geom name="floater_geom" type="box" size="0.05 0.05 0.05"/>
+    </body>
+  </worldbody>
+</mujoco>
+"""
+
+
+def test_contact_queries_are_empty_when_nothing_touches():
+    """An empty contact set comes back empty, not as preallocated pool rows."""
+    host = mujoco.MjModel.from_xml_string(_CONTACT_FREE_XML)
+    native = mujoco.MjData(host)
+    mujoco.mj_forward(host, native)
+    assert native.ncon == 0, "scene must genuinely have no contacts"
+
+    state = MjWarpSceneState(host, nworld=2)
+    state.forward()
+
+    geoms = state.get_contact_geom_pairs(0)
+    bodies = state.get_contact_body_pairs(0)
+    assert geoms.shape == (0, 2)
+    assert bodies.shape == (0, 2)
+    # An empty result still has to be indexable the same way a full one is, so
+    # callers can iterate it without special-casing.
+    assert geoms.dtype == np.int32
+    assert bodies.dtype == np.int32
+
+
+def test_contact_scan_bounds_checks_the_world(contact_scene):
+    _, _, state = contact_scene
+    with pytest.raises(IndexError, match=r"world_index must be in \[0, 2\)"):
+        state.get_contact_geom_pairs(2)
+
+
 def test_nworld_must_be_positive(host_model):
     with pytest.raises(ValueError, match="nworld must be >= 1"):
         MjWarpSceneState(host_model, nworld=0)
