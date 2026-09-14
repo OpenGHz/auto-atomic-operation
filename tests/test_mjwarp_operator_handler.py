@@ -1,10 +1,10 @@
-"""Tests for MJWarp end-effector control.
+"""Tests for the MJWarp ``OperatorHandler`` seam.
 
-The acceptance ladder in ``_completion`` is where a gripper either advances the
-stage or hangs, so each rung is exercised on its own rather than only through a
-happy path: a blocked gripper that never reaches its commanded angle must still
-be accepted, and an opening gripper must not be accepted before its release
-settling has elapsed.
+This layer owns translation, not control, so the tests check that config objects
+reach the state machines as the right arguments -- a waypoint's step bounds and
+tolerance overrides actually applied, a grasp target resolved to its MJCF body
+name rather than its logical name -- and that the contract's own methods are
+satisfied.
 """
 
 from __future__ import annotations
@@ -15,54 +15,78 @@ import pytest
 mujoco = pytest.importorskip("mujoco")
 pytest.importorskip("mujoco_warp")
 
-from auto_atom.backend.mjwarp.operator_handler import MjWarpEefControl  # noqa: E402
+from auto_atom.backend.mjwarp.arm_control import MjWarpArmControl  # noqa: E402
+from auto_atom.backend.mjwarp.operator_handler import (  # noqa: E402
+    MjWarpOperatorHandler,
+)
+from auto_atom.backend.mjwarp.handlers import MjWarpObjectHandler  # noqa: E402
+from auto_atom.backend.mjwarp.ik import MjWarpIkCaller  # noqa: E402
+from auto_atom.backend.mjwarp.eef_control import MjWarpEefControl  # noqa: E402
 from auto_atom.backend.mjwarp.operator_state import register_operator  # noqa: E402
 from auto_atom.basis.mjwarp.state import MjWarpSceneState  # noqa: E402
+from auto_atom.config.motion import (  # noqa: E402
+    EefControlConfig,
+    PoseControlConfig,
+    WaypointToleranceConfig,
+)
+from auto_atom.contracts import OperatorHandler  # noqa: E402
 from auto_atom.execution_model import ControlSignal  # noqa: E402
 
-# A one-joint arm carrying a two-finger gripper, plus a graspable box. The
-# fingers are driven by a slide joint so a commanded "close" actually travels.
-_GRIPPER_XML = """
+_XML = """
 <mujoco>
   <option timestep="0.002" integrator="implicitfast"/>
   <worldbody>
     <geom name="floor" type="plane" size="2 2 0.05"/>
-    <body name="arm_base" pos="0 0 0.3">
+    <body name="arm_base" pos="0.2 -0.1 0.1">
       <geom name="base_geom" type="box" size="0.03 0.03 0.02"/>
-      <body name="link1" pos="0 0 0.03">
-        <joint name="j1" type="hinge" axis="0 0 1" range="-2 2"/>
-        <geom name="l1" type="box" size="0.02 0.02 0.01"/>
-        <body name="tool" pos="0 0 0.02">
-          <site name="eef_pose" pos="0 0 0.02"/>
-          <geom name="tool_geom" type="box" size="0.02 0.01 0.01"/>
-          <body name="left_pad" pos="0 0 0.04">
+      <body name="link1" pos="0 0 0.04">
+        <joint name="j1" type="hinge" axis="0 0 1" range="-2.9 2.9"/>
+        <geom name="l1" type="box" size="0.06 0.02 0.02"/>
+        <body name="tool" pos="0.12 0 0">
+          <site name="eef_pose" pos="0.02 0 0"/>
+          <geom name="tool_geom" type="box" size="0.01 0.01 0.01"/>
+          <body name="left_pad" pos="0.02 0 0.02">
             <joint name="j_left" type="slide" axis="1 0 0" range="0 0.06"/>
-            <geom name="left_finger_pad" type="box" size="0.004 0.01 0.02"/>
+            <geom name="left_finger_pad" type="box" size="0.004 0.01 0.01"/>
           </body>
         </body>
       </body>
     </body>
+    <body name="widget_body" pos="0.6 0.0 0.3">
+      <freejoint name="widget_free"/>
+      <geom name="widget_geom" type="box" size="0.02 0.02 0.02"/>
+    </body>
   </worldbody>
   <actuator>
-    <position name="act_j1" joint="j1" kp="60"/>
+    <position name="act_j1" joint="j1" kp="200"/>
     <position name="act_grip" joint="j_left" kp="80"/>
   </actuator>
 </mujoco>
 """
 
 
-class _StubIK:
-    pass
+class _RecordingArm(MjWarpArmControl):
+    """Captures the arguments move() was called with."""
+
+    def move(self, *args, **kwargs):  # type: ignore[override]
+        self.last_call = (args, kwargs)
+        return super().move(*args, **kwargs)
+
+
+class _RecordingEef(MjWarpEefControl):
+    def control(self, **kwargs):  # type: ignore[override]
+        self.last_call = kwargs
+        return super().control(**kwargs)
 
 
 @pytest.fixture(scope="module")
-def gripper_model():
-    return mujoco.MjModel.from_xml_string(_GRIPPER_XML)
+def model():
+    return mujoco.MjModel.from_xml_string(_XML)
 
 
 @pytest.fixture
-def control(gripper_model):
-    state = MjWarpSceneState(gripper_model, nworld=2)
+def handler(model):
+    state = MjWarpSceneState(model, nworld=2)
     state.forward()
     operator = register_operator(
         state,
@@ -71,191 +95,230 @@ def control(gripper_model):
         eef_site="eef_pose",
         arm_actuators=("act_j1",),
         eef_actuators=("act_grip",),
-        ik_solver=_StubIK(),
+        ik_solver=object(),
     )
-    return MjWarpEefControl(
+    arm = _RecordingArm(
         state=state,
         operator=operator,
-        eef_open_value=0.0,
-        eef_close_value=0.05,
-        eef_tolerance=0.002,
-        timeout_steps=50,
-        settle_steps=5,
+        ik=MjWarpIkCaller(solver=_Solver(), nworld=2, operator_name="arm"),
+        position_tolerance=0.012,
+        orientation_tolerance=0.10,
+    )
+    eef = _RecordingEef(state=state, operator=operator, eef_close_value=0.05)
+    return MjWarpOperatorHandler(state=state, operator=operator, arm=arm, eef=eef)
+
+
+class _Solver:
+    def solve(self, target, seed):
+        return np.zeros(np.asarray(seed).shape)
+
+
+def test_handler_satisfies_the_contract(handler):
+    assert isinstance(handler, OperatorHandler)
+    assert handler.name == "arm"
+
+
+def test_batched_pose_getters_report_every_world(handler):
+    eef = handler.get_end_effector_pose()
+    base = handler.get_base_pose()
+
+    assert np.asarray(eef.position).shape == (2, 3)
+    assert np.asarray(eef.orientation).shape == (2, 4)
+    assert np.asarray(base.position).shape == (2, 3)
+
+
+def test_waypoint_step_bounds_and_tolerances_are_forwarded(handler):
+    """A waypoint's own limits must reach the state machine, not be dropped."""
+    pose = PoseControlConfig(
+        position=[0.5, 0.0, 0.3],
+        orientation=[0.0, 0.0, 0.0, 1.0],
+        max_linear_step=0.02,
+        max_angular_step=0.2,
+        tolerance=WaypointToleranceConfig(position=0.03, orientation=0.15),
+    )
+
+    with handler.control_tick():
+        handler.move_to_pose(pose, None, env_mask=np.array([True, False]))
+
+    _, kwargs = handler.arm.last_call
+    assert kwargs["waypoint_linear_step"] == pytest.approx(0.02)
+    assert kwargs["waypoint_angular_step"] == pytest.approx(0.2)
+    assert kwargs["waypoint_position_tolerance"] == pytest.approx(0.03)
+    assert kwargs["waypoint_orientation_tolerance"] == pytest.approx(0.15)
+
+
+def test_absent_waypoint_tolerance_forwards_none(handler):
+    """No override means the operator default applies, not zero tolerance."""
+    pose = PoseControlConfig(position=[0.5, 0.0, 0.3], orientation=[0, 0, 0, 1.0])
+
+    with handler.control_tick():
+        handler.move_to_pose(pose, None, env_mask=np.array([True, False]))
+
+    _, kwargs = handler.arm.last_call
+    assert kwargs["waypoint_position_tolerance"] is None
+    assert kwargs["waypoint_orientation_tolerance"] is None
+
+
+def test_a_position_only_waypoint_holds_current_orientation(handler):
+    """Snapping to identity would rotate the wrist for no reason."""
+    _, current = (
+        handler.get_end_effector_pose().position,
+        handler.get_end_effector_pose().orientation,
+    )
+    pose = PoseControlConfig(position=[0.5, 0.0, 0.3])
+
+    with handler.control_tick():
+        handler.move_to_pose(pose, None, env_mask=np.array([True, False]))
+
+    args, _ = handler.arm.last_call
+    np.testing.assert_allclose(args[1], current[0], atol=1e-6)
+
+
+def test_the_command_key_changes_with_the_waypoint(handler):
+    """Two different waypoints must not share progress state."""
+    first = PoseControlConfig(position=[0.5, 0.0, 0.3], orientation=[0, 0, 0, 1.0])
+    second = PoseControlConfig(position=[0.4, 0.1, 0.3], orientation=[0, 0, 0, 1.0])
+    mask = np.array([True, False])
+
+    with handler.control_tick():
+        handler.move_to_pose(first, None, env_mask=mask)
+    key_first = handler.arm.last_call[1]["command_key"]
+    with handler.control_tick():
+        handler.move_to_pose(second, None, env_mask=mask)
+    key_second = handler.arm.last_call[1]["command_key"]
+
+    assert key_first != key_second
+
+
+def test_a_pose_without_a_position_is_rejected(handler):
+    """The runtime resolves waypoints before dispatch, so this is a bug signal."""
+    with pytest.raises(ValueError, match="without a position"):
+        handler.move_to_pose(PoseControlConfig(), None)
+
+
+def test_grasp_target_is_resolved_to_its_mjcf_body_name(handler):
+    """Logical name and body name differ, and contacts are keyed on the body.
+
+    Passing the logical name through would look right and silently find no
+    contacts, so the grasp would never confirm.
+    """
+    target = MjWarpObjectHandler(
+        name="widget", state=handler.state, body_name="widget_body"
+    )
+
+    with handler.control_tick():
+        handler.control_eef(
+            EefControlConfig(close=True), target, env_mask=np.array([True, False])
+        )
+
+    assert handler.eef.last_call["target_body_name"] == "widget_body"
+
+
+def test_eef_config_fields_are_forwarded(handler):
+    config = EefControlConfig(close=True, joint_positions=[0.02])
+
+    with handler.control_tick():
+        handler.control_eef(config, None, env_mask=np.array([True, False]))
+
+    call = handler.eef.last_call
+    assert call["close"] is True
+    assert call["joint_positions"] == [0.02]
+    assert call["require_grasp"] is False
+
+
+def test_tolerance_getters_report_configured_values(handler):
+    position, orientation = handler.get_reached_tolerances()
+    assert position == pytest.approx(0.012)
+    assert orientation == pytest.approx(0.10)
+
+    # Unconfigured PLACED tolerance is unconstrained, per the contract.
+    assert handler.get_placed_tolerances() == (None, None)
+
+
+def test_home_joint_positions_are_recorded_and_applied(handler):
+    handler.set_home_joint_positions({"j1": 0.4})
+
+    np.testing.assert_allclose(handler.operator.home_arm_qpos[:, 0], 0.4)
+    got = handler.state.get_joint_positions(handler.operator.arm_qpos_indices)
+    np.testing.assert_allclose(got[:, 0], 0.4, atol=1e-5)
+
+
+def test_home_joint_positions_can_be_recorded_without_applying(handler):
+    before = handler.state.get_joint_positions(handler.operator.arm_qpos_indices).copy()
+
+    handler.set_home_joint_positions({"j1": 0.4}, apply_home=False)
+
+    np.testing.assert_allclose(handler.operator.home_arm_qpos[:, 0], 0.4)
+    np.testing.assert_allclose(
+        handler.state.get_joint_positions(handler.operator.arm_qpos_indices), before
     )
 
 
-def test_target_value_prefers_explicit_joint_positions(control):
-    """A named angle means that angle, not the gripper's travel limit."""
-    assert control.target_value(close=True) == 0.05
-    assert control.target_value(close=False) == 0.0
-    assert control.target_value(close=True, joint_positions=[0.02]) == 0.02
+def test_an_unknown_home_joint_is_rejected(handler):
+    """Silently dropping it would leave a pose the config did not ask for."""
+    with pytest.raises(ValueError, match="no arm joint"):
+        handler.set_home_joint_positions({"nonexistent": 0.1})
 
 
-def test_control_writes_ctrl_and_requests_one_step(control):
-    """Per-world commands land, and physics advances once inside a tick.
+def test_control_tick_collapses_both_halves_into_one_step(handler):
+    """Arm and gripper in one tick must advance physics exactly once.
 
-    This is the deferral contract from design doc 3.8: the handler asks for a
-    step per call, and the tick boundary collapses those into one.
+    If they did not share the boundary they would step twice, and the two halves
+    would disagree about how much time a tick represents.
     """
-    state = control.state
-    timestep = float(state.host_model.opt.timestep)
-    before = state.data.time.numpy().copy()
+    timestep = float(handler.state.host_model.opt.timestep)
+    before = handler.state.data.time.numpy().copy()
+    pose = PoseControlConfig(position=[0.5, 0.0, 0.3], orientation=[0, 0, 0, 1.0])
+    mask = np.array([True, False])
 
-    with state.deferred_step():
-        for world in range(state.nworld):
-            mask = np.zeros(state.nworld, dtype=bool)
-            mask[world] = True
-            control.control(close=True, world_mask=mask)
+    with handler.control_tick():
+        handler.move_to_pose(pose, None, env_mask=mask)
+        handler.control_eef(EefControlConfig(close=True), None, env_mask=mask)
 
-    after = state.data.time.numpy()
+    after = handler.state.data.time.numpy()
     np.testing.assert_allclose(after - before, timestep, rtol=1e-6)
-    # The gripper actuator carries the close command in every world.
-    ctrl = state.get_ctrl()
-    for world in range(state.nworld):
-        assert ctrl[world][control.operator.eef_actuator_ids[0]] == pytest.approx(0.05)
 
 
-def test_closing_reaches_when_the_angle_is_met(control):
-    """With nothing in the way the gripper reaches its commanded angle."""
-    state = control.state
-    result = None
-    for _ in range(120):
-        with state.deferred_step():
-            result = control.control(close=True)
-        if result.signals[0] == ControlSignal.REACHED:
-            break
-
-    assert result.signals[0] == ControlSignal.REACHED
-    assert result.details[0]["event"] == "eef_reached"
-
-
-def test_require_grasp_without_a_target_is_a_config_error(control):
-    """Native reports this as a config error, not a failed grasp."""
-    with control.state.deferred_step():
-        result = control.control(close=True, require_grasp=True)
-
-    for world in range(control.state.nworld):
-        assert result.signals[world] == ControlSignal.FAILED
-        assert result.details[world]["failure_category"] == "missing_grasp_target"
-
-
-def test_blocked_gripper_is_accepted_after_settling(control):
-    """A gripper stopped by an object may never reach its commanded angle.
-
-    Without this rung a successful grasp on a stiff object reads as a timeout,
-    so the test drives the command far past the joint's range to emulate being
-    physically blocked and asserts acceptance still happens.
-    """
-    state = control.state
-    control.eef_close_value = 10.0  # unreachable: joint range stops at 0.06
-    result = None
-    for _ in range(60):
-        with state.deferred_step():
-            result = control.control(close=True)
-        if result.signals[0] == ControlSignal.REACHED:
-            break
-
-    assert result.signals[0] == ControlSignal.REACHED
-    assert result.details[0]["steps"] >= 30, "must wait for the settle window"
-
-
-def test_opening_waits_for_release_settling(control):
-    """Release settling is a hold, so acceptance cannot happen before it."""
-    state = control.state
-    control.release_settle_steps = 8
-
-    with state.deferred_step():
-        first = control.control(close=False)
-    assert first.signals[0] == ControlSignal.RUNNING, "1 step < 8 settle steps"
-
-    for _ in range(20):
-        with state.deferred_step():
-            result = control.control(close=False)
-        if result.signals[0] == ControlSignal.REACHED:
-            break
-    assert result.signals[0] == ControlSignal.REACHED
-    assert result.details[0]["steps"] >= 8
-
-
-def test_timeout_is_reported_when_nothing_completes(control):
-    """A command that never completes times out rather than running forever."""
-    state = control.state
-    control.timeout_steps = 4
-    control.settle_steps = 1000  # keep the grasp rung out of reach
-    control.eef_close_value = 10.0
-    control.eef_tolerance = 1e-9
-
-    result = None
-    for _ in range(10):
-        with state.deferred_step():
-            result = control.control(close=True)
-        if result.signals[0] == ControlSignal.TIMED_OUT:
-            break
-
-    assert result.signals[0] == ControlSignal.TIMED_OUT
-    assert result.details[0]["event"] == "eef_timeout"
-
-
-def test_a_changed_command_restarts_the_step_counter(control):
-    """Switching command mid-stage must not inherit the old command's progress."""
-    state = control.state
-    for _ in range(4):
-        with state.deferred_step():
-            control.control(close=True)
-    assert int(control._steps[0]) == 4
-
-    with state.deferred_step():
-        result = control.control(close=False)
-    assert result.details[0]["steps"] == 1
-
-
-def test_masked_worlds_keep_their_own_counters(control):
-    """Only the selected world advances, since the runtime drives one at a time."""
-    state = control.state
-    only_world_1 = np.array([False, True])
-
-    for _ in range(3):
-        with state.deferred_step():
-            control.control(close=True, world_mask=only_world_1)
-
-    assert int(control._steps[0]) == 0
-    assert int(control._steps[1]) == 3
-
-
-def test_mask_shape_is_validated(control):
-    with pytest.raises(ValueError, match=r"world_mask must have shape \(2,\)"):
-        control.control(close=True, world_mask=np.array([True]))
-
-
-def test_grasp_details_are_reported_when_a_target_is_given(control):
-    """The verdict's two halves are both visible to a failure diagnostic."""
-    state = control.state
-    with state.deferred_step():
-        result = control.control(close=True, target_body_name="tool")
-
-    check = result.details[0]["grasp_check"]
-    assert set(check) == {
-        "left_contact",
-        "right_contact",
-        "lateral_ok",
-        "lateral_error",
-        "lateral_threshold",
-    }
-
-
-def test_missing_eef_actuator_is_refused(gripper_model):
-    """An operator with no gripper cannot be commanded, and says so."""
-    state = MjWarpSceneState(gripper_model, nworld=1)
+def test_missing_eef_control_is_refused(model):
+    state = MjWarpSceneState(model, nworld=1)
+    state.forward()
     operator = register_operator(
         state,
         name="arm",
         root_body="arm_base",
         eef_site="eef_pose",
         arm_actuators=("act_j1",),
-        eef_actuators=(),
-        ik_solver=_StubIK(),
+        ik_solver=object(),
     )
-    control = MjWarpEefControl(state=state, operator=operator)
+    handler = MjWarpOperatorHandler(
+        state=state,
+        operator=operator,
+        arm=MjWarpArmControl(
+            state=state,
+            operator=operator,
+            ik=MjWarpIkCaller(solver=_Solver(), nworld=1),
+        ),
+        eef=None,
+    )
 
-    with pytest.raises(ValueError, match="no eef_actuators"):
-        control.control(close=True)
+    with pytest.raises(ValueError, match="no end-effector control"):
+        handler.control_eef(EefControlConfig(close=True), None)
+
+
+def test_required_collaborators_are_validated(model):
+    state = MjWarpSceneState(model, nworld=1)
+
+    with pytest.raises(ValueError, match="non-None 'arm'"):
+        MjWarpOperatorHandler(state=state, operator=object(), arm=None)
+
+
+def test_signals_come_back_batched(handler):
+    """The runtime reads signals[env_index], so every world needs an entry."""
+    pose = PoseControlConfig(position=[0.5, 0.0, 0.3], orientation=[0, 0, 0, 1.0])
+
+    with handler.control_tick():
+        result = handler.move_to_pose(pose, None, env_mask=np.array([True, False]))
+
+    assert len(result.signals) == 2
+    assert len(result.details) == 2
+    assert result.signals[1] == ControlSignal.RUNNING

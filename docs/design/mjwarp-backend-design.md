@@ -291,7 +291,8 @@ float32，量化在写入 device 的边界上必然发生一次，宿主端再�
 | 4c-3a | IK 调用层（`MjWarpIkCaller`，**per-world** 失败计数与日志节流） | 已实现 |
 | 4c-3b-1 | 运动整形（笛卡尔步长夹紧、per-world stall 缩放、步长界限解析） | 已实现 |
 | 4c-3b-2 | `MjWarpArmControl`：`move_to_pose` 状态机（仅 `per_step_ik`） | 已实现 |
-| 4c-3c | `physical` 模式 env / backend 组装 | 未开始 |
+| 4c-3c-1 | `MjWarpOperatorHandler`：满足 `OperatorHandler` 契约（两半控制的接缝） | 已实现 |
+| 4c-3c-2 | `physical` 模式 env / backend 组装（operator 注册、tick 边界串接） | 未开始 |
 | 4d | 触觉（52 个 `contype=0` 触觉单元的读取路径） | 未开始 |
 
 **轮 2a**（`auto_atom/basis/mjwarp/state.py`）是后续各轮的读写底座：它持有
