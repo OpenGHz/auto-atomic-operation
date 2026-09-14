@@ -279,7 +279,38 @@ randomization entity**。因此 `object_only` 的既有路径受影响：随机�
 位置，`xpos` 与渲染用的 body 变换更新了，但它们的碰撞几何留在原处。之前测到的
 mask IoU 1.0 不能反驳这一点——那比对的是渲染，而渲染读的是 body 级变换。
 
-**待定的修法**（未实现，需先确认哪一种是对的）：
+**根因已确认（上游有意为之，非本仓库 bug）**：`mujoco_warp/_src/smooth.py:197-200`
+的 `_geom_local_to_global` kernel 开头就 early-return：
+
+```python
+if body_weldid[bodyid] == 0 and body_mocapid[body_rootid[bodyid]] == -1:
+    # geoms attached to the world are static (unless they are descended from mcocap bodies)
+    # for such static geoms, geom_xpos and geom_xquat are computed only once during make_data
+    return
+```
+
+即：**焊接到 world（`body_weldid == 0`）且非 mocap 后代的 geom，其
+`geom_xpos`/`geom_xmat` 只在 `make_data` 时算一次，之后每次 kinematics 都跳过。**
+probe 逐项验证了这个机制：静态 body（`weldid=0`）→ `geom_xpos` 冻结；带 freejoint
+的 body（`weldid≠0`）→ 正常更新。这也解释了为什么 free joint 路径一直是对的。
+
+在 stock MuJoCo 下这个假设成立（运行期没人改 `body_pos`）。**它之所以在这里破掉，
+是因为 MJWarp 自己把 `body_pos` 做成了可按 world 批量写入的模型字段**（
+`put_model(batch_sizes=...)` 正是为随机化提供的能力）——一边允许运行期改
+`body_pos`，一边假设它不会变，这两个设计选择互相矛盾。这一点值得上报上游。
+
+好消息是根因确认后修法也确定了：kernel 第 204-205 行给出了它**本该**执行的公式
+
+```python
+geom_xpos_out[worldid, geomid] = xpos + math.rot_vec_quat(geom_pos[..., geomid], xquat)
+geom_xmat_out[worldid, geomid] = math.quat_to_mat(math.mul_quat(xquat, geom_quat[..., geomid]))
+```
+
+所以"写入后自己补算 `geom_xpos`/`geom_xmat`"不再是猜着复刻未知算术，而是对被跳过
+的那些 geom 套用同样两行。这使它成为首选修法：不改场景语义、不重建 device 模型、
+不牺牲轮 3a 的 reset 加速。
+
+**原先并列的三个候选（现已因根因明确而收敛）**：
 
 1. 写 `body_pos` 后同时显式改写 `data.geom_xpos` / `geom_xmat`——治标，且要自己
    重算 geom 局部偏移；
