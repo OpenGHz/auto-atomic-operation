@@ -252,7 +252,7 @@ float32，量化在写入 device 的边界上必然发生一次，宿主端再�
 `step_operator_toward_target` 间接步进物理。两者必须共用同一个 deferral 边界，
 否则一次 tick 里 eef 与 arm 的步进次数会不一致。
 
-### 3.9 静态 body 写入不更新 `geom_xpos`：**已交付代码中的缺陷**
+### 3.9 静态 body 写入不更新 `geom_xpos`：轮 2c 遗留缺陷（已修复）
 
 **这不是"待实现"，而是轮 2c 已交付的 `set_static_body_pose` 存在的真实缺陷**，
 在轮 4c-3c-2 写抓取查询时才被发现（因为抓取查询是第一个真正读接触/碰撞几何的
@@ -317,27 +317,34 @@ deferral、也正是随机化写静态 body 的地方，即最要紧的那条路
 "记录待补算的 body → 每次真实 `forward` 后统一 drain"，三处真实 `forward` 调用点
 全部经由 `_run_forward`。
 
-**但这只修好了一半，必须说清楚**：它恢复的是 **frame**（`geom_xpos`/`geom_xmat`），
-因此读取与**渲染**正确了；**碰撞没有恢复**。实测：补算后的 `geom_xpos` 能活过
-`step()` 与显式 `mjw.collision()`，`geom_rbound` 也正确，但 `nacon` 始终为 0——
-即 **broadphase 对 world-welded geom 不读 `geom_xpos`**（同一次写入原生产生 4 个
-接触）。broadphase 另有一份静态 geom 的位置来源，尚未定位。
-
-因此现状是：
+**碰撞也一并恢复了**，即这条缺陷已完整修复：
 
 | 消费者 | 静态 body 移动后 |
 |---|---|
 | `get_body_pose`（`xpos`） | ✓ 一直是对的 |
-| `geom_xpos` / `geom_xmat` 读取 | ✓ 本轮修好 |
-| 渲染（读 body/geom 变换） | ✓ 本轮修好 |
-| **碰撞 / 接触** | **✗ 仍然陈旧** |
+| `geom_xpos` / `geom_xmat` 读取 | ✓ 已修复 |
+| 渲染（读 body/geom 变换） | ✓ 已修复 |
+| 碰撞 / 接触 | ✓ 已修复 |
 
-`tests/test_mjwarp_state.py::test_refreshed_geometry_actually_collides` 以
-`xfail(strict=True)` 钉住这条限制：一旦上游开始刷新静态 geom，该测试会因"意外通过"
-而报错，从而提醒我们回来收尾。
+**一处我自己搞错并已纠正的判断**（值得留着，因为它很容易再犯）：我曾一度认为
+"补算 frame 但碰撞仍陈旧"，还把这条不存在的上游限制写进本节、并给测试挂了
+`xfail(strict=True)`。真实原因是**我的测试场景退化**：我把探针 box 的中心放在与
+移动后 geom 中心**完全重合**的位置，而两个中心完全重合对 narrowphase 是退化情形，
+产出 0 个接触。把探针错开 15 mm（两个 box 半边长都是 20 mm，仍然重叠）后，warp
+立刻给出 4 个接触，geom 配对正确。
 
-**对轮 4 的结论不变**：抓取判定读接触，所以**静态目标的抓取判定仍不可信**，只有
-free joint 目标可信。要真正修完碰撞，需要先定位 broadphase 的静态位置来源（下一步）。
+诊断过程中被排除的两条（记下来免得重查）：
+
+- **`geom_aabb` 不是嫌疑**：它是 geom **局部**量（中心 + 半边长），不随 body 移动，
+  本来就不需要更新；`geom_rbound` 同理，实测值正确。
+- **sleep 机制不是嫌疑**：`collision_driver.py` 里那条"both asleep / one asleep +
+  one static 则跳过"的过滤只在 `enable_sleep` 下生效，而它来自
+  `m.opt.enableflags & EnableBit.SLEEP`，默认关闭。
+- **候选对列表 `nxn_pairid` 不是嫌疑**：它在 `io.py:535-556` 完全由拓扑构造
+  （contype/conaffinity、weldid、exclude signature），**不含任何位置信息**，因此
+  静态 geom 与动态 geom 的配对本来就在表里。
+
+**对轮 4 的结论因此更新**：静态目标的抓取判定不再受此限制。
 
 **原先并列的三个候选（现已因根因明确而收敛）**：
 
@@ -394,7 +401,7 @@ freejoint 目标来验证"verdict 随状态变化"。
 | 4c-3c-1 | `MjWarpOperatorHandler`：满足 `OperatorHandler` 契约（两半控制的接缝） | 已实现 |
 | 4c-3c-2 | 后端级抓取/接触查询（`MjWarpGraspQueries`，批量回答 stage 后置条件） | 已实现 |
 | 4c-3c-3 | `physical` 模式 env / backend 组装（operator 注册、tick 边界串接） | 未开始 |
-| **修复** | **静态 body 写入不更新 `geom_xpos`（见 3.9，轮 2c 遗留缺陷）** | **未修复，阻塞轮 4 对静态目标的可信度** |
+| 修复 | 静态 body 写入不更新 `geom_xpos`（见 3.9，轮 2c 遗留缺陷） | 已修复（frame + 渲染 + 碰撞） |
 | 4d | 触觉（52 个 `contype=0` 触觉单元的读取路径） | 未开始 |
 
 **轮 2a**（`auto_atom/basis/mjwarp/state.py`）是后续各轮的读写底座：它持有

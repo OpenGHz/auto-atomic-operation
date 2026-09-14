@@ -1703,18 +1703,6 @@ def test_refresh_applies_per_world(static_geom_state):
     np.testing.assert_allclose(after[1][geom], before, atol=1e-7)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "Known upstream limitation, design doc 3.9: refreshing geom_xpos/geom_xmat "
-        "restores the frame (so reads and rendering are correct) but does NOT "
-        "restore collision. Verified: the written geom_xpos survives step() and an "
-        "explicit mjw.collision(), geom_rbound is correct, yet nacon stays 0 -- so "
-        "broadphase does not read geom_xpos for world-welded geoms. Native produces "
-        "4 contacts for the same write. Strict xfail so this fails loudly if "
-        "upstream starts refreshing static geoms."
-    ),
-)
 def test_refreshed_geometry_actually_collides(static_geom_state):
     """The consequence that motivates the fix: contacts follow the geometry.
 
@@ -1727,9 +1715,15 @@ def test_refreshed_geometry_actually_collides(static_geom_state):
     assert not state.get_contact_geom_pairs(0).size, "must start clear of the prober"
 
     # Identity orientation keeps the arithmetic obvious: the geom's centre lands
-    # at body_pos + its local offset (0.01, 0.02, 0.03) = the prober's position.
+    # at body_pos + its local offset (0.01, 0.02, 0.03), i.e. 15 mm in x from the
+    # prober's centre -- overlapping, since both boxes are 20 mm half-size.
+    #
+    # The offset is deliberate. Placing the two centres *exactly* coincident is
+    # degenerate for narrowphase and yields zero contacts, which cost me a wrong
+    # conclusion once: I read it as "the geom refresh does not restore collision"
+    # and recorded a non-existent upstream limitation. Any real overlap contacts.
     state.set_static_body_pose(
-        "static_b", np.array([0.50, 0.50, 0.50]), np.array([0.0, 0.0, 0.0, 1.0])
+        "static_b", np.array([0.515, 0.50, 0.50]), np.array([0.0, 0.0, 0.0, 1.0])
     )
     state.step()
 
