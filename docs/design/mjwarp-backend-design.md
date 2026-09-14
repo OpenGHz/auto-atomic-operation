@@ -404,8 +404,8 @@ freejoint 目标来验证"verdict 随状态变化"。
 | 4c-3c-3b | operator 自动注册（读 `OperatorBinding`，构造真实 IK solver） | 已实现 |
 | 4c-3c-3c | `apply_joint_action`（`JointActionEnvProtocol`）+ `step`（`StepEnvProtocol`） | 已实现 |
 | 4c-3c-3d | `physical` 模式 backend 组装（builder、handler 装配） | 已实现 |
-| 4c-3c-3e | 真实 `rack_plate` physical 跑通 | **已跑，栈能咬合但任务失败**（见 5.2） |
-| 4c-3c-3f | 应用 operator `initial_state`（base_pose / eef_pose / 关节 home） | 未开始，**这是 3e 失败的根因** |
+| 4c-3c-3e | 真实 `rack_plate` physical 跑通 | 栈已咬合；剩余失败是配置本身（见 5.2 + 5.3） |
+| 4c-3c-3f | 应用 operator `initial_state`（base_pose / eef_pose / gripper） | 已实现（见 5.2 后记） |
 | 修复 | 静态 body 写入不更新 `geom_xpos`（见 3.9，轮 2c 遗留缺陷） | 已修复（frame + 渲染 + 碰撞） |
 | 4d-1 | 传感器读取（`get_sensor_values` / `_batch`，触觉唯一的 device 依赖） | 已实现 |
 | 4d-2 | 触觉层接入（panel 分组 / PCA / wrench 汇总，复用宿主侧既有实现） | 未开始 |
@@ -693,6 +693,34 @@ grep 确认：`override_base_pose`（轮 4c-2 写的）**除自己的测试外�
 **另记一条范围外观察**：`mujoco_warp/_src/io.py:338` 对 geom 108/109/110 报
 `friction[0/1] (0.0) < MJ_MINMU (1e-05) with condim=4 may cause NaN`。本次运行没有
 出现 NaN，但这是 MJWarp 特有的告警（原生不报），属于独立事项。
+
+**后记（4c-3c-3f 落地后复跑）**：应用 `initial_state` 后重跑，base 落在
+`[-0.20, -0.5, 0.075]`、eef 复合到 `[-0.20, 0.105, 0.130]`（与配置注释逐毫米一致）。
+失败模式随之从"max_updates 超时、IK 全程成功"变成 **`ik_unreachable`**——手臂现在
+朝**真实**的 pick 目标控制，只是够不到。即 5.2 记录的"控到错误基座系"这个 bug 已消除。
+
+### 5.3 剩余失败是配置本身，不是移植缺陷
+
+复跑后两个 world 都因 `ik_unreachable` 失败（连续 30 次 IK 失败）。根因在配置，不在
+栈：`object` 的随机化框（见 §config 注释）是为 `object_only` 的**相机可见性**设计的
+——
+
+```
+x: [-1.050, 1.050]   y: [-0.550, 0.550]   z: [0.130, 0.370]
+roll/pitch/yaw: 全范围
+```
+
+注释原话是"plate 作为**漂浮的世界坐标盒**采样……盒子就是 `rack_camera_front` 的
+可见区本身"。也就是说，这个框保证的是"盘子在相机里可见"，而**不是**"盘子在机械臂
+可达工作空间内"。`object_only` 用运动学直接把盘子搬到目标，不关心可达性；physical
+模式要真的用 7-DOF 手臂去抓，x=1.05、任意 roll/pitch/yaw 的盘子就是够不到——
+`ik_unreachable` 是**正确**判定。
+
+这与 §9.1 的 rack/plate_stand 碰撞同类：都是该配置**未按 physical 模式设计**。
+移植栈本身已验证咬合（600 tick 无崩溃、sim 时间精确对账、base/eef 归位到毫米、IK
+在可达目标上成功、不可达时正确报错）。要让 `rack_plate` 在 physical 下真正跑通，需要
+一个**为 physical 收窄了随机化范围**的配置变体——但用户已明确"不改
+`rack_plate_p7_v4_umi_v3.yaml` 及其随机化范围"，因此这一步留给用户定夺。
 
 ### 5.0 轮 4d-2（触觉层接入）的交接说明
 
