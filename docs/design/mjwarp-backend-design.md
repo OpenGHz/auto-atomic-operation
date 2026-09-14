@@ -179,6 +179,30 @@ worldbody 下的 body 无法暴露这类 bug**，因为它的父系就是单位�
 `set_object_pose()` 按 body 的实际机制分派到 free joint 或静态路径，与原生
 handler 一致，调用方不需要知道自己拿的是哪一种。
 
+### 5.1 写入 API 必须支持"每个 world 一个不同位姿"
+
+轮 2a / 2c 最初把写入方法设计成"一个位姿 + 一个 world 掩码"，**这个形状是错的**，
+在接上 object handler 之前已修正。
+
+依据在 `randomization_executor.py:1870`：executor 对每个环境**独立采样**，把各自
+的结果写进同一个批量 `PoseState` 的对应槽位
+（`action_buffers[label].pose.position[env_index] = ...`），最后用一次带掩码的
+`set_target_pose` 应用。原生 handler 相应地按 `pose.position[env_index]` 逐环境
+取值。`PoseState` 本身就是 `(B, 3)` / `(B, 4)`。
+
+因此写入方法现在接受两种形状（`_pose_rows`）：
+
+- `(3,)` / `(4,)` 或 `(1, 3)` / `(1, 4)`：单个位姿，广播到所有被写入的 world；
+- `(nworld, 3)` / `(nworld, 4)`：第 `w` 行写入 world `w`。
+
+索引按**绝对 world 下标**，而不是"掩码中的第几个"——与原生
+`pose.position[env_index]` 的语义一致。无论哪种形状都只做一次 readback、一次
+assign、一次 `forward()`，开销不随 world 数增长。
+
+`test_free_joint_accepts_one_pose_per_world` 等 4 项测试对修正前的实现会失败
+（报 `cannot reshape array of size 9 into shape (3,)`），因此它们确实钉住了这个
+形状约定，而不是碰巧通过。
+
 **轮 1** 的动机：MJWarp 门禁拒绝 mesh/box CCD pair 上的非零 margin。编译后场景
 中 59 个非零 margin geom 里只有 7 个可碰撞（`link1..link7`），其余 52 个是
 `contype=conaffinity=0` 的触觉单元，永不产生接触。1200 步 CPU 对比显示被操作

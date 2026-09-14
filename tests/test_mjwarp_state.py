@@ -362,6 +362,103 @@ def test_static_pose_honours_world_mask(host_model):
     assert not np.allclose(moved, untouched, atol=1e-6)
 
 
+# ----------------------------------------------------------------------
+# Per-world distinct poses (what randomization actually writes)
+# ----------------------------------------------------------------------
+
+
+def test_free_joint_accepts_one_pose_per_world(host_model):
+    """Randomization samples each env independently, so rows must differ.
+
+    The executor fills one batched PoseState slot per env and applies it with a
+    single masked call, so a write API that could only broadcast would collapse
+    every world onto the same sample.
+    """
+    state = MjWarpSceneState(host_model, nworld=2)
+    positions = np.array([[0.10, 0.20, 0.30], [-0.40, 0.50, 0.60]])
+    orientations = np.array([[0.0, 0.0, 0.0, 1.0], [0.0, 0.3826834, 0.0, 0.9238795]])
+
+    state.set_free_joint_pose("mover_free", positions, orientations)
+
+    for world in range(2):
+        got_pos, got_quat = state.get_body_pose("mover", world_index=world)
+        np.testing.assert_allclose(got_pos, positions[world], atol=1e-6)
+        assert np.allclose(got_quat, orientations[world], atol=1e-6) or np.allclose(
+            got_quat, -orientations[world], atol=1e-6
+        )
+
+
+def test_static_body_accepts_one_pose_per_world(host_model):
+    """Same for scenery: per-world rows survive the parent-local conversion."""
+    state = MjWarpSceneState(host_model, nworld=2)
+    positions = np.array([[0.42, -0.13, 0.37], [0.05, 0.44, 0.21]])
+    orientations = np.array(
+        [[0.0, 0.0, 0.0, 1.0], [0.1913417, 0.4619398, 0.1913417, 0.8446232]]
+    )
+
+    state.set_static_body_pose("nested_static", positions, orientations)
+
+    for world in range(2):
+        got_pos, got_quat = state.get_body_pose("nested_static", world_index=world)
+        np.testing.assert_allclose(got_pos, positions[world], atol=1e-6)
+        assert np.allclose(got_quat, orientations[world], atol=1e-6) or np.allclose(
+            got_quat, -orientations[world], atol=1e-6
+        )
+    # And the two worlds genuinely disagree, so this is not a broadcast.
+    first, _ = state.get_body_pose("nested_static", world_index=0)
+    second, _ = state.get_body_pose("nested_static", world_index=1)
+    assert not np.allclose(first, second, atol=1e-6)
+
+
+def test_per_world_rows_index_by_absolute_world_under_mask(host_model):
+    """Row w applies to world w, not to the w-th selected world.
+
+    The native handler indexes pose.position[env_index], so a masked write must
+    keep using absolute world indices rather than positions within the mask.
+    """
+    state = MjWarpSceneState(host_model, nworld=2)
+    before, _ = state.get_body_pose("mover", world_index=0)
+    positions = np.array([[0.10, 0.20, 0.30], [-0.40, 0.50, 0.60]])
+    orientations = np.tile(np.array([0.0, 0.0, 0.0, 1.0]), (2, 1))
+
+    # Write world 1 only: it must receive row 1, not row 0.
+    state.set_free_joint_pose(
+        "mover_free", positions, orientations, world_mask=np.array([False, True])
+    )
+
+    untouched, _ = state.get_body_pose("mover", world_index=0)
+    written, _ = state.get_body_pose("mover", world_index=1)
+    np.testing.assert_allclose(untouched, before, atol=1e-6)
+    np.testing.assert_allclose(written, positions[1], atol=1e-6)
+
+
+def test_single_pose_still_broadcasts(host_model):
+    """A batch-1 pose, as a PoseState of batch size 1 yields, broadcasts."""
+    state = MjWarpSceneState(host_model, nworld=2)
+    target = np.array([[0.15, 0.25, 0.35]])
+    orientation = np.array([[0.0, 0.0, 0.0, 1.0]])
+
+    state.set_free_joint_pose("mover_free", target, orientation)
+
+    for world in range(2):
+        got_pos, _ = state.get_body_pose("mover", world_index=world)
+        np.testing.assert_allclose(got_pos, target[0], atol=1e-6)
+
+
+def test_pose_batch_shape_is_validated(host_model):
+    state = MjWarpSceneState(host_model, nworld=2)
+    good_quat = np.tile(np.array([0.0, 0.0, 0.0, 1.0]), (2, 1))
+
+    with pytest.raises(ValueError, match="pose batch must be 1 or nworld"):
+        state.set_free_joint_pose(
+            "mover_free", np.zeros((3, 3)), np.tile(good_quat[0], (3, 1))
+        )
+    with pytest.raises(ValueError, match="must share a batch dimension"):
+        state.set_free_joint_pose("mover_free", np.zeros((2, 3)), good_quat[:1])
+    with pytest.raises(ValueError, match=r"position must be \(3,\)"):
+        state.set_free_joint_pose("mover_free", np.zeros((2, 4)), good_quat)
+
+
 @pytest.mark.parametrize("body", ["mover", "holder", "nested_static"])
 def test_set_object_pose_dispatches_by_body_kind(host_model, body):
     """One entry point places a body whichever mechanism it has."""

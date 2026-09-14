@@ -331,6 +331,10 @@ class MjWarpSceneState:
         to MuJoCo's wxyz on the way into ``qpos``. Velocity is zeroed so a
         kinematic transport does not leave momentum behind -- matching what the
         native object handler does.
+
+        The pose may be one shared pose or one row per world; see
+        :meth:`_pose_rows`. Per-world rows are what randomization needs, since
+        it samples every environment independently.
         """
         import mujoco
 
@@ -340,17 +344,16 @@ class MjWarpSceneState:
 
         qpos_adr = int(self.host_model.jnt_qposadr[joint])
         dof_adr = int(self.host_model.jnt_dofadr[joint])
-        pos = np.asarray(position, dtype=np.float64).reshape(3)
-        quat_xyzw = np.asarray(orientation_xyzw, dtype=np.float64).reshape(4)
-        quat_wxyz = quat_xyzw[[3, 0, 1, 2]]
+        positions, quats_wxyz = self._pose_rows(position, orientation_xyzw)
 
         # Device arrays are read back, edited and reassigned: warp arrays do not
-        # support scatter assignment through a numpy view.
+        # support scatter assignment through a numpy view. One readback and one
+        # assign cover every world, so cost does not scale with world count.
         qpos = self.data.qpos.numpy().copy()
         qvel = self.data.qvel.numpy().copy()
         for world in self._worlds(world_mask):
-            qpos[world, qpos_adr : qpos_adr + 3] = pos
-            qpos[world, qpos_adr + 3 : qpos_adr + 7] = quat_wxyz
+            qpos[world, qpos_adr : qpos_adr + 3] = positions[world]
+            qpos[world, qpos_adr + 3 : qpos_adr + 7] = quats_wxyz[world]
             qvel[world, dof_adr : dof_adr + 6] = 0.0
         self.data.qpos.assign(qpos)
         self.data.qvel.assign(qvel)
@@ -361,6 +364,54 @@ class MjWarpSceneState:
         if world_mask is None:
             return np.arange(self.nworld)
         return np.flatnonzero(np.asarray(world_mask, dtype=bool))
+
+    def _pose_rows(
+        self,
+        position: np.ndarray,
+        orientation_xyzw: np.ndarray,
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """Normalize a pose argument to per-world rows indexed by world.
+
+        Randomization samples every environment independently and writes the
+        results as one batched pose -- ``pose.position[env_index]`` per env --
+        so a write has to be able to give each world a *different* pose, not
+        just broadcast one. Accepted forms:
+
+        ``(3,)`` / ``(4,)``
+            One pose, broadcast to every written world.
+        ``(1, 3)`` / ``(1, 4)``
+            Same, matching a ``PoseState`` of batch size 1.
+        ``(nworld, 3)`` / ``(nworld, 4)``
+            Row ``w`` applies to world ``w``. Indexing is by **absolute world
+            index**, not by position within the mask, which is how the native
+            handler indexes ``pose.position[env_index]``.
+
+        Returns ``(positions, quats_wxyz)``, both ``(nworld, ·)``, with the
+        quaternion reordered to MuJoCo's wxyz.
+        """
+        pos = np.asarray(position, dtype=np.float64)
+        quat = np.asarray(orientation_xyzw, dtype=np.float64)
+        pos = pos.reshape(1, 3) if pos.ndim == 1 else pos
+        quat = quat.reshape(1, 4) if quat.ndim == 1 else quat
+
+        if pos.shape[1:] != (3,) or quat.shape[1:] != (4,):
+            raise ValueError(
+                "position must be (3,) or (B, 3) and orientation (4,) or (B, 4); "
+                f"got {pos.shape} and {quat.shape}."
+            )
+        if pos.shape[0] != quat.shape[0]:
+            raise ValueError(
+                "position and orientation must share a batch dimension; got "
+                f"{pos.shape[0]} and {quat.shape[0]}."
+            )
+        if pos.shape[0] == 1:
+            pos = np.repeat(pos, self.nworld, axis=0)
+            quat = np.repeat(quat, self.nworld, axis=0)
+        elif pos.shape[0] != self.nworld:
+            raise ValueError(
+                f"pose batch must be 1 or nworld ({self.nworld}); got {pos.shape[0]}."
+            )
+        return pos, quat[:, [3, 0, 1, 2]]
 
     def resolve_free_joint_id(
         self,
@@ -419,14 +470,15 @@ class MjWarpSceneState:
         what lets one shared device model express per-world scenery
         randomization that the native path needs one ``MjModel`` per replica
         for.
+
+        The pose may be one shared pose or one row per world; see
+        :meth:`_pose_rows`.
         """
         import mujoco
 
         body = self.body_id(body_name)
         parent = int(self.host_model.body_parentid[body])
-        world_pos = np.asarray(position, dtype=np.float64).reshape(3)
-        quat_xyzw = np.asarray(orientation_xyzw, dtype=np.float64).reshape(4)
-        world_quat_wxyz = quat_xyzw[[3, 0, 1, 2]]
+        positions, quats_wxyz = self._pose_rows(position, orientation_xyzw)
 
         body_pos = self.model.body_pos.numpy().copy()
         body_quat = self.model.body_quat.numpy().copy()
@@ -437,13 +489,13 @@ class MjWarpSceneState:
         for world in self._worlds(world_mask):
             parent_pos = np.asarray(xpos[world][parent], dtype=np.float64)
             parent_mat = np.asarray(xmat[world][parent], dtype=np.float64).reshape(3, 3)
-            body_pos[world][body] = parent_mat.T @ (world_pos - parent_pos)
+            body_pos[world][body] = parent_mat.T @ (positions[world] - parent_pos)
 
             parent_quat_wxyz = np.asarray(xquat[world][parent], dtype=np.float64)
             inverse_parent = np.empty(4, dtype=np.float64)
             mujoco.mju_negQuat(inverse_parent, parent_quat_wxyz)
             local_quat = np.empty(4, dtype=np.float64)
-            mujoco.mju_mulQuat(local_quat, inverse_parent, world_quat_wxyz)
+            mujoco.mju_mulQuat(local_quat, inverse_parent, quats_wxyz[world])
             body_quat[world][body] = local_quat
 
         self.model.body_pos.assign(body_pos)
