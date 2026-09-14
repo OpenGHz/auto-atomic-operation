@@ -637,6 +637,44 @@ camera sensor 时相机声明是惰性的，既不会被materialize 进场景也
 
 **轮 4** 最大：后端里 20 处 per-env 串行循环需要向量化成沿 world 轴的操作。
 
+### 5.1 轮 4c-3c-3（`physical` env / backend 组装）的交接说明
+
+到 4c-3c-2 为止，控制栈的**零件全部就位且各自与原生对齐**，但**没有任何一个环节把
+它们串起来**——因此"MJWarp 上跑 physical"目前**一次都没有真正跑过**，所有一致性
+结论都是单元级、在小型合成场景上、且 IK 是 stub 的。这一节记录组装时需要知道的事，
+避免下一轮重新摸索。
+
+**已有零件**（均已测试）：
+
+| 零件 | 位置 |
+|---|---|
+| 执行器/关节写入 | `state.set_ctrl` / `set_joint_positions` / `actuator_ids` |
+| step 合并（one-hot tick） | `state.deferred_step()` |
+| 接触遍历（per-world） | `state.get_contact_geom_pairs` / `get_contact_body_pairs` |
+| 抓取判定两半 | `state.finger_contacts_with_target` + `grasp.lateral_grasp_ok` |
+| 后端级抓取查询 | `grasp_queries.MjWarpGraspQueries` |
+| 帧转换 | `frames.world_to_base` / `_batch` |
+| operator 状态与注册 | `operator_state.register_operator` |
+| IK 调用（per-world 失败计数） | `ik.MjWarpIkCaller` |
+| 运动整形 | `motion_shaping`（笛卡尔夹紧、stall 缩放、关节增量夹紧） |
+| 两半控制状态机 | `eef_control.MjWarpEefControl` / `arm_control.MjWarpArmControl` |
+| `OperatorHandler` 接缝 | `operator_handler.MjWarpOperatorHandler` |
+
+**`MjWarpObjectOnlyEnv` 缺的东西**（physical env 要补的正是这些）：它**完全没有
+operator 面**——没有 `register_operator`、没有 `step(action, env_mask)`
+（`StepEnvProtocol`）、没有 `apply_joint_action`（`JointActionEnvProtocol`）。
+`object_only` 不需要，所以当初没做。
+
+**组装时最容易错的一点**：`deferred_step` 的边界必须**跨越 runtime 对一次 tick 里
+所有 env 的调用**，不能落在单次调用内部（原因见 3.8）。`MjWarpOperatorHandler`
+把它暴露成 `control_tick()`，所以 env/backend 需要在驱动一次 `update()` 时**在最外
+层**开这个上下文，两半控制共用同一个边界；分别开会让 arm 与 eef 在一个 tick 里步进
+次数不同。
+
+**已知会被立刻触发的既有问题**：`rack_plate` 的 `rack` / `plate_stand`
+随机化在原生上也会失败（见 9 节，用户已明确"只报告不修"），因此第一次跑 physical
+时 reset 4/8 会失败——那不是本轮引入的回归。
+
 ## 6. 未决问题
 
 1. **依赖声明**。`pyproject.toml` 现有
