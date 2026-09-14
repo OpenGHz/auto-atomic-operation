@@ -642,6 +642,31 @@ camera sensor 时相机声明是惰性的，既不会被materialize 进场景也
 
 **轮 4** 最大：后端里 20 处 per-env 串行循环需要向量化成沿 world 轴的操作。
 
+### 5.0 轮 4d-2（触觉层接入）的交接说明
+
+读通了 `TactileSensorManager` 之后，接法已经确定，且**不需要重写任何计算**：
+
+- 构造签名是 `(mj_model, mj_data, enable, window_name)`；
+- 构造期的四步（`_collect_sensor_ids`、`_collect_site_and_geom_ids`、
+  `_build_layout`、`_compute_site_2d_coords`）只读**模型**与 `mj_data.site_xpos`；
+- 运行期只读两处 device 量：`mj_data.sensordata[adr:adr+dim]`（4d-1 已提供
+  `get_sensor_values` / `_batch`）与 `mj_data.site_xpos`（`get_site_pose_batch`
+  已有）。
+
+因此 4d-2 = **per-world 的宿主 scratch 桥接**：manager 天生是单 world 的（它持有
+一个 `mj_data`），所以每个 world 读之前，把该 world 的 `sensordata` 与 `site_xpos`
+拷进一个宿主 scratch `MjData`，再让 manager 照常算。`MjWarpSceneState.__init__`
+里已经有 `self._host_scratch`（`put_data` 用过的那个 `MjData`），可以直接复用，
+不必新建。
+
+两处要注意：
+
+1. **不要每个 world 建一个 manager**：布局与 2D 投影是静态的，建一次、按 world
+   重绑 scratch 即可；每 world 一个会把 PCA 投影重算 `nworld` 遍。
+2. **`enable=False` 时要短路**：原生在 manager 为 `None` 时返回零 wrench
+   （`_wrench_from_tactile`），MJWarp 侧应保持同样语义，否则没配触觉的任务会为
+   一份不存在的传感器付回读成本。
+
 ### 5.1 轮 4c-3c-3（`physical` env / backend 组装）的交接说明
 
 到 4c-3c-2 为止，控制栈的**零件全部就位且各自与原生对齐**，但**没有任何一个环节把
