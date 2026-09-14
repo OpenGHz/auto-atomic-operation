@@ -134,7 +134,8 @@ cam_pos   cam_quat   cam_fovy   jnt_range  qpos0
 | 2c | `MjWarpSceneState`：静态 body 放置（world → parent-local）与统一入口 | 已实现 |
 | 2d | `MjWarpSceneState`：批量 frame 读取（`PoseState` 形状，单次 readback） | 已实现 |
 | 2e | `MjWarpObjectHandler`：满足 `ObjectHandler` 契约（`apply_object_pose` 的落点） | 已实现 |
-| 2f | `object_only` MJWarp env/backend，满足现有接缝，不新增协议 | 未开始 |
+| 2f | `MjWarpObjectOnlyEnv`：满足 `EnvProtocol` / `PoseConstraintEnvProtocol` | 已实现 |
+| 2g | `object_only` MJWarp backend（`SceneBackend` + `RandomizationHost`） | 未开始 |
 | 3 | per-world 批量模型取代 N 份 `MjModel` | 未开始 |
 | 4 | physical 模式：执行器、IK、接触、触觉 | 未开始 |
 
@@ -230,6 +231,40 @@ device readback**而不是每个 world 一次——运行时每个控制 tick �
 `tests/test_backend_contracts.py` 钉住了原生这条信息，因此
 `test_mask_rejection_message_matches_the_native_handler` 用**同一个正则**同时断言
 两个后端，让依赖这条信息的调用方跨后端都能继续工作。
+
+**轮 2f**（`auto_atom/basis/mjwarp/env.py`）是 backend 交给运行时的 `get_env()`
+对象：结构上满足 `EnvProtocol` 与 `PoseConstraintEnvProtocol`，后者正是随机化层
+接受/拒绝候选摆放所需要的能力。
+
+`tests/test_mjwarp_env.py` 不用合成场景，而是直接跑**真实的**
+`rack_plate_p7_v4_umi_v3` + `object_only`，因为那才是移植要复现的东西：分层 MJCF、
+在 Hydra 边界被剥离的 operator 层、配置声明的物体挂载相机、嵌套静态场景。所有值
+都与原生 `UnifiedMujocoEnv` 自己的答案对比，实测全部一致：
+
+- 4 个 support geometry（含配置注释里写的 `object` 半径 0.123857 m）；
+- 2 个相机模型的 fovy / near / far / 位姿 / 分辨率；
+- 3 个 body 位姿、2 个 site 位姿；
+- `visible_in: all` 的见证相机集合——`plate_cam` 骑在待观测物体上，两个后端都把
+  它排除在外。
+
+约束算术复用 backend-neutral 的 `RandomizationConstraintEvaluator`，env 只提供
+两个 simulator-specific 读取，与原生 basis 相同。**这正是 `visible_in` /
+`separated` 语义跨后端一致而非各自重写的原因。**
+
+reset 必须恢复 `body_pos` / `body_quat` / `cam_pos` / `cam_quat` 四个基线：
+`reset_data` 只清动态状态，而静态放置与相机随机化写的正是这四个字段，否则上一次
+reset 的结构位姿会静默变成下一次 reset 的起点。原生 basis 出于同样原因恢复同样
+四个数组。
+
+一处**测试前提被实测推翻**值得记录：最初写了"配置声明了模型里不存在的相机时应当
+报错"，但它不会报——`load_composed_scene` 会**创建**配置声明而场景未编写的相机
+（见 `37d1cd0`），所以改名后的相机其实存在。该守卫只在 `host_model=` 注入路径上
+可达，测试因此改为走那条路径。
+
+渲染尚未实现：MJWarp `RenderContext` 创建时固定单个 znear 且没有 zfar，而原生
+路径按输出流切换 clip range（见 3.3），因此观测采集需要"每个 clip range 一个
+context"的设计。`object_only` 执行路径本身不渲染（采集是显式调用），所以这个切分
+是有意的，而非遗漏。
 
 **轮 1** 的动机：MJWarp 门禁拒绝 mesh/box CCD pair 上的非零 margin。编译后场景
 中 59 个非零 margin geom 里只有 7 个可碰撞（`link1..link7`），其余 52 个是

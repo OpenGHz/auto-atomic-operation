@@ -1,0 +1,208 @@
+"""Equivalence tests for the MJWarp object-only environment.
+
+The comparisons run against the **real** ``rack_plate_p7_v4_umi_v3`` config in
+``object_only`` mode rather than a synthetic scene, because that is what the
+port has to reproduce: layered MJCF, an operator layer stripped at the Hydra
+boundary, a config-declared object-mounted camera, and nested static scenery.
+
+Every value is checked against the native ``UnifiedMujocoEnv``'s own answer, so
+a divergence in convention or derivation fails here rather than surfacing later
+as a placement that passes constraints on one backend and not the other.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import numpy as np
+import pytest
+
+mujoco = pytest.importorskip("mujoco")
+pytest.importorskip("mujoco_warp")
+
+from hydra import compose, initialize_config_dir  # noqa: E402
+from omegaconf import OmegaConf  # noqa: E402
+
+from auto_atom.basis.mjc.mujoco_env import UnifiedMujocoEnv  # noqa: E402
+from auto_atom.basis.mjwarp.env import MjWarpObjectOnlyEnv  # noqa: E402
+from auto_atom.config.env_config import EnvConfig  # noqa: E402
+from auto_atom.contracts import (  # noqa: E402
+    EnvProtocol,
+    PoseConstraintEnvProtocol,
+)
+from auto_atom.execution_config import (  # noqa: E402
+    prepare_task_config_for_instantiation,
+)
+
+_CONFIG_NAME = "rack_plate_p7_v4_umi_v3"
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+# Constraint-relevant scene entities: the manipulated plate, the two randomized
+# scenery bodies, and the placement target that rides the rack.
+_ENTITIES = ("object", "rack", "plate_stand", "rack_target")
+
+
+def _env_config(batch_size: int) -> EnvConfig:
+    config_dir = str(_REPO_ROOT / "aao_configs")
+    with initialize_config_dir(config_dir=config_dir, version_base=None):
+        cfg = compose(
+            config_name=_CONFIG_NAME,
+            overrides=[
+                "execution.mode=object_only",
+                f"env.batch_size={batch_size}",
+                "env.viewer=null",
+            ],
+        )
+    prepared = prepare_task_config_for_instantiation(cfg)
+    node = OmegaConf.to_container(prepared.env, resolve=True)
+    node.pop("_target_", None)
+    return EnvConfig.model_validate(node)
+
+
+@pytest.fixture(scope="module")
+def single_world_config() -> EnvConfig:
+    return _env_config(1)
+
+
+@pytest.fixture(scope="module")
+def warp_env(single_world_config):
+    env = MjWarpObjectOnlyEnv(single_world_config, njmax=512)
+    yield env
+    env.close()
+
+
+@pytest.fixture(scope="module")
+def native_env(single_world_config):
+    env = UnifiedMujocoEnv(single_world_config)
+    yield env
+    env.close()
+
+
+def test_satisfies_env_capability_protocols(warp_env):
+    assert isinstance(warp_env, EnvProtocol)
+    assert isinstance(warp_env, PoseConstraintEnvProtocol)
+    assert warp_env.batch_size == 1
+
+
+def test_operator_layer_is_absent_under_object_only(warp_env):
+    """object_only strips the operator, so its camera must not be present."""
+    assert set(warp_env.camera_names()) == {"rack_camera_front", "plate_cam"}
+    assert warp_env.object_camera_names == frozenset({"plate_cam"})
+
+
+def test_object_mounted_camera_is_not_its_own_witness(warp_env, native_env):
+    """plate_cam rides the plate, so it cannot witness it for visible_in."""
+    assert warp_env._visibility_witness_camera_names() == (
+        native_env._visibility_witness_camera_names()
+    )
+    assert "plate_cam" not in warp_env._visibility_witness_camera_names()
+
+
+@pytest.mark.parametrize("entity", _ENTITIES)
+def test_support_geometry_matches_native(warp_env, native_env, entity):
+    got = warp_env.get_support_geometry(entity)
+    want = native_env.get_support_geometry(entity)
+
+    np.testing.assert_allclose(got.center, want.center, atol=1e-6)
+    assert got.radius == pytest.approx(want.radius, abs=1e-6)
+
+
+@pytest.mark.parametrize("camera", ["rack_camera_front", "plate_cam"])
+def test_camera_model_matches_native(warp_env, native_env, camera):
+    got = warp_env.get_camera_model(camera)
+    want = native_env.get_camera_model(camera)
+
+    assert (got.width, got.height) == (want.width, want.height)
+    assert got.fovy_radians == pytest.approx(want.fovy_radians)
+    assert got.near == pytest.approx(want.near)
+    assert got.far == pytest.approx(want.far)
+    np.testing.assert_allclose(
+        np.asarray(got.pose.position), np.asarray(want.pose.position), atol=1e-6
+    )
+    np.testing.assert_allclose(
+        np.asarray(got.pose.orientation),
+        np.asarray(want.pose.orientation),
+        atol=1e-6,
+    )
+
+
+@pytest.mark.parametrize("body", ["object", "rack", "plate_stand"])
+def test_body_pose_matches_native(warp_env, native_env, body):
+    got_pos, got_quat = warp_env.get_body_pose(body)
+    want_pos, want_quat = native_env.get_body_pose(body)
+
+    assert got_pos.shape == (1, 3)
+    np.testing.assert_allclose(got_pos[0], want_pos, atol=1e-6)
+    np.testing.assert_allclose(got_quat[0], want_quat, atol=1e-6)
+
+
+@pytest.mark.parametrize("site", ["object_site", "rack_target_site"])
+def test_site_pose_matches_native(warp_env, native_env, site):
+    got_pos, got_quat = warp_env.get_site_pose(site)
+    want_pos, want_quat = native_env.get_site_pose(site)
+
+    np.testing.assert_allclose(got_pos[0], want_pos, atol=1e-6)
+    np.testing.assert_allclose(got_quat[0], want_quat, atol=1e-6)
+
+
+def test_element_pose_prefers_site_then_falls_back_to_body(warp_env, native_env):
+    site_pose = warp_env.get_element_pose("object_site")
+    want_pos, _ = native_env.get_site_pose("object_site")
+    np.testing.assert_allclose(np.asarray(site_pose.position)[0], want_pos, atol=1e-6)
+
+    body_pose = warp_env.get_element_pose("rack")
+    want_body_pos, _ = native_env.get_body_pose("rack")
+    np.testing.assert_allclose(
+        np.asarray(body_pose.position)[0], want_body_pos, atol=1e-6
+    )
+
+
+def test_unknown_camera_raises_keyerror(warp_env):
+    with pytest.raises(KeyError, match="Camera 'nope' not found"):
+        warp_env.get_camera_model("nope")
+
+
+def test_configured_camera_absent_from_an_injected_model_is_reported(
+    single_world_config,
+):
+    """A camera the supplied model lacks fails at construction, with the list.
+
+    This only reachable through the ``host_model=`` path. Going through scene
+    composition cannot trigger it, because ``load_composed_scene`` *creates* a
+    camera the config declares but the scene does not author -- so a renamed
+    config camera silently exists rather than going missing.
+    """
+    minimal = mujoco.MjModel.from_xml_string(
+        """
+        <mujoco><worldbody>
+          <geom name="floor" type="plane" size="1 1 0.05"/>
+          <camera name="only_cam" pos="0 -1 0.5"/>
+        </worldbody></mujoco>
+        """
+    )
+
+    with pytest.raises(ValueError, match=r"not found in the compiled model"):
+        MjWarpObjectOnlyEnv(single_world_config, host_model=minimal, njmax=512)
+
+
+def test_injected_model_reports_the_available_camera_names(single_world_config):
+    """The error names what *is* available, since that is the usual diagnosis."""
+    minimal = mujoco.MjModel.from_xml_string(
+        """
+        <mujoco><worldbody>
+          <geom name="floor" type="plane" size="1 1 0.05"/>
+          <camera name="only_cam" pos="0 -1 0.5"/>
+        </worldbody></mujoco>
+        """
+    )
+
+    with pytest.raises(ValueError, match=r"only_cam"):
+        MjWarpObjectOnlyEnv(single_world_config, host_model=minimal, njmax=512)
+
+
+def test_interest_operations_are_validated(warp_env):
+    warp_env.set_interest_objects_and_operations(["object"], ["pick"])
+
+    with pytest.raises(ValueError, match="same length"):
+        warp_env.set_interest_objects_and_operations(["object"], [])
+    with pytest.raises(ValueError, match="not configured in operations"):
+        warp_env.set_interest_objects_and_operations(["object"], ["teleport"])
