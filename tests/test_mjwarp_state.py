@@ -1297,3 +1297,140 @@ def test_empty_index_arrays_read_back_empty(actuated_model):
 
     assert state.get_joint_positions([]).shape == (2, 0)
     assert state.get_joint_velocities([]).shape == (2, 0)
+
+
+# ----------------------------------------------------------------------
+# Grasp-detection primitives (contact + topology, no IK / eef pose)
+# ----------------------------------------------------------------------
+
+# A two-finger gripper closed on a target box. The finger pads are named with
+# the left_/right_ convention the classifier keys on, and the target's collision
+# geom hangs off a *child* body so the subtree walk has something to do -- a
+# check that only looked at the named target body would miss the contact.
+_GRASP_XML = """
+<mujoco>
+  <option timestep="0.002" integrator="implicitfast"/>
+  <worldbody>
+    <body name="gripper" pos="0 0 0.5">
+      <geom name="palm" type="box" size="0.04 0.02 0.01"/>
+      <body name="left_finger" pos="-0.03 0 -0.04">
+        <geom name="left_finger_pad" type="box" size="0.005 0.02 0.03"/>
+      </body>
+      <body name="right_finger" pos="0.03 0 -0.04">
+        <geom name="right_finger_pad" type="box" size="0.005 0.02 0.03"/>
+      </body>
+    </body>
+    <body name="target" pos="0 0 0.46">
+      <freejoint name="target_free"/>
+      <body name="target_shell" pos="0 0 0">
+        <geom name="target_geom" type="box" size="0.028 0.02 0.03"/>
+      </body>
+    </body>
+  </worldbody>
+</mujoco>
+"""
+
+
+@pytest.fixture(scope="module")
+def grasp_model():
+    return mujoco.MjModel.from_xml_string(_GRASP_XML)
+
+
+def test_descendant_body_ids_include_the_whole_subtree(grasp_model):
+    """The target's collision geom lives on a child body, so it must be in."""
+    state = MjWarpSceneState(grasp_model, nworld=1)
+    ids = state.descendant_body_ids("target")
+
+    target = mujoco.mj_name2id(grasp_model, mujoco.mjtObj.mjOBJ_BODY, "target")
+    shell = mujoco.mj_name2id(grasp_model, mujoco.mjtObj.mjOBJ_BODY, "target_shell")
+    assert target in ids and shell in ids
+    gripper = mujoco.mj_name2id(grasp_model, mujoco.mjtObj.mjOBJ_BODY, "gripper")
+    assert gripper not in ids
+
+
+def test_descendant_body_ids_match_native_walk(grasp_model):
+    """Same subtree the native handler computes for a grasp target."""
+    from auto_atom.backend.mjc.mujoco_backend import MujocoObjectHandler
+
+    state = MjWarpSceneState(grasp_model, nworld=1)
+    handler = MujocoObjectHandler.__new__(MujocoObjectHandler)
+    handler.body_name = "target"
+    handler._descendant_body_ids = None
+    want = handler.get_descendant_body_ids(grasp_model)
+
+    assert set(state.descendant_body_ids("target")) == set(want)
+
+
+def test_finger_geom_sides_classify_by_name(grasp_model):
+    state = MjWarpSceneState(grasp_model, nworld=1)
+    op_bodies = state.operator_body_ids("gripper")
+    sides = state.finger_geom_sides(op_bodies)
+
+    left = mujoco.mj_name2id(grasp_model, mujoco.mjtObj.mjOBJ_GEOM, "left_finger_pad")
+    right = mujoco.mj_name2id(grasp_model, mujoco.mjtObj.mjOBJ_GEOM, "right_finger_pad")
+    palm = mujoco.mj_name2id(grasp_model, mujoco.mjtObj.mjOBJ_GEOM, "palm")
+    assert sides[left] == "left"
+    assert sides[right] == "right"
+    assert palm not in sides  # unprefixed operator geom is neither side
+
+
+def test_finger_contacts_detect_a_two_sided_grasp(grasp_model):
+    """Both pads touch the target in every world -> (True, True)."""
+    state = MjWarpSceneState(grasp_model, nworld=2)
+    state.forward()
+    target_ids = state.descendant_body_ids("target")
+    sides = state.finger_geom_sides(state.operator_body_ids("gripper"))
+
+    for world in range(2):
+        left, right = state.finger_contacts_with_target(world, target_ids, sides)
+        assert left and right, f"world {world}"
+
+
+def test_finger_contacts_match_native_detection(grasp_model):
+    """Contact half of the grasp check agrees with the native handler."""
+    from auto_atom.backend.mjc.mujoco_backend import MujocoObjectHandler
+
+    native = mujoco.MjData(grasp_model)
+    mujoco.mj_forward(grasp_model, native)
+    geom_bodyid = grasp_model.geom_bodyid
+
+    handler = MujocoObjectHandler.__new__(MujocoObjectHandler)
+    handler.body_name = "target"
+    handler._descendant_body_ids = None
+    target_bodies = handler.get_descendant_body_ids(grasp_model)
+
+    left_id = mujoco.mj_name2id(
+        grasp_model, mujoco.mjtObj.mjOBJ_GEOM, "left_finger_pad"
+    )
+    right_id = mujoco.mj_name2id(
+        grasp_model, mujoco.mjtObj.mjOBJ_GEOM, "right_finger_pad"
+    )
+    want_left = want_right = False
+    for idx in range(native.ncon):
+        c = native.contact[idx]
+        b1 = int(geom_bodyid[c.geom1]) in target_bodies
+        b2 = int(geom_bodyid[c.geom2]) in target_bodies
+        if not b1 and not b2:
+            continue
+        other = int(c.geom2) if b1 else int(c.geom1)
+        if other == left_id:
+            want_left = True
+        elif other == right_id:
+            want_right = True
+
+    state = MjWarpSceneState(grasp_model, nworld=1)
+    state.forward()
+    got_left, got_right = state.finger_contacts_with_target(
+        0,
+        state.descendant_body_ids("target"),
+        state.finger_geom_sides(state.operator_body_ids("gripper")),
+    )
+    assert (got_left, got_right) == (want_left, want_right)
+
+
+def test_finger_contacts_empty_when_nothing_touches(actuated_model):
+    """No gripper, no target -> no finger contacts, rather than an error."""
+    state = MjWarpSceneState(actuated_model, nworld=2)
+    state.forward()
+    left, right = state.finger_contacts_with_target(0, frozenset({1}), {})
+    assert not left and not right

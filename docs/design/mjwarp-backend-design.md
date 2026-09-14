@@ -244,8 +244,9 @@ float32 精确表示的**运气**，不是转换的性质，因此也一并放�
 | 3b | readback 合并 —— **实测不值得做，已放弃**（见 6.3） | 不做 |
 | 4-pre | world 过滤的接触遍历（`get_contact_geom_pairs` / `get_contact_body_pairs`） | 已实现 `6216f88` |
 | 4a | 执行器/关节写入层（`actuator_ids`、`set_ctrl`、`set_joint_positions`） | 已实现 |
-| 4b | `MjWarpOperatorHandler`：`move_to_pose` / `control_eef` / 抓取判定 | 未开始 |
-| 4c | IK 与 `physical` 模式 env / backend 组装 | 未开始 |
+| 4b-1 | 抓取判定基元（子树 body、左右指分类、接触半判定） | 已实现 |
+| 4b-2 | `MjWarpOperatorHandler`：`control_eef` + 横向距离半判定 | 未开始 |
+| 4c | IK 与 `physical` 模式 env / backend 组装（`move_to_pose`） | 未开始 |
 | 4d | 触觉（52 个 `contype=0` 触觉单元的读取路径） | 未开始 |
 
 **轮 2a**（`auto_atom/basis/mjwarp/state.py`）是后续各轮的读写底座：它持有

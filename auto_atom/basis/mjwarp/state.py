@@ -636,6 +636,97 @@ class MjWarpSceneState:
         geom_bodyid = np.asarray(self.model.geom_bodyid.numpy(), dtype=np.int32)
         return geom_bodyid[pairs]
 
+    def descendant_body_ids(self, body_name: str) -> frozenset[int]:
+        """A body and every body below it in the tree.
+
+        A grasp targets a body, but its collision geoms may hang off child
+        bodies (a plate's rim, a mug's handle), so a contact against any body
+        in the subtree still counts as touching the target. Resolved on the
+        host model, whose ``body_parentid`` is authoritative for topology, and
+        the walk relies on MuJoCo numbering children after their parents.
+        """
+        import mujoco
+
+        target = mujoco.mj_name2id(self.host_model, mujoco.mjtObj.mjOBJ_BODY, body_name)
+        if target < 0:
+            raise ValueError(f"Body '{body_name}' not found in the compiled model.")
+        ids = {target}
+        parentid = self.host_model.body_parentid
+        for body in range(int(self.host_model.nbody)):
+            if body != 0 and int(parentid[body]) in ids:
+                ids.add(body)
+        return frozenset(ids)
+
+    def operator_body_ids(self, root_body_name: str) -> frozenset[int]:
+        """The operator root body and its whole subtree.
+
+        Same subtree walk as :meth:`descendant_body_ids`; named separately
+        because the grasp check reads it against a different argument (the
+        arm root, not the grasp target) and the intent is worth keeping legible
+        at the call site.
+        """
+        return self.descendant_body_ids(root_body_name)
+
+    def finger_geom_sides(self, operator_body_ids: frozenset[int]) -> dict[int, str]:
+        """Map each gripper finger geom id to ``"left"`` or ``"right"``.
+
+        A grasp is confirmed only when *both* a left and a right finger geom
+        touch the target, so the two sides have to be distinguishable. Mirrors
+        the native name matching: a geom belonging to the operator whose name
+        starts with ``left_``/``right_`` or contains ``_left_``/``_right_``
+        (the latter covers a gripper attached under an ``<attach prefix=...>``).
+        """
+        import mujoco
+
+        sides: dict[int, str] = {}
+        geom_bodyid = self.host_model.geom_bodyid
+        for geom in range(int(self.host_model.ngeom)):
+            if int(geom_bodyid[geom]) not in operator_body_ids:
+                continue
+            name = (
+                mujoco.mj_id2name(self.host_model, mujoco.mjtObj.mjOBJ_GEOM, geom) or ""
+            )
+            if name.startswith("left_") or "_left_" in name:
+                sides[geom] = "left"
+            elif name.startswith("right_") or "_right_" in name:
+                sides[geom] = "right"
+        return sides
+
+    def finger_contacts_with_target(
+        self,
+        world_index: int,
+        target_body_ids: frozenset[int],
+        finger_sides: dict[int, str],
+    ) -> Tuple[bool, bool]:
+        """Whether a left and a right finger geom each touch the target.
+
+        Returns ``(left_contact, right_contact)`` for one world. This is the
+        contact half of the grasp check; the lateral-distance half needs the
+        eef pose and belongs to the operator handler. Built on the world-
+        filtered geom-pair scan, so it reads only this world's contacts.
+        """
+        pairs = self.get_contact_geom_pairs(world_index)
+        if pairs.size == 0:
+            return False, False
+        geom_bodyid = np.asarray(self.model.geom_bodyid.numpy(), dtype=np.int32)
+        left = right = False
+        for geom1, geom2 in pairs:
+            body1 = int(geom_bodyid[geom1])
+            body2 = int(geom_bodyid[geom2])
+            b1 = body1 in target_body_ids
+            b2 = body2 in target_body_ids
+            if not b1 and not b2:
+                continue
+            other = int(geom2) if b1 else int(geom1)
+            side = finger_sides.get(other)
+            if side == "left":
+                left = True
+            elif side == "right":
+                right = True
+            if left and right:
+                break
+        return left, right
+
     # ------------------------------------------------------------------
     # Actuators and actuated joints
     # ------------------------------------------------------------------
