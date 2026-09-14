@@ -674,6 +674,30 @@ operator 面**——没有 `register_operator`、没有 `step(action, env_mask)`
 层**开这个上下文，两半控制共用同一个边界；分别开会让 arm 与 eef 在一个 tick 里步进
 次数不同。
 
+**组装 handler 时必须做、否则会静默失败的一件事：eef 的 open/close/tolerance 必须
+从 `actuator_ctrlrange` 推导，不能用默认值。**
+
+原生 builder（`mujoco_backend.py:2390-2408`）就是这么做的：`eef_open_value` /
+`eef_close_value` 取该 eef 执行器 ctrlrange 的 low/high，并把 `tolerance.eef`
+夹到 ctrl 行程的 20%（下限 1e-4、上限 0.03）。注释写明了原因——不同夹爪行程差两个
+数量级（robotiq 0/0.82 vs XF9600 0/0.02）。
+
+**这对本目标配置是致命的**：UMI 的 `claw_joint` 是 `ctrlrange="0 0.0165"`，而
+`MjWarpEefControl` 当前的默认值是 robotiq 形状的（`eef_close_value=0.82`、
+`eef_tolerance=0.03`）。0.03 的容差**比 UMI 的全行程 0.0165 还大**，于是
+`actual >= command - tolerance` 在夹爪完全张开时就成立——**每次闭合都会在第一个
+tick 直接报 REACHED，手指根本没动**。这正是 4b-3 记下的那条符号/量纲假设会翻车的
+方式：不报错，只是抓取判定永远"成功"。
+
+因此 4c-3c-3d 的 handler 装配必须：
+
+1. 读该 operator 的 eef 执行器 id → 取 `actuator_ctrlrange[id]` 的 low/high 作为
+   open/close；
+2. 按 `min(0.03, max(1e-4, span * 0.2))` 夹 `eef_tolerance`；
+3. 其余控制参数（`timeout_steps`、`tolerance.position/orientation`、
+   `grasp.lateral_threshold` 等）来自 task 侧 `task_operators.<name>.control`，
+   IK 侧参数来自 `.ik`（`joint_control_mode`、`max_joint_delta`）。
+
 **已知会被立刻触发的既有问题**：`rack_plate` 的 `rack` / `plate_stand`
 随机化在原生上也会失败（见 9 节，用户已明确"只报告不修"），因此第一次跑 physical
 时 reset 4/8 会失败——那不是本轮引入的回归。
