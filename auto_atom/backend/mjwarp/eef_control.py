@@ -380,3 +380,9 @@ class MjWarpEefControl:
                 f"world_mask must have shape ({nworld},), got {mask.shape}"
             )
         return mask
+
+    def reset(self, worlds: Optional[List[int]] = None) -> None:
+        """Clear command progress for a fresh episode in selected worlds."""
+        for world in range(self.state.nworld) if worlds is None else worlds:
+            self._steps[world] = 0
+            self._last_command_key[world] = None

@@ -13,12 +13,9 @@ incidental:
   device model with batched ``body_pos``/``body_quat``, so the base pose is
   ``(nworld, 3)`` / ``(nworld, 4)`` and each world converts against its own --
   which is what lets randomization place the base per environment.
-* **Joint mode only, for now.** The native path also supports a mocap-driven
-  operator (a virtual base at the world origin plus a mocap body). The target
-  config for this port is joint mode (``per_step_ik`` with ``arm_actuators``
-  and an IK solver), so mocap mode is deliberately not implemented here rather
-  than half-implemented; :func:`register_operator` rejects it explicitly
-  instead of silently producing a state that cannot be driven.
+* **Mocap uses a virtual base.** Its world-origin base is independent of the
+  moving physical body. Tool offsets include the authored weld transform, so
+  the controller can command an EEF pose through the configured mocap target.
 """
 
 from __future__ import annotations
@@ -30,6 +27,11 @@ import numpy as np
 
 from auto_atom.backend.mjwarp.frames import world_to_base_batch
 from auto_atom.basis.mjwarp.state import MjWarpSceneState
+from auto_atom.utils.transformations import (
+    quaternion_inverse,
+    quaternion_matrix,
+    quaternion_multiply,
+)
 
 
 @dataclass
@@ -64,14 +66,27 @@ class MjWarpOperatorState:
     home_arm_qpos: np.ndarray  # (nworld, n_arm)
     home_ctrl: np.ndarray  # (nworld, nu)
 
+    mocap_body_name: str = ""
+    freejoint_name: str = ""
+    home_mocap_position: Optional[np.ndarray] = None
+    home_mocap_orientation: Optional[np.ndarray] = None
+    mocap_to_root_position: Optional[np.ndarray] = None
+    mocap_to_root_orientation: Optional[np.ndarray] = None
+
     joint_control_mode: str = "per_step_ik"
     max_joint_delta: float = 0.35
     joint_interp_speed: float = 0.05
     ik_solver: Optional[object] = field(default=None, repr=False)
+    _baseline: dict[str, np.ndarray] = field(default_factory=dict, repr=False)
+
+    def restore_baseline(self, world_mask: np.ndarray) -> None:
+        """Restore frame and home snapshots before applying a fresh reset."""
+        for name, baseline in self._baseline.items():
+            getattr(self, name)[world_mask] = baseline[world_mask]
 
     @property
     def joint_mode(self) -> bool:
-        """True when an arm is actuator-driven, which is the supported mode."""
+        """True for an actuator-driven arm; false for a mocap-driven body."""
         return self.arm_actuator_ids.size > 0
 
 
@@ -90,6 +105,8 @@ def register_operator(
     joint_control_mode: str = "per_step_ik",
     joint_interp_speed: float = 0.05,
     max_joint_delta: float = 0.35,
+    mocap_body: str = "",
+    freejoint: str = "",
 ) -> MjWarpOperatorState:
     """Resolve an operator's addressing and snapshot its home state.
 
@@ -103,13 +120,12 @@ def register_operator(
     unsupported control mode, or a non-positive interpolation speed -- the same
     three checks native makes, with the same reasons.
     """
-    if not arm_actuators:
+    if not arm_actuators and (not mocap_body or not freejoint):
         raise ValueError(
-            f"Operator '{name}' has no arm_actuators. The MJWarp backend "
-            "implements joint mode only; a mocap-driven operator is not "
-            "supported (see module docstring)."
+            f"Operator '{name}' has no arm_actuators; mocap control requires "
+            "both mocap_body and freejoint."
         )
-    if ik_solver is None:
+    if arm_actuators and ik_solver is None:
         raise ValueError(
             f"Operator '{name}' has arm_actuators but no ik_solver was provided."
         )
@@ -142,7 +158,30 @@ def register_operator(
         eef_position, eef_orientation, base_position, base_orientation
     )
 
-    return MjWarpOperatorState(
+    home_mocap_position = home_mocap_orientation = None
+    mocap_to_root_position = mocap_to_root_orientation = None
+    if not arm_actuators:
+        home_mocap_position, home_mocap_orientation = state.get_mocap_pose(mocap_body)
+        # Validate the free-joint binding at registration, before any control write.
+        import mujoco
+
+        joint = state._id(mujoco.mjtObj.mjOBJ_JOINT, freejoint, "Joint")
+        if int(state.host_model.jnt_type[joint]) != int(mujoco.mjtJoint.mjJNT_FREE):
+            raise ValueError(f"Joint '{freejoint}' is not a free joint.")
+        from auto_atom.basis.mjc.model_initialization import mocap_weld_transform
+
+        mocap_to_root_position, mocap_to_root_orientation = mocap_weld_transform(
+            state.host_model,
+            state.body_id(mocap_body),
+            int(state.host_model.jnt_bodyid[joint]),
+        )
+        tool_position, tool_orientation = world_to_base_batch(
+            eef_position, eef_orientation, home_mocap_position, home_mocap_orientation
+        )
+        base_position = np.zeros((state.nworld, 3))
+        base_orientation = np.tile([0.0, 0.0, 0.0, 1.0], (state.nworld, 1))
+
+    operator = MjWarpOperatorState(
         name=name,
         root_body_name=root_body,
         eef_site_name=eef_site,
@@ -162,7 +201,43 @@ def register_operator(
         max_joint_delta=float(max_joint_delta),
         joint_interp_speed=float(joint_interp_speed),
         ik_solver=ik_solver,
+        mocap_body_name=mocap_body,
+        freejoint_name=freejoint,
+        home_mocap_position=home_mocap_position,
+        home_mocap_orientation=home_mocap_orientation,
+        mocap_to_root_position=mocap_to_root_position,
+        mocap_to_root_orientation=mocap_to_root_orientation,
     )
+    for field_name in (
+        "base_position",
+        "base_orientation",
+        "tool_offset_position",
+        "tool_offset_orientation",
+        "home_arm_qpos",
+        "home_ctrl",
+        "home_mocap_position",
+        "home_mocap_orientation",
+    ):
+        value = getattr(operator, field_name)
+        if value is not None:
+            operator._baseline[field_name] = value.copy()
+    return operator
+
+
+def eef_to_root_pose(
+    operator: MjWarpOperatorState,
+    world: int,
+    position: np.ndarray,
+    orientation_xyzw: np.ndarray,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Convert a world EEF goal to the mocap control frame, including its weld."""
+    root_quat = quaternion_multiply(
+        orientation_xyzw, quaternion_inverse(operator.tool_offset_orientation[world])
+    )
+    root_pos = np.asarray(position) - (
+        quaternion_matrix(root_quat)[:3, :3] @ operator.tool_offset_position[world]
+    )
+    return root_pos, root_quat
 
 
 def override_base_pose(

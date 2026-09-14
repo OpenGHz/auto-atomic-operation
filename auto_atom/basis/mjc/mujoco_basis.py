@@ -29,7 +29,10 @@ import mujoco
 import numpy as np
 from pydantic import PositiveFloat
 
-from auto_atom.basis.mjc.model_initialization import apply_initial_joint_positions
+from auto_atom.basis.mjc.model_initialization import (
+    reset_model_data,
+    synchronize_mocap_bodies,
+)
 from auto_atom.basis.mjc.tactile.tactile_sensor import TactileSensorManager
 from auto_atom.config.env_config import DataType, EnvConfig
 from auto_atom.contracts import (
@@ -893,29 +896,11 @@ class MujocoBasis:
         world pose to the corresponding mocap body so the weld constraint starts
         in equilibrium.
         """
-        for i in range(self.model.neq):
-            if int(self.model.eq_type[i]) != int(mujoco.mjtEq.mjEQ_WELD):
-                continue
-            b1 = int(self.model.eq_obj1id[i])
-            b2 = int(self.model.eq_obj2id[i])
-            mid1 = int(self.model.body_mocapid[b1])
-            mid2 = int(self.model.body_mocapid[b2])
-            if mid1 >= 0:
-                mocap_id, phys_id = mid1, b2
-            elif mid2 >= 0:
-                mocap_id, phys_id = mid2, b1
-            else:
-                continue
-            self.data.mocap_pos[mocap_id] = self.data.xpos[phys_id].copy()
-            self.data.mocap_quat[mocap_id] = self.data.xquat[phys_id].copy()
+        synchronize_mocap_bodies(self.model, self.data)
 
     def _reset_core(self) -> None:
         """Restore model/data state without invoking subclass lifecycle hooks."""
         self._restore_model_pose_baseline()
-        if self.model.nkey > 0:
-            mujoco.mj_resetDataKeyframe(self.model, self.data, 0)
-        else:
-            mujoco.mj_resetData(self.model, self.data)
         actuator_ids = (
             int(actuator_id)
             for operator in self._operators.values()
@@ -925,13 +910,12 @@ class MujocoBasis:
             )
             for actuator_id in indices
         )
-        apply_initial_joint_positions(
+        reset_model_data(
             self.model,
             self.data,
             self.config.initial_joint_positions,
             actuator_ids,
         )
-        self._sync_mocap_to_freejoint()
         self._prev_ctrl = None
 
     def reset(self) -> None:

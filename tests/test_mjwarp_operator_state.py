@@ -230,10 +230,10 @@ def test_override_rejects_an_unmappable_row_count(registered):
 
 
 def test_registration_rejects_mocap_mode(arm_model):
-    """Mocap mode is not implemented, so it is refused rather than half-done."""
+    """An operator must bind its mocap body and free joint explicitly."""
     state = MjWarpSceneState(arm_model, nworld=1)
 
-    with pytest.raises(ValueError, match="joint mode only"):
+    with pytest.raises(ValueError, match="mocap control requires"):
         register_operator(
             state,
             name="arm",

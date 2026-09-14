@@ -117,6 +117,8 @@ class MjWarpSceneState:
         nworld: int = 1,
         njmax: Optional[int] = None,
         batched_fields: Tuple[str, ...] = BATCHED_MODEL_FIELDS,
+        host_data: Optional["mujoco.MjData"] = None,
+        nconmax: Optional[int] = None,
     ) -> None:
         if nworld < 1:
             raise ValueError(f"nworld must be >= 1; got {nworld}.")
@@ -137,11 +139,14 @@ class MjWarpSceneState:
 
         # put_data seeds every world from one host MjData, so the host pass runs
         # first to give all worlds a kinematically consistent starting state.
-        host_data = mujoco.MjData(host_model)
+        if host_data is None:
+            host_data = mujoco.MjData(host_model)
         mujoco.mj_forward(host_model, host_data)
         put_data_kwargs: dict[str, Any] = {"nworld": self.nworld}
         if njmax is not None:
             put_data_kwargs["njmax"] = int(njmax)
+        if nconmax is not None:
+            put_data_kwargs["nconmax"] = int(nconmax)
         self.data = mjw.put_data(host_model, host_data, **put_data_kwargs)
 
         self._host_scratch = host_data
@@ -164,6 +169,42 @@ class MjWarpSceneState:
         self._pending_step_count = 0
         self._pending_step_mask = np.zeros(self.nworld, dtype=bool)
         self._integration_scratch = None
+
+    def integration_state(self) -> Any:
+        """Snapshot the complete integration state on the current device."""
+        import mujoco
+        import warp as wp
+
+        signature = int(mujoco.mjtState.mjSTATE_INTEGRATION)
+        snapshot = wp.empty(
+            (self.nworld, mujoco.mj_stateSize(self.host_model, signature)),
+            dtype=wp.float32,
+            device=self.data.qpos.device,
+        )
+        self._mjw.get_state(self.model, self.data, snapshot, signature)
+        return snapshot
+
+    def restore_integration_state(
+        self, snapshot: Any, world_mask: Optional[np.ndarray] = None
+    ) -> None:
+        """Restore a device snapshot, then refresh observable poses and contacts."""
+        import mujoco
+        import warp as wp
+
+        mask = (
+            None
+            if world_mask is None
+            else wp.array(world_mask, dtype=wp.bool, device=self.data.qpos.device)
+        )
+        self._mjw.set_state(
+            self.model,
+            self.data,
+            snapshot,
+            int(mujoco.mjtState.mjSTATE_INTEGRATION),
+            mask,
+        )
+        self._mark_all_dirty()
+        self.forward()
 
     # ------------------------------------------------------------------
     # Name resolution (host model; the device model has no name table)
@@ -1193,6 +1234,36 @@ class MjWarpSceneState:
         self.data.qvel.assign(qvel)
         self._mark_dirty(int(self.host_model.jnt_bodyid[joint]))
         self.forward()
+
+    def get_mocap_pose(self, body_name: str) -> Tuple[np.ndarray, np.ndarray]:
+        """Read one mocap body's targets in world coordinates, per world."""
+        mocap_id = int(self.host_model.body_mocapid[self.body_id(body_name)])
+        if mocap_id < 0:
+            raise ValueError(f"Body '{body_name}' is not a mocap body.")
+        positions = self.data.mocap_pos.numpy()[:, mocap_id].copy()
+        orientations = self.data.mocap_quat.numpy()[:, mocap_id][:, [1, 2, 3, 0]].copy()
+        return positions, orientations
+
+    def set_mocap_pose(
+        self,
+        body_name: str,
+        position: np.ndarray,
+        orientation_xyzw: np.ndarray,
+        *,
+        world_mask: Optional[np.ndarray] = None,
+    ) -> None:
+        """Command a mocap target while its welded body continues under physics."""
+        mocap_id = int(self.host_model.body_mocapid[self.body_id(body_name)])
+        if mocap_id < 0:
+            raise ValueError(f"Body '{body_name}' is not a mocap body.")
+        worlds = self._worlds(world_mask)
+        positions, orientations = self._pose_rows(position, orientation_xyzw)
+        target_positions = self.data.mocap_pos.numpy()
+        target_orientations = self.data.mocap_quat.numpy()
+        target_positions[worlds, mocap_id] = positions[worlds]
+        target_orientations[worlds, mocap_id] = orientations[worlds]
+        self.data.mocap_pos.assign(target_positions)
+        self.data.mocap_quat.assign(target_orientations)
 
     def _worlds(self, world_mask: Optional[np.ndarray]) -> np.ndarray:
         """World indices a write applies to; all worlds when unmasked."""

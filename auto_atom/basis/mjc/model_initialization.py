@@ -7,8 +7,78 @@ from collections.abc import Iterable, Mapping
 import mujoco
 import numpy as np
 
+from auto_atom.utils.transformations import (
+    quaternion_inverse,
+    quaternion_matrix,
+    quaternion_multiply,
+)
+
 # Joint qpos widths by mjtJoint enum value: free=7, ball=4, slide=1, hinge=1.
 _QPOS_WIDTH = {0: 7, 1: 4, 2: 1, 3: 1}
+
+
+def mocap_weld_transform(
+    model: mujoco.MjModel, mocap_body: int, physical_body: int
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return the authored mocap-to-physical-body weld transform (xyzw)."""
+    for equality in range(model.neq):
+        if int(model.eq_type[equality]) != int(mujoco.mjtEq.mjEQ_WELD):
+            continue
+        if int(model.eq_objtype[equality]) != int(mujoco.mjtObj.mjOBJ_BODY):
+            continue
+        body1, body2 = int(model.eq_obj1id[equality]), int(model.eq_obj2id[equality])
+        if {body1, body2} != {mocap_body, physical_body}:
+            continue
+        position = np.asarray(model.eq_data[equality, 3:6]).copy()
+        orientation = np.asarray(model.eq_data[equality, 6:10])[[1, 2, 3, 0]].copy()
+        position -= quaternion_matrix(orientation)[:3, :3] @ model.eq_data[equality, :3]
+        if body1 == mocap_body:
+            return position, orientation
+        inverse = quaternion_inverse(orientation)
+        return -quaternion_matrix(inverse)[:3, :3] @ position, inverse
+    raise ValueError("Mocap and physical bodies must be connected by a body weld.")
+
+
+def synchronize_mocap_bodies(model: mujoco.MjModel, data: mujoco.MjData) -> None:
+    """Align mocap targets with their welded physical bodies at reset."""
+    for equality in range(model.neq):
+        if int(model.eq_type[equality]) != int(mujoco.mjtEq.mjEQ_WELD):
+            continue
+        if int(model.eq_objtype[equality]) != int(mujoco.mjtObj.mjOBJ_BODY):
+            continue
+        body1 = int(model.eq_obj1id[equality])
+        body2 = int(model.eq_obj2id[equality])
+        mocap1 = int(model.body_mocapid[body1])
+        mocap2 = int(model.body_mocapid[body2])
+        if mocap1 >= 0:
+            mocap, mocap_body, physical = mocap1, body1, body2
+        elif mocap2 >= 0:
+            mocap, mocap_body, physical = mocap2, body2, body1
+        else:
+            continue
+        offset, rotation = mocap_weld_transform(model, mocap_body, physical)
+        target_rotation = quaternion_multiply(
+            data.xquat[physical][[1, 2, 3, 0]], quaternion_inverse(rotation)
+        )
+        data.mocap_pos[mocap] = (
+            data.xpos[physical] - quaternion_matrix(target_rotation)[:3, :3] @ offset
+        )
+        data.mocap_quat[mocap] = target_rotation[[3, 0, 1, 2]]
+
+
+def reset_model_data(
+    model: mujoco.MjModel,
+    data: mujoco.MjData,
+    initial_joint_positions: Mapping[str, object],
+    actuator_ids: Iterable[int] = (),
+) -> None:
+    """Restore authored home state for native execution or device upload."""
+    if model.nkey:
+        mujoco.mj_resetDataKeyframe(model, data, 0)
+    else:
+        mujoco.mj_resetData(model, data)
+    apply_initial_joint_positions(model, data, initial_joint_positions, actuator_ids)
+    synchronize_mocap_bodies(model, data)
 
 
 def _is_joint_position_actuator(model: mujoco.MjModel, actuator_id: int) -> bool:

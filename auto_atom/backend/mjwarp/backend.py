@@ -44,10 +44,8 @@ from auto_atom.utils.seed import resolve_run_seed
 logger = logging.getLogger(__name__)
 
 _OPERATOR_UNSUPPORTED = (
-    "The MJWarp backend currently supports execution.mode=object_only, which "
-    "has no embodied operator. Operator '{name}' cannot be resolved. Physical "
-    "execution on MJWarp is not implemented yet (see "
-    "docs/design/mjwarp-backend-design.md round 4)."
+    "Operator '{name}' is not registered on this MJWarp backend. "
+    "execution.mode=object_only has no embodied operators."
 )
 
 
@@ -93,6 +91,7 @@ class MjWarpObjectOnlyBackend(SceneBackend):
         # One grasp-query object per operator, built lazily: it resolves static
         # topology at construction and post-conditions ask every control tick.
         self._grasp_query_cache: Dict[str, Any] = {}
+        self._baseline_operator_poses: Dict[str, PoseState] = {}
 
     # ------------------------------------------------------------------
     # SceneBackend lifecycle
@@ -123,13 +122,22 @@ class MjWarpObjectOnlyBackend(SceneBackend):
         mask = self._normalize_mask(env_mask)
         self._reset_index += 1
         self._last_reset_diagnostics.clear()
-        self.env.reset()
+        self.env.reset(mask)
+        for handler in self.operator_handlers.values():
+            handler.arm.reset(list(np.flatnonzero(mask)))
+            if handler.eef is not None:
+                handler.eef.reset(list(np.flatnonzero(mask)))
         if not (self._baseline_object_poses or self._baseline_camera_poses):
             self._record_baseline_poses()
         # Home operators to their configured initial_state before randomization:
         # a base_pose moves the arm's base frame, and randomization's pose
         # constraints are evaluated against the scene as the operator leaves it.
         self._apply_operator_initial_states(mask)
+        for name, handler in self.operator_handlers.items():
+            self._baseline_operator_poses[f"{name}.base"] = handler.get_base_pose()
+            self._baseline_operator_poses[f"{name}.eef"] = (
+                handler.get_end_effector_pose()
+            )
         if self.randomization.applies:
             with self.env.state.deferred_forward():
                 self.randomization_executor.apply_randomization(mask)
@@ -406,13 +414,8 @@ class MjWarpObjectOnlyBackend(SceneBackend):
 
     @property
     def operator_names(self) -> Sequence[str]:
-        """Empty: object-only execution has no operator to randomize.
-
-        The executor drops operator entries when this is empty, which is the
-        same outcome the Hydra boundary already produced by removing them from
-        ``task.randomization.entities``.
-        """
-        return ()
+        """Embodied operators available to the randomization executor."""
+        return tuple(self.operator_handlers)
 
     @property
     def rng(self) -> np.random.Generator:
@@ -451,7 +454,12 @@ class MjWarpObjectOnlyBackend(SceneBackend):
 
         owner, attribute = parse_entity_reference(label)
         if attribute is not None:
-            raise KeyError(_OPERATOR_UNSUPPORTED.format(name=owner))
+            handler = self.get_operator_handler(owner)
+            return (
+                handler.get_base_pose()
+                if attribute == "base"
+                else handler.get_end_effector_pose()
+            )
         handler = self.get_object_handler(owner)
         if handler is None:
             raise KeyError(f"Unknown target '{label}'.")
@@ -459,7 +467,11 @@ class MjWarpObjectOnlyBackend(SceneBackend):
 
     def baseline_pose(self, label: str) -> Optional[PoseState]:
         """Recorded reset baseline for one target, or ``None`` if unrecorded."""
-        for recorded in (self._baseline_object_poses, self._baseline_camera_poses):
+        for recorded in (
+            self._baseline_object_poses,
+            self._baseline_camera_poses,
+            self._baseline_operator_poses,
+        ):
             pose = recorded.get(label)
             if pose is not None:
                 return pose
@@ -479,8 +491,12 @@ class MjWarpObjectOnlyBackend(SceneBackend):
                 raise KeyError(f"Unknown object '{owner}'.")
             handler.set_pose(pose, env_mask)
             return
-        if kind in {"operator_base", "operator_eef"}:
-            raise KeyError(_OPERATOR_UNSUPPORTED.format(name=owner))
+        if kind == "operator_base":
+            self.get_operator_handler(owner).set_pose(pose, env_mask)
+            return
+        if kind == "operator_eef":
+            self.get_operator_handler(owner).set_home_end_effector_pose(pose, env_mask)
+            return
         raise ValueError(f"Unknown target part '{kind}' for '{owner}'.")
 
     def camera_names(self) -> List[str]:
@@ -527,7 +543,36 @@ class MjWarpObjectOnlyBackend(SceneBackend):
         part: str,
         env_index: int = 0,
     ) -> SupportGeometry:
-        raise KeyError(_OPERATOR_UNSUPPORTED.format(name=operator_name))
+        operator = self.get_operator_handler(operator_name).operator
+        state = self.env.state
+        model = self.env.host_model
+        if part == "base":
+            root = state.body_id(operator.root_body_name)
+            bodies = {root}
+            center = state.get_body_pose(operator.root_body_name, env_index)[0]
+        elif part == "eef":
+            import mujoco
+
+            body = int(model.site_bodyid[state.site_id(operator.eef_site_name)])
+            bodies = state.descendant_body_ids(
+                mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_BODY, body)
+            )
+            center = state.get_site_pose(operator.eef_site_name, env_index)[0]
+        else:
+            raise ValueError(f"Unknown operator geometry part '{part}'.")
+        positions = state.data.geom_xpos.numpy()[env_index]
+        sizes = state.model.geom_size.numpy()[env_index]
+        radius = max(
+            (
+                float(
+                    np.linalg.norm(positions[gid] - center) + np.linalg.norm(sizes[gid])
+                )
+                for gid in range(model.ngeom)
+                if int(model.geom_bodyid[gid]) in bodies
+            ),
+            default=0.0,
+        )
+        return SupportGeometry(center=np.asarray(center), radius=radius)
 
     def evaluate_pose_constraints(
         self,
@@ -603,13 +648,7 @@ def build_mjwarp_object_only_backend(
     *,
     njmax: Optional[int] = None,
 ) -> MjWarpObjectOnlyBackend:
-    """Construct the MJWarp object-only backend from a task file.
-
-    ``operators`` is accepted for signature parity with the native builders and
-    must be empty: ``execution.mode: object_only`` clears ``task_operators`` at
-    the Hydra boundary, so a non-empty mapping means the task file is asking for
-    physical execution, which this backend does not implement.
-    """
+    """Construct physical or object-only execution from the composed task file."""
     import mujoco
 
     from auto_atom.runtime import ComponentRegistry
@@ -714,7 +753,9 @@ def _build_operator_handlers(
                 solver=operator.ik_solver,
                 nworld=env.batch_size,
                 operator_name=name,
-            ),
+            )
+            if operator.joint_mode
+            else None,
             position_tolerance=tolerance.get("position", 0.01),
             orientation_tolerance=float(tolerance.get("orientation", 0.08)),
             timeout_steps=int(control.get("timeout_steps", 100)),

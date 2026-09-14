@@ -40,6 +40,7 @@ from auto_atom.backend.mjwarp.motion_shaping import (
 )
 from auto_atom.backend.mjwarp.operator_state import (
     MjWarpOperatorState,
+    eef_to_root_pose,
     get_eef_pose_in_world,
 )
 from auto_atom.basis.mjwarp.state import MjWarpSceneState
@@ -53,7 +54,7 @@ class MjWarpArmControl:
 
     state: MjWarpSceneState
     operator: MjWarpOperatorState
-    ik: MjWarpIkCaller
+    ik: Optional[MjWarpIkCaller]
 
     position_tolerance: Any = 0.01
     orientation_tolerance: float = 0.08
@@ -69,7 +70,10 @@ class MjWarpArmControl:
     _scaler: StallScaler = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
-        if self.operator.joint_control_mode != "per_step_ik":
+        if (
+            self.operator.joint_mode
+            and self.operator.joint_control_mode != "per_step_ik"
+        ):
             raise ValueError(
                 f"Operator '{self.operator.name}' uses joint_control_mode "
                 f"'{self.operator.joint_control_mode}', which the MJWarp backend "
@@ -124,7 +128,12 @@ class MjWarpArmControl:
                 self._steps[world] = 0
                 self._scaler.reset(world)
 
-            targets = self._solve_for_world(
+            command = (
+                self._solve_for_world
+                if self.operator.joint_mode
+                else self._move_mocap_for_world
+            )
+            targets = command(
                 world=world,
                 current_position=current_positions[world],
                 current_orientation=current_orientations[world],
@@ -177,27 +186,15 @@ class MjWarpArmControl:
         does. Holding rather than zeroing matters: a zeroed command would drop
         the arm under gravity on an IK miss.
         """
-        position_error = float(np.linalg.norm(current_position - goal_position))
-        orientation_error = quaternion_angular_distance(
-            current_orientation, goal_orientation
-        )
-        scale = self._scaler.update(world, position_error, orientation_error)
-        linear_bound, angular_bound = effective_step_bounds(
-            waypoint_linear_step,
-            waypoint_angular_step,
-            self.max_linear_step,
-            self.max_angular_step,
-            scale,
-        )
-        shaped_position, shaped_orientation = clamp_cartesian_step(
+        shaped_position, shaped_orientation = self._shaped_goal(
+            world,
             current_position,
             current_orientation,
             goal_position,
             goal_orientation,
-            linear_bound,
-            angular_bound,
+            waypoint_linear_step,
+            waypoint_angular_step,
         )
-
         target_position_b, target_orientation_b = world_to_base(
             shaped_position,
             shaped_orientation,
@@ -210,6 +207,69 @@ class MjWarpArmControl:
         if solution is None:
             return None
         return clamp_joint_delta(solution, seed, self.operator.max_joint_delta)
+
+    def _shaped_goal(
+        self,
+        world: int,
+        current_position: np.ndarray,
+        current_orientation: np.ndarray,
+        goal_position: np.ndarray,
+        goal_orientation: np.ndarray,
+        waypoint_linear_step: float,
+        waypoint_angular_step: float,
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """Apply the common Cartesian bounds for joint IK and mocap control."""
+        position_error = float(np.linalg.norm(current_position - goal_position))
+        orientation_error = quaternion_angular_distance(
+            current_orientation, goal_orientation
+        )
+        scale = self._scaler.update(world, position_error, orientation_error)
+        linear_bound, angular_bound = effective_step_bounds(
+            waypoint_linear_step,
+            waypoint_angular_step,
+            self.max_linear_step,
+            self.max_angular_step,
+            scale,
+        )
+        return clamp_cartesian_step(
+            current_position,
+            current_orientation,
+            goal_position,
+            goal_orientation,
+            linear_bound,
+            angular_bound,
+        )
+
+    def _move_mocap_for_world(
+        self,
+        *,
+        world: int,
+        current_position: np.ndarray,
+        current_orientation: np.ndarray,
+        goal_position: np.ndarray,
+        goal_orientation: np.ndarray,
+        seed: np.ndarray,
+        waypoint_linear_step: float,
+        waypoint_angular_step: float,
+    ) -> None:
+        position, orientation = self._shaped_goal(
+            world,
+            current_position,
+            current_orientation,
+            goal_position,
+            goal_orientation,
+            waypoint_linear_step,
+            waypoint_angular_step,
+        )
+        root_position, root_orientation = eef_to_root_pose(
+            self.operator, world, position, orientation
+        )
+        self.state.set_mocap_pose(
+            self.operator.mocap_body_name,
+            root_position,
+            root_orientation,
+            world_mask=np.arange(self.state.nworld) == world,
+        )
 
     def _evaluate(
         self,
@@ -250,7 +310,7 @@ class MjWarpArmControl:
                 position_within_tolerance(difference, position_tolerance)
             )
             orientation_ok = orientation_error <= orientation_tolerance
-            streak = self.ik.failure_streak(world)
+            streak = self.ik.failure_streak(world) if self.ik is not None else 0
             steps = int(self._steps[world])
 
             details[world] = {
@@ -302,4 +362,5 @@ class MjWarpArmControl:
             self._steps[world] = 0
             self._last_command_key[world] = None
             self._scaler.reset(world)
-            self.ik.reset(world)
+            if self.ik is not None:
+                self.ik.reset(world)

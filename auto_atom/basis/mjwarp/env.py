@@ -67,6 +67,7 @@ class MjWarpObjectOnlyEnv:
         *,
         host_model: Optional["mujoco.MjModel"] = None,
         njmax: Optional[int] = None,
+        nconmax: Optional[int] = None,
         **kwargs: Any,
     ) -> None:
         if config is None:
@@ -83,11 +84,15 @@ class MjWarpObjectOnlyEnv:
         )
         if config.sim_freq is not None:
             self.host_model.opt.timestep = 1.0 / config.sim_freq
+        host_data = self._initial_host_data()
         self.state = MjWarpSceneState(
             self.host_model,
             nworld=int(config.batch_size),
             njmax=njmax,
+            host_data=host_data,
+            nconmax=nconmax,
         )
+        self._initial_integration_state = self.state.integration_state()
 
         self._camera_specs = {camera.name: camera for camera in config.cameras}
         self._resolve_camera_ids()
@@ -115,6 +120,29 @@ class MjWarpObjectOnlyEnv:
     # ------------------------------------------------------------------
     # Operator registration
     # ------------------------------------------------------------------
+
+    def _initial_host_data(self) -> Any:
+        """Use the native initialization contract before creating any device state."""
+        import mujoco
+
+        from auto_atom.basis.mjc.model_initialization import reset_model_data
+
+        actuator_ids = []
+        for binding in self.config.operators.values():
+            for name in (*binding.arm_actuators, *binding.eef_actuators):
+                actuator = mujoco.mj_name2id(
+                    self.host_model, mujoco.mjtObj.mjOBJ_ACTUATOR, name
+                )
+                if actuator < 0:
+                    raise ValueError(
+                        f"Actuator '{name}' not found in the MuJoCo model."
+                    )
+                actuator_ids.append(actuator)
+        data = mujoco.MjData(self.host_model)
+        reset_model_data(
+            self.host_model, data, self.config.initial_joint_positions, actuator_ids
+        )
+        return data
 
     def _auto_register_operators(self) -> None:
         """Register operators that declare a ``root_body``, as native does.
@@ -154,6 +182,8 @@ class MjWarpObjectOnlyEnv:
                 arm_actuators=tuple(binding.arm_actuators),
                 eef_actuators=tuple(binding.eef_actuators),
                 ik_solver=ik_solver,
+                mocap_body=binding.mocap_body or "",
+                freejoint=binding.freejoint or "",
             )
 
     @property
@@ -385,17 +415,17 @@ class MjWarpObjectOnlyEnv:
     # Lifecycle
     # ------------------------------------------------------------------
 
-    def reset(self) -> None:
+    def reset(self, env_mask: Optional[np.ndarray] = None) -> None:
         """Restore the structural baseline, then clear dynamic state."""
+        mask = self._normalize_mask(env_mask)
         for field, baseline in self._baselines.items():
-            getattr(self.state.model, field).assign(baseline)
-
-        mjw = self.state._mjw
-        if int(self.host_model.nkey) > 0:
-            mjw.reset_data_keyframe(self.state.model, self.state.data, 0)
-        else:
-            mjw.reset_data(self.state.model, self.state.data)
-        self.state.forward()
+            target = getattr(self.state.model, field)
+            values = target.numpy()
+            values[mask] = baseline[mask]
+            target.assign(values)
+        self.state.restore_integration_state(self._initial_integration_state, mask)
+        for operator in self._operators.values():
+            operator.restore_baseline(mask)
         self._randomization_constraints.reset()
 
     def close(self) -> None:

@@ -16,9 +16,8 @@
 # No `@_global_` is needed on the command line: the `# @package _global_`
 # header above already places this file's content at the config root.
 #
-# Physical execution supports joint-mode operators using `per_step_ik`.
-# Mocap control (e.g. pick_and_place) and `solve_once_interpolate`
-# (e.g. cup_on_coaster_airbot_p7_umi) raise explicit unsupported-mode errors.
+# Physical execution supports mocap operators and joint-mode `per_step_ik`.
+# `solve_once_interpolate` (e.g. cup_on_coaster_airbot_p7_umi) is not implemented.
 # Object-only execution is also available with `execution.mode=object_only`.
 # The Warp env has no interactive viewer path.
 #
@@ -29,8 +28,11 @@
 # previous 512 default; contact-heavy scenes may still need `env.njmax=<n>`.
 # Insufficient capacity raises `njmax overflow` at construction or reports
 # `nefc overflow` during stepping. Memory cost scales with the world count.
+# `nconmax` reserves candidate contacts per world; complex gripper meshes need
+# more than MJWarp's small automatic estimate. Both capacities can be overridden.
 env:
   _target_: auto_atom.basis.mjwarp.env.MjWarpObjectOnlyEnv
   njmax: 2048
+  nconmax: 1024
   viewer: null
 backend: auto_atom.backend.mjwarp.backend.build_mjwarp_backend

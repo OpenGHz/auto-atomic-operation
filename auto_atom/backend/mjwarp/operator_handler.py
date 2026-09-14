@@ -11,13 +11,9 @@ Keeping the translation here rather than inside the control classes is what let
 those be written and tested against native's arithmetic before any config
 plumbing existed, and it keeps this file free of physics.
 
-**The step boundary is the caller's.** Both halves request a step rather than
-taking one, so a control tick must be wrapped in
-:meth:`~auto_atom.basis.mjwarp.state.MjWarpSceneState.deferred_step` by whoever
-drives the tick. This handler exposes :meth:`control_tick` for that, and the
-reason it cannot do it internally is that the runtime calls the handler once per
-environment with a one-hot mask -- so the boundary has to span all of those
-calls, not sit inside one (design doc 3.8).
+Both control halves synchronously advance selected worlds by a complete control
+update. Explicit step deferral remains available for callers that assemble a
+batched command before stepping; the runtime's one-world dispatch works without it.
 """
 
 from __future__ import annotations
@@ -46,8 +42,7 @@ class MjWarpOperatorHandler(OperatorHandler):
     """One operator, satisfying the runtime's handler contract.
 
     ``arm`` and ``eef`` are the two control state machines; either may be
-    absent in principle, but an operator with no arm cannot be driven by this
-    backend (:func:`register_operator` refuses that at registration).
+    absent in principle. Mocap operators use the pose-control half without IK.
     """
 
     state: MjWarpSceneState = None  # type: ignore[assignment]
@@ -81,10 +76,8 @@ class MjWarpOperatorHandler(OperatorHandler):
     def control_tick(self) -> Iterator[None]:
         """Context manager spanning one control tick's per-env calls.
 
-        The runtime calls control primitives once per environment with a one-hot
-        mask; MJWarp's step advances every world at once. Wrapping the whole
-        sweep in one of these makes a tick advance physics exactly once instead
-        of ``batch_size`` times under mismatched commands.
+        Explicit callers can coalesce equal-duration commands for multiple worlds.
+        Completion observations inside this block precede its deferred step.
         """
         return self.state.deferred_step()
 
@@ -217,15 +210,123 @@ class MjWarpOperatorHandler(OperatorHandler):
     def home(self, env_mask: Optional[np.ndarray] = None) -> None:
         """Restore the recorded home joint angles and clear motion progress."""
         mask = None if env_mask is None else np.asarray(env_mask, dtype=bool)
-        self.state.set_joint_positions(
-            self.operator.arm_qpos_indices,
-            self.operator.home_arm_qpos,
-            self.operator.arm_dof_indices,
-            actuator_ids=self.operator.arm_actuator_ids,
-            world_mask=mask,
-        )
+        if self.operator.joint_mode:
+            self.state.set_joint_positions(
+                self.operator.arm_qpos_indices,
+                self.operator.home_arm_qpos,
+                self.operator.arm_dof_indices,
+                actuator_ids=self.operator.arm_actuator_ids,
+                world_mask=mask,
+            )
+        else:
+            from auto_atom.backend.mjwarp.frames import base_to_world
+
+            self.state.set_mocap_pose(
+                self.operator.mocap_body_name,
+                self.operator.home_mocap_position,
+                self.operator.home_mocap_orientation,
+                world_mask=mask,
+            )
+            root_positions = np.empty((self.state.nworld, 3))
+            root_orientations = np.empty((self.state.nworld, 4))
+            for world in range(self.state.nworld):
+                root_positions[world], root_orientations[world] = base_to_world(
+                    self.operator.mocap_to_root_position,
+                    self.operator.mocap_to_root_orientation,
+                    self.operator.home_mocap_position[world],
+                    self.operator.home_mocap_orientation[world],
+                )
+            self.state.set_free_joint_pose(
+                self.operator.freejoint_name,
+                root_positions,
+                root_orientations,
+                world_mask=mask,
+            )
         worlds = None if mask is None else list(np.flatnonzero(mask))
         self.arm.reset(worlds)
+
+    def set_home_end_effector_pose(
+        self,
+        pose: PoseState,
+        env_mask: Optional[np.ndarray] = None,
+    ) -> None:
+        """Resolve and realize per-world home targets during reset/randomization."""
+        from auto_atom.backend.mjwarp.frames import world_to_base
+        from auto_atom.backend.mjwarp.operator_state import eef_to_root_pose
+
+        mask = (
+            np.ones(self.state.nworld, dtype=bool)
+            if env_mask is None
+            else np.asarray(env_mask, dtype=bool)
+        )
+        positions = np.asarray(pose.position)
+        orientations = np.asarray(pose.orientation)
+        seeds = self.state.get_joint_positions(self.operator.arm_qpos_indices)
+        for world in np.flatnonzero(mask):
+            row = 0 if positions.shape[0] == 1 else world
+            position, orientation = positions[row], orientations[row]
+            if self.operator.joint_mode:
+                pos_b, quat_b = world_to_base(
+                    position,
+                    orientation,
+                    self.operator.base_position[world],
+                    self.operator.base_orientation[world],
+                )
+                solution = self.arm.ik.solve(world, pos_b, quat_b, seeds[world], "home")
+                if solution is None:
+                    raise ValueError(
+                        f"Home EEF pose is unreachable for '{self.name}' world {world}."
+                    )
+                self.operator.home_arm_qpos[world] = solution
+            else:
+                root_position, root_orientation = eef_to_root_pose(
+                    self.operator, world, position, orientation
+                )
+                self.operator.home_mocap_position[world] = root_position
+                self.operator.home_mocap_orientation[world] = root_orientation
+        self.home(mask)
+
+    def set_pose(self, pose: PoseState, env_mask: Optional[np.ndarray] = None) -> None:
+        """Move a base and its current EEF rigidly, preserving their relative pose."""
+        from auto_atom.backend.mjwarp.frames import base_to_world, world_to_base
+
+        mask = (
+            np.ones(self.state.nworld, dtype=bool)
+            if env_mask is None
+            else np.asarray(env_mask, dtype=bool)
+        )
+        positions = np.asarray(pose.position)
+        orientations = np.asarray(pose.orientation)
+        eef = self.get_end_effector_pose()
+        moved_positions, moved_orientations = (
+            np.asarray(eef.position).copy(),
+            np.asarray(eef.orientation).copy(),
+        )
+        for world in np.flatnonzero(mask):
+            row = 0 if positions.shape[0] == 1 else world
+            pos_b, quat_b = world_to_base(
+                eef.position[world],
+                eef.orientation[world],
+                self.operator.base_position[world],
+                self.operator.base_orientation[world],
+            )
+            self.operator.base_position[world] = positions[row]
+            self.operator.base_orientation[world] = orientations[row]
+            moved_positions[world], moved_orientations[world] = base_to_world(
+                pos_b, quat_b, positions[row], orientations[row]
+            )
+        if self.operator.joint_mode:
+            self.state.set_object_pose(
+                self.operator.root_body_name,
+                self.operator.base_position,
+                self.operator.base_orientation,
+                world_mask=mask,
+            )
+        else:
+            self.set_home_end_effector_pose(
+                PoseState(position=moved_positions, orientation=moved_orientations),
+                mask,
+            )
 
     # ------------------------------------------------------------------
     # Internals

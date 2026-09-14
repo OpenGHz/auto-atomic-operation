@@ -19,7 +19,8 @@ from typing import Any, Optional, Tuple
 
 import numpy as np
 
-from auto_atom.backend.mjwarp.operator_state import override_base_pose
+from auto_atom.backend.mjwarp.frames import base_to_world
+from auto_atom.utils.pose import PoseState
 
 
 def _full_pose(
@@ -130,13 +131,18 @@ def _apply_base_pose(
 
     # The root body carries no joint (a static mount), so it is placed by the
     # static-body write -- which also refreshes its geom frames (design doc 3.9).
-    handler.state.set_object_pose(
-        operator.root_body_name,
-        position,
-        orientation,
-        world_mask=None if env_mask is None else np.asarray(env_mask, dtype=bool),
-    )
-    override_base_pose(handler.state, operator, position, orientation)
+    if operator.joint_mode:
+        handler.set_pose(
+            PoseState(position=position, orientation=orientation), env_mask
+        )
+    else:
+        mask = (
+            np.ones(handler.state.nworld, dtype=bool)
+            if env_mask is None
+            else np.asarray(env_mask, dtype=bool)
+        )
+        operator.base_position[mask] = position
+        operator.base_orientation[mask] = orientation
 
 
 def _apply_eef_home(
@@ -146,9 +152,8 @@ def _apply_eef_home(
 
     The eef target is resolved to world (a ``base`` reference is composed through
     the operator's freshly-set base), then IK is solved per world from the
-    current arm qpos as seed. A world whose IK fails keeps its previous home
-    rather than adopting a bad solution -- the failure is already logged by the
-    IK caller.
+    current arm qpos as seed. An unreachable home fails explicitly. Mocap homes
+    use the same EEF target with their rigid tool and weld transforms.
     """
     operator = handler.operator
     reference = _reference(eef_pose)
@@ -156,37 +161,31 @@ def _apply_eef_home(
         eef_pose, field="eef_pose", operator=operator.name
     )
 
-    home = operator.home_arm_qpos.copy()
-    seeds = handler.state.get_joint_positions(operator.arm_qpos_indices)
     mask = (
         np.ones(handler.state.nworld, dtype=bool)
         if env_mask is None
         else np.asarray(env_mask, dtype=bool)
     )
+    positions = np.repeat(position[None, :], handler.state.nworld, axis=0)
+    orientations = np.repeat(orientation[None, :], handler.state.nworld, axis=0)
     for world in np.flatnonzero(mask):
         if reference == "base":
-            pos_b, quat_b = position, orientation
-        elif reference == "world":
-            # Express the world target in this world's base frame for IK.
-            from auto_atom.backend.mjwarp.frames import world_to_base
-
-            pos_b, quat_b = world_to_base(
+            positions[world], orientations[world] = base_to_world(
                 position,
                 orientation,
                 operator.base_position[world],
                 operator.base_orientation[world],
             )
+        elif reference == "world":
+            pass
         else:
             raise NotImplementedError(
                 f"Operator '{operator.name}' eef_pose reference '{reference}' is "
                 "not implemented; use 'base' or 'world'."
             )
-        solution = handler.arm.ik.solve(
-            world, pos_b, quat_b, seeds[world], context="initial_state"
-        )
-        if solution is not None:
-            home[world, : len(solution)] = np.asarray(solution, dtype=np.float64)
-    operator.home_arm_qpos = home
+    handler.set_home_end_effector_pose(
+        PoseState(position=positions, orientation=orientations), env_mask=mask
+    )
 
 
 def _home_gripper(
