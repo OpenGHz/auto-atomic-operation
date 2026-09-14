@@ -255,7 +255,7 @@ float32，量化在写入 device 的边界上必然发生一次，宿主端再�
 | 4b-2 | 抓取判定几何半判定（`lateral_grasp_error` / `_ok`，eef 系横向距离） | 已实现 |
 | 4b-3 | `MjWarpOperatorHandler`：`control_eef` 状态机（合成两半判定） | 未开始 |
 | 4c-1 | world ↔ operator base 帧转换（`world_to_base` / `_batch`） | 已实现 |
-| 4c-2 | operator 注册与 eef/base 位姿访问器 | 未开始 |
+| 4c-2 | operator 注册与 eef/base 位姿访问器（`MjWarpOperatorState`，仅 joint 模式） | 已实现 |
 | 4c-3 | IK 与 `move_to_pose`、`physical` 模式 env / backend 组装 | 未开始 |
 | 4d | 触觉（52 个 `contype=0` 触觉单元的读取路径） | 未开始 |
 
