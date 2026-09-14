@@ -1,6 +1,10 @@
 # MJWarp（GPU MuJoCo）后端设计方案
 
-> **状态：`object_only` 已实现并跑通；`physical` 模式（轮 4）尚未实现。**
+> **状态：`object_only` 已实现并跑通；`physical` 模式（轮 4）全部单元已实现并测试，
+> 端到端在 MJWarp 上真实跑起来了（栈咬合、无崩溃、sim 时间精确对账、arm 归位到毫米、
+> IK 在可达目标上成功）。`rack_plate` 在 physical 下仍失败，但原因是该配置的随机化
+> 范围为 `object_only` 相机可见性设计、超出机械臂工作空间——是配置问题而非移植缺陷
+> （见 5.3）；需要一个为 physical 收窄范围的配置变体才能真正通过。**
 >
 > 本文描述把 [MJWarp](https://github.com/google-deepmind/mujoco_warp) 接为 AAO
 > 后端的设计边界与实现进度。已落地的部分：`auto_atom/basis/mjwarp/`
@@ -408,7 +412,7 @@ freejoint 目标来验证"verdict 随状态变化"。
 | 4c-3c-3f | 应用 operator `initial_state`（base_pose / eef_pose / gripper） | 已实现（见 5.2 后记） |
 | 修复 | 静态 body 写入不更新 `geom_xpos`（见 3.9，轮 2c 遗留缺陷） | 已修复（frame + 渲染 + 碰撞） |
 | 4d-1 | 传感器读取（`get_sensor_values` / `_batch`，触觉唯一的 device 依赖） | 已实现 |
-| 4d-2 | 触觉层接入（panel 分组 / PCA / wrench 汇总，复用宿主侧既有实现） | 未开始 |
+| 4d-2 | 触觉层接入（`MjWarpTactileReader`，per-world 桥接复用宿主 manager） | 已实现 |
 
 **轮 2a**（`auto_atom/basis/mjwarp/state.py`）是后续各轮的读写底座：它持有
 device `Model`/`Data`，并以与原生路径相同的单位、dtype 与约定回答 frame 查询。
