@@ -1794,3 +1794,112 @@ def test_jointless_actuator_keeps_its_slot(actuated_model):
     assert len(got) == 2, "slot must be kept, not dropped"
     assert got[0] == "<joint_-1>"
     assert got[1] == "j2"
+
+
+# ----------------------------------------------------------------------
+# Sensor reads (the tactile layer's only device dependency)
+# ----------------------------------------------------------------------
+
+# A pad with a touch sensor plus a box dropped onto it, so the sensor reads a
+# real force rather than zero. Two touch panels, to exercise the batch read.
+_SENSOR_XML = """
+<mujoco>
+  <option timestep="0.002" integrator="implicitfast"/>
+  <worldbody>
+    <geom name="floor" type="plane" size="2 2 0.05"/>
+    <body name="pad" pos="0 0 0.02">
+      <geom name="pad_g" type="box" size="0.03 0.03 0.02"/>
+      <site name="pad_a" type="box" size="0.015 0.03 0.001" pos="-0.015 0 0.02"/>
+      <site name="pad_b" type="box" size="0.015 0.03 0.001" pos="0.015 0 0.02"/>
+    </body>
+    <body name="dropper" pos="0 0 0.08">
+      <freejoint name="drop_j"/>
+      <geom name="drop_g" type="box" size="0.02 0.02 0.02"/>
+    </body>
+  </worldbody>
+  <sensor>
+    <touch name="touch_a" site="pad_a"/>
+    <touch name="touch_b" site="pad_b"/>
+  </sensor>
+</mujoco>
+"""
+
+
+@pytest.fixture(scope="module")
+def sensor_scene():
+    """Settled native and MJWarp copies of the same sensing scene."""
+    host = mujoco.MjModel.from_xml_string(_SENSOR_XML)
+    native = mujoco.MjData(host)
+    for _ in range(200):
+        mujoco.mj_step(host, native)
+
+    state = MjWarpSceneState(host, nworld=2)
+    state.forward()
+    for _ in range(200):
+        state.step()
+    return host, native, state
+
+
+def test_sensor_read_matches_native(sensor_scene):
+    """A touch sensor reads the same force MuJoCo reads, per world.
+
+    This is the whole device dependency of the tactile layer: everything above it
+    (panel grouping, PCA projection, wrench summation) is host-side numpy.
+    """
+    host, native, state = sensor_scene
+
+    for name in ("touch_a", "touch_b"):
+        sensor = mujoco.mj_name2id(host, mujoco.mjtObj.mjOBJ_SENSOR, name)
+        address = int(host.sensor_adr[sensor])
+        dim = int(host.sensor_dim[sensor])
+        want = native.sensordata[address : address + dim]
+
+        got = state.get_sensor_values(name)
+        assert got.shape == (2, dim)
+        for world in range(2):
+            np.testing.assert_allclose(got[world], want, rtol=1e-4, atol=1e-5)
+
+
+def test_the_sensor_actually_reads_a_force(sensor_scene):
+    """A test comparing zero against zero would pass while reading nothing."""
+    _, native, state = sensor_scene
+
+    assert float(np.abs(native.sensordata).sum()) > 1e-3
+    assert float(np.abs(state.get_sensor_values("touch_a")).sum()) > 1e-3
+
+
+def test_batch_read_matches_individual_reads(sensor_scene):
+    """One readback for many panels, which is what a tactile array needs."""
+    _, _, state = sensor_scene
+
+    batched = state.get_sensor_values_batch(["touch_a", "touch_b"])
+
+    assert batched.shape == (2, 2, 1)
+    np.testing.assert_allclose(batched[:, 0, :], state.get_sensor_values("touch_a"))
+    np.testing.assert_allclose(batched[:, 1, :], state.get_sensor_values("touch_b"))
+
+
+def test_batch_read_of_nothing_is_empty(sensor_scene):
+    _, _, state = sensor_scene
+
+    assert state.get_sensor_values_batch([]).shape == (2, 0, 0)
+
+
+def test_batch_read_rejects_mixed_dimensions(sensor_scene):
+    """Padding silently would misalign every panel after the odd one."""
+    host, _, state = sensor_scene
+    sensor = mujoco.mj_name2id(host, mujoco.mjtObj.mjOBJ_SENSOR, "touch_b")
+    saved = int(host.sensor_dim[sensor])
+    host.sensor_dim[sensor] = 3
+    try:
+        with pytest.raises(ValueError, match="equal dimension"):
+            state.get_sensor_values_batch(["touch_a", "touch_b"])
+    finally:
+        host.sensor_dim[sensor] = saved
+
+
+def test_unknown_sensor_is_named(sensor_scene):
+    _, _, state = sensor_scene
+
+    with pytest.raises(ValueError, match="Sensor 'nope' not found"):
+        state.get_sensor_values("nope")

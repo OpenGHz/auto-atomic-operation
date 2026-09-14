@@ -845,6 +845,73 @@ class MjWarpSceneState:
             np.asarray(dof_indices, dtype=np.int32),
         )
 
+    # ------------------------------------------------------------------
+    # Sensors
+    # ------------------------------------------------------------------
+
+    def sensor_id(self, sensor_name: str) -> int:
+        """Resolve a sensor name to its id on the host model."""
+        import mujoco
+
+        return self._id(mujoco.mjtObj.mjOBJ_SENSOR, sensor_name, "Sensor")
+
+    def get_sensor_values(self, sensor_name: str) -> np.ndarray:
+        """One sensor's readings for every world, shaped ``(nworld, dim)``.
+
+        ``sensordata`` is a flat per-world buffer addressed by ``sensor_adr`` and
+        ``sensor_dim`` on the host model, exactly as on the native path -- MJWarp
+        gives it a leading world axis and otherwise leaves the layout alone.
+        Verified against native on a touch sensor: 0.6278352 per world against
+        native's 0.62783464, i.e. float32 agreement.
+
+        This is what the tactile layer needs. Everything above the read (panel
+        grouping, PCA projection, wrench summation) is host-side numpy in
+        ``basis/mjc/tactile``, so it ports as a consumer of this rather than
+        needing a device reimplementation.
+        """
+        sensor = self.sensor_id(sensor_name)
+        address = int(self.host_model.sensor_adr[sensor])
+        dim = int(self.host_model.sensor_dim[sensor])
+        values = self.data.sensordata.numpy()[:, address : address + dim]
+        return np.asarray(values, dtype=np.float64)
+
+    def get_sensor_values_batch(
+        self,
+        sensor_names: Sequence[str],
+    ) -> np.ndarray:
+        """Several sensors at once, ``(nworld, len(sensor_names), dim)``.
+
+        Costs one device readback rather than one per sensor, which matters
+        because a tactile array is tens of panels read every tick. Requires the
+        sensors to share a dimension, which panels of one array do; a mixed
+        request is a caller error rather than something to pad silently.
+        """
+        if not sensor_names:
+            return np.empty((self.nworld, 0, 0), dtype=np.float64)
+
+        spans = []
+        for name in sensor_names:
+            sensor = self.sensor_id(name)
+            spans.append(
+                (
+                    int(self.host_model.sensor_adr[sensor]),
+                    int(self.host_model.sensor_dim[sensor]),
+                )
+            )
+        dims = {dim for _, dim in spans}
+        if len(dims) != 1:
+            raise ValueError(
+                "get_sensor_values_batch requires sensors of equal dimension; "
+                f"got {sorted(dims)} for {list(sensor_names)}."
+            )
+
+        buffer = self.data.sensordata.numpy()
+        dim = spans[0][1]
+        out = np.empty((self.nworld, len(spans), dim), dtype=np.float64)
+        for index, (address, _) in enumerate(spans):
+            out[:, index, :] = buffer[:, address : address + dim]
+        return out
+
     def actuator_joint_names(self, actuator_ids: Sequence[int]) -> list[str]:
         """Names of the joints those actuators drive, in actuator order.
 
