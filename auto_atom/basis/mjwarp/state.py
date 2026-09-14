@@ -111,6 +111,11 @@ class MjWarpSceneState:
         # Bodies written since the last kinematics pass, so a write that reads a
         # parent's world pose can tell whether that pose is still valid.
         self._dirty_bodies: set[int] = set()
+        # Step deferral is tracked separately from forward deferral: a control
+        # tick coalesces steps across envs, while a reset coalesces kinematics
+        # passes across entities. The two nest independently.
+        self._step_defer_depth = 0
+        self._step_pending = False
 
     # ------------------------------------------------------------------
     # Name resolution (host model; the device model has no name table)
@@ -592,8 +597,51 @@ class MjWarpSceneState:
             self._mjw.forward(self.model, self.data)
 
     def step(self) -> None:
-        """Advance physics by one timestep for every world (``mj_step``)."""
+        """Advance physics by one timestep for every world (``mj_step``).
+
+        Inside a :meth:`deferred_step` block this only records that a step is
+        wanted; the actual step runs once when the outermost block exits. That
+        is what makes the runtime's per-env control loop correct on MJWarp --
+        see :meth:`deferred_step` for why.
+        """
+        if self._step_defer_depth > 0:
+            self._step_pending = True
+            return
         self._mjw.step(self.model, self.data)
+
+    @contextmanager
+    def deferred_step(self) -> Iterator[None]:
+        """Collapse a control tick's per-env steps into one step of all worlds.
+
+        The runtime drives control one environment at a time: ``runtime.py``
+        loops over envs and ``stage_execution._mask_for_env`` hands each call a
+        **one-hot** mask. The native backend can honour that literally because
+        each env is its own ``MjData``, so it steps exactly that one.
+
+        MJWarp cannot: ``mjw.step(m, d)`` takes no mask and advances every
+        world. Stepping once per env would therefore advance each world
+        ``batch_size`` times per control tick, and all but one of those steps
+        would run under a *different* env's command. Nothing would raise -- the
+        simulation would just silently run at ``batch_size x timestep`` per tick
+        with mismatched commands.
+
+        So a control tick wraps its per-env calls in this block: each call
+        writes its own world's ``ctrl`` and asks to step, and exactly one step
+        of all worlds happens on exit. Same shape as :meth:`deferred_forward`,
+        for the same reason -- a per-entity operation coalesced into the batched
+        one the device actually offers.
+
+        Nesting is reference-counted, and the step runs on exit even if the body
+        raises, so a failed control tick cannot leave a tick un-stepped.
+        """
+        self._step_defer_depth += 1
+        try:
+            yield
+        finally:
+            self._step_defer_depth -= 1
+            if self._step_defer_depth == 0 and self._step_pending:
+                self._step_pending = False
+                self._mjw.step(self.model, self.data)
 
     # ------------------------------------------------------------------
     # Contacts

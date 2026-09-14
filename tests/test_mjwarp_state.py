@@ -1434,3 +1434,146 @@ def test_finger_contacts_empty_when_nothing_touches(actuated_model):
     state.forward()
     left, right = state.finger_contacts_with_target(0, frozenset({1}), {})
     assert not left and not right
+
+
+# ----------------------------------------------------------------------
+# Step deferral (the one-hot control-tick mask)
+# ----------------------------------------------------------------------
+
+
+def _count_steps(state):
+    """Count actual device steps, not calls to state.step()."""
+    calls = {"n": 0}
+    original = state._mjw.step
+
+    def counting(model, data):
+        calls["n"] += 1
+        return original(model, data)
+
+    state._mjw.step = counting
+
+    def restore():
+        state._mjw.step = original
+
+    return calls, restore
+
+
+def test_deferred_step_coalesces_a_control_tick(actuated_model):
+    """Two envs asking to step inside one tick produce ONE device step.
+
+    This is the bug the deferral exists to prevent: the runtime drives control
+    one env at a time with a one-hot mask, and mjw.step has no mask, so stepping
+    per env would advance every world batch_size times per tick.
+    """
+    state = MjWarpSceneState(actuated_model, nworld=2)
+    calls, restore = _count_steps(state)
+    try:
+        with state.deferred_step():
+            state.step()  # env 0's call
+            state.step()  # env 1's call
+            assert calls["n"] == 0, "must not step until the tick ends"
+        assert calls["n"] == 1
+    finally:
+        restore()
+
+
+def test_deferred_step_advances_time_once_per_tick(actuated_model):
+    """The observable consequence: sim time advances by exactly one timestep."""
+    state = MjWarpSceneState(actuated_model, nworld=2)
+    timestep = float(actuated_model.opt.timestep)
+    before = state.data.time.numpy().copy()
+
+    with state.deferred_step():
+        for _ in range(state.nworld):
+            state.step()
+
+    after = state.data.time.numpy()
+    np.testing.assert_allclose(after - before, timestep, rtol=1e-6)
+
+
+def test_undeferred_step_would_advance_per_call(actuated_model):
+    """Without the block, each call steps -- which is the wrong tick semantics.
+
+    Kept as an explicit contrast so the deferral's purpose is not mistaken for
+    an optimisation: undeferred, two calls advance time twice.
+    """
+    state = MjWarpSceneState(actuated_model, nworld=2)
+    timestep = float(actuated_model.opt.timestep)
+    before = state.data.time.numpy().copy()
+
+    state.step()
+    state.step()
+
+    after = state.data.time.numpy()
+    np.testing.assert_allclose(after - before, 2.0 * timestep, rtol=1e-6)
+
+
+def test_nested_step_deferral_still_steps_once(actuated_model):
+    state = MjWarpSceneState(actuated_model, nworld=1)
+    calls, restore = _count_steps(state)
+    try:
+        with state.deferred_step():
+            with state.deferred_step():
+                state.step()
+            assert calls["n"] == 0, "inner exit must not flush"
+        assert calls["n"] == 1
+    finally:
+        restore()
+
+
+def test_step_deferral_flushes_even_when_the_tick_raises(actuated_model):
+    """A failed control tick must not leave the tick un-stepped."""
+    state = MjWarpSceneState(actuated_model, nworld=1)
+    calls, restore = _count_steps(state)
+    try:
+        with pytest.raises(RuntimeError, match="boom"):
+            with state.deferred_step():
+                state.step()
+                raise RuntimeError("boom")
+        assert calls["n"] == 1
+    finally:
+        restore()
+
+
+def test_step_deferral_does_not_step_when_nothing_asked(actuated_model):
+    """An observation-only tick performs no step."""
+    state = MjWarpSceneState(actuated_model, nworld=2)
+    calls, restore = _count_steps(state)
+    try:
+        with state.deferred_step():
+            pass
+        assert calls["n"] == 0
+    finally:
+        restore()
+
+
+def test_step_and_forward_deferral_are_independent(actuated_model):
+    """A reset's forward deferral must not swallow a control tick's step.
+
+    The two coalesce different things -- kinematics passes across entities
+    versus steps across envs -- so they are tracked separately and nesting one
+    inside the other keeps both counts right.
+    """
+    state = MjWarpSceneState(actuated_model, nworld=1)
+    step_calls, restore_step = _count_steps(state)
+    forward_calls = {"n": 0}
+    original_forward = state._mjw.forward
+
+    def counting_forward(model, data):
+        forward_calls["n"] += 1
+        return original_forward(model, data)
+
+    state._mjw.forward = counting_forward
+    try:
+        qidx, vidx = state.actuator_joint_indices(state.actuator_ids(["a1", "a2"]))
+        with state.deferred_step():
+            with state.deferred_forward():
+                state.set_joint_positions(qidx, np.array([0.1, 0.1]), vidx)
+                state.set_joint_positions(qidx, np.array([0.2, 0.2]), vidx)
+            state.step()
+            state.step()
+        assert forward_calls["n"] == 1, "two writes, one kinematics pass"
+        assert step_calls["n"] == 1, "two step requests, one device step"
+    finally:
+        state._mjw.forward = original_forward
+        restore_step()

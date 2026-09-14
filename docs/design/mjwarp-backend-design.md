@@ -221,6 +221,37 @@ float32，量化在写入 device 的边界上必然发生一次，宿主端再�
 `0.13655685`，warp 是 `0.136557`。因此"pin 住后保持不动"是那个玩具场景的性质、
 不是写入层的性质，断言必须对齐原生轨迹而不是对齐绝对角度。
 
+### 3.8 控制 tick 的 one-hot mask：轮 4 真正的结构性冲突
+
+这是轮 4b-3 / 4c-3 的**前置设计问题**，比接触遍历（3.1）更结构化，必须在写
+`control_eef` / `move_to_pose` 之前定下来。
+
+**事实链**（读代码得到，非推断）：
+
+1. `runtime.py:677` 按 env 逐个循环调用控制原语；
+2. `stage_execution.py:1413` 的 `_mask_for_env` 造的是 **one-hot** mask
+   （`mask[env_index] = True`，其余全 False）；
+3. 原生 `control_eef`（`mujoco_backend.py:654`）在这个 one-hot mask 下
+   `self.env.step(..., env_mask=np.eye(batch)[env_index])`——**只步进那一个**
+   `MjData`；
+4. 而 `mjw.step(m, d)` **没有 mask 参数**（实测签名 `(Model, Data)`），它无条件
+   步进**所有** world。
+
+**后果**：照抄原生结构的话，batch=2 的一次 `update()` 会让每个 world 被步进
+**两次**（每个 env 的循环各一次），且其中一次带的是另一个 env 的 `ctrl`——物理
+时间与控制指令双双错位。这不是性能问题，是正确性问题，且**不会立刻报错**：仿真
+照样运行，只是每个 tick 的 dt 变成了 `batch_size × timestep`。
+
+**结论：不能按 env 逐个步进，必须把一次 control tick 的所有 world 指令先攒起来、
+再步进一次。** 这与轮 3a 的做法同构：3a 把多次 `forward()` 合并成一次
+（`deferred_forward`），这里要把多次 `step()` 合并成一次。因此实现方向是
+`deferred_step`——每个 env 的调用只写自己 world 的 `ctrl` 并累计"需要步进"的标记，
+在一次 `update()` 的所有 env 都写完之后统一 `step()` 一次。
+
+注意这条同时约束 `move_to_pose`：它也在同一个 one-hot 循环里，也调
+`step_operator_toward_target` 间接步进物理。两者必须共用同一个 deferral 边界，
+否则一次 tick 里 eef 与 arm 的步进次数会不一致。
+
 ## 4. 不受影响的部分
 
 - **场景组合**：`MjSpec` 编译在宿主侧完成，`put_model` 只消费编译产物。
@@ -253,6 +284,7 @@ float32，量化在写入 device 的边界上必然发生一次，宿主端再�
 | 4a | 执行器/关节写入层（`actuator_ids`、`set_ctrl`、`set_joint_positions`） | 已实现 |
 | 4b-1 | 抓取判定基元（子树 body、左右指分类、接触半判定） | 已实现 |
 | 4b-2 | 抓取判定几何半判定（`lateral_grasp_error` / `_ok`，eef 系横向距离） | 已实现 |
+| 4b-3-pre | one-hot mask 冲突的解法：`deferred_step`（见 3.8） | 已实现 |
 | 4b-3 | `MjWarpOperatorHandler`：`control_eef` 状态机（合成两半判定） | 未开始 |
 | 4c-1 | world ↔ operator base 帧转换（`world_to_base` / `_batch`） | 已实现 |
 | 4c-2 | operator 注册与 eef/base 位姿访问器（`MjWarpOperatorState`，仅 joint 模式） | 已实现 |
