@@ -1,11 +1,12 @@
 # MJWarp（GPU MuJoCo）后端设计方案
 
-> **状态：提案，尚未实现。**
+> **状态：`object_only` 已实现并跑通；`physical` 模式（轮 4）尚未实现。**
 >
 > 本文描述把 [MJWarp](https://github.com/google-deepmind/mujoco_warp) 接为 AAO
-> 后端的设计边界。仓库中没有 `auto_atom/backend/mjwarp` 包，`pyproject.toml`
-> 也没有 `mjwarp` extra；文中的包路径与配置字段均为**拟议接口**。
-> 轮 1（移除机械臂 margin）已实现于 `393b2fd`，轮 2–4 尚未开始。
+> 后端的设计边界与实现进度。已落地的部分：`auto_atom/basis/mjwarp/`
+> （state / env / render）与 `auto_atom/backend/mjwarp/backend.py`。
+> `pyproject.toml` 尚未新增 `mjwarp` extra（见 6.1），故 `mujoco_warp`
+> 仍按可选依赖惰性导入。轮次与状态见第 5 节。
 >
 > 本文结论均来自 `scripts/check_mjwarp_compat.py` 的实测与一次 `object_only`
 > 真实运行的方法级 tracing，而非阅读推断。复现方式见文末。
@@ -75,15 +76,33 @@ pre_move / eef / post_move 相位全部走过，`success=True`）。
 
 ## 3. 与 MuJoCo 的真实差异
 
-### 3.1 接触遍历：没有 `data.ncon`
+### 3.1 接触遍历：没有 `data.ncon`（已解决，`6216f88`）
 
 MJWarp 用一个跨 world 共享的扁平接触池（`naconmax`），按 `contact.worldid`
-打标签，`Data` 上没有 per-world 的 `ncon`。现有按 `range(data.ncon)` 遍历接触
-的写法（`mujoco_backend.py:1027`、`:2269`）需要改成按 world 过滤的扫描。
+打标签，`Data` 上没有 per-world 的 `ncon`。原生按 `range(data.ncon)` 遍历接触
+的写法（`mujoco_backend.py:1027`、`:2269`）在 MJWarp 上**无法直接移植**——那个
+字段不存在。
 
-**但这不是硬性前置条件**：`get_data_into(out, mjm, d, world_id)` 返回的宿主
-`MjData` 带正确的 `ncon`（实测 physical 37、object_only 2）。可以先用它跑通，
-再把热路径改成 world 过滤扫描——那是优化，不是前提。
+这一点**不能靠 `get_data_into` 回避**：那条路每次查询都要把整个 world 的
+`MjData` 拷回宿主，而抓取判定每个 tick 都要问一次。因此实现的是 world 过滤
+扫描本身：`MjWarpSceneState.get_contact_geom_pairs(world_index)` /
+`get_contact_body_pairs(world_index)`，各返回 `(ncon, 2)`。
+
+两件事必须同时做对，否则错误不会立刻显现：
+
+1. **按 `nacon` 截断再过滤。** 接触池是按最坏情况预分配的（两盒场景实测池长 96，
+   `nacon` 只有 24），不截断就会把未初始化的预分配行当成真接触读出来。
+2. **按 `worldid` 过滤。** 不过滤就会把别的 world 的接触算到本 world 头上。
+
+对同一场景与原生 MuJoCo 对齐验证（`tests/test_mjwarp_state.py`）：
+
+| 量 | 原生 | MJWarp（每 world） |
+|---|---|---|
+| 接触数 | `ncon` = 12 | 12（`nacon` = 24 = 12 x 2 world） |
+| geom 配对 | `[(a_g,b_g), (a_g,floor), (b_g,floor)]` | 完全相同，两个 world 均如是 |
+| `geom_bodyid` | host | device 上逐元素相同 |
+
+空接触场景单独测：`nacon = 0` 时返回 `(0, 2)` 而不是预分配行。
 
 ### 3.2 接触力：**不是轮 4 的前置**（早先判断有误）
 
@@ -101,9 +120,8 @@ MJWarp 用一个跨 world 共享的扁平接触池（`naconmax`），按 `contac
   （`lateral_threshold`）。
 
 **因此轮 4 需要的是接触的"存在性 + geom 配对"，而不是力的数值精度。** 力只影响
-失败报告里多一条还是少一条诊断信息。真正的前置是 3.1 那件事：把
-`range(data.ncon)` 改成按 `contact.worldid` 过滤的扫描，并确保 geom 配对与
-`geom_bodyid` 映射在 device 上取到的与原生一致。
+失败报告里多一条还是少一条诊断信息。真正的前置是 3.1 那件事——world 过滤的接触
+遍历加上 device 侧 `geom_bodyid` 映射，**已于 `6216f88` 实现并与原生对齐**。
 
 ### 3.3 相机 clip range：唯一的结构性缺口
 
@@ -194,6 +212,7 @@ float32 精确表示的**运气**，不是转换的性质，因此也一并放�
 | 2i | 观测采集（渲染）：每个 clip range 一个 `RenderContext` | 已实现 |
 | 3a | reset 的 forward pass 合并（6 → 2 次 kernel launch，1.84x） | 已实现 |
 | 3b | readback 合并 —— **实测不值得做，已放弃**（见 6.3） | 不做 |
+| 4-pre | world 过滤的接触遍历（`get_contact_geom_pairs` / `get_contact_body_pairs`） | 已实现 `6216f88` |
 | 4 | physical 模式：执行器、IK、接触、触觉 | 未开始 |
 
 **轮 2a**（`auto_atom/basis/mjwarp/state.py`）是后续各轮的读写底座：它持有
@@ -437,7 +456,7 @@ camera sensor 时相机声明是惰性的，既不会被materialize 进场景也
    `mjwarp` extra 而不动现有 pin。后端模块必须**惰性导入** `mujoco_warp`，
    保证未安装时项目照常可用（`check_mjwarp_compat.py` 已是这个写法）。
 2. ~~**接触力数值一致性**~~ —— 早先误判为轮 4 前置，**已排除**，见 3.2。真正的
-   前置是接触遍历（3.1）：`range(data.ncon)` 要改成按 `contact.worldid` 过滤。
+   前置是接触遍历（3.1），**已完成**（`6216f88`），故轮 4 已无前置未决项。
 3. ~~**单 world 是否值得**~~ —— **已实测，结论与预期相反**，见 6.1。
 
 ### 6.1 实测吞吐：渲染即使在单 world 也更快，reset 曾是瓶颈
