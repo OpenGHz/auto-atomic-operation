@@ -252,6 +252,46 @@ float32，量化在写入 device 的边界上必然发生一次，宿主端再�
 `step_operator_toward_target` 间接步进物理。两者必须共用同一个 deferral 边界，
 否则一次 tick 里 eef 与 arm 的步进次数会不一致。
 
+### 3.9 静态 body 写入不更新 `geom_xpos`：**已交付代码中的缺陷**
+
+**这不是"待实现"，而是轮 2c 已交付的 `set_static_body_pose` 存在的真实缺陷**，
+在轮 4c-3c-2 写抓取查询时才被发现（因为抓取查询是第一个真正读接触/碰撞几何的
+消费者）。
+
+实测（一次性 probe）：
+
+| 写入路径 | `model.body_pos` | `data.xpos` | `data.geom_xpos` | 接触 |
+|---|---|---|---|---|
+| free joint（写 `qpos`） | — | ✓ 更新 | ✓ 更新 | ✓ 刷新 |
+| 静态 body（写 `model.body_pos`） | ✓ 更新 | ✓ 更新 | **✗ 不更新** | **✗ 不刷新** |
+
+即：写 `model.body_pos` 后 `forward()`，body 的世界位姿（`xpos`）正确变了，但该
+body 上 **geom 的世界位姿（`geom_xpos`）仍是旧值**，因此碰撞检测继续用旧几何。
+再调一次 `forward()` 无效，显式调 `mjw.kinematics()` 也无效；`batched_fields`
+含不含 `body_pos` 都一样（该字段在本版本里恒带 world 轴），所以**与批量无关**。
+
+**为什么之前没发现**：轮 2c 的等价性测试只断言 `get_body_pose`，而它读的是
+`xpos`——正好是会更新的那个字段。测试通过，碰撞几何却没动。
+
+**影响面**：`rack_plate_p7_v4_umi_v3` 里 `rack` 与 `plate_stand` **都是静态
+body**（`assets/xmls/scenes/rack_plate/demo.xml:29,84`，无 freejoint），且**都是
+randomization entity**。因此 `object_only` 的既有路径受影响：随机化把它们移到新
+位置，`xpos` 与渲染用的 body 变换更新了，但它们的碰撞几何留在原处。之前测到的
+mask IoU 1.0 不能反驳这一点——那比对的是渲染，而渲染读的是 body 级变换。
+
+**待定的修法**（未实现，需先确认哪一种是对的）：
+
+1. 写 `body_pos` 后同时显式改写 `data.geom_xpos` / `geom_xmat`——治标，且要自己
+   重算 geom 局部偏移；
+2. 让被随机化的静态 body 在场景里带 freejoint（走已验证正确的 free joint 路径）
+   ——改场景语义，但与原生一致性最好；
+3. 确认这是否为 MJWarp 上游对"静态 body 的 geom 变换在 `put_data` 后不再重算"
+   的优化假设（stock MuJoCo 下 `body_pos` 不会在运行期被改，该假设成立；MJWarp
+   自己把 `body_pos` 做成可批量写入的字段，假设就破了），若是则应上报上游。
+
+在定下修法之前，**轮 4 的抓取查询只对 free joint 目标可信**；本轮测试因此用
+freejoint 目标来验证"verdict 随状态变化"。
+
 ## 4. 不受影响的部分
 
 - **场景组合**：`MjSpec` 编译在宿主侧完成，`put_model` 只消费编译产物。
@@ -292,7 +332,9 @@ float32，量化在写入 device 的边界上必然发生一次，宿主端再�
 | 4c-3b-1 | 运动整形（笛卡尔步长夹紧、per-world stall 缩放、步长界限解析） | 已实现 |
 | 4c-3b-2 | `MjWarpArmControl`：`move_to_pose` 状态机（仅 `per_step_ik`） | 已实现 |
 | 4c-3c-1 | `MjWarpOperatorHandler`：满足 `OperatorHandler` 契约（两半控制的接缝） | 已实现 |
-| 4c-3c-2 | `physical` 模式 env / backend 组装（operator 注册、tick 边界串接） | 未开始 |
+| 4c-3c-2 | 后端级抓取/接触查询（`MjWarpGraspQueries`，批量回答 stage 后置条件） | 已实现 |
+| 4c-3c-3 | `physical` 模式 env / backend 组装（operator 注册、tick 边界串接） | 未开始 |
+| **修复** | **静态 body 写入不更新 `geom_xpos`（见 3.9，轮 2c 遗留缺陷）** | **未修复，阻塞轮 4 对静态目标的可信度** |
 | 4d | 触觉（52 个 `contype=0` 触觉单元的读取路径） | 未开始 |
 
 **轮 2a**（`auto_atom/basis/mjwarp/state.py`）是后续各轮的读写底座：它持有
