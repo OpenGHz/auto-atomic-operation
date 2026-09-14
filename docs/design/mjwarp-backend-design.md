@@ -25,7 +25,12 @@ records=4
 ```
 
 两个 world 全部成功，8 次 `update()`、4 条记录（2 stage x 2 world），与原生路径
-一致。轮 1 与轮 2a–2h 已实现；**尚未实现的是观测采集（渲染）**，见 3.3 与轮 2i。
+一致。**观测采集也已跑通**：同一次运行每个 tick 采到 6 路观测
+（2 相机 x color/depth/heat_map），形状与 dtype 与原生一致。
+
+轮 1 与轮 2a–2i 已实现。一处需要知道的边界：**RGB 无法与原生逐像素一致**
+（光线追踪 vs 光栅化的着色差异），而 mask / heat map 的 IoU 为 1.0、depth 前景
+平均误差 0.9 mm——细节见 2i 那一节。
 
 **接缝已经在正确的位置**，移植工作量比按文件行数估算的小得多。
 
@@ -96,8 +101,14 @@ CPU 路径通过 `_camera_clip_scope` 在 `update_scene` 前临时改写
 scope 必须在 `update_scene` 时生效。
 
 MJWarp 的 `RenderContext` 只在**创建时**固定一个 `znear`，且**没有 zfar 字段**。
-拟议对策：按不同 znear 建多个 `RenderContext`；远平面改为对
-`get_depth` 返回值做后处理钳制。
+对策已在轮 2i 实现：按请求的 clip range 分组，每组建一个 `RenderContext`；
+远平面改为对 `get_depth` 返回值做后处理钳制。RGB 与深度 clip range 不同的相机会
+出现在两个组里，各只启用相关的流。
+
+`rack_plate` 这个配置的两个相机都用模型默认值，因此只需 **1 个** context；但
+physical 配置里的 `eef_wrist_cam` 声明了显式的 per-stream range
+（`rgb_clip_range_m: [0.001, 50]`、`depth_clip_range_m: [0.001, 5]`），所以分组
+逻辑必须是通用的，不能假设只有一个。
 
 > **更正一处早期判断**：`model.vis` 不在 device model 上（`hasattr(m,'vis')` 为
 > False）**不构成问题**。`put_model` 本身要求宿主 `mjm`，后端始终持有它，
@@ -169,7 +180,7 @@ float32 精确表示的**运气**，不是转换的性质，因此也一并放�
 | 2f | `MjWarpObjectOnlyEnv`：满足 `EnvProtocol` / `PoseConstraintEnvProtocol` | 已实现 |
 | 2g | 相机位姿写入（mount / world 系）+ geom / joint frame 读取 | 已实现 |
 | 2h | `MjWarpObjectOnlyBackend`：`SceneBackend` + `RandomizationHost` + builder | 已实现 |
-| 2i | 观测采集（渲染）：每个 clip range 一个 `RenderContext` | 未开始 |
+| 2i | 观测采集（渲染）：每个 clip range 一个 `RenderContext` | 已实现 |
 | 3 | per-world 批量模型取代 N 份 `MjModel` | 未开始 |
 | 4 | physical 模式：执行器、IK、接触、触觉 | 未开始 |
 
@@ -295,10 +306,10 @@ reset 的结构位姿会静默变成下一次 reset 的起点。原生 basis 出
 （见 `37d1cd0`），所以改名后的相机其实存在。该守卫只在 `host_model=` 注入路径上
 可达，测试因此改为走那条路径。
 
-渲染尚未实现：MJWarp `RenderContext` 创建时固定单个 znear 且没有 zfar，而原生
-路径按输出流切换 clip range（见 3.3），因此观测采集需要"每个 clip range 一个
-context"的设计。`object_only` 执行路径本身不渲染（采集是显式调用），所以这个切分
-是有意的，而非遗漏。
+渲染在轮 2f 时**尚未实现**，留到轮 2i 单独做：MJWarp `RenderContext` 创建时固定
+单个 znear 且没有 zfar，而原生路径按输出流切换 clip range（见 3.3）。这个切分是
+有意的——`object_only` 执行路径本身不渲染（采集是显式调用），所以后端可以先跑通
+执行，再补采集。
 
 **轮 2g** 补上相机位姿**写入**与两级更深的 frame 读取，两者都是 backend 的前置：
 
@@ -347,6 +358,53 @@ geom → joint 共四级，而轮 2f 只实现了前两级。`motion_goal.py` �
 
 `MjWarpObjectOnlyEnv` 现在也会用 `config.name` 注册到 `ComponentRegistry`，与原生
 env 同样的接线方式；否则 builder 的 `get_env` 找不到 Hydra 已经实例化的那个 env。
+
+**轮 2i**（`auto_atom/basis/mjwarp/render.py` + `env.capture_observation`）补上观测
+采集。至此 `object_only` 的数据采集链路也跑通了：任务跑完 8 次 update，两个 world
+全部成功，同时**每个 tick 采到 6 路观测**，形状 `(2, 352, 640[, 3|5])` 与原生一致。
+
+观测契约与原生逐项对齐（`tests/test_mjwarp_render.py`，同配置双后端对比）：
+key 集合、shape、dtype 全部相同，`t` 逐 world 取自 `data.time`（它带 world 轴，
+所以每个 world 报自己的时钟，而不是广播 world 0）。
+
+### 关于精度：mask 几乎完全一致，RGB 无法一致
+
+这是本轮最重要的结论，**RGB 的差异不是缺陷，而是渲染器本身不同**：
+
+| 流 | 与原生的一致度 |
+|---|---|
+| `mask/image_raw` | IoU **1.0000**（`plate_cam`）／**0.9966**（`rack_camera_front`，1182 px 中差 4 px） |
+| `mask/heat_map` | IoU **1.0000**，逐像素 **100%** |
+| depth（前景） | 平均误差 **0.9 mm**，p99 **1.05 cm** |
+| depth（背景掩码） | 与原生一致 **99.9991%** |
+| `color/image_raw` | 中位差 **1/255**，但均值亮度 44.4 vs 31.7 |
+
+mask 与 heat map 来自 segmentation pass（几何），所以能一致；RGB 来自着色，
+MJWarp 光线追踪、MuJoCo 用 OpenGL 光栅化，着色模型不同。实测尝试过 sRGB/linear
+两个方向的色彩空间变换，**都让误差变大**（raw 14.3/255 最优，sRGB 82.3，linear
+27.7），因此这不是一个可以纠正的编码差异。几何是对的：相关系数 0.72，结构性
+不匹配（>96/255）只占 0.07%。
+
+**结论**：训练目标（mask/heat map）和几何量（depth）可以跨后端互换；RGB 不能，
+需要 RGB 逐像素一致的场景不要混用两个后端采的数据。测试因此断言契约、depth 与
+mask，而把 RGB 差异记录为实测容差而非当作 bug。
+
+### 三处 MJWarp 渲染语义与 MuJoCo 不同
+
+1. **depth 永远是归一化的**。`get_depth` 算的是
+   `clamp(value / depth_scale, 0, 1)`，传 `1.0` 会把超过 1 m 的距离全部截断。取米
+   必须把远平面作为 scale 传进去再乘回来——这样做把与原生的差距从 **3.16 m 降到
+   2.3 mm**（100 m 量程）。
+2. **打空的射线返回 0.0，不是远平面**。原生返回远平面。不处理的话，空背景会读成
+   "距离 0"，比任何实物都近——正好相反。
+3. **图像朝向与 segmentation 编码不需要转换**。实测 segmentation 质心与原生一致到
+   小数点后 4 位（无翻转），编码本身已是 MuJoCo 的 `(object_id, object_type)`、
+   背景 `(-1, -1)`。
+
+另外修正了轮 2f 的一个真实 bug：相机 id 解析原本无条件执行，但原生（与
+`EnvConfig.camera_elements` 的文档）都把它**门控在 `DataType.CAMERA` 上**——没有
+camera sensor 时相机声明是惰性的，既不会被materialize 进场景也不该被解析。
+无条件解析会拒绝一个完全合法的无相机配置。
 
 **轮 1** 的动机：MJWarp 门禁拒绝 mesh/box CCD pair 上的非零 margin。编译后场景
 中 59 个非零 margin geom 里只有 7 个可碰撞（`link1..link7`），其余 52 个是
