@@ -2,7 +2,7 @@
 #
 # CPU MuJoCo -- the default backend; selecting it explicitly is a no-op:
 #
-#     aao-demo --config-name <task> +backend@_global_=cpu
+#     aao-demo --config-name <task> +backend=cpu
 #
 # This option is intentionally empty.  Each robot basis config sets its own
 # robot-specific CPU builder (for example `build_p7_v3_umi_v3_backend`) and

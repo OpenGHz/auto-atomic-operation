@@ -3,13 +3,18 @@
 # GPU (mujoco_warp) backend.  Select it from the command line without editing
 # any task config:
 #
-#     aao-demo --config-name <task> +backend@_global_=warp
+#     aao-demo --config-name <task> +backend=warp
 #
-# The append form (`+backend@_global_=`) is required rather than a plain
-# `backend=warp`: every robot basis config re-asserts its own CPU builder in
-# its `_self_`, which composes after an inherited defaults entry and would
-# overwrite the group.  An appended group composes last, so it wins on any
-# task config regardless of how deep its inheritance chain is.
+# The leading `+` is required: this group is deliberately not listed in any
+# config's `defaults`, so there is no entry to override -- `+` appends one.
+# That is also what makes it win.  Every robot basis config re-asserts its own
+# CPU builder in its `_self_`, which composes after an inherited defaults entry
+# and would overwrite the group; an appended group composes last, so it wins on
+# any task config regardless of how deep its inheritance chain is.  A plain
+# `backend=warp` fails with "Could not override 'backend'".
+#
+# No `@_global_` is needed on the command line: the `# @package _global_`
+# header above already places this file's content at the config root.
 #
 # `njmax` is the constraint budget; 512 clears the rack_plate arm.  Scenes
 # with more contacts or more worlds may need it raised -- too low shows up as
