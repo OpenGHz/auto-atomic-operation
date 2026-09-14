@@ -1743,3 +1743,54 @@ def test_free_joint_writes_do_not_need_the_refresh(host_model):
     )
 
     assert not state._pending_static_geom_bodies
+
+
+def test_actuator_joint_names_match_native(actuated_basis, actuated_model):
+    """Joint names agree with the native helper, in actuator order."""
+    state = MjWarpSceneState(actuated_model, nworld=1)
+    ids = state.actuator_ids(["a1", "a2"])
+
+    got = state.actuator_joint_names(ids)
+
+    assert got == ["j1", "j2"]
+    # Native derives the same list from actuator_trnid for its IK construction.
+    want = [
+        mujoco.mj_id2name(
+            actuated_model,
+            mujoco.mjtObj.mjOBJ_JOINT,
+            int(actuated_model.actuator_trnid[int(a), 0]),
+        )
+        for a in ids
+    ]
+    assert got == want
+
+
+def test_actuator_joint_names_follow_actuator_order(actuated_model):
+    """Order is the solver's joint mapping, so it must follow the config.
+
+    Reversing the actuator list must reverse the names. Returning them sorted or
+    by joint id would silently permute what the IK solver thinks each joint is.
+    """
+    state = MjWarpSceneState(actuated_model, nworld=1)
+
+    forward = state.actuator_joint_names(state.actuator_ids(["a1", "a2"]))
+    reverse = state.actuator_joint_names(state.actuator_ids(["a2", "a1"]))
+
+    assert forward == ["j1", "j2"]
+    assert reverse == ["j2", "j1"]
+
+
+def test_jointless_actuator_keeps_its_slot(actuated_model):
+    """A jointless transmission must not shorten the list and misalign the rest."""
+    state = MjWarpSceneState(actuated_model, nworld=1)
+    host = state.host_model
+    saved = int(host.actuator_trnid[0, 0])
+    host.actuator_trnid[0, 0] = -1
+    try:
+        got = state.actuator_joint_names([0, 1])
+    finally:
+        host.actuator_trnid[0, 0] = saved
+
+    assert len(got) == 2, "slot must be kept, not dropped"
+    assert got[0] == "<joint_-1>"
+    assert got[1] == "j2"

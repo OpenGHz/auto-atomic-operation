@@ -845,6 +845,31 @@ class MjWarpSceneState:
             np.asarray(dof_indices, dtype=np.int32),
         )
 
+    def actuator_joint_names(self, actuator_ids: Sequence[int]) -> list[str]:
+        """Names of the joints those actuators drive, in actuator order.
+
+        An IK solver is constructed as
+        ``ik_factory(model=model, arm_joint_names=names, **ik_params)``, so the
+        solver's joint ordering is defined by the arm actuator ordering in the
+        config. Order therefore matters: returning these sorted, or by joint id,
+        would silently permute the solver's joint mapping.
+
+        A jointless transmission yields ``"<joint_-1>"`` rather than being
+        skipped, mirroring the native helper -- dropping it would shorten the
+        list and misalign every name after it, which is worse than a name that
+        is visibly wrong.
+        """
+        import mujoco
+
+        names = []
+        for actuator in actuator_ids:
+            joint = int(self.host_model.actuator_trnid[int(actuator), 0])
+            names.append(
+                mujoco.mj_id2name(self.host_model, mujoco.mjtObj.mjOBJ_JOINT, joint)
+                or f"<joint_{joint}>"
+            )
+        return names
+
     def get_ctrl(self) -> np.ndarray:
         """Every world's actuator command, shaped ``(nworld, nu)``.
 
