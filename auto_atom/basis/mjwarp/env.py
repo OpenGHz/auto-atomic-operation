@@ -170,17 +170,27 @@ class MjWarpObjectOnlyEnv:
         return self.state.get_site_pose_batch(site_name)
 
     def get_element_pose(self, name: str, env_index: int = 0) -> PoseState:
-        """Pose of a named site, else a named body, for one world.
+        """Pose of a named element, for one world.
 
-        Sites are tried first because a task addresses semantic frames
+        Resolution order is site -> body -> geom -> joint, matching the native
+        backend. Sites come first because a task addresses semantic frames
         (``object_site``, ``rack_target_site``) that are usually sites attached
-        to a body of the same or similar name.
+        to a body of the same or similar name; the deeper levels exist because
+        ``controlled_frame`` and door/latch arcs address geoms and joints too.
         """
-        try:
-            position, orientation = self.state.get_site_pose(name, env_index)
-        except ValueError:
-            position, orientation = self.state.get_body_pose(name, env_index)
-        return PoseState(position=position, orientation=orientation)
+        import mujoco
+
+        for obj_type, read in (
+            (mujoco.mjtObj.mjOBJ_SITE, self.state.get_site_pose),
+            (mujoco.mjtObj.mjOBJ_BODY, self.state.get_body_pose),
+            (mujoco.mjtObj.mjOBJ_GEOM, self.state.get_geom_pose),
+            (mujoco.mjtObj.mjOBJ_JOINT, self.state.get_joint_frame_pose),
+        ):
+            if mujoco.mj_name2id(self.host_model, obj_type, name) >= 0:
+                position, orientation = read(name, env_index)
+                return PoseState(position=position, orientation=orientation)
+
+        raise KeyError(f"Element '{name}' not found as a site, body, geom or joint.")
 
     # ------------------------------------------------------------------
     # PoseConstraintEnvProtocol
@@ -295,6 +305,59 @@ class MjWarpObjectOnlyEnv:
     def get_camera_pose(self, camera_name: str, env_index: int = 0) -> PoseState:
         position, orientation = self.state.get_camera_pose(camera_name, env_index)
         return PoseState(position=position, orientation=orientation)
+
+    def set_camera_pose(
+        self,
+        camera_name: str,
+        pose: PoseState,
+        env_mask: Optional[np.ndarray] = None,
+    ) -> None:
+        """Write world-frame camera poses as parent-local extrinsics."""
+        pose = pose.broadcast_to(self.batch_size)
+        self.state.set_camera_pose(
+            camera_name,
+            np.asarray(pose.position, dtype=np.float64),
+            np.asarray(pose.orientation, dtype=np.float64),
+            world_mask=self._normalize_mask(env_mask),
+        )
+
+    def get_camera_mount_pose(self, camera_name: str) -> PoseState:
+        """Batched mount-frame extrinsics: the offset from the mount body.
+
+        This is what an object-mounted camera's randomization samples -- the
+        mount frame travels with the object, so a world pose would name a
+        different and moving thing.
+        """
+        position, orientation = self.state.get_camera_mount_pose_batch(camera_name)
+        return PoseState(position=position, orientation=orientation)
+
+    def set_camera_mount_pose(
+        self,
+        camera_name: str,
+        pose: PoseState,
+        env_mask: Optional[np.ndarray] = None,
+    ) -> None:
+        pose = pose.broadcast_to(self.batch_size)
+        self.state.set_camera_mount_pose(
+            camera_name,
+            np.asarray(pose.position, dtype=np.float64),
+            np.asarray(pose.orientation, dtype=np.float64),
+            world_mask=self._normalize_mask(env_mask),
+        )
+
+    def _normalize_mask(
+        self,
+        env_mask: Optional[np.ndarray],
+    ) -> Optional[np.ndarray]:
+        """Validate a mask against the world count, as the handlers do."""
+        if env_mask is None:
+            return None
+        mask = np.asarray(env_mask, dtype=bool).reshape(-1)
+        if mask.shape != (self.batch_size,):
+            raise ValueError(
+                f"env_mask must have shape ({self.batch_size},), got {mask.shape}"
+            )
+        return mask
 
     def set_interest_objects_and_operations(
         self,

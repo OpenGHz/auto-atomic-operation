@@ -112,6 +112,23 @@ cam_pos   cam_quat   cam_fovy   jnt_range  qpos0
 
 （`geom_condim` **不可** batch；`geom_margin` / `geom_gap` / `geom_friction` 可以。）
 
+### 3.6 device 侧是 float32，宿主侧是 float64
+
+`cam_pos` / `cam_quat` / `body_pos` / `body_quat` 在 MuJoCo 宿主模型里是
+`float64`，在 MJWarp device 模型里是 `float32`（`np.finfo(float32).eps ≈ 1.19e-7`）。
+
+因此一个用 float64 算出来的写入值回读时会带约 `1e-7` 的相对误差。等价性测试的容差
+必须按 float32 取（`rtol=1e-6, atol=1e-7`）：更紧的容差要求的是 device 存储**表达
+不出来**的精度，卡住的不是转换 bug。
+
+实测中 `set_camera_pose` 的 world→parent-local 写入在 `atol=1e-9` 下失败，最大绝对
+偏差 `8.9e-9`（值本身约 0.18，即约 5e-8 相对误差）——纯量化，不是逻辑错误。
+`set_static_body_pose` 的同类断言恰好能在 `1e-9` 下通过，但那是该位姿的值刚好可被
+float32 精确表示的**运气**，不是转换的性质，因此也一并放宽。
+
+这条同时限定了 3.2 里那个未决问题的判据：接触力的 CPU/GPU 数值对比也只能在 float32
+精度上要求一致。
+
 ## 4. 不受影响的部分
 
 - **场景组合**：`MjSpec` 编译在宿主侧完成，`put_model` 只消费编译产物。
@@ -135,7 +152,8 @@ cam_pos   cam_quat   cam_fovy   jnt_range  qpos0
 | 2d | `MjWarpSceneState`：批量 frame 读取（`PoseState` 形状，单次 readback） | 已实现 |
 | 2e | `MjWarpObjectHandler`：满足 `ObjectHandler` 契约（`apply_object_pose` 的落点） | 已实现 |
 | 2f | `MjWarpObjectOnlyEnv`：满足 `EnvProtocol` / `PoseConstraintEnvProtocol` | 已实现 |
-| 2g | `object_only` MJWarp backend（`SceneBackend` + `RandomizationHost`） | 未开始 |
+| 2g | 相机位姿写入（mount / world 系）+ geom / joint frame 读取 | 已实现 |
+| 2h | `object_only` MJWarp backend（`SceneBackend` + `RandomizationHost`） | 未开始 |
 | 3 | per-world 批量模型取代 N 份 `MjModel` | 未开始 |
 | 4 | physical 模式：执行器、IK、接触、触觉 | 未开始 |
 
@@ -265,6 +283,21 @@ reset 的结构位姿会静默变成下一次 reset 的起点。原生 basis 出
 路径按输出流切换 clip range（见 3.3），因此观测采集需要"每个 clip range 一个
 context"的设计。`object_only` 执行路径本身不渲染（采集是显式调用），所以这个切分
 是有意的，而非遗漏。
+
+**轮 2g** 补上相机位姿**写入**与两级更深的 frame 读取，两者都是 backend 的前置：
+
+- `set_camera_mount_pose` 直接写 `cam_pos` / `cam_quat`；`set_camera_pose` 走
+  world → parent-local 转换，但锚定的是**相机自己的父级**（`cam_bodyid`）而不是
+  body 的父级，所以挂在运动 body 上的相机也能正确放置。测试用挂载相机
+  （`holder_cam`，父级位姿非单位）验证，否则转换退化为恒等。
+- `get_geom_pose` / `get_joint_frame_pose` 是 `get_element_pose` 的第三、四级
+  回退。joint 一级读 `xanchor` 而非父 body 原点：测试里 `swing_hinge` 的锚点与其
+  body 原点刻意不同，并断言两者确实有差异，否则这个测试不会咬。
+
+这一轮还修正了轮 2f 的一处**遗漏**：原生 `get_element_pose` 解析 site → body →
+geom → joint 共四级，而轮 2f 只实现了前两级。`motion_goal.py` 与 `runtime.py` 都
+通过它解析命名 frame（`controlled_frame`、门/闩的 arc 支点），因此缺失的两级是真实
+缺口，现已补齐并与原生同序。
 
 **轮 1** 的动机：MJWarp 门禁拒绝 mesh/box CCD pair 上的非零 margin。编译后场景
 中 59 个非零 margin geom 里只有 7 个可碰撞（`link1..link7`），其余 52 个是

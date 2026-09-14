@@ -253,6 +253,150 @@ class MjWarpSceneState:
         extent = float(self.host_model.stat.extent)
         return float(vis_map.znear) * extent, float(vis_map.zfar) * extent
 
+    # ------------------------------------------------------------------
+    # Camera pose writes (randomization samples these)
+    # ------------------------------------------------------------------
+
+    def get_camera_mount_pose_batch(
+        self,
+        camera_name: str,
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """``cam_pos``/``cam_quat`` verbatim, per world.
+
+        This is the offset the camera keeps relative to the body it is mounted
+        on, which is what an object-mounted camera's randomization samples: the
+        mount frame moves with the object, so a world pose would describe a
+        different -- and moving -- thing.
+        """
+        cam = self.camera_id(camera_name)
+        positions = np.asarray(self.model.cam_pos.numpy()[:, cam, :], dtype=np.float64)
+        quats_wxyz = np.asarray(
+            self.model.cam_quat.numpy()[:, cam, :], dtype=np.float64
+        )
+        return positions, quats_wxyz[:, [1, 2, 3, 0]]
+
+    def set_camera_mount_pose(
+        self,
+        camera_name: str,
+        position: np.ndarray,
+        orientation_xyzw: np.ndarray,
+        world_mask: Optional[np.ndarray] = None,
+    ) -> None:
+        """Write mount-frame camera extrinsics, per world."""
+        cam = self.camera_id(camera_name)
+        positions, quats_wxyz = self._pose_rows(position, orientation_xyzw)
+
+        cam_pos = self.model.cam_pos.numpy().copy()
+        cam_quat = self.model.cam_quat.numpy().copy()
+        for world in self._worlds(world_mask):
+            cam_pos[world][cam] = positions[world]
+            cam_quat[world][cam] = quats_wxyz[world]
+        self.model.cam_pos.assign(cam_pos)
+        self.model.cam_quat.assign(cam_quat)
+        self.forward()
+
+    def set_camera_pose(
+        self,
+        camera_name: str,
+        position: np.ndarray,
+        orientation_xyzw: np.ndarray,
+        world_mask: Optional[np.ndarray] = None,
+    ) -> None:
+        """Write a *world*-frame camera pose as parent-local extrinsics.
+
+        Same conversion shape as :meth:`set_static_body_pose`, but anchored on
+        the camera's own parent (``cam_bodyid``) rather than a body's parent, so
+        a camera mounted on a moving body is placed correctly.
+        """
+        import mujoco
+
+        cam = self.camera_id(camera_name)
+        parent = int(self.host_model.cam_bodyid[cam])
+        positions, quats_wxyz = self._pose_rows(position, orientation_xyzw)
+
+        cam_pos = self.model.cam_pos.numpy().copy()
+        cam_quat = self.model.cam_quat.numpy().copy()
+        xpos = self.data.xpos.numpy()
+        xmat = self.data.xmat.numpy()
+        xquat = self.data.xquat.numpy()
+
+        for world in self._worlds(world_mask):
+            parent_pos = np.asarray(xpos[world][parent], dtype=np.float64)
+            parent_rot = np.asarray(xmat[world][parent], dtype=np.float64).reshape(3, 3)
+            cam_pos[world][cam] = parent_rot.T @ (positions[world] - parent_pos)
+
+            parent_quat_wxyz = np.asarray(xquat[world][parent], dtype=np.float64)
+            inverse_parent = np.empty(4, dtype=np.float64)
+            mujoco.mju_negQuat(inverse_parent, parent_quat_wxyz)
+            local_quat = np.empty(4, dtype=np.float64)
+            mujoco.mju_mulQuat(local_quat, inverse_parent, quats_wxyz[world])
+            cam_quat[world][cam] = local_quat
+
+        self.model.cam_pos.assign(cam_pos)
+        self.model.cam_quat.assign(cam_quat)
+        self.forward()
+
+    # ------------------------------------------------------------------
+    # Geom / joint frame reads (the deeper get_element_pose fallbacks)
+    # ------------------------------------------------------------------
+
+    def get_geom_pose(
+        self,
+        geom_name: str,
+        world_index: int = 0,
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """World-frame geom pose as ``(position, orientation_xyzw)``."""
+        import mujoco
+
+        from auto_atom.utils.pose import quaternion_from_matrix_3x3
+
+        world = self._check_world(world_index)
+        geom = int(
+            mujoco.mj_name2id(self.host_model, mujoco.mjtObj.mjOBJ_GEOM, geom_name)
+        )
+        if geom < 0:
+            raise ValueError(f"Geom '{geom_name}' not found in the MuJoCo model.")
+        position = np.asarray(
+            self.data.geom_xpos.numpy()[world][geom], dtype=np.float64
+        )
+        orientation = quaternion_from_matrix_3x3(
+            np.asarray(
+                self.data.geom_xmat.numpy()[world][geom], dtype=np.float64
+            ).reshape(3, 3)
+        )
+        return position, orientation
+
+    def get_joint_frame_pose(
+        self,
+        joint_name: str,
+        world_index: int = 0,
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """Articulated joint anchor and its body's orientation.
+
+        MuJoCo publishes the joint anchor in world coordinates after a forward
+        pass, so ``xanchor`` is used rather than the parent body's static
+        transform -- the latter loses both the anchor offset and the joint's
+        current orientation.
+        """
+        import mujoco
+
+        from auto_atom.utils.pose import quaternion_from_matrix_3x3
+
+        world = self._check_world(world_index)
+        joint = int(
+            mujoco.mj_name2id(self.host_model, mujoco.mjtObj.mjOBJ_JOINT, joint_name)
+        )
+        if joint < 0:
+            raise ValueError(f"Joint '{joint_name}' not found in the MuJoCo model.")
+        joint_body = int(self.host_model.jnt_bodyid[joint])
+        position = np.asarray(self.data.xanchor.numpy()[world][joint], dtype=np.float64)
+        orientation = quaternion_from_matrix_3x3(
+            np.asarray(
+                self.data.xmat.numpy()[world][joint_body], dtype=np.float64
+            ).reshape(3, 3)
+        )
+        return position, orientation
+
     def get_support_geometry(
         self,
         entity_name: str,

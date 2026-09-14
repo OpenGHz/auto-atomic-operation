@@ -33,6 +33,18 @@ _SCENE_XML = """
       <body name="nested_static" pos="0.06 0.01 0.02" quat="0.7071068 0 0 0.7071068">
         <geom name="nested_geom" type="box" size="0.01 0.01 0.01"/>
       </body>
+      <!-- Mounted on a parent with non-identity pos and quat, so a world-frame
+           camera write has a real conversion to get right. -->
+      <camera name="holder_cam" pos="0.08 0 0.03" quat="0.7071068 0 0.7071068 0"/>
+    </body>
+    <!-- Hinge with an offset anchor: xanchor and the parent body origin differ,
+         which is what the joint frame fallback has to report correctly. -->
+    <body name="swing_base" pos="0.5 0.25 0.2" quat="0.9238795 0 0 0.3826834">
+      <geom name="swing_base_geom" type="box" size="0.03 0.03 0.03"/>
+      <body name="swing_arm" pos="0.04 0 0">
+        <joint name="swing_hinge" type="hinge" axis="0 0 1" pos="0.06 0.02 0"/>
+        <geom name="swing_arm_geom" type="box" size="0.02 0.01 0.01"/>
+      </body>
     </body>
     <body name="mover" pos="-0.4 0.15 0.5" quat="0.8446232 0.1913417 0.4619398 0.1913417">
       <freejoint name="mover_free"/>
@@ -330,11 +342,21 @@ def test_static_pose_matches_native_handler_math(host_model):
     state = MjWarpSceneState(host_model, nworld=1)
     state.set_static_body_pose("nested_static", target_pos, target_quat_xyzw)
 
+    # Loosened to float32 precision deliberately, even though this particular
+    # pose happens to pass at 1e-9: body_pos is float32 on the device and
+    # float64 on the host, so an exact match here is luck about representable
+    # values rather than a property of the conversion (design doc 3.6).
     np.testing.assert_allclose(
-        state.model.body_pos.numpy()[0][bid], native_model.body_pos[bid], atol=1e-9
+        state.model.body_pos.numpy()[0][bid],
+        native_model.body_pos[bid],
+        rtol=1e-6,
+        atol=1e-7,
     )
     np.testing.assert_allclose(
-        state.model.body_quat.numpy()[0][bid], native_model.body_quat[bid], atol=1e-9
+        state.model.body_quat.numpy()[0][bid],
+        native_model.body_quat[bid],
+        rtol=1e-6,
+        atol=1e-7,
     )
 
 
@@ -517,6 +539,159 @@ def test_batch_read_matches_native_stacked_read(host_model, native_basis):
     np.testing.assert_allclose(positions[0], want_pos, atol=1e-6)
     np.testing.assert_allclose(orientations[0], want_quat, atol=1e-6)
     assert positions.dtype == want_pos.dtype
+
+
+# ----------------------------------------------------------------------
+# Camera pose writes and the deeper frame reads
+# ----------------------------------------------------------------------
+
+
+def test_geom_pose_matches_native(native_basis, warp_state):
+    """Geom frames back get_element_pose's third resolution level."""
+    from auto_atom.utils.pose import quaternion_from_matrix_3x3
+
+    geom_id = mujoco.mj_name2id(
+        native_basis.model, mujoco.mjtObj.mjOBJ_GEOM, "holder_geom"
+    )
+    want_pos = np.asarray(native_basis.data.geom_xpos[geom_id], dtype=np.float64)
+    want_quat = quaternion_from_matrix_3x3(
+        np.asarray(native_basis.data.geom_xmat[geom_id], dtype=np.float64).reshape(3, 3)
+    )
+
+    got_pos, got_quat = warp_state.get_geom_pose("holder_geom")
+
+    np.testing.assert_allclose(got_pos, want_pos, atol=1e-6)
+    np.testing.assert_allclose(got_quat, want_quat, atol=1e-6)
+
+
+def test_joint_frame_pose_matches_native(native_basis, warp_state):
+    """The joint frame reports xanchor, not the parent body origin.
+
+    swing_hinge's anchor is offset from its body origin, so reading the parent
+    body's transform instead of xanchor lands in a different place -- which is
+    the distinction the native implementation calls out explicitly.
+    """
+    from auto_atom.utils.pose import quaternion_from_matrix_3x3
+
+    joint_id = mujoco.mj_name2id(
+        native_basis.model, mujoco.mjtObj.mjOBJ_JOINT, "swing_hinge"
+    )
+    joint_body = int(native_basis.model.jnt_bodyid[joint_id])
+    want_pos = np.asarray(native_basis.data.xanchor[joint_id], dtype=np.float64)
+    want_quat = quaternion_from_matrix_3x3(
+        np.asarray(native_basis.data.xmat[joint_body], dtype=np.float64).reshape(3, 3)
+    )
+
+    got_pos, got_quat = warp_state.get_joint_frame_pose("swing_hinge")
+
+    np.testing.assert_allclose(got_pos, want_pos, atol=1e-6)
+    np.testing.assert_allclose(got_quat, want_quat, atol=1e-6)
+    # The anchor really is distinct from the body origin, so the test bites.
+    body_origin = np.asarray(native_basis.data.xpos[joint_body], dtype=np.float64)
+    assert not np.allclose(want_pos, body_origin, atol=1e-3)
+
+
+def test_deeper_frame_reads_reject_unknown_names(warp_state):
+    with pytest.raises(ValueError, match="Geom 'nope' not found"):
+        warp_state.get_geom_pose("nope")
+    with pytest.raises(ValueError, match="Joint 'nope' not found"):
+        warp_state.get_joint_frame_pose("nope")
+
+
+def test_camera_mount_pose_read_matches_model_extrinsics(host_model, warp_state):
+    """The mount pose is cam_pos/cam_quat verbatim, reordered to xyzw."""
+    cam_id = mujoco.mj_name2id(host_model, mujoco.mjtObj.mjOBJ_CAMERA, "side_cam")
+    want_pos = np.asarray(host_model.cam_pos[cam_id], dtype=np.float64)
+    qw, qx, qy, qz = np.asarray(host_model.cam_quat[cam_id], dtype=np.float64)
+
+    positions, orientations = warp_state.get_camera_mount_pose_batch("side_cam")
+
+    assert positions.shape == (warp_state.nworld, 3)
+    np.testing.assert_allclose(positions[0], want_pos, atol=1e-6)
+    np.testing.assert_allclose(orientations[0], [qx, qy, qz, qw], atol=1e-6)
+
+
+def test_camera_mount_write_round_trips(host_model):
+    state = MjWarpSceneState(host_model, nworld=2)
+    target_pos = np.array([0.2, 0.03, 0.07])
+    target_quat = np.array([0.0, 0.3826834, 0.0, 0.9238795])
+
+    state.set_camera_mount_pose("side_cam", target_pos, target_quat)
+    positions, orientations = state.get_camera_mount_pose_batch("side_cam")
+
+    for world in range(2):
+        np.testing.assert_allclose(positions[world], target_pos, atol=1e-6)
+        np.testing.assert_allclose(orientations[world], target_quat, atol=1e-6)
+
+
+def test_camera_mount_write_honours_world_mask(host_model):
+    state = MjWarpSceneState(host_model, nworld=2)
+    before, _ = state.get_camera_mount_pose_batch("side_cam")
+
+    state.set_camera_mount_pose(
+        "side_cam",
+        np.array([0.9, 0.0, 0.0]),
+        np.array([0.0, 0.0, 0.0, 1.0]),
+        world_mask=np.array([True, False]),
+    )
+    positions, _ = state.get_camera_mount_pose_batch("side_cam")
+
+    np.testing.assert_allclose(positions[0], [0.9, 0.0, 0.0], atol=1e-6)
+    np.testing.assert_allclose(positions[1], before[1], atol=1e-6)
+
+
+def test_world_camera_write_matches_native_conversion(host_model):
+    """A world-frame write converts against the camera's own parent body.
+
+    side_cam hangs off worldbody, so this uses the mounted camera to keep the
+    parent frame non-identity -- otherwise the conversion degenerates and a
+    wrong implementation would still pass.
+    """
+    world_pos = np.array([0.24, -0.16, 0.42])
+    world_quat = np.array([0.1913417, 0.4619398, 0.1913417, 0.8446232])
+    cam_id = mujoco.mj_name2id(host_model, mujoco.mjtObj.mjOBJ_CAMERA, "holder_cam")
+
+    # Native: reproduce the backend's set_camera_pose conversion verbatim.
+    native_model = mujoco.MjModel.from_xml_string(_SCENE_XML)
+    native_data = mujoco.MjData(native_model)
+    mujoco.mj_forward(native_model, native_data)
+    parent = int(native_model.cam_bodyid[cam_id])
+    parent_pos = np.asarray(native_data.xpos[parent], dtype=np.float64)
+    parent_rot = np.asarray(native_data.xmat[parent], dtype=np.float64).reshape(3, 3)
+    native_model.cam_pos[cam_id] = parent_rot.T @ (world_pos - parent_pos)
+    inverse_parent = np.empty(4, dtype=np.float64)
+    mujoco.mju_negQuat(
+        inverse_parent, np.asarray(native_data.xquat[parent], dtype=np.float64)
+    )
+    local_quat = np.empty(4, dtype=np.float64)
+    mujoco.mju_mulQuat(local_quat, inverse_parent, world_quat[[3, 0, 1, 2]])
+    native_model.cam_quat[cam_id] = local_quat
+
+    state = MjWarpSceneState(host_model, nworld=1)
+    state.set_camera_pose("holder_cam", world_pos, world_quat)
+
+    # MJWarp stores these model fields as float32 where MuJoCo uses float64, so
+    # a float64-computed write round-trips with ~1e-7 relative error. A tighter
+    # tolerance would demand precision the device storage cannot represent, not
+    # catch a conversion bug -- see the design doc's 3.6.
+    np.testing.assert_allclose(
+        state.model.cam_pos.numpy()[0][cam_id],
+        native_model.cam_pos[cam_id],
+        rtol=1e-6,
+        atol=1e-7,
+    )
+    np.testing.assert_allclose(
+        state.model.cam_quat.numpy()[0][cam_id],
+        native_model.cam_quat[cam_id],
+        rtol=1e-6,
+        atol=1e-7,
+    )
+    # The camera also ends up where it was asked to be, in world terms.
+    got_pos, got_quat = state.get_camera_pose("holder_cam")
+    np.testing.assert_allclose(got_pos, world_pos, atol=1e-6)
+    assert np.allclose(got_quat, world_quat, atol=1e-6) or np.allclose(
+        got_quat, -world_quat, atol=1e-6
+    )
 
 
 @pytest.mark.parametrize("body", ["mover", "holder", "nested_static"])
