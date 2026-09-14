@@ -197,6 +197,165 @@ def test_free_joint_write_rejects_non_free_joint(host_model):
         state.set_free_joint_pose("nope", np.zeros(3), np.array([0.0, 0.0, 0.0, 1.0]))
 
 
+# ----------------------------------------------------------------------
+# Deferred kinematics passes
+# ----------------------------------------------------------------------
+
+
+def _count_forward_passes(state):
+    """Count real kernel launches, not calls to the wrapper method.
+
+    Deferral works by making ``forward()`` return early, so counting method
+    calls would show no change at all -- the saving is in the launches.
+    """
+    calls = {"n": 0}
+    original = state._mjw.forward
+
+    def counted(model, data):
+        calls["n"] += 1
+        original(model, data)
+
+    state._mjw.forward = counted
+    return calls, lambda: setattr(state._mjw, "forward", original)
+
+
+def test_deferral_coalesces_kinematics_passes(host_model):
+    """Several writes inside one block cost one pass instead of one each."""
+    state = MjWarpSceneState(host_model, nworld=2)
+    calls, restore = _count_forward_passes(state)
+    try:
+        with state.deferred_forward():
+            state.set_free_joint_pose(
+                "mover_free", np.array([0.1, 0.2, 0.3]), np.array([0.0, 0.0, 0.0, 1.0])
+            )
+            state.set_static_body_pose(
+                "nested_static",
+                np.array([0.4, -0.1, 0.35]),
+                np.array([0.0, 0.0, 0.0, 1.0]),
+            )
+            state.set_camera_mount_pose(
+                "side_cam", np.array([0.2, 0.0, 0.05]), np.array([0.0, 0.0, 0.0, 1.0])
+            )
+        assert calls["n"] == 1
+    finally:
+        restore()
+
+
+def test_writes_are_eager_outside_a_deferral_block(host_model):
+    """The default stays eager, so a standalone write is still correct."""
+    state = MjWarpSceneState(host_model, nworld=1)
+    calls, restore = _count_forward_passes(state)
+    try:
+        state.set_free_joint_pose(
+            "mover_free", np.array([0.1, 0.2, 0.3]), np.array([0.0, 0.0, 0.0, 1.0])
+        )
+        assert calls["n"] == 1
+    finally:
+        restore()
+
+
+def test_deferred_writes_land_identically_to_eager_ones(host_model):
+    """Deferral is a cost saving, not a change in result."""
+    target_pos = np.array([0.25, -0.35, 0.65])
+    target_quat = np.array([0.1913417, 0.4619398, 0.1913417, 0.8446232])
+
+    eager = MjWarpSceneState(host_model, nworld=2)
+    eager.set_free_joint_pose("mover_free", target_pos, target_quat)
+    eager.set_static_body_pose("nested_static", target_pos, target_quat)
+    eager_mover, _ = eager.get_body_pose("mover")
+    eager_static, _ = eager.get_body_pose("nested_static")
+
+    deferred = MjWarpSceneState(host_model, nworld=2)
+    with deferred.deferred_forward():
+        deferred.set_free_joint_pose("mover_free", target_pos, target_quat)
+        deferred.set_static_body_pose("nested_static", target_pos, target_quat)
+    deferred_mover, _ = deferred.get_body_pose("mover")
+    deferred_static, _ = deferred.get_body_pose("nested_static")
+
+    np.testing.assert_allclose(deferred_mover, eager_mover, rtol=1e-6, atol=1e-7)
+    np.testing.assert_allclose(deferred_static, eager_static, rtol=1e-6, atol=1e-7)
+
+
+def test_a_child_write_flushes_its_freshly_moved_parent(host_model):
+    """The hazard deferral would otherwise introduce, pinned.
+
+    nested_static converts its world pose against holder's *current* pose. If
+    holder moves in the same block and the pending pass is not flushed, the child
+    converts against a stale parent and lands somewhere else. Comparing against
+    the eager result is what catches that, because the eager path cannot have the
+    bug.
+    """
+    holder_target = np.array([0.30, -0.30, 0.50])
+    child_target = np.array([0.42, -0.13, 0.37])
+    identity = np.array([0.0, 0.0, 0.0, 1.0])
+
+    eager = MjWarpSceneState(host_model, nworld=1)
+    eager.set_static_body_pose("holder", holder_target, identity)
+    eager.set_static_body_pose("nested_static", child_target, identity)
+    want, _ = eager.get_body_pose("nested_static")
+
+    deferred = MjWarpSceneState(host_model, nworld=1)
+    with deferred.deferred_forward():
+        deferred.set_static_body_pose("holder", holder_target, identity)
+        deferred.set_static_body_pose("nested_static", child_target, identity)
+    got, _ = deferred.get_body_pose("nested_static")
+
+    np.testing.assert_allclose(got, want, rtol=1e-6, atol=1e-7)
+    # And it really did land where it was asked to, not merely match a shared bug.
+    np.testing.assert_allclose(got, child_target, atol=1e-5)
+
+
+def test_camera_write_flushes_a_freshly_moved_mount(host_model):
+    """Same hazard for a camera mounted on a body that just moved."""
+    mover_target = np.array([0.2, 0.1, 0.6])
+    cam_target = np.array([0.35, 0.05, 0.55])
+    identity = np.array([0.0, 0.0, 0.0, 1.0])
+
+    deferred = MjWarpSceneState(host_model, nworld=1)
+    with deferred.deferred_forward():
+        deferred.set_static_body_pose("holder", mover_target, identity)
+        deferred.set_camera_pose("holder_cam", cam_target, identity)
+    got, _ = deferred.get_camera_pose("holder_cam")
+
+    np.testing.assert_allclose(got, cam_target, atol=1e-5)
+
+
+def test_deferral_flushes_even_when_the_body_raises(host_model):
+    """A failed reset must not leave stale kinematics behind."""
+    state = MjWarpSceneState(host_model, nworld=1)
+    calls, restore = _count_forward_passes(state)
+    try:
+        with pytest.raises(RuntimeError, match="boom"):
+            with state.deferred_forward():
+                state.set_free_joint_pose(
+                    "mover_free",
+                    np.array([0.1, 0.2, 0.3]),
+                    np.array([0.0, 0.0, 0.0, 1.0]),
+                )
+                raise RuntimeError("boom")
+        assert calls["n"] == 1
+        assert state._defer_depth == 0
+    finally:
+        restore()
+
+
+def test_nested_deferral_still_runs_one_pass(host_model):
+    state = MjWarpSceneState(host_model, nworld=1)
+    calls, restore = _count_forward_passes(state)
+    try:
+        with state.deferred_forward():
+            with state.deferred_forward():
+                state.set_free_joint_pose(
+                    "mover_free",
+                    np.array([0.1, 0.2, 0.3]),
+                    np.array([0.0, 0.0, 0.0, 1.0]),
+                )
+            assert calls["n"] == 0, "inner exit must not flush"
+        assert calls["n"] == 1
+    finally:
+        restore()
+
+
 def test_nworld_must_be_positive(host_model):
     with pytest.raises(ValueError, match="nworld must be >= 1"):
         MjWarpSceneState(host_model, nworld=0)

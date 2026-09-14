@@ -95,7 +95,14 @@ class MjWarpObjectOnlyBackend(SceneBackend):
         self.env.close()
 
     def reset(self, env_mask: Optional[np.ndarray] = None) -> None:
-        """Restore the scene, then apply randomization to the masked worlds."""
+        """Restore the scene, then apply randomization to the masked worlds.
+
+        Randomization writes several entities in a row, and each write would
+        otherwise run its own kinematics pass -- measured at 74% of reset time,
+        6 passes for 5 entities. Deferring coalesces them into one; the adapter
+        still flushes early for a write that needs a freshly-moved parent, so
+        this is a cost saving rather than a correctness trade.
+        """
         mask = self._normalize_mask(env_mask)
         self._reset_index += 1
         self._last_reset_diagnostics.clear()
@@ -103,7 +110,8 @@ class MjWarpObjectOnlyBackend(SceneBackend):
         if not (self._baseline_object_poses or self._baseline_camera_poses):
             self._record_baseline_poses()
         if self.randomization.applies:
-            self.randomization_executor.apply_randomization(mask)
+            with self.env.state.deferred_forward():
+                self.randomization_executor.apply_randomization(mask)
 
     def _normalize_mask(self, env_mask: Optional[np.ndarray]) -> np.ndarray:
         if env_mask is None:

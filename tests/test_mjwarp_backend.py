@@ -205,6 +205,66 @@ def test_baseline_poses_are_recorded_for_objects_and_cameras(backend):
     assert backend.baseline_pose("no_such_target") is None
 
 
+def test_reset_coalesces_kinematics_passes(backend):
+    """Randomization's many writes must not each run their own pass.
+
+    Measured on this config, eager writes cost 6 kernel launches for 5 entities;
+    deferring brings it to 2 -- two rather than one because plate_cam is mounted
+    on the randomized plate, so its write correctly forces a flush first.
+
+    Counting real launches rather than calls to ``forward()`` is the point:
+    deferral works by making the method return early, so a call count would show
+    no change at all.
+    """
+    backend.reset()  # warm, so kernel compilation is not counted
+
+    launches = {"n": 0}
+    state = backend.env.state
+    original = state._mjw.forward
+
+    def counted(model, data):
+        launches["n"] += 1
+        original(model, data)
+
+    state._mjw.forward = counted
+    try:
+        backend.reset()
+    finally:
+        state._mjw.forward = original
+
+    assert 0 < launches["n"] <= 3
+
+
+def test_reset_results_do_not_depend_on_deferral(backend):
+    """Deferral is an optimisation, so disabling it must change nothing."""
+    from contextlib import contextmanager
+
+    from auto_atom.basis.mjwarp.state import MjWarpSceneState
+
+    backend.reset()
+    deferred = np.asarray(backend.get_object_handler("object").get_pose().position)
+
+    @contextmanager
+    def _no_deferral(self):
+        yield
+
+    original = MjWarpSceneState.deferred_forward
+    MjWarpSceneState.deferred_forward = _no_deferral
+    try:
+        eager_backend = _build()
+        try:
+            eager_backend.reset()
+            eager = np.asarray(
+                eager_backend.get_object_handler("object").get_pose().position
+            )
+        finally:
+            eager_backend.teardown()
+    finally:
+        MjWarpSceneState.deferred_forward = original
+
+    np.testing.assert_allclose(deferred, eager, rtol=1e-6, atol=1e-7)
+
+
 def test_builder_rejects_operators():
     """A non-empty task_operators means the task wants physical execution."""
     ComponentRegistry.clear()

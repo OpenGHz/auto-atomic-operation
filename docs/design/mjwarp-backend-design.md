@@ -181,7 +181,8 @@ float32 精确表示的**运气**，不是转换的性质，因此也一并放�
 | 2g | 相机位姿写入（mount / world 系）+ geom / joint frame 读取 | 已实现 |
 | 2h | `MjWarpObjectOnlyBackend`：`SceneBackend` + `RandomizationHost` + builder | 已实现 |
 | 2i | 观测采集（渲染）：每个 clip range 一个 `RenderContext` | 已实现 |
-| 3 | per-world 批量模型取代 N 份 `MjModel` | 未开始 |
+| 3a | reset 的 forward pass 合并（6 → 2 次 kernel launch，1.84x） | 已实现 |
+| 3b | 批量模型的其余优化（readback 合并等） | 未开始 |
 | 4 | physical 模式：执行器、IK、接触、触觉 | 未开始 |
 
 **轮 2a**（`auto_atom/basis/mjwarp/state.py`）是后续各轮的读写底座：它持有
@@ -425,10 +426,54 @@ camera sensor 时相机声明是惰性的，既不会被materialize 进场景也
    `mjwarp` extra 而不动现有 pin。后端模块必须**惰性导入** `mujoco_warp`，
    保证未安装时项目照常可用（`check_mjwarp_compat.py` 已是这个写法）。
 2. **接触力数值一致性**（见 3.2）。轮 4 的前置验证。
-3. **单 world 是否值得**。本任务 `batch_size: 1`、`sim_freq: 1200`、
-   `update_freq: 30`（每次 update 40 substep）。MJWarp 的优势在多 world 并行，
-   单 world 很可能比 CPU MuJoCo 慢；首次 `step` 另有约 55 s 的 kernel JIT
-   （之后缓存于 `~/.cache/warp/<version>`）。默认后端的选择应在轮 3 之后再评估。
+3. ~~**单 world 是否值得**~~ —— **已实测，结论与预期相反**，见 6.1。
+
+### 6.1 实测吞吐：渲染即使在单 world 也更快，reset 曾是瓶颈
+
+`rack_plate` + `object_only`，每项取 5 次中位数（秒）：
+
+| batch | 后端 | reset | render | render/world |
+|---|---|---|---|---|
+| 1 | warp | 0.0126 | **0.0070** | 0.0070 |
+| 1 | native | 0.0001 | 0.0258 | 0.0258 |
+| 2 | warp | 0.0116 | **0.0137** | 0.0069 |
+| 2 | native | 0.0002 | 0.0564 | 0.0282 |
+| 4 | warp | 0.0119 | **0.0263** | 0.0066 |
+| 4 | native | 0.0002 | 0.1106 | 0.0277 |
+
+**这推翻了本文早先两次给出的判断**（"单 world 很可能比 CPU 慢"）：渲染在
+`batch_size=1` 就已经快约 3.7 倍，且 per-world 渲染成本基本恒定（6.6–7.0 ms），
+而原生按 world 线性增长（每个约 27–28 ms）。
+
+真正的瓶颈在 reset —— 原本比原生慢约 60 倍。剖析显示 **74% 的 reset 时间花在
+6 次 `forward()` kernel launch 上**（5 个实体各写各刷），而不是我先前猜测的
+numpy readback（那只占 11 ms）。轮 3a 因此做的是合并 forward pass，不是合并
+readback。
+
+> ⚠️ 本机 8 GB 显存。跑吞吐对比时**不要**一次性拉到 8/16 world：曾因此让机器卡死。
+> 验证 3a 只需 `batch_size=2`。
+
+### 6.2 轮 3a：`deferred_forward` 把 6 次 pass 降到 2 次
+
+`MjWarpSceneState.deferred_forward()` 是一个引用计数的上下文管理器：块内的
+`forward()` 只标记"待刷新"，退出时统一跑一次。backend 的 `reset` 用它包住
+`apply_randomization`。
+
+实测 **6 → 2 次 kernel launch，reset 24.0 ms vs 44.2 ms（1.84x）**，且四个物体
+与两个相机的位姿**逐位一致**。
+
+为什么是 2 次而不是 1 次：**这正是安全机制在生效**。`set_static_body_pose` 与
+`set_camera_pose` 都要读父级的**当前**世界位姿来做 world → parent-local 转换。
+`rack_plate` 把 `plate_cam` 挂在被随机化的 `object` 上，所以相机写入前必须先让
+`object` 的那次 pass 落地——`_require_fresh_parent` 检测到父级 body 在本块内被写过
+就提前 flush。
+
+**这不是"对这个配置刚好安全"，而是通用正确的**：写入时记录 dirty body，读父级
+位姿时按需 flush，因此即使某个任务同时随机化一个 body 和它的父级也不会出错。
+`test_a_child_write_flushes_its_freshly_moved_parent` 与
+`test_camera_write_flushes_a_freshly_moved_mount` 钉住了这一点——**把该守卫改成
+no-op 后两者立刻失败**（相机落到 `[0.2, 0.35, 0.95]` 而非 `[0.35, 0.05, 0.55]`，
+约 0.5 m 偏差），确认它确实承重而非装饰。
 
 ## 7. 本机环境注意事项
 
