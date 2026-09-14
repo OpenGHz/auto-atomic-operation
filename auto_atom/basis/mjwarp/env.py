@@ -220,6 +220,62 @@ class MjWarpObjectOnlyEnv:
         self.state.set_ctrl(actuator_ids, rows, world_mask=mask)
         self.state.step()
 
+    def step(
+        self,
+        action: np.ndarray,
+        /,
+        *,
+        env_mask: Optional[np.ndarray] = None,
+    ) -> None:
+        """Apply a policy action and advance one control update.
+
+        ``action`` addresses actuators positionally from index 0 -- the whole
+        ``nu`` vector, not one operator's slice -- which is what a recorded or
+        replayed policy action is. It may be ``(nu,)`` broadcast to every
+        selected world, or ``(nworld, nu)``.
+
+        Two things differ from :meth:`apply_joint_action`, both mirroring the
+        native ``step``:
+
+        * **The action is clamped to ``actuator_ctrlrange`` before it is
+          written.** Native's ``step`` clamps here while its actuator path does
+          not, and the difference is observable -- a recording that captures
+          ``ctrl`` would show clamped values on this path and raw values on the
+          other. Matching native matters more than internal tidiness for an
+          entry point whose whole purpose is recorded actions. (Contrast 3.7,
+          which is about the actuator path.)
+        * **It advances ``n_substeps`` steps, not one**, because native's
+          ``step`` ends in ``update()``, and one policy action corresponds to one
+          control update rather than one physics step.
+
+        Calling this inside a :meth:`~MjWarpSceneState.deferred_step` block is
+        refused: that block exists to collapse a control tick's per-env calls
+        into a single step, so it would silently turn ``n_substeps`` into one and
+        run the episode at the wrong rate.
+        """
+        if self.state._step_defer_depth > 0:
+            raise RuntimeError(
+                "step() cannot be called inside a deferred_step block: the "
+                "block collapses steps to one, which would silently reduce this "
+                "action's n_substeps to a single step. Deferral is for the "
+                "per-env control tick; a policy action is not part of one."
+            )
+
+        nu = int(self.host_model.nu)
+        rows = self._joint_action_rows(action, nu, "<policy action>")
+        low = np.asarray(self.host_model.actuator_ctrlrange[:, 0], dtype=np.float64)
+        high = np.asarray(self.host_model.actuator_ctrlrange[:, 1], dtype=np.float64)
+        limited = np.asarray(self.host_model.actuator_ctrllimited, dtype=bool)
+        clamped = np.where(limited, np.clip(rows, low, high), rows)
+
+        self.state.set_ctrl(
+            np.arange(nu, dtype=np.int32),
+            clamped,
+            world_mask=self._normalize_mask(env_mask),
+        )
+        for _ in range(self.n_substeps):
+            self.state.step()
+
     def _joint_action_rows(
         self,
         action: Any,

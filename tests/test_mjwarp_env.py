@@ -440,3 +440,85 @@ def test_a_wrong_batch_is_refused(physical_env):
 def test_joint_action_on_an_unknown_operator_is_refused(physical_env):
     with pytest.raises(KeyError, match="Registered: arm"):
         physical_env.apply_joint_action("nonexistent", np.zeros(1))
+
+
+# ----------------------------------------------------------------------
+# Policy actions (StepEnvProtocol)
+# ----------------------------------------------------------------------
+
+
+def test_satisfies_the_step_protocol(physical_env):
+    from auto_atom.contracts import StepEnvProtocol
+
+    assert isinstance(physical_env, StepEnvProtocol)
+
+
+def test_policy_step_advances_one_control_update(physical_env):
+    """One policy action is one control update, i.e. n_substeps physics steps.
+
+    Native's step ends in update(), so a port that advanced a single step would
+    run the episode at n_substeps times the intended rate.
+    """
+    nu = int(physical_env.host_model.nu)
+    timestep = float(physical_env.state.host_model.opt.timestep)
+    before = physical_env.state.data.time.numpy().copy()
+
+    physical_env.step(np.zeros(nu))
+
+    after = physical_env.state.data.time.numpy()
+    np.testing.assert_allclose(
+        after - before, timestep * physical_env.n_substeps, rtol=1e-5
+    )
+
+
+def test_policy_action_is_clamped_to_ctrlrange(physical_env):
+    """This path clamps on write, unlike the actuator path (3.7).
+
+    Native's step clamps before writing, so a recording that captures ctrl shows
+    clamped values here. Divergence would make replayed actions differ.
+    """
+    nu = int(physical_env.host_model.nu)
+    limited = np.asarray(physical_env.host_model.actuator_ctrllimited, dtype=bool)
+    assert limited.any(), "config must have at least one limited actuator to test"
+    high = np.asarray(physical_env.host_model.actuator_ctrlrange[:, 1])
+
+    physical_env.step(np.full(nu, 1e6))
+
+    got = physical_env.state.get_ctrl()[0]
+    np.testing.assert_allclose(got[limited], high[limited], rtol=1e-5, atol=1e-6)
+
+
+def test_policy_step_accepts_per_world_actions(physical_env):
+    nu = int(physical_env.host_model.nu)
+    rows = np.stack([np.full(nu, 0.01), np.full(nu, -0.01)])
+
+    physical_env.step(rows)
+
+    got = physical_env.state.get_ctrl()
+    assert not np.allclose(got[0], got[1]), "each world keeps its own command"
+
+
+def test_policy_step_respects_a_world_mask(physical_env):
+    nu = int(physical_env.host_model.nu)
+    physical_env.step(np.zeros(nu))
+    baseline = physical_env.state.get_ctrl()[0].copy()
+
+    physical_env.step(np.full(nu, 0.02), env_mask=np.array([False, True]))
+
+    got = physical_env.state.get_ctrl()
+    np.testing.assert_allclose(got[0], baseline, atol=1e-7)
+    assert not np.allclose(got[1], baseline)
+
+
+def test_policy_step_is_refused_inside_a_deferral(physical_env):
+    """Deferral collapses steps to one, which would break n_substeps silently."""
+    nu = int(physical_env.host_model.nu)
+
+    with pytest.raises(RuntimeError, match="cannot be called inside a deferred_step"):
+        with physical_env.state.deferred_step():
+            physical_env.step(np.zeros(nu))
+
+
+def test_policy_step_rejects_a_wrong_width(physical_env):
+    with pytest.raises(ValueError, match="joint value"):
+        physical_env.step(np.zeros(3))
