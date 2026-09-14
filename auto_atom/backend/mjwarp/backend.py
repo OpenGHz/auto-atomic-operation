@@ -57,6 +57,7 @@ class MjWarpObjectOnlyBackend(SceneBackend):
         object_handlers: Mapping[str, MjWarpObjectHandler],
         randomization: Optional["ResolvedRandomizationConfig"] = None,
         operator_handlers: Optional[Mapping[str, Any]] = None,
+        operator_initial_states: Optional[Mapping[str, Any]] = None,
     ) -> None:
         self.config = config
         self.env = env
@@ -64,6 +65,11 @@ class MjWarpObjectOnlyBackend(SceneBackend):
         # Empty for ``execution.mode: object_only``, which strips the operator
         # layer at the Hydra boundary; populated for physical execution.
         self.operator_handlers: Dict[str, Any] = dict(operator_handlers or {})
+        # Configured ``initial_state`` per operator, applied on every reset. Only
+        # operators that declare one appear here.
+        self._operator_initial_states: Dict[str, Any] = dict(
+            operator_initial_states or {}
+        )
         # The *resolved* config, not the raw scope: `.applies` folds the master
         # switch and emptiness into one decision, and a backend is not supposed
         # to hold a raw randomization config at all.
@@ -116,9 +122,30 @@ class MjWarpObjectOnlyBackend(SceneBackend):
         self.env.reset()
         if not (self._baseline_object_poses or self._baseline_camera_poses):
             self._record_baseline_poses()
+        # Home operators to their configured initial_state before randomization:
+        # a base_pose moves the arm's base frame, and randomization's pose
+        # constraints are evaluated against the scene as the operator leaves it.
+        self._apply_operator_initial_states(mask)
         if self.randomization.applies:
             with self.env.state.deferred_forward():
                 self.randomization_executor.apply_randomization(mask)
+
+    def _apply_operator_initial_states(self, env_mask: np.ndarray) -> None:
+        """Apply each operator's ``initial_state`` for the selected worlds.
+
+        Empty for ``object_only`` (no operators) and for a physical task that
+        configures none, so this is a no-op rather than a branch there. The
+        end-to-end run (design doc 5.2) showed this step was missing entirely:
+        the arm sat at its raw MJCF pose and drove away from every target.
+        """
+        if not self._operator_initial_states:
+            return
+        from auto_atom.backend.mjwarp.initial_state import apply_initial_state
+
+        for name, initial_state in self._operator_initial_states.items():
+            apply_initial_state(
+                self.get_operator_handler(name), initial_state, env_mask=env_mask
+            )
 
     def _normalize_mask(self, env_mask: Optional[np.ndarray]) -> np.ndarray:
         if env_mask is None:
@@ -597,6 +624,11 @@ def build_mjwarp_object_only_backend(
             config.randomization
         ),
         operator_handlers=_build_operator_handlers(env, operator_configs),
+        operator_initial_states={
+            name: operator_config.initial_state
+            for name, operator_config in operator_configs.items()
+            if getattr(operator_config, "initial_state", None) is not None
+        },
     )
 
 
