@@ -28,6 +28,10 @@ aao-unidoor-sweep = "auto_atom.runner.unidoor_sweep:main"
 
 [project.optional-dependencies]
 mujoco = ["mujoco >=3.12.0,<3.13.0", "PyOpenGL_accelerate"]
+# GPU MuJoCo. mujoco-warp requires mujoco>=3.12.0, so it composes with the
+# `mujoco` pin above rather than forcing it forward. Imported lazily by
+# auto_atom.basis.mjwarp, so the native path never needs this installed.
+mjwarp = ["mujoco-warp >=3.13.0", "warp-lang >=1.15"]
 gs = [
   "gsplat",
   "torch",

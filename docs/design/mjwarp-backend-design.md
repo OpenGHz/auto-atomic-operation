@@ -129,9 +129,20 @@ cam_pos   cam_quat   cam_fovy   jnt_range  qpos0
 | 轮 | 内容 | 状态 |
 |---|---|---|
 | 1 | 移除 P7 机械臂 default class 的非零 `margin` | 已实现 `393b2fd` |
-| 2 | `object_only` MJWarp 后端，满足现有接缝，不新增协议 | 未开始 |
+| 2a | `MjWarpSceneState`：device 状态读写 + 与原生路径的等价性测试 | 已实现 |
+| 2b | `object_only` MJWarp env/backend，满足现有接缝，不新增协议 | 未开始 |
 | 3 | per-world 批量模型取代 N 份 `MjModel` | 未开始 |
 | 4 | physical 模式：执行器、IK、接触、触觉 | 未开始 |
+
+**轮 2a**（`auto_atom/basis/mjwarp/state.py`）是后续各轮的读写底座：它持有
+device `Model`/`Data`，并以与原生路径相同的单位、dtype 与约定回答 frame 查询。
+`tests/test_mjwarp_state.py` 的每个位姿读取都与**原生 `MujocoBasis` 方法本身**
+对比，而不是与"原生做了什么"的复述对比，因此约定不一致会在此处失败，而不是
+以后表现为一个略微错误的抓取位姿。
+
+其中一条约定值得单独固定：MJWarp 把 MuJoCo 的 wxyz 存在 `wp.quat` 里，而
+`wp.quat` 的 Warp 原生序是 xyzw。直接返回原始数组会**错但看起来合理**，
+`test_body_orientation_is_xyzw_not_wxyz` 专门钉住这一点。
 
 **轮 1** 的动机：MJWarp 门禁拒绝 mesh/box CCD pair 上的非零 margin。编译后场景
 中 59 个非零 margin geom 里只有 7 个可碰撞（`link1..link7`），其余 52 个是
@@ -170,6 +181,24 @@ KeyError: 'ccd_kernel_builder__locals__ccd_kernel_..._smem_bytes'
 恢复缓存后即通过。**与模型内容无关**——不含机械臂的 `object_only` 模型同样触发，
 故不是 margin 或场景问题，而是工具链版本偏移。会干扰 CI 判读，排查时优先
 确认缓存状态。
+
+### 7.1 受限 runner 的内存上限不够加载 CUDA 模块
+
+`scripts/run_tests_safe.py` 默认 `--memory-max-mb 6144`。在该上限下
+`tests/test_mjwarp_state.py` 有 3 项失败，报的正是上面那个 CCD kernel
+`KeyError`——**但这不是工具链偏移，而是 cgroup 上限**：同一批测试直接用
+`python -m pytest` 跑 12 项全通过（2 s），提高上限后用同一个受限 runner 也
+全通过（3.8 s）。
+
+CUDA 模块加载很吃宿主内存，触到 cgroup 硬上限时 warp 报出的症状与符号查找
+失败难以区分。**涉及 MJWarp 的测试必须提高上限**：
+
+```bash
+python scripts/run_tests_safe.py --test-targets tests/test_mjwarp_state.py \
+    --max-concurrency=1 --memory-high-mb 10240 --memory-max-mb 14336
+```
+
+排查顺序因此是：先确认内存上限，再确认 warp kernel 缓存，最后才怀疑模型。
 
 ## 8. 复现方式
 
