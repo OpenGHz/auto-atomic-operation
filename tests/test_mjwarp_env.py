@@ -310,3 +310,133 @@ def test_object_only_registers_nothing(warp_env):
 def test_unknown_operator_names_what_is_registered(physical_env):
     with pytest.raises(KeyError, match="Registered: arm"):
         physical_env.get_operator_state("nonexistent")
+
+
+# ----------------------------------------------------------------------
+# Joint actions (JointActionEnvProtocol)
+# ----------------------------------------------------------------------
+
+
+def _joint_width(env, operator="arm"):
+    state = env.get_operator_state(operator)
+    return state.arm_actuator_ids.size + state.eef_actuator_ids.size
+
+
+def test_satisfies_the_joint_action_protocol(physical_env):
+    from auto_atom.contracts import JointActionEnvProtocol
+
+    assert isinstance(physical_env, JointActionEnvProtocol)
+
+
+def test_joint_action_writes_arm_then_eef_actuators(physical_env):
+    """Action layout is arm actuators first, then eef, in config order.
+
+    A transposed or offset mapping would still move the arm, just to the wrong
+    joints, so this checks the commanded ctrl slot by slot.
+    """
+    operator = physical_env.get_operator_state("arm")
+    width = _joint_width(physical_env)
+    action = np.arange(1, width + 1, dtype=np.float64) * 0.01
+
+    with physical_env.state.deferred_step():
+        physical_env.apply_joint_action("arm", action)
+
+    ctrl = physical_env.state.get_ctrl()[0]
+    expected = np.concatenate([operator.arm_actuator_ids, operator.eef_actuator_ids])
+    np.testing.assert_allclose(ctrl[expected], action, rtol=1e-5, atol=1e-6)
+
+
+def test_joint_action_broadcasts_and_accepts_per_world_rows(physical_env):
+    width = _joint_width(physical_env)
+    operator = physical_env.get_operator_state("arm")
+    slots = np.concatenate([operator.arm_actuator_ids, operator.eef_actuator_ids])
+
+    with physical_env.state.deferred_step():
+        physical_env.apply_joint_action("arm", np.full(width, 0.05))
+    shared = physical_env.state.get_ctrl()
+    np.testing.assert_allclose(shared[0][slots], shared[1][slots], atol=1e-7)
+
+    per_world = np.stack([np.full(width, 0.02), np.full(width, -0.02)])
+    with physical_env.state.deferred_step():
+        physical_env.apply_joint_action("arm", per_world)
+    got = physical_env.state.get_ctrl()
+    np.testing.assert_allclose(got[0][slots], 0.02, rtol=1e-5, atol=1e-6)
+    np.testing.assert_allclose(got[1][slots], -0.02, rtol=1e-5, atol=1e-6)
+
+
+def test_joint_action_respects_a_world_mask(physical_env):
+    width = _joint_width(physical_env)
+    operator = physical_env.get_operator_state("arm")
+    slots = np.concatenate([operator.arm_actuator_ids, operator.eef_actuator_ids])
+
+    with physical_env.state.deferred_step():
+        physical_env.apply_joint_action("arm", np.full(width, 0.11))
+    with physical_env.state.deferred_step():
+        physical_env.apply_joint_action(
+            "arm", np.full(width, 0.33), env_mask=np.array([False, True])
+        )
+
+    got = physical_env.state.get_ctrl()
+    np.testing.assert_allclose(got[0][slots], 0.11, rtol=1e-5, atol=1e-6)
+    np.testing.assert_allclose(got[1][slots], 0.33, rtol=1e-5, atol=1e-6)
+
+
+def test_kinematic_action_pins_joints_exactly(physical_env):
+    """Reset needs the exact pose, not whatever physics converges to."""
+    operator = physical_env.get_operator_state("arm")
+    width = _joint_width(physical_env)
+    target = np.full(width, 0.07)
+
+    physical_env.apply_joint_action("arm", target, kinematic=True)
+
+    qpos_indices = np.concatenate(
+        [operator.arm_qpos_indices, operator.eef_qpos_indices]
+    )
+    got = physical_env.state.get_joint_positions(qpos_indices)
+    np.testing.assert_allclose(got[0], target[: qpos_indices.size], atol=1e-5)
+    # And no momentum survives the teleport.
+    dof_indices = np.concatenate([operator.arm_dof_indices, operator.eef_dof_indices])
+    np.testing.assert_allclose(
+        physical_env.state.get_joint_velocities(dof_indices), 0.0, atol=1e-7
+    )
+
+
+def test_one_step_per_tick_regardless_of_call_count(physical_env):
+    """Two operators-worth of calls in one tick still advance physics once.
+
+    This is the 3.8 contract at the env level: apply_joint_action requests a
+    step, and the tick boundary collapses the requests.
+    """
+    width = _joint_width(physical_env)
+    timestep = float(physical_env.state.host_model.opt.timestep)
+    before = physical_env.state.data.time.numpy().copy()
+
+    with physical_env.state.deferred_step():
+        physical_env.apply_joint_action("arm", np.zeros(width))
+        physical_env.apply_joint_action("arm", np.zeros(width))
+
+    after = physical_env.state.data.time.numpy()
+    np.testing.assert_allclose(after - before, timestep, rtol=1e-6)
+
+
+def test_a_wrong_width_action_is_refused_not_truncated(physical_env):
+    """Native truncates; this fails closed.
+
+    A short action applied as action[:n] leaves the remaining joints holding a
+    stale target, and an arm that moves partially is harder to diagnose than one
+    that refuses the command.
+    """
+    with pytest.raises(ValueError, match="joint value"):
+        physical_env.apply_joint_action("arm", np.zeros(3))
+
+
+def test_a_wrong_batch_is_refused(physical_env):
+    width = _joint_width(physical_env)
+
+    with pytest.raises(ValueError, match="must be 1 or batch_size"):
+        physical_env.apply_joint_action("arm", np.zeros((3, width)))
+
+
+def test_joint_action_on_an_unknown_operator_is_refused(physical_env):
+    with pytest.raises(KeyError, match="Registered: arm"):
+        physical_env.apply_joint_action("nonexistent", np.zeros(1))

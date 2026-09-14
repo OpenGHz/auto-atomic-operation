@@ -169,6 +169,86 @@ class MjWarpObjectOnlyEnv:
                 f"Operator '{name}' is not registered. Registered: {known}."
             ) from None
 
+    def apply_joint_action(
+        self,
+        operator: str,
+        action: Any,
+        env_mask: Optional[np.ndarray] = None,
+        kinematic: bool = False,
+    ) -> None:
+        """Drive one operator's joints, satisfying ``JointActionEnvProtocol``.
+
+        ``action`` is ``(n_joints,)`` -- broadcast to every selected world -- or
+        ``(nworld, n_joints)`` for per-world commands. The first ``n_arm``
+        entries map to ``arm_actuators`` and the remainder to ``eef_actuators``,
+        in the order the config declares them, matching the native contract.
+
+        ``kinematic=True`` pins the joints exactly (write ``qpos``, zero the
+        matching ``qvel``, mirror into ``ctrl``) rather than commanding actuators
+        and letting physics converge. Reset and teleport use it, because a
+        randomized pose has to be reached exactly regardless of what the
+        controller would have done.
+
+        The physics branch *requests* a step rather than taking one, so a caller
+        driving several operators or several worlds in one tick wraps the whole
+        sweep in ``state.deferred_step()`` and gets exactly one step -- see the
+        design doc's 3.8 for why per-call stepping is wrong here.
+        """
+        state = self.get_operator_state(operator)
+        actuator_ids = np.concatenate(
+            [state.arm_actuator_ids, state.eef_actuator_ids]
+        ).astype(np.int32)
+        rows = self._joint_action_rows(action, actuator_ids.size, operator)
+        mask = self._normalize_mask(env_mask)
+
+        if kinematic:
+            qpos_indices = np.concatenate(
+                [state.arm_qpos_indices, state.eef_qpos_indices]
+            ).astype(np.int32)
+            dof_indices = np.concatenate(
+                [state.arm_dof_indices, state.eef_dof_indices]
+            ).astype(np.int32)
+            self.state.set_joint_positions(
+                qpos_indices,
+                rows[:, : qpos_indices.size],
+                dof_indices,
+                actuator_ids=actuator_ids,
+                world_mask=mask,
+            )
+            return
+
+        self.state.set_ctrl(actuator_ids, rows, world_mask=mask)
+        self.state.step()
+
+    def _joint_action_rows(
+        self,
+        action: Any,
+        width: int,
+        operator: str,
+    ) -> np.ndarray:
+        """Normalize a joint action to one row per world, width-checked.
+
+        A wrong width is rejected rather than truncated. The native path tolerates
+        a short action by applying ``action[:n]``, which leaves the remaining
+        joints holding a stale target -- an arm that moves partially is harder to
+        diagnose than one that refuses the command, so this fails closed.
+        """
+        array = np.asarray(action, dtype=np.float64)
+        array = array.reshape(1, -1) if array.ndim == 1 else array
+        if array.shape[1] != width:
+            raise ValueError(
+                f"Operator '{operator}' expects {width} joint value(s) "
+                f"(arm + eef actuators); got {array.shape[1]}."
+            )
+        if array.shape[0] == 1:
+            return np.repeat(array, self.batch_size, axis=0)
+        if array.shape[0] != self.batch_size:
+            raise ValueError(
+                f"Joint action batch must be 1 or batch_size "
+                f"({self.batch_size}); got {array.shape[0]}."
+            )
+        return array
+
     # ------------------------------------------------------------------
     # EnvProtocol
     # ------------------------------------------------------------------
