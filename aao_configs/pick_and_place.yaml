@@ -23,6 +23,8 @@ env:
 #     start: { stage: pick_source, phase: post_move, waypoint: 0, side: before }
 #     stop: { stage: place_source, phase: post_move, waypoint: 0, side: after }
 #     max_fast_forward_updates: 10000
+#     continuous: false # true: no-skip dense collection with per-step keypoint
+#                       # marks; requires update_boundary: control_tick
 
 task:
   # Pose randomization applied at each reset.

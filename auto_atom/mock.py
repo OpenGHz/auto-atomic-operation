@@ -153,12 +153,26 @@ class MockEnv:
     """Minimal env stub that satisfies the ``SceneBackend.env`` contract."""
 
     batch_size: int = 1
+    keypoint_mark: Optional[List[Dict[str, Any]]] = None
 
     def step(self, action: np.ndarray, env_mask: np.ndarray | None = None) -> None:
         pass
 
+    def set_keypoint_mark(
+        self,
+        mark: Optional[List[Dict[str, Any]]],
+    ) -> None:
+        """Store per-step keypoint marks published by TaskRunner."""
+        self.keypoint_mark = None if mark is None else list(mark)
+
     def capture_observation(self) -> Dict[str, Dict[str, Any]]:
-        return {}
+        observation: Dict[str, Dict[str, Any]] = {}
+        if self.keypoint_mark is not None:
+            observation["task/keypoint"] = {
+                "data": list(self.keypoint_mark),
+                "t": [0.0 for _ in self.keypoint_mark],
+            }
+        return observation
 
     def apply_joint_action(
         self,

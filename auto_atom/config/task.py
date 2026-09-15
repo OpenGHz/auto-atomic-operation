@@ -21,6 +21,7 @@ from auto_atom.config.execution import (
     KeypointSide,
     TaskKeypointConfig,
     TaskPhase,
+    UpdateBoundary,
 )
 from auto_atom.config.motion import StageConfig
 from auto_atom.config.operations import Operation
@@ -335,6 +336,16 @@ class TaskFileConfig(BaseModel):
         selection = self.execution.interval_selection
         if selection is None:
             return self
+        if (
+            selection.continuous
+            and self.execution.update_boundary != UpdateBoundary.CONTROL_TICK
+        ):
+            raise ValueError(
+                "execution.interval_selection.continuous requires "
+                "execution.update_boundary=control_tick; continuous mode "
+                "already steps through every keypoint boundary per tick, "
+                "while a coarser update_boundary skips them by design"
+            )
 
         stages_by_name: Dict[str, List[Tuple[int, StageConfig]]] = {}
         for index, stage in enumerate(self.task.stages):

@@ -150,6 +150,58 @@ different: each held-object waypoint is written once. Use the default
 `control_tick` for dense physical trajectories; use `primitive`, `keypoint`, or
 `stage` only when boundary-only samples are intentional.
 
+### Continuous keypoint-marked collection
+
+Collecting boundary-only transition data normally requires a dedicated pass
+with `execution.update_boundary=keypoint`. To obtain the same keypoint data
+from one dense pass instead, add
+`+execution.interval_selection.continuous=true` (and keep the default
+`update_boundary=control_tick`):
+
+```python
+overrides=[
+    "+execution.interval_selection.start.stage=pick_source",
+    "+execution.interval_selection.start.phase=post_move",
+    "+execution.interval_selection.start.waypoint=0",
+    "+execution.interval_selection.start.side=after",
+    "+execution.interval_selection.stop.stage=place_source",
+    "+execution.interval_selection.stop.phase=post_move",
+    "+execution.interval_selection.stop.waypoint=0",
+    "+execution.interval_selection.stop.side=after",
+    "+execution.interval_selection.continuous=true",
+]
+```
+
+`runner.reset()` still fast-forwards to the start boundary, then every
+public `runner.update()` advances exactly one controller update without
+skipping the segments between keypoints. The marks are injected into the
+observation itself, so pipelines that only persist `capture_observation()`
+output record them automatically. After each `reset()` / `update()`, the
+runner publishes one row per environment to the env, and
+`capture_observation()` returns it under the `task/keypoint` key
+(`/robot/task/keypoint` in structured mode):
+
+```python
+runner.reset()
+obs = env.capture_observation()
+mark = obs["task/keypoint"]              # {"data": [per-env rows], "t": [...]}
+row = mark["data"][env_index]            # is_keypoint, stage_index,
+                                         # stage_name, phase, waypoint, side
+```
+
+Each row carries `is_keypoint` plus the marked keypoint's
+`stage_index` / `stage_name` / `phase` / `waypoint` / `side`. The reset step
+marks the `start` boundary with `start.side`; a step that completes a
+keypoint marks it with `after`; the terminal step marks the `stop` boundary
+with `stop.side`. Environments without the `set_keypoint_mark` capability
+and non-continuous runs omit the key entirely. A writer that persists
+observations verbatim therefore keeps the marks automatically, and filtering
+the dense trajectory to samples whose row has `is_keypoint: true`
+reproduces the boundary-only transition data for the selected interval,
+without a second collection pass. See
+[Stages & Waypoints](../task-configuration/stages_and_waypoints.md#continuous-keypoint-marked-collection)
+for the exact field semantics.
+
 `execution.render_internal_updates: false` only coalesces passive-viewer
 refreshes and skips viewer `step_delay`; it does not change which observations
 the host captures or how many physics ticks run.

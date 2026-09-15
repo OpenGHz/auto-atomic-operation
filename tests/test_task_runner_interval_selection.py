@@ -101,6 +101,11 @@ def _operator_positions(runner: TaskRunner) -> np.ndarray:
     )
 
 
+def _obs_mark(runner: TaskRunner) -> dict:
+    """Return the env-0 keypoint mark row injected into the observation."""
+    return runner.get_env().capture_observation()["task/keypoint"]["data"][0]
+
+
 @pytest.fixture(autouse=True)
 def _clear_component_registry():
     ComponentRegistry.clear()
@@ -199,6 +204,7 @@ def test_interval_endpoint_sides_have_role_specific_defaults() -> None:
             "side": "after",
         },
         "max_fast_forward_updates": 10_000,
+        "continuous": False,
     }
 
 
@@ -988,3 +994,277 @@ def test_primitive_action_preserves_existing_positional_constructor_order() -> N
     assert action.arc_cumulative_angle == pytest.approx(0.25)
     assert action.phase is None
     assert action.waypoint is None
+
+
+def test_continuous_mode_marks_keypoint_boundaries_without_skipping_ticks() -> None:
+    interval = {
+        "start": _keypoint("selected", "pre_move", 0),
+        "stop": _keypoint("selected", "post_move", 1),
+        "continuous": True,
+    }
+    runner = TaskRunner().from_config(
+        TaskFileConfig.model_validate(_task_payload(interval=interval))
+    )
+    try:
+        reset_update = runner.reset()
+
+        assert reset_update.done.tolist() == [False]
+        assert _obs_mark(runner) == {
+            "is_keypoint": True,
+            "stage_index": 0,
+            "stage_name": "selected",
+            "phase": "pre_move",
+            "waypoint": 0,
+            "side": "before",
+        }
+        assert reset_update.details[0]["interval_selection"]["continuous"] is True
+        assert (
+            reset_update.details[0]["interval_selection"]["fast_forward_updates"] == 0
+        )
+
+        # Each mock pose primitive takes two controller ticks. The four
+        # in-interval keypoints therefore need eight dense updates, and only
+        # the completion tick of each keypoint is marked.
+        expected_marks = [
+            ("pre_move", 0, "after"),
+            ("pre_move", 1, "after"),
+            ("post_move", 0, "after"),
+            ("post_move", 1, "after"),
+        ]
+        positions: list[float] = []
+        marks: list[tuple[str, int, str] | None] = []
+        for _ in range(16):
+            update = runner.update()
+            positions.append(float(_operator_positions(runner)[0, 0]))
+            row = _obs_mark(runner)
+            if bool(row["is_keypoint"]):
+                marks.append((row["phase"], int(row["waypoint"]), row["side"]))
+            else:
+                marks.append(None)
+            if bool(update.done[0]):
+                break
+
+        assert positions == pytest.approx([0.2, 0.1, 0.1, 0.2, 0.2, 0.3, 0.3, 0.4])
+        assert [mark for mark in marks if mark is not None] == expected_marks
+        assert marks[1] == ("pre_move", 0, "after")
+        assert marks[3] == ("pre_move", 1, "after")
+        assert marks[5] == ("post_move", 0, "after")
+        assert marks[7] == ("post_move", 1, "after")
+        assert update.success.tolist() == [True]
+    finally:
+        runner.close()
+
+
+def test_continuous_run_ticks_match_plain_control_tick_interval() -> None:
+    interval = {
+        "start": _keypoint("selected", "pre_move", 0),
+        "stop": _keypoint("selected", "post_move", 1),
+    }
+    positions: dict[bool, list[float]] = {}
+    for continuous in (False, True):
+        payload_interval = dict(interval)
+        if continuous:
+            payload_interval["continuous"] = True
+        runner = TaskRunner().from_config(
+            TaskFileConfig.model_validate(_task_payload(interval=payload_interval))
+        )
+        try:
+            runner.reset()
+            sequence: list[float] = []
+            for _ in range(64):
+                update = runner.update()
+                sequence.append(float(_operator_positions(runner)[0, 0]))
+                if bool(update.done[0]):
+                    break
+            positions[continuous] = sequence
+        finally:
+            runner.close()
+
+    assert len(positions[True]) == 8
+    assert positions[True] == positions[False]
+
+
+def test_continuous_reset_after_start_marks_after_side() -> None:
+    interval = {
+        "start": _keypoint("selected", "post_move", 0, side="after"),
+        "stop": _keypoint("selected", "post_move", 1),
+        "continuous": True,
+    }
+    runner = TaskRunner().from_config(
+        TaskFileConfig.model_validate(_task_payload(interval=interval))
+    )
+    try:
+        reset_update = runner.reset()
+
+        assert _operator_positions(runner)[0, 0] == pytest.approx(0.3)
+        assert _obs_mark(runner) == {
+            "is_keypoint": True,
+            "stage_index": 0,
+            "stage_name": "selected",
+            "phase": "post_move",
+            "waypoint": 0,
+            "side": "after",
+        }
+        assert (
+            reset_update.details[0]["interval_selection"]["fast_forward_updates"] == 6
+        )
+
+        running_update = runner.update()
+        assert _obs_mark(runner)["is_keypoint"] is False
+
+        final_update = runner.update()
+        assert final_update.done.tolist() == [True]
+        assert final_update.success.tolist() == [True]
+        assert _obs_mark(runner) == {
+            "is_keypoint": True,
+            "stage_index": 0,
+            "stage_name": "selected",
+            "phase": "post_move",
+            "waypoint": 1,
+            "side": "after",
+        }
+    finally:
+        runner.close()
+
+
+def test_continuous_stop_before_marks_the_before_side() -> None:
+    interval = {
+        "start": _keypoint("selected", "pre_move", 0),
+        "stop": _keypoint("selected", "pre_move", 1, side="before"),
+        "continuous": True,
+    }
+    runner = TaskRunner().from_config(
+        TaskFileConfig.model_validate(_task_payload(interval=interval))
+    )
+    try:
+        runner.reset()
+        assert _obs_mark(runner)["side"] == "before"
+
+        runner.update()
+        assert _obs_mark(runner)["is_keypoint"] is False
+
+        final_update = runner.update()
+        assert final_update.done.tolist() == [True]
+        assert final_update.success.tolist() == [True]
+        assert _obs_mark(runner) == {
+            "is_keypoint": True,
+            "stage_index": 0,
+            "stage_name": "selected",
+            "phase": "pre_move",
+            "waypoint": 1,
+            "side": "before",
+        }
+        assert _operator_positions(runner)[0, 0] == pytest.approx(0.1)
+    finally:
+        runner.close()
+
+
+def test_continuous_partial_reset_mask_publishes_only_selected_envs() -> None:
+    interval = {
+        "start": _keypoint("selected", "pre_move", 0),
+        "stop": _keypoint("selected", "post_move", 1),
+        "continuous": True,
+    }
+    runner = TaskRunner().from_config(
+        TaskFileConfig.model_validate(_task_payload(batch_size=2, interval=interval))
+    )
+    try:
+        runner.reset(np.asarray([True, False], dtype=bool))
+        rows = runner.get_env().capture_observation()["task/keypoint"]["data"]
+
+        assert rows[0] == {
+            "is_keypoint": True,
+            "stage_index": 0,
+            "stage_name": "selected",
+            "phase": "pre_move",
+            "waypoint": 0,
+            "side": "before",
+        }
+        assert rows[1] == {
+            "is_keypoint": False,
+            "stage_index": -1,
+            "stage_name": "",
+            "phase": None,
+            "waypoint": -1,
+            "side": None,
+        }
+    finally:
+        runner.close()
+
+
+def test_continuous_mode_requires_control_tick_update_boundary() -> None:
+    payload = _task_payload(
+        interval={
+            "start": _keypoint("selected", "pre_move", 0),
+            "stop": _keypoint("selected", "post_move", 1),
+            "continuous": True,
+        }
+    )
+    payload["execution"]["update_boundary"] = "keypoint"
+
+    with pytest.raises(
+        ValidationError,
+        match="requires execution.update_boundary=control_tick",
+    ):
+        TaskFileConfig.model_validate(payload)
+
+
+def test_continuous_mode_publishes_marks_into_observation() -> None:
+    interval = {
+        "start": _keypoint("selected", "pre_move", 0),
+        "stop": _keypoint("selected", "post_move", 1),
+        "continuous": True,
+    }
+    runner = TaskRunner().from_config(
+        TaskFileConfig.model_validate(_task_payload(interval=interval))
+    )
+    try:
+        runner.reset()
+        obs = runner.get_env().capture_observation()
+
+        assert obs["task/keypoint"]["data"] == [
+            {
+                "is_keypoint": True,
+                "stage_index": 0,
+                "stage_name": "selected",
+                "phase": "pre_move",
+                "waypoint": 0,
+                "side": "before",
+            }
+        ]
+        assert obs["task/keypoint"]["t"] == [0.0]
+
+        runner.update()
+        obs = runner.get_env().capture_observation()
+        assert obs["task/keypoint"]["data"][0]["is_keypoint"] is False
+        assert obs["task/keypoint"]["data"][0]["side"] is None
+
+        runner.update()
+        obs = runner.get_env().capture_observation()
+        row = obs["task/keypoint"]["data"][0]
+        assert row["is_keypoint"] is True
+        assert row["phase"] == "pre_move"
+        assert row["waypoint"] == 0
+        assert row["side"] == "after"
+    finally:
+        runner.close()
+
+
+def test_observation_has_no_keypoint_mark_without_continuous_mode() -> None:
+    runner = TaskRunner().from_config(
+        TaskFileConfig.model_validate(
+            _task_payload(
+                interval={
+                    "start": _keypoint("selected", "pre_move", 0),
+                    "stop": _keypoint("selected", "post_move", 1),
+                }
+            )
+        )
+    )
+    try:
+        runner.reset()
+        obs = runner.get_env().capture_observation()
+
+        assert "task/keypoint" not in obs
+    finally:
+        runner.close()

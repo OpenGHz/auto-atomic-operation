@@ -141,6 +141,7 @@ To discover which configs are runnable tasks, use [`aao-info`](#aao-info).
 | `[+]execution.interval_selection...` | mapping | unset | Run between states immediately before or after configured `stage` / `phase` / `waypoint` keypoints |
 | `[+]execution.interval_selection.{start,stop}.side=...` | enum | `before` / `after` | Endpoint side relative to its keypoint; the start default is `before`, while the stop default is `after` |
 | `[+]execution.interval_selection.max_fast_forward_updates=N` | int | 10000 | Per-environment controller-update limit while `reset()` advances to the interval start boundary |
+| `[+]execution.interval_selection.continuous=true` | bool | false | Non-transition collection: still fast-forward to `start`, then return one control tick per public update without skipping segments, marking each step in `capture_observation()` under `task/keypoint` |
 | `[+]execution.keypoint_selection=[...]` | list | unset | Ordered keypoints to execute: task-wide ordinals or `{stage, phase?, waypoint?}` entries, with negative indexes counting from the end; unlisted keypoints are skipped. Mutually exclusive with `interval_selection` |
 
 Any key present in the YAML config can be overridden on the command line following Hydra syntax:
@@ -225,6 +226,18 @@ update and reset fast-forward limits are independent; both default to `10000`.
 With `execution.render_internal_updates=false`, all of those internal updates
 still run, but their viewer refreshes and `step_delay` calls are coalesced into
 one delay-free refresh at the public boundary.
+
+To collect the interval densely instead of stepping keypoint by keypoint, add
+`+execution.interval_selection.continuous=true` (requires the default
+`update_boundary=control_tick`). Every public update then advances one control
+tick without skipping the segments between keypoints, and each
+`capture_observation()` result carries a `task/keypoint` entry (prefixed,
+e.g. `/robot/task/keypoint`, in structured mode) whose per-environment rows
+mark `is_keypoint` plus the marked keypoint's stage, phase, waypoint, and
+`before`/`after` side. Filtering the dense pass to marked samples reproduces
+the boundary-only data, so no separate keypoint-boundary collection run is
+needed. See
+[Stages & Waypoints](../task-configuration/stages_and_waypoints.md#continuous-keypoint-marked-collection).
 See [Stages & Waypoints](../task-configuration/stages_and_waypoints.md#task-interval-boundary-selection)
 for endpoint semantics and reporting.
 

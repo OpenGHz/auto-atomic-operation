@@ -2479,7 +2479,9 @@ class BatchedGSUnifiedMujocoEnv(BatchedUnifiedMujocoEnv):
         # The canonical adapter stacks replicated observations or broadcasts a
         # single shared-physics observation exactly once, before noise.
         obs = self._capture_observation_raw()
-        return self._apply_camera_noise(obs)
+        obs = self._apply_camera_noise(obs)
+        self._merge_keypoint_mark(obs)
+        return obs
 
     def _capture_observation_raw(self) -> dict[str, dict[str, Any]]:
         """Capture the logical batch and inject GS streams before noise."""

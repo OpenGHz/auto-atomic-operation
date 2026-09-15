@@ -331,6 +331,9 @@ execution:
 
 `update_boundary` can be `control_tick`, `primitive`, `keypoint`, or `stage`.
 `interval_selection` can restrict execution to the interval between two
+keypoint boundaries; its `continuous: true` mode additionally collects the
+interval without skipping segments between keypoints and marks each
+configured keypoint boundary per step. See
 keypoint boundaries, while `keypoint_selection` can run an ordered subset of
 keypoints and skip the rest. Both accept only `TaskRunner` / `aao-demo` and are
 mutually exclusive. See

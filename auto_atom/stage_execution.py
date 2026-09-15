@@ -1358,6 +1358,7 @@ class StageExecution:
         state.phase = None
         state.phase_step = None
         state.reported_keypoint = None
+        state.keypoint_mark_side = None
 
     def _set_succeeded(
         self,

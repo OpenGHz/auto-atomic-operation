@@ -17,6 +17,7 @@ import numpy as np
 from auto_atom.config.execution import (
     IntervalSelectionConfig,
     KeypointSelector,
+    KeypointSide,
     TaskKeypointConfig,
     TaskPhase,
     UpdateBoundary,
@@ -154,6 +155,7 @@ class _EnvRuntimeState:
     latest_status: StageExecutionStatus = StageExecutionStatus.PENDING
     latest_details: Dict[str, Any] = field(default_factory=dict)
     reported_keypoint: Optional[_ResolvedTaskKeypoint] = None
+    keypoint_mark_side: Optional[KeypointSide] = None
 
 
 @dataclass
