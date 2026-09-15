@@ -1,7 +1,9 @@
 <mujoco>
     <default>
         <default class="tactile_cell">
-            <geom type="sphere" size="0.0005" contype="0" conaffinity="0" condim="4" friction="0 0 0" margin="0.0003" solref="0.001 1" solimp="0.98 0.999 0.0005 0.5 2" rgba="0 1 1 0.2" density="500"/>
+            <!-- These sensor geoms do not collide; finger pads own contact friction.
+                 condim=1 keeps zero friction valid for MJWarp model validation. -->
+            <geom type="sphere" size="0.0005" contype="0" conaffinity="0" condim="1" friction="0 0 0" margin="0.0003" solref="0.001 1" solimp="0.98 0.999 0.0005 0.5 2" rgba="0 1 1 0.2" density="500"/>
             <site type="sphere" size="0.0005" rgba="0 0 0 0"/>
         </default>
     </default>
