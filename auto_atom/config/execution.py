@@ -115,6 +115,15 @@ class IntervalSelectionConfig(BaseModel, frozen=True):
     max_fast_forward_updates: PositiveInt = 10_000
     """Maximum controller updates per environment while ``reset()`` advances
     to ``start``."""
+    continuous: bool = False
+    """Non-transition collection mode. When true, ``reset()`` still
+    fast-forwards to the ``start`` boundary, but every public update returns
+    at ``control_tick`` granularity without skipping segments between
+    keypoints, and each ``TaskUpdate`` marks whether the current state is a
+    configured keypoint boundary (identity plus ``before``/``after`` side).
+    The marks let a dense collection pass be filtered into the same
+    boundary-only transition data afterwards. Requires
+    ``execution.update_boundary: control_tick``."""
 
     @model_validator(mode="before")
     @classmethod

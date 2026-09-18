@@ -45,6 +45,7 @@ execution:
       waypoint: 0
       side: after
     max_fast_forward_updates: 10000
+    continuous: false
 
 task:
   stages:
@@ -59,6 +60,12 @@ Each endpoint contains:
 | `phase` | `pre_move`, `eef`, or `post_move` |
 | `waypoint` | Zero-based index in that phase; `eef` is a singleton and only accepts `0` |
 | `side` | `before` or `after` the referenced keypoint; defaults to `before` for `start` and `after` for `stop` |
+
+The selection also accepts one mode switch:
+
+| Field | Meaning |
+| --- | --- |
+| `continuous` | `false` (default) keeps the boundary-oriented behavior described below; `true` enables non-transition collection described in [Continuous keypoint-marked collection](#continuous-keypoint-marked-collection) |
 
 Both endpoints use the same `TaskKeypointConfig` schema. Its standalone
 `side` default is `None`; `IntervalSelectionConfig` resolves that adaptive
@@ -265,6 +272,53 @@ condition unless the operator already holds the target object.
 `TaskUpdate.details[env_index]["keypoint_selection"]` reports the configured
 entries and the current selection event. Omitting
 `execution.keypoint_selection` preserves full-task execution.
+
+### Continuous keypoint-marked collection
+
+`execution.interval_selection.continuous: true` turns the selected interval
+into a non-transition (no-skip) collection mode: `reset()` still
+fast-forwards to the `start` boundary exactly as before, but every public
+`update()` afterwards returns at `control_tick` granularity and executes
+every segment between the interval's keypoints. Nothing is skipped; the
+runner simply stamps a keypoint mark on each step whose state is a
+configured keypoint boundary, so one dense collection pass can later be
+filtered into the same boundary-only transition data — no second collection
+pass is needed.
+
+Because continuous mode is inherently dense, it requires
+`execution.update_boundary: control_tick`; combining it with `primitive`,
+`keypoint`, or `stage` is rejected during config validation.
+
+The marks are published into the environment, so observation-only collection
+pipelines record them without any extra plumbing. After each `reset()` /
+`update()`, `TaskRunner` pushes one row per environment into the env via the
+optional `set_keypoint_mark` capability, and the env's
+`capture_observation()` output carries them under the `task/keypoint` key —
+fully prefixed, e.g. `/robot/task/keypoint`, in structured mode. The entry
+follows the normal observation shape: `"data"` is the list of per-environment
+rows and `"t"` holds one timestamp per environment. Each row contains:
+
+| Field | Meaning |
+| --- | --- |
+| `is_keypoint` | `bool`; `true` when that environment's post-step state is a configured keypoint boundary |
+| `stage_index` / `stage_name` | The marked keypoint's stage identity; `-1` / `""` when unmarked |
+| `phase` / `waypoint` | The marked keypoint's phase and zero-based waypoint index; `None` / `-1` when unmarked |
+| `side` | `before` when the state precedes the keypoint (the reset state, or a `stop.side: before` terminal state) and `after` when the keypoint has just completed |
+
+The reset step marks the `start` boundary with `start.side`; each step whose
+tick completes a keypoint marks it with `after`; the terminal step marks the
+`stop` boundary with `stop.side`. In-between steps report
+`is_keypoint: false`. `TaskUpdate.details[env_index]["interval_selection"]`
+additionally reports `continuous`. Environments without the
+`set_keypoint_mark` capability are skipped, and `None` clears any stored
+rows, so non-continuous runs never emit the key.
+
+> [!NOTE]
+> The state after completing keypoint *K* is the same physical state as the
+> state before the next keypoint. The marks use the completed keypoint's
+> `after` identity for that state; the only explicit `before` marks are the
+> interval's `start` and `stop` boundaries, where the interval semantics
+> define them.
 
 ## Stage reference site
 

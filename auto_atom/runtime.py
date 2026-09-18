@@ -678,6 +678,7 @@ class TaskRunner:
                 pending[env_index] = False
                 continue
             state.reported_keypoint = None
+            state.keypoint_mark_side = None
 
         while bool(np.any(pending)):
             for env_index_value in np.flatnonzero(pending):
@@ -730,6 +731,16 @@ class TaskRunner:
                     )
                     pending[env_index] = False
                     continue
+
+                if (
+                    selection is not None
+                    and selection.continuous
+                    and completed_keypoint is not None
+                ):
+                    # Continuous (non-transition) collection marks every tick
+                    # whose post-tick state is a configured keypoint boundary.
+                    state.reported_keypoint = completed_keypoint
+                    state.keypoint_mark_side = KeypointSide.AFTER
 
                 boundary_event = self._require_timeline().reached_update_boundary(event)
                 if boundary_event is None:
@@ -812,6 +823,7 @@ class TaskRunner:
         state.phase = None
         state.phase_step = None
         state.reported_keypoint = None
+        state.keypoint_mark_side = None
 
     def _fast_forward_to_interval_start(
         self,
@@ -900,6 +912,7 @@ class TaskRunner:
                 else "interval_fast_forward_failed",
                 "start": selection.start.model_dump(mode="json"),
                 "stop": selection.stop.model_dump(mode="json"),
+                "continuous": bool(selection.continuous),
                 "fast_forward_updates": int(ticks[index]),
                 "max_fast_forward_updates": max_updates,
             }
@@ -933,6 +946,7 @@ class TaskRunner:
                 "interval_selection": interval_details,
             }
             state.reported_keypoint = start_keypoint
+            state.keypoint_mark_side = selection.start.side
             state.phase = start_keypoint.phase.value
             state.phase_step = start_keypoint.waypoint
             if start_state_index == stop_state_index:
@@ -981,6 +995,7 @@ class TaskRunner:
         state.phase = None
         state.phase_step = None
         state.reported_keypoint = None
+        state.keypoint_mark_side = None
 
     @staticmethod
     def _finish_interval(
@@ -1013,6 +1028,7 @@ class TaskRunner:
         state.phase = keypoint.phase.value
         state.phase_step = keypoint.waypoint
         state.reported_keypoint = keypoint
+        state.keypoint_mark_side = selection.stop.side
 
     def get_env(self) -> EnvProtocol:
         """Return the underlying environment object managed by this runner."""
@@ -2465,6 +2481,7 @@ class TaskRunner:
                 interval_details.setdefault(
                     "stop", selection.stop.model_dump(mode="json")
                 )
+                interval_details.setdefault("continuous", bool(selection.continuous))
                 interval_details.setdefault(
                     "max_fast_forward_updates",
                     int(selection.max_fast_forward_updates),
@@ -2502,7 +2519,7 @@ class TaskRunner:
             else:
                 phase.append(state.phase)
                 phase_step.append(-1 if state.phase_step is None else state.phase_step)
-        return TaskUpdate(
+        update = TaskUpdate(
             stage_index=np.asarray(stage_index, dtype=np.int64),
             stage_name=stage_name,
             status=np.asarray(status, dtype=object),
@@ -2512,6 +2529,56 @@ class TaskRunner:
             phase=phase,
             phase_step=np.asarray(phase_step, dtype=np.int64),
         )
+        self._publish_keypoint_marks()
+        return update
+
+    def _publish_keypoint_marks(self) -> None:
+        """Push the current per-step keypoint marks into the environment.
+
+        Environments exposing ``set_keypoint_mark`` merge the published rows
+        into ``capture_observation()`` under ``task/keypoint``, so
+        observation-only collection pipelines record the marks without
+        threading anything extra through a custom adapter. Envs without the
+        capability are skipped; ``None`` clears any stored rows.
+        """
+        env = self.get_env()
+        setter = getattr(env, "set_keypoint_mark", None)
+        if setter is None:
+            return
+        selection = (
+            self._timeline.interval_selection if self._timeline is not None else None
+        )
+        continuous = selection is not None and bool(selection.continuous)
+        if not continuous:
+            setter(None)
+            return
+        rows = []
+        for state in self._env_states:
+            keypoint = state.reported_keypoint
+            side = state.keypoint_mark_side
+            if keypoint is not None and side is not None:
+                rows.append(
+                    {
+                        "is_keypoint": True,
+                        "stage_index": int(keypoint.stage_index),
+                        "stage_name": keypoint.stage_name,
+                        "phase": keypoint.phase.value,
+                        "waypoint": int(keypoint.waypoint),
+                        "side": side.value,
+                    }
+                )
+            else:
+                rows.append(
+                    {
+                        "is_keypoint": False,
+                        "stage_index": -1,
+                        "stage_name": "",
+                        "phase": None,
+                        "waypoint": -1,
+                        "side": None,
+                    }
+                )
+        setter(rows)
 
     def _collect_reset_details(
         self,

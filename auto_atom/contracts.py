@@ -31,6 +31,7 @@ from typing import (
     List,
     Optional,
     Protocol,
+    Sequence,
     TypeVar,
     cast,
     runtime_checkable,
@@ -222,6 +223,23 @@ class ObservationEnvProtocol(EnvProtocol, Protocol):
     """Environment capability for capturing policy observations."""
 
     def capture_observation(self) -> Dict[str, Dict[str, Any]]: ...
+
+
+@runtime_checkable
+class KeypointMarkEnvProtocol(ObservationEnvProtocol, Protocol):
+    """Environment capability for publishing per-step keypoint marks.
+
+    ``set_keypoint_mark`` receives one row per environment, where each row
+    carries ``is_keypoint`` and the marked keypoint's identity
+    (``stage_index`` / ``stage_name`` / ``phase`` / ``waypoint`` / ``side``).
+    Implementations merge the stored rows into :meth:`capture_observation`
+    output under the ``task/keypoint`` key; passing ``None`` clears them.
+    """
+
+    def set_keypoint_mark(
+        self,
+        mark: Optional[Sequence[Mapping[str, Any]]],
+    ) -> None: ...
 
 
 @runtime_checkable

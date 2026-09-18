@@ -2103,6 +2103,7 @@ class BatchedUnifiedMujocoEnv:
         if config.name:
             ComponentRegistry.register_env(config.name, self)
         self._key_creator = KeyCreator(self.config.structured)
+        self._keypoint_mark: Optional[list[dict[str, Any]]] = None
         self._camera_noise_processor = CameraNoiseProcessor(
             {spec.name: spec for spec in self.config.cameras}
         )
@@ -2666,13 +2667,43 @@ class BatchedUnifiedMujocoEnv:
         observation = self._capture_observation_raw()
         processor = getattr(self, "_camera_noise_processor", None)
         if processor is None:
+            self._merge_keypoint_mark(observation)
             return observation
-        return processor.process_batched_observation(
+        observation = processor.process_batched_observation(
             observation,
             self._key_creator,
             structured=self.config.structured,
             batch_size=self.batch_size,
         )
+        self._merge_keypoint_mark(observation)
+        return observation
+
+    def set_keypoint_mark(
+        self,
+        mark: Optional[list[dict[str, Any]]],
+    ) -> None:
+        """Store per-step keypoint marks published by TaskRunner.
+
+        The stored rows are merged into :meth:`capture_observation` output
+        under the ``task/keypoint`` key (fully prefixed, e.g.
+        ``/robot/task/keypoint`` in structured mode).
+        """
+        self._keypoint_mark = None if mark is None else [dict(row) for row in mark]
+
+    def _merge_keypoint_mark(self, observation: dict[str, dict[str, Any]]) -> None:
+        mark = self._keypoint_mark
+        if mark is None:
+            return
+        times = [
+            int(env.data.time * 1e9) if self.config.stamp_ns else float(env.data.time)
+            for env in self.envs
+        ]
+        if len(times) == 1 and self.batch_size > 1:
+            times = times * self.batch_size
+        observation[self._key_creator.apply_prefix("task/keypoint")] = {
+            "data": list(mark),
+            "t": times,
+        }
 
     def _capture_observation_raw(self) -> dict[str, dict[str, Any]]:
         """Capture a logical batch before RGB/depth sensor noise is applied."""
