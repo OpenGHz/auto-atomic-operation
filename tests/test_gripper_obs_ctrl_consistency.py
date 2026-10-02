@@ -35,6 +35,7 @@ import mujoco
 import numpy as np
 import pytest
 
+from auto_atom.basis.mjc.model_initialization import synchronize_mocap_bodies
 from auto_atom.scene_composition import (
     MjcfLayerConfig,
     SceneConfig,
@@ -114,6 +115,10 @@ def _reset(model: mujoco.MjModel, data: mujoco.MjData) -> None:
     mujoco.mj_resetData(model, data)
     if model.nkey > 0:
         mujoco.mj_resetDataKeyframe(model, data, 0)
+    mujoco.mj_forward(model, data)
+    # Start mocap targets on their welded bodies, as the env does; otherwise
+    # the weld drags a mocap gripper from its home pose into the table.
+    synchronize_mocap_bodies(model, data)
     mujoco.mj_forward(model, data)
 
 

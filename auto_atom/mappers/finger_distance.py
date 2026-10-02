@@ -23,6 +23,8 @@ from __future__ import annotations
 import mujoco
 import numpy as np
 
+from auto_atom.basis.mjc.model_initialization import synchronize_mocap_bodies
+
 
 class FingerDistanceMapper:
     """Bidirectional mapper between raw joint position and finger-pad distance.
@@ -112,6 +114,8 @@ class FingerDistanceMapper:
         saved_qpos = data.qpos.copy()
         saved_qvel = data.qvel.copy()
         saved_ctrl = data.ctrl.copy()
+        saved_mocap_pos = data.mocap_pos.copy()
+        saved_mocap_quat = data.mocap_quat.copy()
 
         model.opt.gravity[:] = 0
         model.opt.timestep = 0.001
@@ -125,6 +129,10 @@ class FingerDistanceMapper:
             mujoco.mj_resetData(model, data)
             if model.nkey > 0:
                 mujoco.mj_resetDataKeyframe(model, data, 0)
+            mujoco.mj_forward(model, data)
+            # Start mocap targets on their welded bodies; otherwise the weld
+            # drags a mocap gripper from its home pose into the scene.
+            synchronize_mocap_bodies(model, data)
             mujoco.mj_forward(model, data)
             # Hold all actuators at initial positions.
             for a in range(model.nu):
@@ -145,6 +153,8 @@ class FingerDistanceMapper:
         data.qpos[:] = saved_qpos
         data.qvel[:] = saved_qvel
         data.ctrl[:] = saved_ctrl
+        data.mocap_pos[:] = saved_mocap_pos
+        data.mocap_quat[:] = saved_mocap_quat
         mujoco.mj_forward(model, data)
 
         # Ensure qpos is sorted ascending for np.interp (it should be since
