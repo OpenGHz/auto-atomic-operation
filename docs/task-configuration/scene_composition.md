@@ -101,6 +101,19 @@ slot 被丢弃）。顺序决定声明和资源合并顺序；因为 scene 组�
 这种合并规则让第二个 adapter 复用同一 seam，也避免旧 `_merge_fragment` 只认识
 少数 sections 而静默丢失物理约束。
 
+由于 layer 改不了 host 的 `<option>`，需要在配置层面调整全局物理参数时，使用
+`EnvConfig` 上的显式覆盖项。它们在模型加载后直接写入 `model.opt`，原生 MuJoCo
+和 MJWarp 后端行为一致：
+
+```yaml
+env:
+  sim_freq: 1000            # 覆盖 timestep = 1 / sim_freq
+  gravity: [0.0, 0.0, 0.0]  # 覆盖 <option gravity>；省略或 null 时沿用 XML
+```
+
+`gravity` 只改世界重力。只想让部分物体不受重力影响时，仍应在 MJCF 中给对应
+body 设置 `gravcomp="1"`。
+
 `load_composed_scene` 走 `mujoco.MjSpec`（`from_file` + `compile`）而不是
 `mjModel.from_xml_path`，唯一原因是可以先往 spec 上补元素：`env.cameras` 里
 声明、而场景 MJCF 没有定义的相机，会在编译前按 `parent_frame` 挂到对应
