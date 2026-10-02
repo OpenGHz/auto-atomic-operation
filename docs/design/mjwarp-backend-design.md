@@ -18,7 +18,7 @@
 
 ### 1.0 `object_only` 已经在 MJWarp 上跑通
 
-原始问题——`aao-demo --config-name rack_plate_p7_v4_umi_v3
+原始问题——`aao-demo task=rack_plate
 execution.mode=object_only` 所配置的功能能否跑通——答案是**能**，且已实测：
 
 ```
@@ -651,10 +651,10 @@ camera sensor 时相机声明是惰性的，既不会被materialize 进场景也
 **命令**（`batch_size=2`，未改任何配置）：
 
 ```bash
-python -m auto_atom.runner.demo --config-name rack_plate_p7_v4_umi_v3 \
-  execution.mode=physical env.batch_size=2 env.viewer=null \
-  env._target_=auto_atom.basis.mjwarp.env.MjWarpObjectOnlyEnv \
-  backend=auto_atom.backend.mjwarp.backend.build_mjwarp_backend
+# 当时直接覆盖 env._target_ 与 backend 工厂；backend 现已是 config group，
+# 等价写法为 backend=warp（同时带上该组的 njmax / nconmax 默认值）
+python -m auto_atom.runner.demo task=rack_plate \
+  execution.mode=physical env.batch_size=2 backend=warp
 ```
 
 **好消息（栈本身是通的）**：600 次 `update()` 全部跑完、无崩溃、无异常，
@@ -737,7 +737,7 @@ roll/pitch/yaw: 全范围
   base/EEF 随机化支持独立 world。反向 weld 与非零锚点有回归覆盖。
 - `solve_once_interpolate` 对最终目标求解一次 IK，按 `joint_interp_speed`
   线性推进关节计划；等价的四元数正负号不触发重规划，目标变化及 reset 会更新计划。
-- `+backend=warp` 默认 `njmax=2048`、`nconmax=1024`，分别提供每个 world 的
+- `backend=warp` 默认 `njmax=2048`、`nconmax=1024`，分别提供每个 world 的
   约束行与候选接触容量。复杂场景仍需根据实际峰值配置容量。
 - MJWarp 尚无 noslip 后处理，设备上传时禁用该选项并明确警告切向滑移风险。
   CPU 的共享 MJCF 配置保留原选项。
@@ -745,9 +745,9 @@ roll/pitch/yaw: 全范围
 复现当前三个验收模式：
 
 ```bash
-aao-demo --config-name pick_and_place +backend=warp
-aao-demo --config-name cup_on_coaster_airbot_p7_umi +backend=warp
-aao-demo --config-name rack_plate_p7_v4_umi_v3 +backend=warp execution.mode=object_only
+aao-demo task=pick_and_place backend=warp
+aao-demo task=cup_on_coaster embodiment=p7_v3_umi_v3 backend=warp
+aao-demo task=rack_plate backend=warp execution.mode=object_only
 ```
 
 ### 5.0 轮 4d-2（触觉层接入）的交接说明
@@ -964,7 +964,7 @@ python scripts/run_tests_safe.py --test-targets tests/test_mjwarp_state.py \
 
 ```bash
 # 1) 项目环境：走真实 Hydra + 场景组合路径导出各执行模式的模型
-python scripts/check_mjwarp_compat.py export --config-name rack_plate_p7_v4_umi_v3
+python scripts/check_mjwarp_compat.py export --task rack_plate
 
 # 2) 装有 mujoco_warp 的环境：加载 .mjb + manifest 逐项检查
 /path/to/mjwarp-venv/bin/python scripts/check_mjwarp_compat.py probe \

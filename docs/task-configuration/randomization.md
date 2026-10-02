@@ -260,7 +260,7 @@ task:
 The key is not declared in every task file, so the command line adds it:
 
 ```bash
-aao-demo --config-name rack_plate_p7_v4_umi_v3 +task.randomization.enabled=false
+aao-demo task=rack_plate +task.randomization.enabled=false
 ```
 
 Sensor noise (`env.cameras[].noise`) is a separate subsystem and keeps running.
@@ -1019,8 +1019,8 @@ Use the `rounds` top-level config key (default 1) to run the task multiple times
 with different random seeds:
 
 ```bash
-aao-demo rounds=10
-aao-demo --config-name cup_on_coaster rounds=20
+aao-demo +rounds=10
+aao-demo task=cup_on_coaster +rounds=20
 ```
 
 Each round resets the scene (applying a fresh random sample) and runs all stages.
@@ -1048,7 +1048,7 @@ Success rate: 8/10
 Set `task.seed` to fix the randomization seed:
 
 ```bash
-aao-demo task.seed=42 rounds=5
+aao-demo task.seed=42 +rounds=5
 ```
 
 The same seed produces the same sequence of random poses across runs. The seed

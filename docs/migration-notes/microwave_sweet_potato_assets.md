@@ -27,9 +27,10 @@ assets/
 
 `demo.xml` uses `meshdir="../../../meshes"`; no path is absolute. It contains the
 counter, the fixed microwave, the free `sweet_potato`, the `microwave_target` placement
-frame, and the `env0_cam` / `env1_cam` observation cameras expected by the UMI basis
-config. The robot is injected as an ordered MJCF layer
-(`assets/xmls/robots/umi_gripper_v3_mocap.xml`) by `basis_mocap_eef_umi_v3`.
+frame, and the `env0_cam` / `env1_cam` observation cameras declared by
+`aao_configs/scene/microwave_sweet_potato.yaml`. The robot is injected as an ordered
+MJCF layer (`assets/xmls/robots/umi_gripper_v3_mocap.xml`) by the `umi_v3_mocap`
+embodiment (formerly `basis_mocap_eef_umi_v3`).
 
 There are no Gaussian assets for this scene and no host actuators or keyframes.
 
@@ -98,8 +99,8 @@ cavity opening spans local x ∈ [-0.172, 0.094] and z ∈ [-0.055, 0.071].
 ## UMI v3 task
 
 ```bash
-aao-info microwave_sweet_potato_umi_v3
-aao-demo --config-name microwave_sweet_potato_umi_v3
+aao-info microwave_sweet_potato
+aao-demo task=microwave_sweet_potato    # default embodiment: umi_v3_mocap
 ```
 
 The jaw plane of `umi_gripper_v3` is 56 mm thick and opens to 100 mm. Only the two
@@ -131,7 +132,8 @@ world-aligned.
 weld. With the 0.2 kg tuber held about 4 cm ahead of the pads, the EEF pitched about
 4 cm off its command and the post-grasp lift timed out. The weld now uses
 `solref="0.10 1"`, the value `xf9600_mocap.xml` adopted for the dishwasher task.
-`pick_and_place_umi_v3` still succeeds 2/2 with the change.
+`pick_and_place_umi_v3` (now `task=pick_and_place embodiment=umi_v3_mocap`) still
+succeeds 2/2 with the change.
 
 Cartesian step clamping (`cartesian_max_linear_step`) is intentionally not used.
 Each clamped command is re-based on the measured EEF, so any steady weld sag

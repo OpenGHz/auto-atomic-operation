@@ -2,7 +2,7 @@
 
 ## 现象
 
-在 `place_blocks_on_disk_airbot_play_g2`（AIRBOT Play + G2 夹爪）中，机器人抓起
+在 `place_blocks_on_disk_airbot_play_g2`（现为 `aao-demo task=place_blocks_on_disk`，默认 embodiment `airbot_play_g2`，即 AIRBOT Play + G2 夹爪）中，机器人抓起
 积木后，从 pick 运送到 place 的过程中积木会**逐渐在夹爪里扭转、最终滑落**。任务的
 成功判据比较宽松时可能仍然“成功”，但视觉上明显不稳。
 
@@ -101,7 +101,7 @@ MuJoCo geom 的 `friction="滑动 扭转 滚动"` 有三个分量：
 ## 受影响场景
 
 在 `assets/xmls/robots/airbot_g2.xml` 修复（G2 夹爪，供
-`place_blocks_on_disk_airbot_play_g2` 使用）。新建抓取类任务、尤其被抓物体带 yaw
+`airbot_play_g2` embodiment 使用）。新建抓取类任务、尤其被抓物体带 yaw
 随机化时，应确认夹爪接触的 `condim` 已设为 4 或 6。
 
 相关文档：[EEF Mapper](eef_mapper.md)、[Gripper Joint Semantics](gripper_joint_semantics.md)、

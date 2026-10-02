@@ -2,20 +2,22 @@
 
 `BatchedGSUnifiedMujocoEnv` 在 `+get_obs=true` 时每步触发大量 GS 渲染，本文档记录已完成的优化和后续可做的优化方向。
 
+> 注：下文历史 benchmark 标题和表格中的 `open_door_airbot_play_back_gs`、`open_door_airbot_play_gs`、`cup_on_coaster_gs` 是 config-group 重构前的配置名，分别对应现在的 `task=open_door_back render=gs`（默认 embodiment `airbot_play_g2p`）、`task=open_door embodiment=airbot_play_g2p render=gs` 和 `task=cup_on_coaster render=gs`，见 [config groups 迁移说明](../migration-notes/aao_configs_config_groups.md)。
+
 ## Benchmark 工具
 
 ```bash
 # 无头环境下确保 EGL 可用
 export MUJOCO_GL=egl
 
-# 基本测试 (默认关闭 viewer, to_numpy=false)
-python examples/bench_env.py open_door_airbot_play_back_gs 30 +test=open_the_door
+# 基本测试 (默认关闭 viewer, to_numpy=false)；指定 task 时需显式传 render=gs
+python examples/bench_env.py open_door_back 30 render=gs +test=open_the_door
 
 # 指定 batch_size
-python examples/bench_env.py open_door_airbot_play_back_gs 30 +test=open_the_door env.batch_size=4
+python examples/bench_env.py open_door_back 30 render=gs +test=open_the_door env.batch_size=4
 
 # 带 cProfile 输出
-python examples/bench_env.py open_door_airbot_play_back_gs 10 --profile +test=open_the_door env.batch_size=2
+python examples/bench_env.py open_door_back 10 --profile render=gs +test=open_the_door env.batch_size=2
 ```
 
 > 注：`+test=open_the_door` 会显式设置 `env.to_numpy=true / structured=false`。bench_env.py 默认注入 `+env.to_numpy=false …` 与之冲突时，需要把 bench 默认改为 `++env.to_numpy=false …`（或在命令行用 `++` 显式覆盖），让 to_numpy=false 的"GPU 直留"路径生效。
@@ -25,7 +27,7 @@ python examples/bench_env.py open_door_airbot_play_back_gs 10 --profile +test=op
 ## Benchmark (`open_door_airbot_play_back_gs +test=open_the_door`, 2026-05-04)
 
 > 测试硬件：NVIDIA GeForce RTX 5090（32 GB），驱动 590.48.01 / CUDA 13.1
-> 测试命令：`python examples/bench_env.py open_door_airbot_play_back_gs N +test=open_the_door env.batch_size=B`
+> 测试命令（现等价写法）：`python examples/bench_env.py open_door_back N render=gs +test=open_the_door env.batch_size=B`
 > bench 默认注入 `++env.viewer.disable=true ++env.to_numpy=false ++env.structured=false`；warmup 不计入统计；测量 `capture_observation` 与 `update` 的纯环境时间。
 
 ### 当前配置快照（带 `+test=open_the_door` 覆盖）
@@ -34,7 +36,7 @@ python examples/bench_env.py open_door_airbot_play_back_gs 10 --profile +test=op
 |---|---|
 | `BatchedGSUnifiedMujocoEnv` | `share_physics=false`（默认） |
 | 相机 | 2 路：`eef_wrist_cam`（动态，挂在末端）+ `env2_cam`（静态） |
-| 分辨率 | **640 × 480**（来自 `test/open_the_door.yaml` 的 `cam_width / cam_height`） |
+| 分辨率 | **640 × 480**（来自 `test/open_the_door.yaml` 的 `observation.camera.width / height`） |
 | 单 GS 相机功能 | `enable_color=true`，`enable_depth / enable_mask / enable_heat_map=false` |
 | `mask_objects` | `["handle_lever_body"]` — 该物体没有 GS body 对应（启动日志：`Skipping GS mask renderer for 'handle_lever_body'`），`_gs_mask_renderers` 为空，binary mask / heat_map 路径全部跳过 |
 | `gaussian_render.background_ply` | `${bg3dgs_dir}/bg*.ply` — 当前资产目录命中 14 张 `bg{0..13}.ply`，每张 ~1.17 M 点；`is_multi_background=True` |
@@ -127,17 +129,17 @@ CPU 侧 self time 第一名是 `cudaStreamSynchronize`（**118.1 ms / 400 calls�
 ```bash
 # 端到端 wall-clock（4 个 batch_size 串跑）
 for b in 1 2 4 8; do
-  python examples/bench_env.py open_door_airbot_play_back_gs 30 +test=open_the_door env.batch_size=$b
+  python examples/bench_env.py open_door_back 30 render=gs +test=open_the_door env.batch_size=$b
 done
 
-# torch.profiler trace（含 chrome://tracing 用的 JSON）
-python examples/profile_gs_obs.py open_door_airbot_play_back_gs 10 +test=open_the_door env.batch_size=2
+# torch.profiler trace（含 chrome://tracing 用的 JSON）；profile_gs_obs.py 总是追加 render=gs
+python examples/profile_gs_obs.py open_door_back 10 +test=open_the_door env.batch_size=2
 ```
 
 `examples/profile_gs_obs.py` 内置 `wait=1, warmup=1, active=N` 的 schedule（见
 [torch.profiler.schedule](https://pytorch.org/docs/stable/profiler.html#torch.profiler.schedule)），
 排除 gsplat CUDA JIT 与首帧填缓存对均值的污染；trace 落到
-`outputs/bench/profiles/<config>_b<batch>/` 下，可 tensorboard 或 chrome://tracing 直接打开。
+`outputs/bench/profiles/<run_name>_b<batch>/` 下（`<run_name>` 形如 `open_door_back__airbot_play_g2p__gs`），可 tensorboard 或 chrome://tracing 直接打开。
 
 ---
 

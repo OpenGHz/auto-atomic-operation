@@ -7,16 +7,20 @@ package 解析出的资产装配。环境、viewer 和 MuJoCo basis 只消费这
 
 ## 配置契约
 
+在 Hydra 配置中，`env.scene.layers` 是按 slot 名称索引的字典：scene 组
+（`aao_configs/scene/<scene>.yaml`）声明场景资产 layer，embodiment 组
+（`aao_configs/embodiment/<robot>.yaml`）声明 `robot` layer。下例是
+`task=open_door_unidoor` 组合后的结果：
+
 ```yaml
 env:
   scene:
     base: ${assets_dir}/xmls/scenes/open_door_unidoor/demo.xml
     layers:
-      # 机器人也是普通的 MJCF layer；顺序决定声明和资源合并顺序。
-      - kind: mjcf
-        path: ${assets_dir}/xmls/robots/p7_arm_v3_with_umi_gripper_v3.xml
+      # 来自 scene/open_door_unidoor.yaml。
       # 资产装配使用稳定 namespace，避免多个实例的名字互相覆盖。
-      - kind: asset_assembly
+      door:
+        kind: asset_assembly
         package: assets/scene_assets/unidoor_lever_right_hinge/scene_asset_package.json
         adapter: unidoor.lever_door@1
         selection: {door: D001, handle: H001}
@@ -44,7 +48,19 @@ env:
               x: {edge: min, offset_m: 0.08}
               y: {edge: max, multiplier: -1.0}
               z: {value_m: 1.0}
+      # 来自 embodiment/p7_v3_umi_v3.yaml。机器人也是普通的 MJCF layer。
+      robot:
+        kind: mjcf
+        path: ${assets_dir}/xmls/robots/p7_arm_v3_with_umi_gripper_v3.xml
+        role: operator
 ```
+
+实例化前，`auto_atom.execution_config.prepare_task_config_for_instantiation`
+把这个字典按 slot 插入顺序展平为 `SceneConfig.layers` 列表（值为 `null` 的
+slot 被丢弃）。顺序决定声明和资源合并顺序；因为 scene 组先于 embodiment 组
+组合，场景资产 layer 总在 `robot` layer 之前。后续配置可以只替换某个 slot
+（例如 `env.scene.layers.robot.path=...`），或用 `null` 删除它，而无需重写整个
+列表。直接调用 `SceneConfig` / `load_composed_scene` 时仍传入有序列表。
 
 `SceneConfig` 是纯数据模型：不在 YAML 中放 adapter 实例、Python callable 或
 临时文件。adapter 只在运行时 registry 中按 `adapter@version` 查找。一个场景
@@ -249,8 +265,8 @@ coordinate = transformed_bounds[edge][axis] * multiplier + offset_m
 adapter 提供对应的 bounds 和稳定的 MJCF 名称。
 
 UniDoor 的 2 m 门高、1 m 把手安装高度和 0.15 m 把手长度都在
-`aao_configs/open_door_unidoor_p7_v3_umi_v3.yaml` 的 asset assembly layer 中声明。
-替换其他门或把手时，通常只需修改 `selection`；如果新资产的原始尺寸不同，再按
+`aao_configs/scene/open_door_unidoor.yaml` 的 `door` asset assembly layer 中声明。
+替换其他门或把手时，通常只需修改 `selection`（命令行用 `door_id=` / `handle_id=`）；如果新资产的原始尺寸不同，再按
 其 manifest bounds 调整 `target_extent_m` 或 anchor 规则。
 
 ## Scene asset package v1
@@ -291,8 +307,9 @@ MJCF mesh geom。不同凸块不会合并，因为 MuJoCo 对单个 mesh 使用�
 
 ## UniDoor 示例
 
-完整任务见 `aao_configs/open_door_unidoor_p7_v3_umi_v3.yaml`。该任务使用
-`asset_assembly` layer 默认选择 `D001/H001`，并将门的 semantic names 映射到
+完整任务见 `aao_configs/task/open_door_unidoor.yaml`（场景与 `door` layer 在
+`aao_configs/scene/open_door_unidoor.yaml`，运行 `aao-demo task=open_door_unidoor`）。
+该任务使用 `asset_assembly` layer 默认选择 `D001/H001`，并将门的 semantic names 映射到
 `door__door_handle`、`door__handle_grasp_center`、`door__handle_hinge` 和
 `door__door_hinge`。替换门或把手只需改 `selection`；替换另一类资产则实现一个
 新的 adapter，不需要修改 `EnvConfig`、Basis 或 viewer。

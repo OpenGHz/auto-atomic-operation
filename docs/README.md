@@ -124,15 +124,21 @@ runner.close()
 
 ```bash
 # Mock backend (no simulator required)
-aao-demo --config-name mock
+aao-demo task=mock
 
-# MuJoCo demos
-aao-demo --config-name pick_and_place
+# MuJoCo demos: pick a task, optionally a robot and a renderer
+aao-demo task=pick_and_place
+aao-demo task=pick_and_place embodiment=xf9600_mocap
+aao-demo task=cup_on_coaster render=gs
 
-# List all runnable tasks (name, objects, operations, workflow)
+# List all runnable task x embodiment variants (objects, operations, workflow,
+# and the aao-demo command for each)
 aao-info
 ```
 
+All runs compose the single primary config `aao_configs/config.yaml` from
+config groups (`task`, `embodiment`, `scene`, `render`, ...); see
+[Reusing & Creating Tasks](task-configuration/reusing_and_creating_tasks.md).
 Use `aao-info` rather than a static task list so composed tasks and newly added
 robot variants are included.  To inspect the fully composed scene and robot,
 use the [View Scene](tools/view_scene.md) tool instead of opening a host XML

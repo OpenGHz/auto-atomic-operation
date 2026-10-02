@@ -83,7 +83,7 @@ the mocap arm has no actuators and the whole arm component is skipped.
 
 ## Example: Joint-mode Panda + XFG-9600
 
-With `basis_p7_xf9600` (7 arm actuators + 1 gripper), a structured obs
+With the `p7_xf9600` embodiment (7 arm actuators + 1 gripper), a structured obs
 entry looks like:
 
 ```python

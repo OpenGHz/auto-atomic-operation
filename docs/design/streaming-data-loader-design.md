@@ -484,7 +484,7 @@ flowchart LR
 
 | 轮次 | 内容 | 验证 |
 |---|---|---|
-| **R1** | `auto_atom/data/` 骨架：`Episode`/`EpisodeArrays`/`Transition`/`StreamConfig` + `EvaluatorEpisodeSource`（单 env、同步、进程内） | `aao_configs/mock.yaml` 上的单测：episode 长度、标签对齐、T 与观测一致；不跑重仿真 |
+| **R1** | `auto_atom/data/` 骨架：`Episode`/`EpisodeArrays`/`Transition`/`StreamConfig` + `EvaluatorEpisodeSource`（单 env、同步、进程内） | `aao_configs/task/mock.yaml`（`task=mock`）上的单测：episode 长度、标签对齐、T 与观测一致；不跑重仿真 |
 | **R2** | recording seam：观测/命令/标签/`scene`/`randomization` 采集 + `success`/`truncated`/`failure_reason` 三态 + `StreamStats` | mock 后端测三态与非成功 episode 的字段完整性 |
 | **R3** | `EpisodeStream` 调度：slot 掩码异步、`shard`、背压队列、`on_invalid` + `retry_budget` + 熔断 | 单测：多 slot 异步不串扰、`done` 去重、跳过计数正确；`retry_budget` 耗尽时抛错 |
 | **R4** | 确定性：`AddressableResetHost.set_reset_address` + `begin_reset(addressed=True)` 状态归位，并覆盖 waypoint 随机化与相机噪声两条随机源 | 单测：同 `episode_index` 在不同 worker 数/顺序下 → 场景一致（用假 host 断言场景规格）；`determinism="sequential"` 与今日逐字一致（`tests/test_randomization_*` 不回归） |

@@ -8,8 +8,13 @@ This guide covers the scripts used to record task demonstrations and compare ren
 
 ### Basic usage
 
+Select the run with the same config groups as `aao-demo` (`task=`, optionally
+`embodiment=` and `render=gs`):
+
 ```bash
-python examples/record_demo.py --config-name pick_and_place
+python examples/record_demo.py task=pick_and_place
+python examples/record_demo.py task=pick_and_place embodiment=xf9600_mocap
+python examples/record_demo.py task=press_three_buttons render=gs
 ```
 
 ### Hide the robot from native camera data
@@ -19,10 +24,10 @@ Set `env.hide_operators_in_camera=true` to remove every configured operator
 geoms) from native MuJoCo RGB, depth, mask, and heat-map rendering:
 
 ```bash
-aao-demo --config-name pick_and_place \
+aao-demo task=pick_and_place \
     env.hide_operators_in_camera=true +perf_count=true
 
-python examples/record_demo.py --config-name pick_and_place \
+python examples/record_demo.py task=pick_and_place \
     env.hide_operators_in_camera=true
 ```
 
@@ -42,19 +47,23 @@ This option filters native MuJoCo rendering. Gaussian Splatting RGB/depth uses
 a separate renderer; remove robot entries from `gaussian_render.body_gaussians`
 (and ensure the background PLY does not bake in the robot) for GS datasets.
 
-Output files are written to:
+Output files are named by the run name `<task>__<embodiment>[__<render>]`
+(the render part is omitted for native MuJoCo), e.g.
+`pick_and_place__robotiq_mocap`, and written to:
 
-- `assets/videos/<config_name>.gif`
-- `assets/videos/<config_name>.mp4`
-- `assets/demos/<config_name>.json`
-- `assets/demos/<config_name>.npz`
+- `outputs/records/videos/<run_name>.gif`
+- `outputs/records/videos/<run_name>.mp4`
+- `outputs/records/demos/<run_name>.json`
+- `outputs/records/demos/<run_name>.npz`
 
 When `env.batch_size > 1`, the recorder writes one video per env replica:
 
-- `assets/videos/<config_name>_env0.gif`
-- `assets/videos/<config_name>_env0.mp4`
-- `assets/videos/<config_name>_env1_cam.gif`
+- `outputs/records/videos/<run_name>_env0.gif`
+- `outputs/records/videos/<run_name>_env0.mp4`
+- `outputs/records/videos/<run_name>_env1.gif`
 - ...
+
+The demo JSON records the `run_name` and the selected config-group `choices`.
 
 ### Recorder options
 
@@ -72,19 +81,19 @@ All options are injected via Hydra with the `+recorder.` prefix:
 
 ```bash
 # Save MP4 only
-python examples/record_demo.py --config-name pick_and_place \
+python examples/record_demo.py task=pick_and_place \
     +recorder.save_mp4=true +recorder.save_gif=false
 
 # Use a different camera and higher FPS
-python examples/record_demo.py --config-name cup_on_coaster \
+python examples/record_demo.py task=cup_on_coaster \
     +recorder.camera=env0_cam +recorder.fps=30
 
 # Wider GIF output
-python examples/record_demo.py --config-name stack_color_blocks \
+python examples/record_demo.py task=stack_color_blocks \
     +recorder.gif_width=480
 
 # Stop recording automatically after 200 updates
-python examples/record_demo.py --config-name press_three_buttons \
+python examples/record_demo.py task=press_three_buttons \
     +recorder.max_updates=200
 ```
 
@@ -92,20 +101,23 @@ python examples/record_demo.py --config-name press_three_buttons \
 
 [`examples/replay_demo.py`](../examples/replay_demo.py) replays data recorded by `record_demo.py`. It supports two replay modes:
 
-- `ctrl`: replay the saved low-level MuJoCo control actions from `assets/demos/<config_name>.npz`
-- `pose`: replay the saved `action/<operator>/pose` targets from `assets/demos/<config_name>.json` to validate whether the recorded pose targets are themselves sufficient
+- `ctrl`: replay the saved low-level MuJoCo control actions from `outputs/records/demos/<run_name>.npz`
+- `pose`: replay the saved `action/<operator>/pose` targets from `outputs/records/demos/<run_name>.json` to validate whether the recorded pose targets are themselves sufficient
+
+Pass the same `task=` / `embodiment=` / `render=` choices used for recording so
+the default `<run_name>` matches.
 
 ### Basic usage
 
 ```bash
 # Replay saved low-level ctrl actions
-python examples/replay_demo.py --config-name pick_and_place
+python examples/replay_demo.py task=pick_and_place
 
 # Replay saved action pose targets
-python examples/replay_demo.py --config-name pick_and_place +replay.mode=pose
+python examples/replay_demo.py task=pick_and_place +replay.mode=pose
 
-# Replay another recorded demo name
-python examples/replay_demo.py --config-name pick_and_place \
+# Replay another recorded demo name (e.g. one recorded before the run-name scheme)
+python examples/replay_demo.py task=pick_and_place \
     +replay.demo_name=my_demo +replay.mode=pose
 ```
 
@@ -119,7 +131,7 @@ All options are injected via Hydra with the `+replay.` prefix:
 
 | Option | Default | Description |
 | ------ | ------- | ----------- |
-| `demo_name` | `<config_name>` | Demo basename under `assets/demos/` |
+| `demo_name` | `<run_name>` | Demo basename under `outputs/records/demos/` |
 | `mode` | `ctrl` | Replay mode, either `ctrl` or `pose` |
 | `camera` | `env1_cam` | Camera name used for replay recording |
 | `fps` | `25` | Frame rate for replay video export |
@@ -129,15 +141,15 @@ All options are injected via Hydra with the `+replay.` prefix:
 
 ```bash
 # Save replay MP4 only
-python examples/replay_demo.py --config-name open_hinge_door \
+python examples/replay_demo.py task=open_hinge_door \
     +replay.save_mp4=true +replay.save_gif=false
 
 # Use pose replay to validate recorded pose targets
-python examples/replay_demo.py --config-name open_hinge_door \
+python examples/replay_demo.py task=open_hinge_door \
     +replay.mode=pose
 
 # Replay from another camera
-python examples/replay_demo.py --config-name cup_on_coaster \
+python examples/replay_demo.py task=cup_on_coaster \
     +replay.camera=env0_cam
 ```
 
@@ -147,28 +159,31 @@ python examples/replay_demo.py --config-name cup_on_coaster \
 
 ### Basic usage
 
-```bash
-# Default config: press_three_buttons_gs
-python examples/compare_gs_render.py
+The script requires GS rendering, so always pass `render=gs`:
 
-# Specify a different GS scene config
-python examples/compare_gs_render.py --config-name cup_on_coaster_gs
-python examples/compare_gs_render.py --config-name stack_color_blocks_gs
-python examples/compare_gs_render.py --config-name hang_toothbrush_cup_gs
-python examples/compare_gs_render.py --config-name wipe_the_table_gs
-python examples/compare_gs_render.py --config-name arrange_flowers_gs
+```bash
+python examples/compare_gs_render.py task=press_three_buttons render=gs
+
+# Other tasks / embodiments with GS assets
+python examples/compare_gs_render.py task=cup_on_coaster render=gs
+python examples/compare_gs_render.py task=stack_color_blocks render=gs
+python examples/compare_gs_render.py task=hang_toothbrush_cup render=gs
+python examples/compare_gs_render.py task=wipe_the_table render=gs
+python examples/compare_gs_render.py task=arrange_flowers render=gs
+python examples/compare_gs_render.py task=press_blue_button embodiment=p7_g2p render=gs
 ```
 
-Output images are saved to `outputs/compare_<config_name>_<timestamp>.png`.
+Output images are saved to `outputs/compare_<run_name>_<timestamp>.png`, where
+`<run_name>` is `<task>__<embodiment>__gs`.
 
 ### Options
 
 | Option | Default | Description |
 | ------ | ------- | ----------- |
-| `show` | `false` | Display the comparison interactively with matplotlib |
+| `+show` | `false` | Display the comparison interactively with matplotlib |
 
 ```bash
-python examples/compare_gs_render.py show=true
+python examples/compare_gs_render.py task=press_three_buttons render=gs +show=true
 ```
 
 ## Compare Depth Render
@@ -181,25 +196,26 @@ python examples/compare_gs_render.py show=true
 
 ### Basic usage
 
-```bash
-# Default config: press_three_buttons_gs
-python examples/compare_depth_render.py
+The script requires GS rendering, so always pass `render=gs`:
 
-# Specify a different GS scene config
-python examples/compare_depth_render.py --config-name cup_on_coaster_gs
-python examples/compare_depth_render.py --config-name stack_color_blocks_gs
+```bash
+python examples/compare_depth_render.py task=press_three_buttons render=gs
+
+# Other tasks with GS assets
+python examples/compare_depth_render.py task=cup_on_coaster render=gs
+python examples/compare_depth_render.py task=stack_color_blocks render=gs
 ```
 
-Output images are saved to `outputs/compare_depth_<config_name>_<timestamp>.png`.
+Output images are saved to `outputs/compare_depth_<run_name>_<timestamp>.png`.
 
 ### Options
 
 | Option | Default | Description |
 | ------ | ------- | ----------- |
-| `show` | `false` | Display the comparison interactively with matplotlib |
+| `+show` | `false` | Display the comparison interactively with matplotlib |
 
 ```bash
-python examples/compare_depth_render.py show=true
+python examples/compare_depth_render.py task=press_three_buttons render=gs +show=true
 ```
 
 ## Depth Source Notes

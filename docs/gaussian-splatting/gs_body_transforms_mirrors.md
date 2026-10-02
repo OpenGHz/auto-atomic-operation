@@ -186,8 +186,10 @@ body_mirrors:
 ```
 
 This is exactly the pattern used by
-`aao_configs/open_door_airbot_play_back_gs.yaml` to reuse the front-side
-door PLYs on the back side of the scene.
+`aao_configs/render_assets/task/gs/open_door_back.yaml` (auto-selected for
+`aao-demo task=open_door_back render=gs`) to reuse the front-side door PLYs on
+the back side of the scene. That file is packaged at `env.gaussian_render`, so
+it declares `body_mirrors:` at its top level.
 
 ## Caching
 

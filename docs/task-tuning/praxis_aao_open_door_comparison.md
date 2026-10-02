@@ -33,6 +33,13 @@ Praxis 的 `open_room_door_push.yaml` 在本文中作为基础实现背景引用
 
 `third_party/` 和 `outputs/` 被外层仓库忽略，Praxis 不是外层 Git 子模块。因此文档同时记录两个 commit，不能只用外层 commit 代表两边版本。
 
+> 注：本文引用的 AAO 配置路径与行号均指上述快照。`aao_configs/` 重构为 config groups 之后（见
+> [迁移说明](../migration-notes/aao_configs_config_groups.md)），`open_door_p7_v3_umi_v3.yaml`
+> 对应 `aao-demo task=open_door embodiment=p7_v3_umi_v3`（`aao_configs/task/open_door.yaml`
+> + `aao_configs/adapt/_open_door/p7.yaml` + `aao_configs/adapt/open_door/p7_v3_umi_v3.yaml`），
+> `basis_p7_v3_umi_v3.yaml` 对应 `aao_configs/embodiment/p7_v3_umi_v3.yaml`，`common_vars.yaml`
+> 的媒体开关对应 `aao_configs/observation/default.yaml` 的 `observation.camera`。
+
 ### 1.3 AAO 配置解析证据
 
 按项目要求运行：
@@ -40,6 +47,8 @@ Praxis 的 `open_room_door_push.yaml` 在本文中作为基础实现背景引用
 ```bash
 /home/ghz/.mini_conda3/envs/airbot_play_data/bin/aao-info \
   open_door_p7_v3_umi_v3 --no-progress
+# config groups 重构后的等价命令：
+# aao-info open_door -r p7_v3_umi_v3 --no-progress
 ```
 
 解析结果为：

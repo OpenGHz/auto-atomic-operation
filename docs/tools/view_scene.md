@@ -31,12 +31,12 @@ viewer does not reinterpret them or create a second source of truth.
 ## Usage
 
 ```bash
-python examples/view_scene.py --config-name pick_and_place
-python examples/view_scene.py --config-name open_door_airbot_play_back_gs
-python examples/view_scene.py --config-name open_door_p7_ik
-python examples/view_scene.py --debug --config-name open_door_p7_ik
-python examples/view_scene.py --show-object-frames --config-name open_door_p7_ik
-python examples/view_scene.py --no-show-cameras --config-name open_door_p7_ik
+python examples/view_scene.py task=pick_and_place
+python examples/view_scene.py task=open_door_back render=gs
+python examples/view_scene.py task=open_door embodiment=p7_xf9600
+python examples/view_scene.py --debug task=open_door embodiment=p7_xf9600
+python examples/view_scene.py --show-object-frames task=open_door embodiment=p7_xf9600
+python examples/view_scene.py --no-show-cameras task=open_door embodiment=p7_xf9600
 ```
 
 Press `Ctrl+C` in the terminal to close the viewer and tear down the backend;
@@ -47,15 +47,20 @@ already enabled. MuJoCo displays axes for all model bodies, including task
 objects and robot links. In GS mode this affects the synchronized MuJoCo window;
 the Gaussian raster window itself does not render MuJoCo debug overlays.
 
-The default config is `pick_and_place`. Any Hydra override can be appended after `--`:
+The run is selected with the same config groups as `aao-demo` (`task=`,
+`embodiment=`, `render=gs`); without `task=` the primary config's default task
+(`pick_and_place`) is shown. Script flags (`--debug`, `--show-object-frames`,
+`--no-show-cameras`) go before the Hydra arguments. Any other Hydra override
+can be appended, optionally after `--`:
 
 ```bash
-python examples/view_scene.py --config-name open_door_p7_ik -- env.initial_joint_positions.joint1=0.5
+python examples/view_scene.py task=open_door embodiment=p7_xf9600 \
+    -- env.initial_joint_positions.joint1=0.5
 ```
 
 ## What it composes
 
-For the chosen config, the script reads these override surfaces and applies them on top of the host scene:
+For the chosen task and embodiment, the script reads these override surfaces and applies them on top of the host scene:
 
 | Source                                            | What it sets                                                                  |
 |---------------------------------------------------|-------------------------------------------------------------------------------|
@@ -101,9 +106,9 @@ viewer keeps running.
 
 ## Gaussian Splatting mode
 
-When the chosen config carries an `env.gaussian_render` section with at least one body
-gaussian or a background PLY (e.g. `open_door_airbot_play_gs`,
-`stack_color_blocks_gs`), the script switches to a **passive** MuJoCo viewer
+When the composed config carries an `env.gaussian_render` section with at least one body
+gaussian or a background PLY (e.g. `task=open_door embodiment=airbot_play_g2p render=gs`,
+`task=stack_color_blocks render=gs`), the script switches to a **passive** MuJoCo viewer
 and opens a second OpenCV window titled
 `GS view (synced with MuJoCo viewer)`.
 
@@ -135,7 +140,9 @@ Reload re-reads:
   `task_operators.<name>.initial_state.base_pose` (and warnings for
   `initial_state.eef_pose`), `task.camera_initial_pose`,
   `env.scene.*`, or
-  `env.gaussian_render.*` — re-composed via Hydra from disk.
+  `env.gaussian_render.*` — re-composed via Hydra from disk with the same
+  `task=` / `embodiment=` / `render=` choices, so edits to the task, scene,
+  embodiment, `adapt/`, and `render_assets/` files are all picked up.
 - **XML/package edits** to the host, MJCF layer or asset package — re-read by
   `auto_atom.scene_composition.load_composed_scene`.
 - **PLY edits** in GS mode — body / background gaussians are reloaded from

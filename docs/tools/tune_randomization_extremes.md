@@ -21,11 +21,16 @@ task runs.
 
 ```bash
 python examples/tune_randomization_extremes.py
-python examples/tune_randomization_extremes.py --config-name cup_on_coaster
-python examples/tune_randomization_extremes.py --config-name arrange_flowers
+python examples/tune_randomization_extremes.py task=cup_on_coaster
+python examples/tune_randomization_extremes.py task=arrange_flowers
+python examples/tune_randomization_extremes.py task=open_door embodiment=p7_xf9600
 ```
 
-The default config is `pick_and_place`. The script extracts the `task.randomization` section from the YAML config and builds a set of extreme cases.
+Without `task=` the primary config's default task (`pick_and_place`) is used.
+The script extracts the `task.randomization` section from the composed config
+and builds a set of extreme cases. Reloads re-compose `aao_configs/config.yaml`
+with the same command-line overrides, so edits to the task file and to its
+`adapt/<task>/<embodiment>.yaml` are both picked up.
 
 ### Multiple disjoint regions
 
@@ -67,7 +72,7 @@ The tkinter panel provides:
 - **Extreme case selector** -- dropdown to pick a case, with Prev/Next buttons
 - **Apply / Reset Default** -- apply the selected case or return to the nominal pose
 - **Random Sample** -- draw a fresh random sample uniformly from each configured range
-- **Reload Randomization** -- re-read the YAML config from disk, apply updated defaults from `task.initial_pose` / `task_operators.<name>.initial_state`, then rebuild the randomization cases
+- **Reload Randomization** -- re-compose the config from disk, apply updated defaults from `task.initial_pose` / `task_operators.<name>.initial_state`, then rebuild the randomization cases
 - **Full Reload** -- rebuild the entire scene and backend from the current config
 - **Current Poses** -- live display of each target's position, quaternion, and RPY
 

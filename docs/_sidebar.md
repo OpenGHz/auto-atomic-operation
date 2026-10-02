@@ -74,6 +74,7 @@
   - [Dishwasher031 and plate2 assets](/migration-notes/dishwasher_plate_assets.md)
   - [PlaceGen rack-plate assets](/migration-notes/rack_plate_assets.md)
   - [Microwave and sweet-potato assets](/migration-notes/microwave_sweet_potato_assets.md)
+  - [aao_configs config groups](/migration-notes/aao_configs_config_groups.md)
 
 - **Docs Site**
   - [GitHub Pages Media Notes](/docs-site/github_pages_media_notes.md)

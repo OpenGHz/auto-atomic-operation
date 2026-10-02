@@ -223,13 +223,13 @@ Data Replay 必须选择并记录一种明确语义：
 
 ### 8.1 堆叠方块
 
-[`stack_color_blocks.yaml`](../../aao_configs/stack_color_blocks.yaml) 的注释和 waypoint
+[`task/stack_color_blocks.yaml`](../../aao_configs/task/stack_color_blocks.yaml) 的注释和 waypoint
 使用固定的方块半高/堆叠高度，例如 `0.025` 和 `0.050`。方块尺寸变化后，放置目标
 不能继续依赖这些常数，应改为基于目标物体顶部或接触面的动态 reference。
 
 ### 8.2 磁盘上的方块
 
-[`place_blocks_on_disk_airbot_play_g2.yaml`](../../aao_configs/place_blocks_on_disk_airbot_play_g2.yaml)
+[`task/place_blocks_on_disk.yaml`](../../aao_configs/task/place_blocks_on_disk.yaml)
 含有固定的接近、放置和 retreat 高度。缩放后需要重新检查：
 
 - 抓取姿态是否仍位于物体有效区域；

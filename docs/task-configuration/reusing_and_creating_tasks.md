@@ -2,14 +2,65 @@
 
 This guide tells an agent (or a human) how to satisfy a request like *"I need a
 task that does X"* **efficiently**: reuse what exists, tweak it the cheapest way
-that works, and only create a new config file when the task is fundamentally
-different.
+that works, and only add a config file when something is fundamentally new —
+and then put it in the config group that owns that kind of difference.
 
-> **Golden rule.** A new `aao_configs/*.yaml` is justified **only** by a
-> *fundamental* difference — a different **robot/embodiment**, a different
-> **object set / scene**, or a different **operation flow** (the sequence of
-> stages/operations). If none of those change, do **not** add a file: adjust the
-> existing task in place, or pass a command-line override.
+> **Golden rule.** A new file under `aao_configs/` is justified **only** by a
+> *fundamental* difference, and the kind of difference decides where it goes:
+> a new **operation flow** (or object set) is a new `task/<name>.yaml`; a new
+> **robot** is a new `embodiment/<name>.yaml`; an existing task that needs
+> **tuning for a robot** gets `adapt/<task>/<embodiment>.yaml`; **GS assets**
+> go under `render_assets/`. If none of those change, do **not** add a file:
+> adjust the existing task in place, or pass a command-line override.
+
+## How a run is composed
+
+Every run composes one primary config, `aao_configs/config.yaml`, from config
+groups. Nothing is selected by file name any more — a run is a choice of group
+options:
+
+```bash
+aao-demo task=<task> [embodiment=<robot>] [render=gs] [backend=warp] [platform=egl] ...
+```
+
+The groups compose in this order; later entries win, and command-line
+overrides win over everything:
+
+| Order | Group | Directory | Owns |
+|---|---|---|---|
+| 1 | `simulator` | `simulator/` | Environment shell (`mujoco`, or `mock` for simulator-free tasks) |
+| 2 | `execution` | `execution/` | `physical` or `object_only` execution |
+| 3 | `observation` | `observation/` | Sensor streams and camera defaults (`observation.camera.width`, `enable_depth`, ...) |
+| 4 | `camera_layout` | `camera_layout/` | Which camera roles are kept (`all`, `operator_only`, `no_operator`) |
+| 5 | `scene` | `scene/` | `scene_name` (the MJCF under `assets/xmls/scenes/<scene_name>/`), static cameras, scene asset layers |
+| 6 | `embodiment` | `embodiment/` | Robot MJCF layer, operator binding, IK, home pose, wrist camera, `eef_top_down_orientation` |
+| 7 | `task` | `task/` | Stages, objects, operations, randomization, viewer framing |
+| 8 | `render` | `render/` | `mujoco` (native) or `gs` (Gaussian splatting) |
+| 9 | `render_assets/*` | `render_assets/{embodiment,scene,task}/<render>/` | Per-renderer asset bindings, auto-selected (optional) |
+| 10 | `adapt` | `adapt/<task>/<embodiment>.yaml` | Task × embodiment tuning, auto-selected (optional) |
+| 11 | `backend` | `backend/` | `cpu` or `warp` |
+| 12 | `platform` | `platform/` | `egl` headless-rendering environment variables (unset by default) |
+
+Rules that follow from this layout:
+
+- A task selects its scene and default robot inside its own `defaults` list
+  with `override /scene: <scene>` and `override /embodiment: <robot>`;
+  `embodiment=...` on the command line still takes priority.
+- `render`, `backend`, and `platform` compose after the task, so they are
+  user-level choices a task cannot override.
+- `adapt` and `render_assets/*` are **specialization slots**: Hydra picks
+  `adapt/${task}/${embodiment}.yaml` and
+  `render_assets/<axis>/${render}/<name>.yaml` from the final group choices and
+  silently skips them when no file matches. Never list them in a task.
+- `env.cameras` and `env.scene.layers` are dicts keyed by slot name
+  (`wrist`, `env0`, `robot`, `door`, ...). A later config replaces one slot by
+  restating its key, or removes it with `null`;
+  `prepare_task_config_for_instantiation` flattens them into the ordered
+  lists the environment expects. Every camera inherits the
+  `observation.camera` defaults.
+- `env.initial_joint_positions.<joint>: null` drops one inherited joint; other
+  lists (for example `task.stages`) are replaced wholesale, so parameterize a
+  task with named values when only numbers differ per robot.
 
 ## Decision flow
 
@@ -17,34 +68,44 @@ different.
 User asks for a task
         │
         ▼
-1. Does a matching task already exist?  ──► run `aao-info` (search / filter / --vocab)
-        │ yes                                        │ no exact match, but a close one exists
-        ▼                                            ▼
-   Run it as-is.                          2. Is the difference FUNDAMENTAL?
-   `aao-demo --config-name <name>`            (robot? objects/scene? operation flow?)
-                                                 │ no                        │ yes
-                                                 ▼                           ▼
-                                    3a. One-off / experimental?     4. Create a NEW config by
-                                        → CLI override                  COMPOSING the closest
-                                        (no file change)                existing base; override
-                                    3b. Permanent change?               only what differs.
-                                        → edit the task YAML            Follow the naming rules.
-                                        in place (no new file)
-                                                 │                           │
-                                                 └──────────► 5. Verify with `aao-info` + a run.
+1. Does a matching variant already exist?  ──► `aao-info` (search / filter / --vocab)
+        │ yes                                       │ a close one exists
+        ▼                                           ▼
+   Run it as-is: copy its `run:` line       2. What differs?
+   aao-demo task=<t> [embodiment=<e>]          │
+                                               ├─ a value (waypoint, range, camera, seed)
+                                               │      → 3. CLI override, or edit in place
+                                               ├─ renderer / backend / platform / GS background
+                                               │      → render=gs, backend=warp, platform=egl,
+                                               │        render_assets/background=<name> (no file)
+                                               ├─ an existing task on an existing robot
+                                               │      → embodiment=<e>; if it needs tuning,
+                                               │        4c. adapt/<task>/<e>.yaml
+                                               ├─ a new robot / gripper
+                                               │      → 4b. embodiment/<robot>.yaml
+                                               ├─ new objects / scene, or a new operation flow
+                                               │      → 4a. task/<task>.yaml (+ scene/<scene>.yaml)
+                                               └─ GS assets for a robot, scene, or task
+                                                      → 4d. render_assets/...
+                                                                │
+                                                                ▼
+                                                5. Verify with `aao-info` + a run
 ```
 
 ## Step 1 — Discover what already exists
 
-`aao-info` is the reuse-discovery tool. Never hand-scan `aao_configs/`; query it:
+`aao-info` is the reuse-discovery tool. Never hand-scan `aao_configs/`; query
+it. It lists every task once for its default embodiment and once more for
+every embodiment with an `adapt/<task>/<embodiment>.yaml`, and prints the
+`aao-demo` command for each variant:
 
 ```bash
-aao-info                     # every runnable task: operators, robots, objects, workflow
-aao-info -o press            # tasks that use a given operation
-aao-info --object cup        # tasks that manipulate a given object
-aao-info -r airbot           # tasks for a given robot model
-aao-info 'cup_on_coaster*'   # glob over config names
-aao-info --vocab             # keyword glossary (all operations/objects/robots/scenes) for retrieval
+aao-info                     # every runnable task x embodiment variant
+aao-info -o press            # variants that use a given operation
+aao-info --object cup        # variants that manipulate a given object
+aao-info -r p7               # variants for a given embodiment / robot model
+aao-info 'cup_on_coaster*'   # glob over task names
+aao-info --vocab             # keyword glossary (tasks, embodiments, scenes, objects, ...)
 ```
 
 See the [CLI Reference](../getting-started/cli_reference.md#aao-info) for every
@@ -55,30 +116,38 @@ one that already ships.
 
 | The request changes… | Fundamental? | What to do |
 |---|---|---|
-| A waypoint height / grasp offset / approach pose | No | Edit in place, or CLI override |
+| A waypoint height / grasp offset / approach pose | No | Edit in place (task, or its `adapt` file for one robot), or CLI override |
 | Randomization range, tolerance, seed, rounds, batch size | No | Edit in place, or CLI override |
-| Camera / viewer framing | No | Edit in place, or CLI override |
-| Toggling an already-parameterised option (e.g. an existing GS/render flag) | No | CLI override |
-| The **robot / gripper / embodiment** | **Yes** | New config composing a different `basis_*` |
-| The **object set or the scene** | **Yes** | New config (+ scene XML / assets if truly new) |
-| The **operation flow** (which operations, in what order) | **Yes** | New config with new `task.stages` |
+| Camera / viewer framing, camera resolution or modalities | No | Edit in place, or CLI override (`observation.camera.*`, `camera_layout=...`) |
+| Renderer, GS background, backend, platform | No | `render=gs`, `render_assets/background=<name>`, `backend=warp`, `platform=egl` |
+| An existing task on another **existing** robot | No new task | `embodiment=<name>`; add `adapt/<task>/<embodiment>.yaml` only if it needs tuning |
+| A **new robot / gripper** | **Yes** | New `embodiment/<name>.yaml` |
+| The **object set or the scene** | **Yes** | New `task/<name>.yaml` selecting a (new) `scene/<scene>.yaml` + scene XML / assets |
+| The **operation flow** (which operations, in what order) | **Yes** | New `task/<name>.yaml` with new `task.stages` |
+| GS rendering for a robot / scene / task that has none | **Yes** (assets) | New `render_assets/{embodiment,scene,task}/gs/<name>.yaml` |
 
 When in doubt, ask: *"Would this change break the task for its current users?"*
-If yes it is fundamental (make a new config); if it is just a better/alternate
-value for the same task, it is not (edit or override).
+If yes it is fundamental; if it is just a better/alternate value for the same
+task, it is not (edit or override).
 
 ## Step 3 — Non-fundamental changes (the common case)
 
 ### 3a. CLI override — for one-off, experimental, or swept values
 
 Hydra lets you override any key on the command line, so you can explore without
-touching a file. Dotted paths index into lists too:
+touching a file. Dotted paths index into lists too. Keys the composed config
+does not define need a `+` prefix (`+rounds`, `+max_updates`):
 
 ```bash
-# tweak a single waypoint of stage 0, run 3 rounds, 4 envs, fixed seed
-aao-demo --config-name pick_and_place \
-    task.stages.0.param.pre_move.1.position="[0.0, 0.0, 0.008]" \
-    rounds=3 env.batch_size=4 task.seed=1
+# tweak a named task parameter and a stage waypoint, run 3 rounds, 4 envs, fixed seed
+aao-demo task=pick_and_place \
+    pick_place.pick_z=0.008 \
+    task.stages.1.param.pre_move.0.position="[0.0, 0.0, 0.14]" \
+    +rounds=3 env.batch_size=4 task.seed=1
+
+# user-level dimensions are group selections, not files
+aao-demo task=cup_on_coaster render=gs render_assets/background=table
+aao-demo task=pick_and_place backend=warp observation.camera.width=320
 ```
 
 Use this for quick experiments and parameter sweeps — anything you would not
@@ -86,32 +155,174 @@ want to commit as the task's new default.
 
 ### 3b. Edit in place — for a permanent change to an existing task
 
-If the new value *should become* the task's behaviour, edit that task's YAML
-directly (its `task.stages`, `task.randomization`, `env.viewer`, …). **Do not
-clone the file to change one number** — that creates a near-duplicate that
-silently drifts from the original. See
-[Stages & Waypoints](stages_and_waypoints.md) and
+If the new value *should become* the task's behaviour, edit
+`task/<task>.yaml` directly (its `task.stages`, `task.randomization`,
+`env.viewer`, …). If the value is only right for one robot, edit that robot's
+`adapt/<task>/<embodiment>.yaml` instead so the other embodiments keep theirs.
+**Do not add a file to change one number** — a near-duplicate silently drifts
+from the original. See [Stages & Waypoints](stages_and_waypoints.md) and
 [Randomization](randomization.md) for the fields.
 
-## Step 4 — Fundamental changes: create a new config by composing
+## Step 4 — Fundamental changes: add a file to the right group
 
-A new variant should **compose** the closest existing config through `defaults`
-and override *only* what differs — never copy a whole task to change one layer.
-For a runnable variant, normally end the `defaults` list with `_self_` so the
-variant's local values override its bases.  `_self_` is a precedence marker,
-not a ceremonial suffix: a reusable building block may deliberately put it
-earlier when a later mixin is intended to win.  Keep such exceptions explicit
-and documented (see [Scene Composition](scene_composition.md)).
+Task, scene, embodiment, and adapt files start with `# @package _global_` (their
+keys land at the config root) and end their `defaults` list with `_self_` so
+their local values override what they include. `_self_` is a precedence marker, not a ceremonial
+suffix: a shared fragment may deliberately put it earlier when a later include
+is intended to win.
 
-**Render (GS) variant — pure composition, a handful of lines:**
+### 4a. Add a task — `task/<name>.yaml`
+
+A task is an operation flow on a scene. It selects the scene and a default
+robot, and stays robot-agnostic where it can: use
+`${eef_top_down_orientation}` (defined by the mocap-gripper, P7, and Franka
+embodiments — define it in any new embodiment) and named parameters for values
+a robot may need to retune.
 
 ```yaml
-# cup_on_coaster_gs.yaml
+# @package _global_
+# aao_configs/task/cup_on_coaster.yaml
 defaults:
-  - cup_on_coaster     # reuse the full base task (stages, objects, randomization)
-  - robotiq_gs         # robot's GS building block
-  - gs_mixin           # GS rendering mixin
+  - override /scene: cup_on_coaster       # scene/cup_on_coaster.yaml
+  - override /embodiment: robotiq_mocap   # default robot; `embodiment=...` still wins
   - _self_
+
+env:
+  mask_objects: ["cup", "coaster"]
+  operations: ["pick", "place"]
+
+task:
+  randomization:
+    entities:
+      cup: {x: [0.2, 0.5], y: [-0.32, 0.25], collision_radius: 0.04, reference: absolute_world}
+  stages:
+    - name: pick_cup
+      object: cup
+      operation: pick
+      operator: arm
+      param:
+        pre_move:
+          - position: [0.0, 0.0, 0.12]
+            orientation: ${eef_top_down_orientation}
+            reference: object_world
+        ...
+```
+
+If the task needs new objects, add a scene: `scene/<scene>.yaml` sets
+`scene_name` (the robot-less host MJCF is
+`assets/xmls/scenes/<scene_name>/demo.xml`) and its static cameras as slots:
+
+```yaml
+# @package _global_
+scene_name: cup_on_coaster
+
+env:
+  cameras:
+    env1: {name: env1_cam, is_static: true}
+    env0: {name: env0_cam, is_static: true}
+```
+
+Several tasks can share one scene (`open_drawer` / `close_drawer` both use
+`open_close_drawer`). Tasks that differ only by a parameter share a fragment:
+`task/press_blue_button.yaml` is just `defaults: [_press_button, _self_]`
+plus `object_name: button_blue`.
+
+### 4b. Add a robot — `embodiment/<name>.yaml`
+
+An embodiment is task-agnostic: the robot MJCF layer, operator binding, home
+pose, wrist camera name, IK solver/backend, and the top-down grasp orientation.
+Build it on the closest shared fragment (`_mocap_gripper`, `_fixed_arm`,
+`_p7`, `_airbot_play`) or on a sibling option:
+
+```yaml
+# @package _global_
+# aao_configs/embodiment/xf9600_mocap.yaml
+defaults:
+  - _mocap_gripper
+  - _self_
+
+eef_top_down_orientation: [0.70710678, 0.0, -0.70710678, 0.0]
+
+env:
+  sim_freq: 1200
+  scene:
+    layers:
+      robot:
+        kind: mjcf
+        path: ${assets_dir}/xmls/robots/xf9600_mocap.xml
+        role: operator
+  cameras:
+    wrist:
+      name: eef_wrist_cam
+  initial_joint_positions:
+    xf9600_freejoint: [0.0, 0.0, 0.4, 1.0, 0.0, 0.0, 0.0]
+    eef_clawj: 0.0
+  operators:
+    arm:
+      eef_actuators: [eef_claw_joint]
+      root_body: xf9600_interface
+      mocap_body: xf9600_mocap
+      freejoint: xf9600_freejoint
+```
+
+A variant of an existing robot can include it and restate only what differs
+(`embodiment/p7_v4_umi_v3.yaml` includes `p7_v3_umi_v3` and replaces
+`env.scene.layers.robot.path` and the IK kinematics). The new robot then runs
+any task with `embodiment=<name>`.
+
+### 4c. Tune a task for a robot — `adapt/<task>/<embodiment>.yaml`
+
+When `task=<t> embodiment=<e>` composes but the robot needs different heights,
+base pose, cameras, or control settings, add `adapt/<t>/<e>.yaml`. It is
+picked up automatically, composes after the task (so it wins over it), and
+makes the combination appear in `aao-info` as a validated variant:
+
+```yaml
+# @package _global_
+# aao_configs/adapt/pick_and_place/xf9600_mocap.yaml
+pick_place:
+  pick_z: 0.045
+  place_approach_z: 0.15
+  place_z: 0.10
+  retreat_z: 0.18
+```
+
+Prefer retuning the task's named parameters over restating `task.stages`;
+restate the stages only when the robot forces a different program (as
+`adapt/pick_and_place/franka_robotiq.yaml` does for per-waypoint IK step
+limits). Remove inherited entries that do not apply with `null`, e.g.
+`env.initial_joint_positions.robotiq_freejoint: null` or
+`env.cameras.env0: null`. When several task × embodiment pairs share one
+adaptation, put it in a fragment and include it by absolute path:
+
+```yaml
+# @package _global_
+# aao_configs/adapt/open_door/p7_xf9600.yaml
+defaults:
+  - /adapt/_open_door/p7
+  - _self_
+
+p7_open_door:
+  door_angle: 0.35
+```
+
+### 4d. GS assets — `render_assets/...`
+
+`render=gs` (`render/gs.yaml`) switches the environment to the GS renderer and
+loads the default background. Everything asset-specific is auto-selected from
+`render_assets/` for the chosen task, scene, and embodiment — a task never
+lists GS files:
+
+| File | Package | Contents |
+|---|---|---|
+| `render_assets/embodiment/gs/<embodiment>.yaml` | `env.gaussian_render` | The robot's per-body PLYs (`body_gaussians`, `body_transforms`) |
+| `render_assets/scene/gs/<scene>.yaml` | `_global_` | Object PLYs under `env.gaussian_render.body_gaussians`, GS viewer framing, scene-specific `model_name` / backgrounds |
+| `render_assets/task/gs/<task>.yaml` | `env.gaussian_render` | Task-specific GS corrections (e.g. `body_mirrors` for `open_door_back`) |
+| `render_assets/background/<name>.yaml` | `env.gaussian_render` | `background_ply` + `background_transforms`; select with `render_assets/background=<name>` |
+
+```yaml
+# @package _global_
+# aao_configs/render_assets/scene/gs/cup_on_coaster.yaml
 env:
   gaussian_render:
     body_gaussians:
@@ -119,80 +330,64 @@ env:
       coaster_gs: ${gs_dir}/coaster.ply
 ```
 
-**Robot variant — swap the `basis_*`, keep the intent:** a different robot
-generally needs its own grasp orientation / IK, so its stages legitimately
-differ. Compose the robot base and redeclare only what the new embodiment
-requires:
+`aao-info` lists `render: mujoco | gs` for a variant once its scene has a
+`render_assets/scene/gs/<scene>.yaml`.
 
-```yaml
-# pick_and_place_franka.yaml
-defaults:
-  - basis_franka       # robot + eef definition (instead of basis_mocap_eef)
-  - _self_
-scene_name: pick_and_place
-env:
-  scene:
-    layers:
-      - kind: mjcf
-        path: ${assets_dir}/xmls/robots/panda_robotiq.xml
-  mask_objects: ["source_block", "target_pedestal"]
-  operations: ["pick", "place"]
-task:
-  stages: ...          # only where the robot forces different poses/IK
-```
+## Step 5 — Naming and layout conventions
 
-If two variants share *identical* stages and differ only by robot base, prefer a
-shared mixin over duplicated stages so they cannot drift apart.
-
-## Step 5 — Naming conventions (only when a file is actually created)
-
-Runnable task configs live at the **top level** of `aao_configs/` and are named
-`snake_case`, scene-descriptive, with optional suffixes composed left→right:
-
-```
-<task>[_<robot>][_gs].yaml
-```
-
-| Kind | Pattern | Examples |
-|---|---|---|
-| Base task | `<task>.yaml` | `pick_and_place`, `cup_on_coaster`, `open_door` |
-| Render variant | `<task>_gs.yaml` | `cup_on_coaster_gs`, `stack_color_blocks_gs` |
-| Robot variant | `<task>_<robot>.yaml` | `pick_and_place_franka`, `pick_and_place_xf9600` |
-| Robot + render | `<task>_<robot>_gs.yaml` | `open_door_airbot_play_gs` |
-
-- The `<robot>` segment names the embodiment (arm and, where it matters,
-  gripper): `franka`, `xf9600`, `umi_v3`, `airbot_p7`, `airbot_play_g2p`, …
-  **Match sibling variants** of the same task rather than inventing a new spelling.
-- **Reserved building-block names — never name a runnable task like these:**
-  `basis_*` (robot/eef/scene bases), `*_mixin` (reusable fragments),
-  `*_vars` (variable files), `robotiq_gs` / `gs_mixin` / `airbot_*_gs`
-  (GS building blocks). These are meant to be *included*, not run; `aao-info`
-  hides them (they declare no `task.stages`), and the name signals intent to
-  readers.
-- Scratch / experimental configs go in `aao_configs/test/`, not the top level.
+- Option names are `snake_case`. A **task** names the operation flow on a
+  scene (`cup_on_coaster`, `open_door_back`) and carries **no robot or
+  renderer suffix** — those are `embodiment=` and `render=`.
+- An **embodiment** names arm and gripper, or the gripper and `_mocap` for a
+  free-floating gripper: `p7_g2p`, `p7_v3_umi_v3`, `airbot_play_g2p`,
+  `franka_robotiq`, `robotiq_mocap`, `xf9600_mocap`. **Match existing
+  spellings** rather than inventing new ones.
+- A **scene** option is named like its XML directory under
+  `assets/xmls/scenes/`.
+- `adapt/<task>/<embodiment>.yaml` and
+  `render_assets/<axis>/<render>/<name>.yaml` must match option names
+  exactly: the slots are optional, so a misspelt file is silently ignored.
+- **`_`-prefixed files and directories are shared fragments**
+  (`embodiment/_p7.yaml`, `task/_press_button.yaml`, `adapt/_open_door/`,
+  `render_assets/embodiment/gs/_airbot_play.yaml`). They are included through
+  `defaults`, never selected directly, and `aao-info` skips them.
+- Scratch / experimental overrides go in `aao_configs/test/` and are appended
+  with `+test=<name>` (for example `+test=open_the_door`).
 
 ## Step 6 — Verify
 
 ```bash
-aao-info <new_or_edited_name>            # confirm it is detected as a task with the
-                                         # expected operators / robots / objects / workflow
-aao-demo --config-name <name>            # actually run it (use `mock` backend for a dry check)
+aao-info <task>                               # the task / new variant is listed with the
+                                              # expected embodiment, objects, and workflow
+aao-demo task=<task> [embodiment=<e>] --info defaults   # which scene / adapt / render_assets files composed
+aao-demo task=<task> [embodiment=<e>] --cfg job         # print the composed config
+aao-demo task=<task> [embodiment=<e>]                   # actually run it
 ```
 
-If `aao-info` does not list your config, it composed without a non-empty
-`task.stages` (so it is not a task) or the composition errored — run
-`aao-info --verbose` to see the skip reason.
+If `aao-info` does not list your variant, it composed without a non-empty
+`task.stages` (so it is not a task), the composition errored, or — for a
+non-default embodiment — there is no `adapt/<task>/<embodiment>.yaml`. Run
+`aao-info --verbose` to see skip reasons. A task × embodiment pair without an
+adapt file still runs with `embodiment=<e>`; it is just not advertised as
+validated.
 
 ## Anti-patterns
 
-- **Cloning a whole task file to change one waypoint / range / seed.** → Edit in
-  place, or use a CLI override.
-- **Duplicating `task.stages` across variants that only differ by robot base**
-  when the stages are identical. → Share via the base / a mixin.
-- **Naming a runnable task `basis_*` / `*_mixin` / `*_vars`.** → It will be
-  hidden by `aao-info` and misleads readers.
-- **Adding a config without composing** (copy-pasting a full base you could have
-  listed in `defaults`). → Compose and override only the delta.
+- **Adding a file to change one waypoint / range / seed.** → Edit in place, or
+  use a CLI override.
+- **Naming a task after a robot or renderer** (`<task>_<robot>`,
+  `<task>_gs`). → Use `embodiment=` / `render=`; tune with `adapt/`, add GS
+  assets under `render_assets/`.
+- **Putting task-specific values in an embodiment** (or robot properties in a
+  task). → Task × robot values belong in `adapt/<task>/<embodiment>.yaml`.
+- **Restating `task.stages` in an adapt file** when only heights differ. →
+  Parameterize the task (`pick_place.*`) and retune the parameters.
+- **Restating a whole camera or layer list.** → Replace or `null` the one slot
+  that differs.
+- **Listing `render_assets/*` or `adapt/*` in a task's `defaults`.** → They are
+  auto-selected; a task cannot override `render` / `backend` / `platform`.
+- **Selecting a `_`-prefixed fragment directly** (`task=_press_button`). →
+  Include it from an option's `defaults`.
 - **Forgetting `_self_`**, or placing it at a precedence point that does not
   match the intended override order.
 
@@ -200,6 +395,7 @@ If `aao-info` does not list your config, it composed without a non-empty
 
 - [CLI Reference — aao-info](../getting-started/cli_reference.md#aao-info) — discovery, filtering, and the `--vocab` glossary
 - [Stages & Waypoints](stages_and_waypoints.md) — the fields you edit in place
-- [Scene Composition](scene_composition.md) — `defaults`, composition order, `_self_`
+- [Scene Composition](scene_composition.md) — scene layers and asset assembly
 - [Randomization](randomization.md) — per-object/per-camera randomization ranges
-- [Action Space](action_space.md) — operations and operators
+- [Action Space](action_space.md) — operations and operators per embodiment
+- [Config groups migration note](../migration-notes/aao_configs_config_groups.md) — old `--config-name` names → `task=` / `embodiment=` / `render=`

@@ -2,15 +2,22 @@
 
 This guide explains how to estimate and interactively tune per-background GS offsets for files under `assets/gs/backgrounds/`.
 
-These offsets are used by [`aao_configs/gs_mixin.yaml`](../aao_configs/gs_mixin.yaml):
+Each background is one option of the `render_assets/background` config group,
+[`aao_configs/render_assets/background/<name>.yaml`](../../aao_configs/render_assets/background/),
+which holds its PLY path and offset:
 
 ```yaml
-env:
-  gaussian_render:
-    background_ply: ${assets_dir}/gs/backgrounds/${bg3dgs_name}.ply
-    background_transforms:
-      discover-lab2: [0.2839, 0.0888, 0.0745]
+# @package env.gaussian_render
+# aao_configs/render_assets/background/discover-lab2.yaml
+background_ply: ${assets_dir}/gs/backgrounds/discover-lab2.ply
+background_transforms:
+  discover-lab2: [0.2839, 0.0888, 0.0745]
 ```
+
+`render=gs` loads `background_1` by default; select another background with
+`render_assets/background=<name>`, e.g.
+`aao-demo task=press_three_buttons render=gs render_assets/background=discover-lab2`.
+To add a background, copy one of these files under the PLY's file stem.
 
 The goal is to shift each background PLY so that:
 
@@ -23,7 +30,7 @@ The goal is to shift each background PLY so that:
 Recommended workflow:
 
 1. Run the automatic estimator to get an initial offset.
-2. Paste the result into `background_transforms`.
+2. Paste the result into `background_transforms` of that background's `render_assets/background/<name>.yaml`.
 3. Launch the interactive tuner and refine the offset while watching RGB, mask, and overlay across one or more cameras.
 
 ## 1. Automatic Offset Recommendation
@@ -129,7 +136,7 @@ Launch the tuner on one camera:
 ```bash
 /home/ghz/.mini_conda3/envs/airbot_play_data/bin/python \
     examples/tune_gs_background_transform.py \
-    --config-name press_three_buttons_gs
+    --task press_three_buttons
 ```
 
 Select a specific background:
@@ -137,8 +144,8 @@ Select a specific background:
 ```bash
 /home/ghz/.mini_conda3/envs/airbot_play_data/bin/python \
     examples/tune_gs_background_transform.py \
-    --config-name press_three_buttons_gs \
-    -- --bg3dgs_name=discover-lab2
+    --task press_three_buttons \
+    -- render_assets/background=discover-lab2
 ```
 
 Tune with a specific camera and smaller step:
@@ -146,7 +153,7 @@ Tune with a specific camera and smaller step:
 ```bash
 /home/ghz/.mini_conda3/envs/airbot_play_data/bin/python \
     examples/tune_gs_background_transform.py \
-    --config-name wipe_the_table_gs \
+    --task wipe_the_table \
     --camera env1_cam \
     --step 0.002
 ```
@@ -158,7 +165,7 @@ You can preview multiple cameras at once:
 ```bash
 /home/ghz/.mini_conda3/envs/airbot_play_data/bin/python \
     examples/tune_gs_background_transform.py \
-    --config-name press_three_buttons_gs \
+    --task press_three_buttons \
     --camera env1_cam \
     --camera wrist_cam
 ```
@@ -193,19 +200,19 @@ When you press `p`, the script prints a line like:
 YAML: discover-lab2: [0.2839, 0.0888, 0.0745]
 ```
 
-You can paste that line back into `background_transforms` in [`aao_configs/gs_mixin.yaml`](../aao_configs/gs_mixin.yaml).
+You can paste that line back into `background_transforms` in the background's [`aao_configs/render_assets/background/<name>.yaml`](../../aao_configs/render_assets/background/).
 
 ### Optional arguments
 
 | Option | Default | Meaning |
 | ------ | ------- | ------- |
-| `--config-name` | `press_three_buttons_gs` | Hydra config to load |
+| `--task` | `press_three_buttons` | Task to compose; always composed with `render=gs` |
 | `--camera` | first configured camera | Camera(s) to preview; repeatable |
 | `--all-cameras` | `false` | Show all configured cameras |
 | `--step` | `0.005` | Initial xyz tuning step in metres |
 | `--window-scale` | `0.75` | OpenCV window scale factor |
 | `--viewer` | `false` | Also keep the MuJoCo passive viewer open |
-| `-- ...` | none | Additional Hydra overrides |
+| `-- ...` | none | Additional Hydra overrides, e.g. `embodiment=p7_g2p render_assets/background=discover-lab2` |
 
 ## Notes
 

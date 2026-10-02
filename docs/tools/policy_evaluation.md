@@ -112,7 +112,7 @@ Use it for final aggregate metrics:
 ## Policy Interface
 
 The package entry point is [auto_atom/runner/policy_eval.py](../auto_atom/runner/policy_eval.py).
-By default, `aao-eval` resolves Hydra configs from `./aao_configs/` relative to the current working directory.
+By default, `aao-eval` composes `./aao_configs/config.yaml` relative to the current working directory; select the run with `task=<task>` (plus `embodiment=` / `render=gs` when needed), exactly as for `aao-demo`.
 
 If the config does not provide a `policy` section, `aao-eval` will default to
 `auto_atom.ConfigDrivenDemoPolicy`, so you can directly evaluate a normal demo
@@ -324,21 +324,21 @@ This means policy evaluation is not based on ad-hoc metrics. It uses the same st
 The repository includes:
 
 - [auto_atom/runner/policy_eval.py](../auto_atom/runner/policy_eval.py)
-- [policy_eval_mock.yaml](../aao_configs/policy_eval_mock.yaml)
+- [task/policy_eval_mock.yaml](../../aao_configs/task/policy_eval_mock.yaml)
 
 Run evaluation directly on a demo config:
 
 ```bash
-aao-eval --config-name pick_and_place
+aao-eval task=pick_and_place
 ```
 
 Or run the mock example:
 
 ```bash
-aao-eval --config-name policy_eval_mock
+aao-eval task=policy_eval_mock
 ```
 
-`policy_eval_mock.yaml` explicitly pins `auto_atom.ConfigDrivenDemoPolicy`, but
+`task/policy_eval_mock.yaml` explicitly pins `auto_atom.ConfigDrivenDemoPolicy`, but
 that is now equivalent to omitting `policy` entirely.
 
 The mock example is mainly for verifying the control loop and outputs:
@@ -406,8 +406,8 @@ from auto_atom.ipc import RemotePolicyEvaluator
 
 evaluator = RemotePolicyEvaluator(host="localhost", port=18861)
 
-# Initialize — the server loads config and creates the simulator
-evaluator.from_config("press_three_buttons", overrides=["env.batch_size=1"])
+# Initialize — the server composes task=<task> + overrides and creates the simulator
+evaluator.from_config("press_three_buttons", overrides=["render=gs", "env.batch_size=1"])
 # or: evaluator.from_yaml("path/to/task.yaml")
 
 # Query env info (config, camera intrinsics/extrinsics, etc.)
@@ -436,7 +436,7 @@ All return types (`TaskUpdate`, `ExecutionRecord`, `ExecutionSummary`) are real 
 
 | Method / Property | Returns | Description |
 |---|---|---|
-| `from_config(name, overrides=)` | `self` | Load task config on the server by Hydra config name |
+| `from_config(task, overrides=)` | `self` | Compose `task=<task>` plus Hydra `overrides` (e.g. `embodiment=...`, `render=gs`) on the server and load it |
 | `from_yaml(path)` | `self` | Load task config on the server from a YAML path |
 | `reset(env_mask=)` | `TaskUpdate` | Reset environments |
 | `get_observation()` | `Any` | Get current observation |
@@ -470,10 +470,18 @@ See [examples/policy_eval_server.py](../examples/policy_eval_server.py) and [exa
 # Terminal 1
 python examples/policy_eval_server.py
 
-# Terminal 2
+# Terminal 2 (default: --task press_three_buttons with render=gs)
 python examples/policy_eval_client.py
+python examples/policy_eval_client.py --task cup_on_coaster
+python examples/policy_eval_client.py --task press_blue_button \
+    --override embodiment=p7_g2p --override render=gs
 python examples/policy_eval_client.py --host 10.0.0.5 --port 9999
 ```
+
+The client replays `outputs/records/demos/<run_name>.npz`, written by
+`examples/record_demo.py` with the same task and overrides (for the default:
+`python examples/record_demo.py task=press_three_buttons render=gs env.batch_size=1`);
+pass `--demo-path` to use another file.
 
 ## Recommended Integration Pattern
 

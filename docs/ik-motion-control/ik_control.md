@@ -67,7 +67,8 @@ TaskRunner.update()
 
 这个模式适合单次 IK 已能准确收敛、且希望减少求解次数的任务。若目标存在
 不可忽略的残差，它不会继续闭环修正；因此带随机目标与近距离抓取动作的
-`aao_configs/pick_and_place_franka.yaml` 使用 `per_step_ik`。
+`aao-demo task=pick_and_place embodiment=franka_robotiq`（其
+`aao_configs/adapt/pick_and_place/franka_robotiq.yaml`）使用 `per_step_ik`。
 
 执行过程：
 
@@ -203,9 +204,15 @@ def solve(target_pose_in_base, current_qpos) -> Optional[np.ndarray]:
 
 ## YAML 配置
 
-### 基础配置：basis_franka.yaml + 任务 YAML
+### 基础配置：embodiment + adapt YAML
+
+机器人相关字段（`env.operators`、`backend`、`task_operators.arm.ik` 默认值）位于
+`aao_configs/embodiment/franka_robotiq.yaml`；该任务在 Franka 上的 stage 与 IK
+调参位于 `aao_configs/adapt/pick_and_place/franka_robotiq.yaml`，组合后通过
+`aao-demo task=pick_and_place embodiment=franka_robotiq` 运行。下例为示意：
 
 ```yaml
+# embodiment/franka_robotiq.yaml
 env:
   operators:
     arm:
@@ -217,6 +224,7 @@ env:
 
 backend: auto_atom.backend.mjc.ik.mink_ik_solver.build_franka_backend
 
+# adapt/pick_and_place/franka_robotiq.yaml
 task:
   stages:
     - name: pick_source

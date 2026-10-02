@@ -530,24 +530,27 @@ batched GS 背景有 `_bg_cache`，用于静态相机复用背景渲染结果。
 
 ## Open Door 当前配置状态
 
-`aao_configs/open_door_airbot_play_gs.yaml` 当前已切到部件字典形式，分别给墙面和室内提供候选：
+`aao_configs/render_assets/scene/gs/open_door.yaml`（`open_door` 场景的 GS 资产，
+`aao-demo task=open_door embodiment=airbot_play_g2p render=gs`、
+`task=open_door_back render=gs` 等所有 open_door GS 运行都会自动加载）当前已切到
+部件字典形式，分别给墙面和室内提供候选：
 
 ```yaml
 wall_name: wall*
-inside_name: inside10
-bg3dgs_dir: ${assets_dir}/gs/backgrounds/door_bg/
+inside_name: inside0
+bg3dgs_dir: ${assets_dir}/gs/backgrounds/door_bg
 
 env:
   gaussian_render:
     background_ply:
-      wall:   ${bg3dgs_dir}/${wall_name}.ply
-      inside: ${bg3dgs_dir}/${inside_name}.ply
+      wall:   ${bg3dgs_dir}/wall/${wall_name}.ply
+      inside: ${bg3dgs_dir}/inside/${inside_name}.ply
 ```
 
-每个环境的背景 = 一张 `wall*` PLY 与 `inside10.ply` 的组合（合并后落盘缓存到
+每个环境的背景 = 一张 `wall*` PLY 与 `inside0.ply` 的组合（合并后落盘缓存到
 `.cache/gs_background_combos/`）。
 
-`aao_configs/test/open_the_door.yaml` 当前测试配置里：
+`aao_configs/test/open_the_door.yaml`（命令行追加 `+test=open_the_door`）测试配置里：
 
 ```yaml
 env:

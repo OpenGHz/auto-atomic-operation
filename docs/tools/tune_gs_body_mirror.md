@@ -12,16 +12,18 @@ See [GS Body Transforms & Mirrors](../gaussian-splatting/gs_body_transforms_mirr
 
 ## Usage
 
+The task is always composed with `render=gs`:
+
 ```bash
-python examples/tune_gs_body_mirror.py --config-name open_door_airbot_play_back_gs
+python examples/tune_gs_body_mirror.py --task open_door_back
 python examples/tune_gs_body_mirror.py \
-    --config-name open_door_airbot_play_back_gs \
+    --task open_door_back \
     --camera env0_cam --bg-index 3 --width 720 --height 540
 ```
 
 | Flag             | Default                                  | Purpose                                                        |
 |------------------|------------------------------------------|----------------------------------------------------------------|
-| `--config-name`  | `open_door_airbot_play_back_gs`          | Hydra task config (must define `env.gaussian_render.body_mirrors`) |
+| `--task`         | `open_door_back`                         | Task to compose with `render=gs` (must define `env.gaussian_render.body_mirrors`) |
 | `--camera`       | first static camera                      | Named MuJoCo camera that seeds the initial orbit pose          |
 | `--bg-index`     | `0`                                      | Pin a single background PLY when `background_ply` is a glob/list |
 | `--width` / `--height` | `640` / `480`                      | Per-panel resolution                                           |
@@ -31,8 +33,10 @@ python examples/tune_gs_body_mirror.py \
 Hydra overrides can be appended after `--`:
 
 ```bash
-python examples/tune_gs_body_mirror.py --config-name open_door_airbot_play_back_gs \
+python examples/tune_gs_body_mirror.py --task open_door_back \
     -- env.gaussian_render.minibatch=256
+python examples/tune_gs_body_mirror.py --task open_door_back \
+    -- embodiment=airbot_play_g2p render_assets/background=simple_room
 ```
 
 ## Mouse controls
@@ -71,7 +75,7 @@ python examples/tune_gs_body_mirror.py --config-name open_door_airbot_play_back_
 3. Press `f` to pick the mirror axis (GS-local X / Y / Z).
 4. Use `Shift + i/k j/l o/u` to slide the mirror center until reflected gaussians sit on the physics body.
 5. Use `i/k j/l o/u` and `y/h t/g n/m` to fine-tune the post-reflection translate/rotate.
-6. Press `p` to print the YAML snippet — paste it into the task config under `env.gaussian_render.body_mirrors`.
+6. Press `p` to print the YAML snippet — paste it into the task's GS asset file under `body_mirrors` (for `open_door_back`: `aao_configs/render_assets/task/gs/open_door_back.yaml`, which is packaged at `env.gaussian_render`).
 7. Press `r` to revert if a tweak made things worse.
 
 ## Notes

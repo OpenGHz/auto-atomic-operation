@@ -116,11 +116,34 @@ follow `--continue-on-failure`. CPU and RAM limits do not cap GPU VRAM, so use
 Run a task-runner demo.
 
 ```bash
-aao-demo                                # default: pick_and_place
-aao-demo --config-name cup_on_coaster   # any config in aao_configs/
+aao-demo                                          # default task: pick_and_place
+aao-demo task=cup_on_coaster                      # any option of aao_configs/task/
+aao-demo task=cup_on_coaster embodiment=p7_g2p    # the same task on another robot
+aao-demo task=cup_on_coaster render=gs            # Gaussian-splatting rendering
+aao-demo task=pick_and_place backend=warp         # GPU (mujoco_warp) backend
 ```
 
-To discover which configs are runnable tasks, use [`aao-info`](#aao-info).
+To discover which task × embodiment combinations are runnable, use
+[`aao-info`](#aao-info); it prints the exact `aao-demo` command for each.
+
+### Config groups
+
+Every run composes the single primary config `aao_configs/config.yaml`. A run
+is selected by choosing config-group options, not by naming a config file —
+`--config-name <task>` no longer exists. Group selections need no `+` prefix.
+
+| Group | Options | Default | Description |
+|---|---|---|---|
+| `task` | `aao_configs/task/*.yaml` | `pick_and_place` | Stages, waypoints, and randomization. Each task also selects its scene and default embodiment |
+| `embodiment` | `aao_configs/embodiment/*.yaml` (e.g. `robotiq_mocap`, `xf9600_mocap`, `franka_robotiq`, `p7_g2p`, `airbot_play_g2p`) | set by the task | Robot and gripper. Task-specific tuning in `adapt/<task>/<embodiment>.yaml` is applied automatically |
+| `render` | `mujoco`, `gs` | `mujoco` | `gs` enables Gaussian-splatting rendering; choose the background with `render_assets/background=<name>` |
+| `backend` | `cpu`, `warp` | `cpu` | `backend=warp` selects the GPU mujoco_warp backend |
+| `platform` | `egl` | none | `platform=egl` sets the EGL/NVIDIA environment variables for headless rendering |
+| `observation` | `default`, `rgb_only` | `default` | Camera resolution and modalities; tune single fields with `observation.camera.width=...`, `observation.camera.enable_mask=true`, ... |
+| `camera_layout` | `all`, `operator_only`, `no_operator` | `all` | Which camera roles (wrist / scene / object) are kept |
+| `execution` | `physical`, `object_only` | `physical` | `object_only` transports stage objects kinematically without operators |
+| `scene` | `aao_configs/scene/*.yaml` | set by the task | Rarely overridden directly |
+| `simulator` | `mujoco`, `mock` | `mujoco` | Mock tasks select `mock` themselves |
 
 ### Hydra overrides
 
@@ -143,16 +166,16 @@ To discover which configs are runnable tasks, use [`aao-info`](#aao-info).
 | `[+]execution.interval_selection.max_fast_forward_updates=N` | int | 10000 | Per-environment controller-update limit while `reset()` advances to the interval start boundary |
 | `[+]execution.keypoint_selection=[...]` | list | unset | Ordered keypoints to execute: task-wide ordinals or `{stage, phase?, waypoint?}` entries, with negative indexes counting from the end; unlisted keypoints are skipped. Mutually exclusive with `interval_selection` |
 
-Any key present in the YAML config can be overridden on the command line following Hydra syntax:
+Any key present in the composed config can be overridden on the command line following Hydra syntax:
 
-Use `+key=value` when the selected YAML does not define the key, and
+Use `+key=value` when the composed config does not define the key, and
 `key=value` when it already exists. `[+]` in the table means the prefix depends
-on the selected config; using `+` for an existing key causes a Hydra composition
+on the selected task; using `+` for an existing key causes a Hydra composition
 error.
 
 ```bash
 # Multiple overrides
-aao-demo --config-name stack_color_blocks +rounds=3 env.batch_size=4 +max_updates=500
+aao-demo task=stack_color_blocks +rounds=3 env.batch_size=4 +max_updates=500
 
 # Override a nested key
 aao-demo task.stages.0.param.pre_move.0.position="[0.4, 0.0, 0.1]"
@@ -162,7 +185,7 @@ Make each public update complete one YAML waypoint, beginning immediately
 before the pick retract and ending immediately after the place retract:
 
 ```bash
-aao-demo --config-name pick_and_place \
+aao-demo task=pick_and_place \
   +execution.update_boundary=keypoint \
   +execution.render_internal_updates=false \
   +execution.interval_selection.start.stage=pick_source \
@@ -175,8 +198,8 @@ aao-demo --config-name pick_and_place \
   +execution.interval_selection.stop.side=after
 ```
 
-The shipped `pick_and_place` config leaves this example commented out, so the
-command adds the paths with `+`. When a selected config already defines a
+The shipped `task/pick_and_place.yaml` leaves this example commented out, so the
+command adds the paths with `+`. When the selected task already defines a
 path, override it without `+`.
 
 Run only some keypoints, skipping the rest, by replacing the contiguous
@@ -185,13 +208,13 @@ ordinal (negative counts from the end) or a `stage` / `phase` / `waypoint`
 scope:
 
 ```bash
-aao-demo --config-name place_blocks_on_disk_airbot_play_g2 \
+aao-demo task=place_blocks_on_disk \
   ~execution.interval_selection \
   +execution.keypoint_selection="[0, -1]"
 ```
 
 ```bash
-aao-demo --config-name place_blocks_on_disk_airbot_play_g2 \
+aao-demo task=place_blocks_on_disk \
   ~execution.interval_selection \
   +execution.keypoint_selection="[{stage: pick_cube_yellow_2}, {stage: place_cube_orange_3_in_disk, waypoint: -1}]"
 ```
@@ -241,6 +264,10 @@ Each run writes a `summary.json` to the Hydra output directory
 completion steps, timing, and failure reasons. `updates_used` includes the
 untimed warmup update; `timed_updates` and `loop_frequency_hz` exclude it.
 Timing covers only update execution, not interactive waits or console output.
+Its `run_config` block records the run name (`task__embodiment[__render]`,
+e.g. `pick_and_place__robotiq_mocap` or `press_blue_button__p7_g2p__gs`; the
+render part is omitted for native MuJoCo) and the selected config-group
+`choices`.
 
 ## aao-unidoor-sweep
 
@@ -250,11 +277,12 @@ component index declared by the scene asset package, so the tested matrix and
 the assets loaded by the task have one source of truth.
 
 ```bash
-# All 55 doors x 47 handles (2,585 jobs), using the default P7 V4 task config
+# All 55 doors x 47 handles (2,585 jobs), using the default
+# task=open_door_unidoor embodiment=p7_v4_umi_v3
 aao-unidoor-sweep
 
-# Select the legacy P7 V3 task config explicitly
-aao-unidoor-sweep --config-name open_door_unidoor_p7_v3_umi_v3
+# Select the legacy P7 V3 embodiment explicitly
+aao-unidoor-sweep --embodiment p7_v3_umi_v3
 
 # A smaller Cartesian product, in the specified order
 aao-unidoor-sweep \
@@ -361,6 +389,9 @@ also retries task-level failures, missing/invalid summaries, launcher failures,
 and combinations that never started. `--resume-latest` selects the valid sweep
 under `outputs/unidoor-sweeps/` whose manifest was updated most recently;
 explicit `--resume` remains available when reproducing an older run.
+Manifests written before the config-group layout (they record a
+`config_name` instead of `task` / `embodiment`) can still be reported, but
+not resumed; start a new sweep with `--task` / `--embodiment`.
 
 Exit code `0` means every combination succeeded. A strict stop returns `1` for
 a task-level failure or `2` for an infrastructure/launcher failure; later
@@ -372,8 +403,8 @@ sweep was interrupted. Reports are written before returning any nonzero code.
 Run policy evaluation. Same Hydra config system as `aao-demo` but accepts an external policy.
 
 ```bash
-aao-eval --config-name pick_and_place       # evaluate with ConfigDrivenDemoPolicy (default)
-aao-eval --config-name policy_eval_mock     # mock backend evaluation
+aao-eval task=pick_and_place       # evaluate with ConfigDrivenDemoPolicy (default)
+aao-eval task=policy_eval_mock     # mock backend evaluation
 ```
 
 ### Additional overrides
@@ -388,7 +419,7 @@ aao-eval --config-name policy_eval_mock     # mock backend evaluation
 
 ### Custom policy
 
-Provide a `policy` section in the YAML config to use a custom policy:
+Provide a `policy` section in the task YAML (or pass `+policy._target_=...` on the command line) to use a custom policy:
 
 ```yaml
 policy:
@@ -400,50 +431,53 @@ When `policy` is omitted, `aao-eval` defaults to `auto_atom.ConfigDrivenDemoPoli
 
 ## aao-info
 
-Introspect the **runnable tasks** in `aao_configs/`. Unlike a flat directory
-listing, `aao-info` only reports configs that compose into a real task — i.e.
-those with a non-empty `task.stages` after Hydra composition. Building-block
-configs (bases, robot/eef definitions, mixins, variable files) are skipped
-because they declare no stages.
+Introspect the **runnable task variants** in `aao_configs/task/`. Each option
+of the `task` group (`_`-prefixed fragments are skipped) is reported once for
+its default embodiment and once more for every embodiment it has a dedicated
+adaptation for (`aao_configs/adapt/<task>/<embodiment>.yaml`) — the validated
+task × embodiment combinations. A variant is kept only when it composes into a
+real task, i.e. with a non-empty `task.stages` after Hydra composition.
 
-For each task it reports the task name, the **operating subject** (the operator
-that performs the stages and the robot model it is embodied as), the objects it
-manipulates, the operations it performs, and a workflow generated from the
-ordered stages.
+For each variant it reports the `aao-demo` command that selects it, the
+embodiment (marked `(default)` when it is the task's own default), the
+available render modes (`mujoco | gs` when the scene has GS assets), the
+**operating subject** (the operator that performs the stages and the robot
+model it is embodied as), the objects it manipulates, the operations it
+performs, and a workflow generated from the ordered stages.
 
 ```bash
-aao-info                    # list every runnable task
-aao-info pick_and_place     # a single config by exact name
-aao-info 'open_door*'       # glob over config names (quote so the shell doesn't expand it)
+aao-info                    # list every runnable task variant
+aao-info pick_and_place     # one task (all of its embodiment variants)
+aao-info 'open_door*'       # glob over task names (quote so the shell doesn't expand it)
 aao-info -o press           # only tasks that press something
 aao-info --object cup       # only tasks involving a "cup" object
-aao-info -r airbot          # only tasks running on an airbot robot
+aao-info -r airbot          # only variants running on an airbot embodiment
 aao-info -o pick -r p7      # combine filters (AND across categories)
 aao-info --json             # machine-readable output
-aao-info --verbose          # also report configs skipped as non-tasks
+aao-info --verbose          # also report variants skipped as non-tasks
 ```
 
 ### Filtering
 
 | Argument | Description |
 |---|---|
-| `PATTERN...` | Glob pattern(s) (`fnmatch`) matched against config names; an exact name matches itself. Default: all runnable tasks |
+| `PATTERN...` | Glob pattern(s) (`fnmatch`) matched against task names; an exact name matches itself. Default: all runnable tasks |
 | `-o, --operation OP` | Keep tasks that use operation `OP` (repeatable, or comma-separated: `-o pick,place`) |
 | `-b, --object OBJ` | Keep tasks referencing an object whose name contains `OBJ` (case-insensitive substring) |
 | `-s, --scene GLOB` | Keep tasks whose `scene_name` matches the glob |
-| `-r, --robot MODEL` | Keep tasks whose robot model contains `MODEL` (case-insensitive substring) |
+| `-r, --robot MODEL` | Keep variants whose embodiment name or robot model contains `MODEL` (case-insensitive substring) |
 | `--vocab`, `--keywords` | Aggregate all fields into a keyword vocabulary instead of a per-task report (see below) |
 | `--json` | Emit a JSON array (or, with `--vocab`, a `{field: [values]}` object) instead of readable text |
 | `--config-dir DIR` | Config directory (default: `./aao_configs`) |
-| `--verbose` | Print configs skipped as non-tasks or on composition errors (to stderr) |
+| `--verbose` | Print variants skipped as non-tasks or on composition errors (to stderr) |
 | `--no-progress` | Disable the progress line (see below) |
 
 Filter categories are AND-combined; values within a category are OR-combined
 (e.g. `-o pick -o place` keeps tasks that use pick **or** place). Name globs are
 matched before composition, so filtering by name is cheap.
 
-> **Progress:** each config must be composed by Hydra to decide whether it is a
-> task, which takes a moment when there are many configs. While it works,
+> **Progress:** each variant must be composed by Hydra to decide whether it is a
+> task, which takes a moment when there are many variants. While it works,
 > `aao-info` shows a transient `Composing configs [i/total]` line on **stderr**.
 > It is auto-enabled only when stderr is a terminal (so piped or redirected
 > output stays clean) and can be turned off with `--no-progress`. Because it is
@@ -452,17 +486,35 @@ matched before composition, so filtering by name is cheap.
 Example output:
 
 ```
-Runnable tasks (40):
+Runnable task variants (37):
 
-press_three_buttons
+...
+
+press_blue_button  (scene: press_three_buttons)
+  run:        aao-demo task=press_blue_button
+  embodiment: robotiq_mocap (default)
+  render:     mujoco | gs
   operators:  arm (robotiq)
-  objects:    button_blue, button_green, button_pink
+  objects:    button_blue
   operations: press
   workflow:
-    1. press button_blue [press_blue]
-    2. press button_green [press_green]
-    3. press button_pink [press_pink]
+    1. press button_blue [press_button_blue]
+
+press_blue_button embodiment=p7_g2p  (scene: press_three_buttons)
+  run:        aao-demo task=press_blue_button embodiment=p7_g2p
+  embodiment: p7_g2p
+  render:     mujoco | gs
+  operators:  arm (p7_arm_with_g2p)
+  objects:    button_blue
+  operations: press
+  workflow:
+    1. press button_blue [press_blue_button]
 ```
+
+The `(scene: ...)` suffix appears when the scene differs from the task name.
+In `--json` output each variant carries `task`, `embodiment`,
+`default_embodiment`, `scene_name`, `renders`, and the `overrides` list that
+selects it.
 
 The **operating subject** comes from the task's operators (the `operator` a
 stage runs on, plus any declared in `task_operators` / `env.operators`), each
@@ -492,22 +544,21 @@ aao-info -r airbot --vocab    # glossary restricted to airbot tasks
 aao-info --vocab --json       # {field: [sorted values]} for programmatic use
 ```
 
-The aggregated fields are `configs`, `scenes`, `operators`, `robots`,
-`objects`, `operations`, and `stage_names`. All active filters apply first, so
+The aggregated fields are `tasks`, `embodiments`, `scenes`, `operators`,
+`robots`, `objects`, `operations`, and `stage_names`. All active filters apply first, so
 the vocabulary always reflects exactly the task subset you selected. Unresolved
 interpolation placeholders (e.g. `${object_name}` from template configs) are
 dropped so the vocabulary stays clean. Example:
 
 ```
-Task vocabulary (40 tasks):
+Task vocabulary (23 tasks):
+
+embodiments (10):
+  airbot_play_g2, airbot_play_g2p, franka_robotiq, p7_g2p, p7_v3_umi_v3,
+  p7_v4_umi_v3, p7_xf9600, robotiq_mocap, umi_v3_mocap, xf9600_mocap
 
 operators (3):
   arm, arm_a, observer
-
-robots (9):
-  airbot_play_with_g2, airbot_play_with_g2p, p7_arm_v3_with_umi_gripper_v3,
-  p7_arm_with_g2p, p7_arm_with_xf9600, panda_robotiq, robotiq,
-  umi_gripper_v3_mocap, xf9600_mocap
 
 operations (6):
   move, pick, place, press, pull, push
@@ -515,4 +566,19 @@ operations (6):
 
 ## Config resolution
 
-`aao-demo` and `aao-eval` resolve Hydra configs from `./aao_configs/` relative to the current working directory, and `aao-info` scans the same directory. Run them from the project root.
+`aao-demo` and `aao-eval` compose `./aao_configs/config.yaml` relative to the current working directory, and `aao-info` scans the same directory. Run them from the project root.
+
+`config.yaml` composes its groups in this order, later entries winning and
+command-line overrides winning over everything: `simulator`, `execution`,
+`observation`, `camera_layout`, `scene`, `embodiment`, `task`, `render`, the
+optional `render_assets/{embodiment,scene,task}: ${render}/<name>` asset
+bindings, the optional `adapt: ${task}/${embodiment}` tuning, `backend`, and
+`platform`. A task picks its scene and default embodiment with
+`override /scene:` / `override /embodiment:` in its own defaults list, so
+`embodiment=...` on the command line still takes priority. `render`,
+`backend`, and `platform` compose after the task and are therefore user-level
+choices a task cannot override. See
+[Reusing & Creating Tasks](../task-configuration/reusing_and_creating_tasks.md)
+for how to add tasks and robots, and the
+[config-groups migration note](../migration-notes/aao_configs_config_groups.md)
+for the mapping from the old `--config-name` names.

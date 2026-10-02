@@ -7,15 +7,29 @@ backend-specific state mapping are documented in the linked guides.
 
 ## Loading and composition
 
-Task files are loaded through [Hydra](https://hydra.cc) and OmegaConf.  A
-`defaults` list can compose a robot, scene, gripper, or rendering building
-block; later entries override earlier entries.  `_self_` marks where the
-current file enters that merge order.  Runnable variants normally put it last
-so their local values win; a reusable building block may deliberately put it
-earlier so a later mixin overrides its defaults.  `aao-demo` and `aao-eval`
-resolve configs from `./aao_configs/` relative to the current working
-directory.  For one-off changes, pass a Hydra override instead of cloning a
-nearly identical file; see [Reusing & Creating Tasks](reusing_and_creating_tasks.md).
+Task files are loaded through [Hydra](https://hydra.cc) and OmegaConf.  Every
+run composes the single primary config `aao_configs/config.yaml` from config
+groups — `simulator`, `execution`, `observation`, `camera_layout`, `scene`,
+`embodiment`, `task`, `render`, the optional `render_assets/*` and `adapt`
+specializations, `backend`, and `platform` — in that order; later entries
+override earlier entries, and command-line overrides win over everything.  A
+task file (`aao_configs/task/<name>.yaml`, `# @package _global_`) selects its
+scene and default embodiment with `override /scene: ...` and
+`override /embodiment: ...` in its own `defaults` list; `_self_` marks where
+the current file enters that merge order.  `aao-demo` and `aao-eval` resolve
+`./aao_configs/config.yaml` relative to the current working directory and
+select a run with `task=<name> [embodiment=<name>] [render=gs]`.  For one-off
+changes, pass a Hydra override instead of adding a nearly identical file; see
+[Reusing & Creating Tasks](reusing_and_creating_tasks.md).
+
+In the composed (raw) config, `env.cameras` and `env.scene.layers` are
+mappings keyed by slot name, so a later group can replace one entry or remove
+it with `null`.  `auto_atom.execution_config.prepare_task_config_for_instantiation`
+flattens them into the ordered lists described below, merges the
+`observation.camera` defaults (resolution and modalities) under every camera,
+and drops cameras whose role is not kept by the `camera_layout` group.
+Setting `env.initial_joint_positions.<joint>: null` drops one inherited joint
+entry.
 
 Hydra instantiates the `env` block before the backend factory runs.  The
 factory receives the validated `task` and `task_operators` blocks and resolves
@@ -67,10 +81,17 @@ only the config-side aspects apply. Creation is inert unless `camera` is in
 `env.enabled_sensors`; a camera that has to be created without a complete mount
 pose fails at construction.
 
+In a config-group file, `env.cameras` is keyed by slot (`wrist`, `env0`,
+`env1`, ...). Every entry inherits the `observation.camera` defaults
+(resolution and `enable_*` modalities), so a camera only states the fields
+that differ; the slots become the `EnvConfig.cameras` list before
+instantiation.
+
 ```yaml
 env:
   cameras:
-    - name: eef_wrist_cam
+    wrist:
+      name: eef_wrist_cam
       role: operator
       width: 640
       height: 352
@@ -190,8 +211,9 @@ batch expansion, while masks and heat maps remain clean supervision data.
 ## Minimal task file
 
 This example uses the same Hydra registration pattern as the custom-backend
-guide.  A concrete MuJoCo task normally composes one of the `basis_*` configs
-instead of spelling out every environment field here.
+guide.  A concrete MuJoCo task in `aao_configs/task/` instead relies on the
+`simulator`, `scene`, and `embodiment` groups for every environment field and
+only adds its stages and task-specific settings.
 
 ```yaml
 env:
@@ -355,7 +377,7 @@ semantics.
 `execution.mode` accepts `physical` (the default) and `object_only`:
 
 ```bash
-aao-demo --config-name dishwasher_plate execution.mode=object_only
+aao-demo task=dishwasher_plate execution=object_only
 ```
 
 `object_only` filters operator layers and cameras, clears physical operator

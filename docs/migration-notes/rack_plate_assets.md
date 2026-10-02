@@ -33,13 +33,14 @@ under separate ownership boundaries.
 
 ## P7 V4 placement task
 
-The runnable `rack_plate_p7_v4_umi_v3` task composes this host with
-`assets/xmls/robots/p7_arm_v4_with_umi_gripper_v3.xml` and the existing analytical
+The runnable `rack_plate` task (formerly the `rack_plate_p7_v4_umi_v3` config) composes
+this host with its default `p7_v4_umi_v3` embodiment
+(`assets/xmls/robots/p7_arm_v4_with_umi_gripper_v3.xml`) and the existing analytical
 P7 IK binding:
 
 ```bash
-aao-info rack_plate_p7_v4_umi_v3
-aao-demo --config-name rack_plate_p7_v4_umi_v3
+aao-info rack_plate
+aao-demo task=rack_plate
 ```
 
 The scene places the draining rack on the table plane and starts the smaller

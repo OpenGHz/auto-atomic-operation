@@ -55,7 +55,7 @@ editable install with the MuJoCo extra, pytest, and asset-inspection tools) from
 
 ```bash
 pixi install
-pixi run aao-demo --config-name pick_and_place
+pixi run aao-demo task=pick_and_place
 ```
 
 MuJoCo demo assets live in Git LFS. After cloning, install Git LFS and pull them:
@@ -67,14 +67,16 @@ git lfs pull
 
 ## Running demos
 
-The CLI looks for configs in `./aao_configs/` relative to the current working directory. After cloning the repo, run from the project root:
+The CLI composes `./aao_configs/config.yaml` relative to the current working directory. After cloning the repo, run from the project root. Every run is selected by Hydra config groups — a `task`, optionally an `embodiment` (robot) and a `render` mode:
 
 ```bash
-aao-info                                 # list every runnable task
-aao-demo --config-name mock              # mock backend, no simulator required
-aao-demo --config-name pick_and_place    # MuJoCo demo (default)
-aao-demo --config-name <config>          # any other config
+aao-info                                          # list every runnable task x embodiment variant
+aao-demo task=mock                                # mock backend, no simulator required
+aao-demo task=pick_and_place                      # MuJoCo demo (default task)
+aao-demo task=<task> [embodiment=<robot>] [render=gs]   # any other variant
 ```
+
+`aao-info` prints the exact `aao-demo task=... embodiment=...` command for every variant.
 
 For all CLI flags, Hydra overrides, and `aao-eval` usage, see the [CLI Reference](https://openghz.github.io/auto-atomic-operation/#/getting-started/cli_reference).
 
@@ -96,11 +98,11 @@ For all CLI flags, Hydra overrides, and `aao-eval` usage, see the [CLI Reference
 | |
 |:---:|
 | ![pick_and_place_franka](assets/videos/pick_and_place_franka.gif) |
-| `pick_and_place_franka` |
+| `task=pick_and_place embodiment=franka_robotiq` |
 
 ### 3D Gaussian Splatting demos
 
-GS configs are named `<task>_gs` and run identically to the native MuJoCo demos. Asset bundles live on Hugging Face:
+GS rendering is selected with `render=gs` (e.g. `aao-demo task=cup_on_coaster render=gs`); otherwise the runs are identical to the native MuJoCo demos. Asset bundles live on Hugging Face:
 
 ```bash
 pip install huggingface_hub "httpx[socks]"
@@ -110,11 +112,11 @@ hf download OpenGHz/auto-atom-assets --repo-type=dataset --include "assets/gs/*"
 | | |
 |:---:|:---:|
 | ![cup_on_coaster_gs](assets/videos/cup_on_coaster_gs.gif) | ![stack_color_blocks_gs](assets/videos/stack_color_blocks_gs.gif) |
-| `cup_on_coaster_gs` | `stack_color_blocks_gs` |
+| `task=cup_on_coaster render=gs` | `task=stack_color_blocks render=gs` |
 | ![press_three_buttons_gs](assets/videos/press_three_buttons_gs.gif) | ![arrange_flowers_gs](assets/videos/arrange_flowers_gs.gif) |
-| `press_three_buttons_gs` | `arrange_flowers_gs` |
+| `task=press_three_buttons render=gs` | `task=arrange_flowers render=gs` |
 | ![hang_toothbrush_cup_gs](assets/videos/hang_toothbrush_cup_gs.gif) | ![wipe_the_table_gs](assets/videos/wipe_the_table_gs.gif) |
-| `hang_toothbrush_cup_gs` | `wipe_the_table_gs` |
+| `task=hang_toothbrush_cup render=gs` | `task=wipe_the_table render=gs` |
 
 ## Documentation
 

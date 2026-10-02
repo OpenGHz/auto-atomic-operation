@@ -65,40 +65,44 @@ env.apply_pose_action("arm", positions, orientations, grippers, env_mask=mask)
 
 ## Actuator Layout Per Robot
 
-### Mocap Robot (basis_mocap_eef / Robotiq 2F-85)
+Headings name the `embodiment` config group option (`aao_configs/embodiment/<name>.yaml`)
+that defines each robot; select it with `embodiment=<name>`.
+
+### Mocap Robot (robotiq_mocap / Robotiq 2F-85)
 
 `arm_actuators: []`, `eef_actuators: [fingers_actuator]`
 
 - `apply_joint_action`: action = `[gripper]` (1 dim)
 - `apply_pose_action`: arm via mocap, gripper via `gripper` param
 
-### Mocap Robot (basis_mocap_eef_xf9600 / XFG-9600)
+### Mocap Robot (xf9600_mocap / XFG-9600)
 
 `arm_actuators: []`, `eef_actuators: [eef_claw_joint]`
 
 - Robot XML: `assets/xmls/robots/xf9600_mocap.xml` (mocap-driven floating XF9600 gripper)
-- Used by `pick_and_place_xf9600` and any other task that pairs mocap-style EEF control with the XF9600 gripper.
+- Default embodiment of `dishwasher_plate`; also used by `task=pick_and_place embodiment=xf9600_mocap` and any other task that pairs mocap-style EEF control with the XF9600 gripper.
 - `apply_joint_action` / `apply_pose_action` behave the same as the Robotiq mocap variant; only the gripper actuator name and ctrl range differ.
 
-### Mocap Robot (basis_mocap_eef_umi_v3 / UMI gripper v3)
+### Mocap Robot (umi_v3_mocap / UMI gripper v3)
 
 `arm_actuators: []`, `eef_actuators: [eef_claw_joint]`
 
 - Robot XML: `assets/xmls/robots/umi_gripper_v3_mocap.xml` (mocap-driven floating UMI gripper v3)
-- Used by `pick_and_place_umi_v3` and other tasks that need mocap-style
-  EEF control with the v3 UMI gripper.
+- Default embodiment of `microwave_sweet_potato`; also used by
+  `task=pick_and_place embodiment=umi_v3_mocap` and other tasks that need
+  mocap-style EEF control with the v3 UMI gripper.
 - The driven slide joint range is `0..0.0165` m (lower bound = max open),
   in contrast to the XF9600's reversed range; otherwise the action API
   is identical to the other mocap variants.
 
-### Joint-Mode Robot (basis_p7_xf9600 / P7 + XFG-9600)
+### Joint-Mode Robot (p7_xf9600 / P7 + XFG-9600)
 
 `arm_actuators: [joint1..joint7]`, `eef_actuators: [eef_claw_joint]`
 
 - `apply_joint_action`: action = `[j1..j7, gripper]` (8 dims)
 - `apply_pose_action`: arm via IK, gripper via `gripper` param
 
-### Airbot Play (basis_airbot_play_xf9600 / basis_airbot_play_g2p)
+### Airbot Play (airbot_play_xf9600 / airbot_play_g2p)
 
 `arm_actuators: [joint1..joint6]`, `eef_actuators: [eef_claw_joint]`
 
@@ -109,17 +113,17 @@ env.apply_pose_action("arm", positions, orientations, grippers, env_mask=mask)
 - `apply_joint_action`: action = `[j1..j6, gripper]` (7 dims)
 - `apply_pose_action`: arm via `AirbotKdlIKSolver`, gripper via `gripper` param
 
-### Joint-Mode Robot (basis_p7_g2p / P7 + G2P)
+### Joint-Mode Robot (p7_g2p / P7 + G2P)
 
 `arm_actuators: [joint1..joint7]`, `eef_actuators: [eef_claw_joint]`
 
 - Robot XML: `p7_arm_with_g2p.xml`. Same actuator layout as
-  `basis_p7_xf9600`; only the gripper assembly (and a few mesh / pad geom
+  `p7_xf9600`; only the gripper assembly (and a few mesh / pad geom
   paths) differ.
 - `apply_joint_action`: action = `[j1..j7, gripper]` (8 dims)
 - `apply_pose_action`: arm via `P7AnalyticalIKSolver`, gripper via `gripper` param
 
-### Joint-Mode Robot (basis_p7_v3_umi_v3 / P7 v3 + UMI v3)
+### Joint-Mode Robot (p7_v3_umi_v3 / P7 v3 + UMI v3)
 
 `arm_actuators: [joint1..joint7]`, `eef_actuators: [eef_claw_joint]`
 
@@ -130,7 +134,12 @@ env.apply_pose_action("arm", positions, orientations, grippers, env_mask=mask)
 - IK backend factory: `auto_atom.backend.mjc.ik.p7_v3_analytical_ik_solver.build_p7_v3_umi_v3_backend`.
 - `apply_joint_action`: action = `[j1..j7, gripper]` (8 dims)
 - `apply_pose_action`: arm via `P7V3AnalyticalIKSolver`, gripper via `gripper` param
-- Used by `cup_on_coaster_gs_airbot_p7_umi`, `open_door_p7_v3_umi_v3`.
+- Default embodiment of `open_door_unidoor`; also used by
+  `task=cup_on_coaster embodiment=p7_v3_umi_v3` and
+  `task=open_door embodiment=p7_v3_umi_v3`.
+- `p7_v4_umi_v3` (default embodiment of `rack_plate`) extends this option with
+  the V4 arm MJCF and DH parameters; the actuator layout and IK backend are
+  the same.
 
 ## Recorded Demo Data
 

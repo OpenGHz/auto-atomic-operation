@@ -7,20 +7,22 @@ Renders per-camera outputs from a task scene and saves them to disk. Supports bo
 ## Usage
 
 ```bash
-python examples/save_rendering.py
-python examples/save_rendering.py --config-name press_three_buttons
-python examples/save_rendering.py --config-name press_three_buttons_gs
-python examples/save_rendering.py show=true
+python examples/save_rendering.py task=press_three_buttons
+python examples/save_rendering.py task=press_three_buttons render=gs
+python examples/save_rendering.py task=press_three_buttons +show=true
 ```
 
-The default config is `press_three_buttons`. Use any GS config (e.g. `press_three_buttons_gs`) to render with Gaussian Splatting.
+Select the run with `task=` (plus `embodiment=` when needed) exactly as for
+`aao-demo`; without `task=` the primary config's default task
+(`pick_and_place`) is rendered. Add `render=gs` to render with Gaussian
+Splatting.
 
-Example for the open-door back-side GS config and the test override:
+Example for the open-door back-side GS task and the test override:
 
 ```bash
 /home/ghz/.mini_conda3/envs/airbot_play_data/bin/python \
   examples/save_rendering.py \
-  --config-name open_door_airbot_play_back_gs \
+  task=open_door_back render=gs \
   +test=open_the_door
 ```
 
@@ -37,7 +39,7 @@ For each configured camera, the script saves:
 | `<camera>_heatmap.png` | Multi-channel operation heatmap with color legend (when available) |
 | `<camera>_heat_<operation>.png` | Per-operation heatmap channel (when active) |
 
-Output directory: `outputs/rendering_<gs|mj>_<config>_<timestamp>/`
+Output directory: `outputs/rendering_<gs|mj>_<run_name>_<timestamp>/`, where `<run_name>` is `<task>__<embodiment>[__<render>]` (e.g. `press_three_buttons__robotiq_mocap__gs`).
 
 ## Batched environments
 
@@ -73,8 +75,8 @@ The same convention is used for every configured camera. Missing optional stream
 Enable the recorder to capture an MP4 or GIF of the full task rollout:
 
 ```bash
-python examples/save_rendering.py +recorder.enabled=true
-python examples/save_rendering.py +recorder.enabled=true +recorder.save_gif=true +recorder.fps=15
+python examples/save_rendering.py task=press_three_buttons +recorder.enabled=true
+python examples/save_rendering.py task=press_three_buttons +recorder.enabled=true +recorder.save_gif=true +recorder.fps=15
 ```
 
 | Recorder option | Default | Description |
@@ -103,8 +105,8 @@ For `batch_size=1`, video filenames keep the original form:
 
 ## Interactive display
 
-Pass `show=true` to open a matplotlib window after rendering the first frame:
+Pass `+show=true` to open a matplotlib window after rendering the first frame:
 
 ```bash
-python examples/save_rendering.py show=true
+python examples/save_rendering.py task=press_three_buttons +show=true
 ```

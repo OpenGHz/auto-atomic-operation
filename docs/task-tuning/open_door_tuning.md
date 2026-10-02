@@ -2,7 +2,7 @@
 
 ## Overview
 
-Record of issues and solutions encountered while implementing the P7+XF9600 door opening task (`open_door_p7_ik`).
+Record of issues and solutions encountered while implementing the P7+XF9600 door opening task (`open_door_p7_ik`, now `aao-demo task=open_door embodiment=p7_xf9600` with its tuning in `aao_configs/adapt/open_door/p7_xf9600.yaml` and `aao_configs/adapt/_open_door/p7.yaml`).
 
 ## 1. EEF Close 永远卡住 (eef_moving timeout)
 

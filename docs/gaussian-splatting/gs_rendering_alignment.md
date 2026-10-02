@@ -139,17 +139,22 @@ Key rules:
 
 ## YAML Configuration Pattern
 
-```yaml
-gs_dir: assets/gs/scenes/press_three_buttons   # pre-rotated PLYs
-bg_dir: third_party/.../3dgs                   # background (no pre-rotation needed)
+Scene PLY bindings live in `aao_configs/render_assets/scene/gs/<scene>.yaml`,
+which is merged automatically whenever a task on that scene runs with
+`render=gs`. `render/gs.yaml` sets `gs_dir: ${assets_dir}/gs/scenes/${scene_name}`
+(pre-rotated PLYs) and loads the background from
+`render_assets/background/<name>.yaml` (no pre-rotation needed; select it with
+`render_assets/background=<name>`):
 
+```yaml
+# @package _global_
+# aao_configs/render_assets/scene/gs/press_three_buttons.yaml
 env:
-    gaussian_render:
-    background_ply: ${bg_dir}/background.ply
+  gaussian_render:
     body_gaussians:
-        button_blue_gs: ${gs_dir}/button_blue.ply    # outer body → pre-rotated PLY
-        button_green_gs: ${gs_dir}/button_green.ply
-        button_pink_gs: ${gs_dir}/button_pink.ply
+      button_blue_gs: ${gs_dir}/button_blue.ply    # outer body → pre-rotated PLY
+      button_green_gs: ${gs_dir}/button_green.ply
+      button_pink_gs: ${gs_dir}/button_pink.ply
 ```
 
 The `body_gaussians` keys must match the **outer** (`*_gs`) body names in the XML.
@@ -159,18 +164,19 @@ The `body_gaussians` keys must match the **outer** (`*_gs`) body names in the XM
 Use `examples/compare_gs_render.py` to render the first frame of a GS scene and compare GS vs native MuJoCo images side-by-side per camera.
 
 ```bash
-# Default config: press_three_buttons_gs
-python examples/compare_gs_render.py
+# GS rendering is required: always pass render=gs
+python examples/compare_gs_render.py task=press_three_buttons render=gs
 
-# Any other GS scene config (Hydra --config-name override)
-python examples/compare_gs_render.py --config-name cup_on_coaster_gs
-python examples/compare_gs_render.py --config-name stack_color_blocks_gs
+# Any other task / embodiment with GS assets
+python examples/compare_gs_render.py task=cup_on_coaster render=gs
+python examples/compare_gs_render.py task=stack_color_blocks render=gs
+python examples/compare_gs_render.py task=press_blue_button embodiment=p7_g2p render=gs
 
 # Display result interactively (in addition to saving)
-python examples/compare_gs_render.py show=true
+python examples/compare_gs_render.py task=press_three_buttons render=gs +show=true
 ```
 
-Must be run from the project root. Output is saved to `outputs/compare_<config>_<timestamp>.png`.
+Must be run from the project root. Output is saved to `outputs/compare_<run_name>_<timestamp>.png`, where `<run_name>` is `<task>__<embodiment>__gs` (e.g. `press_three_buttons__robotiq_mocap__gs`).
 
 Each row in the output image corresponds to one camera, with the GS render on the left and the native MuJoCo rasteriser on the right. This is useful for verifying that GS and non-GS renders are geometrically aligned after following the pre-rotation workflow above.
 
@@ -184,7 +190,7 @@ When adding a new GS object to a scene:
 4. **Store pre-rotated PLY** in `assets/gs/scenes/<task>/`.
 5. **Use identity orientation** on the GS reference body in the scene XML.
 6. **Put visual mesh `euler` on the geom** (not the body) for non-GS rendering.
-7. **Map the outer (`*_gs`) body** in `body_gaussians` YAML to the pre-rotated PLY.
+7. **Map the outer (`*_gs`) body** in `body_gaussians` of `aao_configs/render_assets/scene/gs/<scene>.yaml` to the pre-rotated PLY.
 
 Following this pattern ensures both GS and non-GS renders are geometrically consistent without SH color distortion.
 

@@ -5,7 +5,7 @@
 > 均已实现。本文同时保留其他实现方案的对比，以及内部观测 callback 的后续
 > 演进建议。
 
-本文分析 `aao-demo --config-name pick_and_place` 为什么需要多次
+本文分析 `aao-demo task=pick_and_place` 为什么需要多次
 `TaskRunner.update()` 才能完成一个配置点位，并比较“每次外部 update
 直接推进到一个关键点”的可选实现。
 
@@ -105,7 +105,7 @@ fast-forward timeout；修改其中一个不会影响另一个。
 1. `pick_source`
 2. `place_source`
 
-`aao_configs/pick_and_place.yaml` 中每个 stage 都会展开成四个 primitive：
+`aao_configs/task/pick_and_place.yaml` 中每个 stage 都会展开成四个 primitive：
 
 ```text
 pre_move[0] -> pre_move[1] -> eef -> post_move[0]
@@ -150,7 +150,7 @@ YAML 将一段运动拆成了大量小 waypoint。
 
 ### Mocap body 与物理 body 之间存在软约束
 
-该任务继承 `basis_mocap_eef`，`arm_actuators` 为空，因此 operator 使用
+该任务默认使用 `robotiq_mocap` embodiment，`arm_actuators` 为空，因此 operator 使用
 mocap 模式。控制链路是：
 
 ```text

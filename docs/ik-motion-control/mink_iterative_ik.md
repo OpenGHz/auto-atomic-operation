@@ -261,8 +261,8 @@ dx ≈ J(q) dq
 
 配置一般在：
 
-- [`aao_configs/base_franka.yaml`](../aao_configs/base_franka.yaml)
-- [`aao_configs/pick_and_place_franka.yaml`](../aao_configs/pick_and_place_franka.yaml)
+- [`aao_configs/embodiment/franka_robotiq.yaml`](../../aao_configs/embodiment/franka_robotiq.yaml)（机器人与 IK 默认参数）
+- [`aao_configs/adapt/pick_and_place/franka_robotiq.yaml`](../../aao_configs/adapt/pick_and_place/franka_robotiq.yaml)（`task=pick_and_place embodiment=franka_robotiq` 的任务级调参）
 
 重要参数有：
 

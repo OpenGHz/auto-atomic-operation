@@ -55,8 +55,10 @@ it does not migrate:
   `Shelf002.obj`, `Button001.obj`, and `Button002.obj`).
 
 The subsequent object-centric motion-goal work adds the runnable
-`aao_configs/dishwasher_plate.yaml`. It composes `basis_mocap_eef_xf9600`, selects this host
-through `scene_name: dishwasher_plate`, and keeps the plate goal in object space: the plate's local
+`dishwasher_plate` task (now `aao_configs/task/dishwasher_plate.yaml`). It uses the
+`xf9600_mocap` embodiment (formerly `basis_mocap_eef_xf9600`), selects this host
+through `scene_name: dishwasher_plate` (`aao_configs/scene/dishwasher_plate.yaml`), and
+keeps the plate goal in object space: the plate's local
 `+Z` axis is aligned with the rack target frame's `+Y` axis while twist about that normal is
 left free. It does not rotate or otherwise rewrite `dishwasher_rack1_target_site`: the site
 retains its authored identity orientation, and YAML independently selects that unchanged
@@ -177,11 +179,11 @@ The runnable task composes successfully and is discoverable through the public t
 
 ```bash
 aao-info dishwasher_plate --verbose --no-progress
-aao-demo --config-name dishwasher_plate \
+aao-demo task=dishwasher_plate \
   +env.viewer.disable=true +max_updates=6000 +print_updates=false
 ```
 
-The task uses `basis_mocap_eef_xf9600`. In the bounded actuator comparison, XF9600 was the
+The task uses the `xf9600_mocap` embodiment. In the bounded actuator comparison, XF9600 was the
 only existing gripper that passed the required held-object lift: its two-sided grasp closed
 in 6 updates, and the direct 0.15 m lift completed in 46 updates with semantic object errors
 of `0.01882 m` and `0.09819 rad`. Robotiq's wide cylinder contact slipped inside the gripper,

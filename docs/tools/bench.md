@@ -61,11 +61,19 @@
 
 ```bash
 /home/ghz/.mini_conda3/envs/airbot_play_data/bin/python tests/run_bench_suite.py \
-  --config-name cup_on_coaster_gs \
+  --task cup_on_coaster \
   --batch-sizes 1 2 4 8 \
   --iterations 10 \
-  --max-updates 300
+  --max-updates 300 \
+  -- render=gs
 ```
+
+`--task` 选择 `task` config group 的选项（默认 `cup_on_coaster`），其后的位置参数是
+同时传给两类 benchmark 的 Hydra overrides（如 `render=gs embodiment=p7_g2p`）。
+不传位置参数时默认为 `render=gs`；一旦传入就会整体替换默认值，因此需要 GS 时要显式写上
+`render=gs`。位置参数跟在 `--batch-sizes` 之后时需用 `--` 分隔。`manifest.json`
+记录 `task`、`overrides` 以及 run name（`<task>__<embodiment>[__<render>]`，
+如 `cup_on_coaster__robotiq_mocap__gs`）。
 
 可通过 `--help` 查看完整参数说明。
 

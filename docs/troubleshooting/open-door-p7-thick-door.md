@@ -2,7 +2,7 @@
 
 ## 现象
 
-`open_door_p7_ik` 默认使用 `assets/xmls/scenes/open_door/demo.xml`（场景，不含机器人）+ `assets/xmls/robots/p7_arm_with_xf9600.xml`（通过 `env.scene.layers` 的 `kind: mjcf` layer 在加载时注入）时可以完成开门。
+`open_door_p7_ik`（现为 `task=open_door embodiment=p7_xf9600`）默认使用 `assets/xmls/scenes/open_door/demo.xml`（场景，不含机器人）+ `assets/xmls/robots/p7_arm_with_xf9600.xml`（通过 `env.scene.layers` 的 `kind: mjcf` layer 在加载时注入）时可以完成开门。
 
 但如果把门板碰撞几何从:
 
@@ -19,7 +19,7 @@
 再运行:
 
 ```bash
-aao-demo --config-name open_door_p7_ik
+aao-demo task=open_door embodiment=p7_xf9600
 ```
 
 会出现以下现象：
@@ -28,7 +28,7 @@ aao-demo --config-name open_door_p7_ik
 - `door_hinge` 基本保持在 `0`
 - 任务卡在 `post_move` 推门阶段，最终失败
 
-对比之下，`aao-demo --config-name open_door_airbot_play` 在同样的厚门尺寸下仍可成功。
+对比之下，`aao-demo task=open_door embodiment=airbot_play_g2p` 在同样的厚门尺寸下仍可成功。
 
 ## 结论
 
@@ -129,7 +129,7 @@ equality，把门重新锁住。
 修复后可直接验证：
 
 ```bash
-PYTHONPATH=. /home/ghz/.mini_conda3/envs/airbot_play_data/bin/python -m auto_atom.runner.demo --config-name open_door_p7_ik env.viewer=null +max_updates=300
+PYTHONPATH=. /home/ghz/.mini_conda3/envs/airbot_play_data/bin/python -m auto_atom.runner.demo task=open_door embodiment=p7_xf9600 env.viewer=null +max_updates=300
 ```
 
 预期结果：

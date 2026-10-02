@@ -48,8 +48,10 @@ Follow [Reusing & Creating Tasks](../task-configuration/reusing_and_creating_tas
 reuse a matching task and apply Hydra overrides for non-fundamental differences
 such as batch size, seed, camera options, or randomization ranges.
 
-Shipped tasks commonly use Hydra `defaults`, so load them with
-`load_task_file_hydra()` rather than reading one YAML file directly:
+Shipped tasks are options of the `task` config group composed from
+`aao_configs/config.yaml`, so load them with `load_task_file_hydra(task, ...)`
+rather than reading one YAML file directly. The first argument is the task
+name; select another robot or the GS renderer through overrides:
 
 ```python
 from auto_atom import ComponentRegistry, load_task_file_hydra
@@ -59,6 +61,7 @@ task_file = load_task_file_hydra(
     "pick_and_place",
     config_dir="aao_configs",
     overrides=[
+        "embodiment=xf9600_mocap",  # optional; default is the task's embodiment
         "env.batch_size=4",
         "+env.viewer.disable=true",
         "task.seed=42",
