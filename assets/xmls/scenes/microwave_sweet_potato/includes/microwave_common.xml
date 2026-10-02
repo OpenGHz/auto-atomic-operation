@@ -1,0 +1,136 @@
+<mujocoinclude>
+  <geom name="microwave_body_visual" mesh="microwave_body_visual"
+        class="microwave_visual" material="microwave_body_visual"/>
+  <!-- Fixed cabinet: 52 source convex hulls. -->
+  <geom name="microwave_body_hull_000" mesh="microwave_body_hull_000" class="microwave_hull"/>
+  <geom name="microwave_body_hull_001" mesh="microwave_body_hull_001" class="microwave_hull"/>
+  <geom name="microwave_body_hull_002" mesh="microwave_body_hull_002" class="microwave_hull"/>
+  <geom name="microwave_body_hull_003" mesh="microwave_body_hull_003" class="microwave_hull"/>
+  <geom name="microwave_body_hull_004" mesh="microwave_body_hull_004" class="microwave_hull"/>
+  <geom name="microwave_body_hull_005" mesh="microwave_body_hull_005" class="microwave_hull"/>
+  <geom name="microwave_body_hull_006" mesh="microwave_body_hull_006" class="microwave_hull"/>
+  <geom name="microwave_body_hull_007" mesh="microwave_body_hull_007" class="microwave_hull"/>
+  <geom name="microwave_body_hull_008" mesh="microwave_body_hull_008" class="microwave_hull"/>
+  <geom name="microwave_body_hull_009" mesh="microwave_body_hull_009" class="microwave_hull"/>
+  <geom name="microwave_body_hull_010" mesh="microwave_body_hull_010" class="microwave_hull"/>
+  <geom name="microwave_body_hull_011" mesh="microwave_body_hull_011" class="microwave_hull"/>
+  <geom name="microwave_body_hull_012" mesh="microwave_body_hull_012" class="microwave_hull"/>
+  <geom name="microwave_body_hull_013" mesh="microwave_body_hull_013" class="microwave_hull"/>
+  <geom name="microwave_body_hull_014" mesh="microwave_body_hull_014" class="microwave_hull"/>
+  <geom name="microwave_body_hull_015" mesh="microwave_body_hull_015" class="microwave_hull"/>
+  <geom name="microwave_body_hull_016" mesh="microwave_body_hull_016" class="microwave_hull"/>
+  <geom name="microwave_body_hull_017" mesh="microwave_body_hull_017" class="microwave_hull"/>
+  <geom name="microwave_body_hull_018" mesh="microwave_body_hull_018" class="microwave_hull"/>
+  <geom name="microwave_body_hull_019" mesh="microwave_body_hull_019" class="microwave_hull"/>
+  <geom name="microwave_body_hull_020" mesh="microwave_body_hull_020" class="microwave_hull"/>
+  <geom name="microwave_body_hull_021" mesh="microwave_body_hull_021" class="microwave_hull"/>
+  <geom name="microwave_body_hull_022" mesh="microwave_body_hull_022" class="microwave_hull"/>
+  <geom name="microwave_body_hull_023" mesh="microwave_body_hull_023" class="microwave_hull"/>
+  <geom name="microwave_body_hull_024" mesh="microwave_body_hull_024" class="microwave_hull"/>
+  <geom name="microwave_body_hull_025" mesh="microwave_body_hull_025" class="microwave_hull"/>
+  <geom name="microwave_body_hull_026" mesh="microwave_body_hull_026" class="microwave_hull"/>
+  <geom name="microwave_body_hull_027" mesh="microwave_body_hull_027" class="microwave_hull"/>
+  <geom name="microwave_body_hull_028" mesh="microwave_body_hull_028" class="microwave_hull"/>
+  <geom name="microwave_body_hull_029" mesh="microwave_body_hull_029" class="microwave_hull"/>
+  <geom name="microwave_body_hull_030" mesh="microwave_body_hull_030" class="microwave_hull"/>
+  <geom name="microwave_body_hull_031" mesh="microwave_body_hull_031" class="microwave_hull"/>
+  <geom name="microwave_body_hull_032" mesh="microwave_body_hull_032" class="microwave_hull"/>
+  <geom name="microwave_body_hull_033" mesh="microwave_body_hull_033" class="microwave_hull"/>
+  <geom name="microwave_body_hull_034" mesh="microwave_body_hull_034" class="microwave_hull"/>
+  <geom name="microwave_body_hull_035" mesh="microwave_body_hull_035" class="microwave_hull"/>
+  <geom name="microwave_body_hull_036" mesh="microwave_body_hull_036" class="microwave_hull"/>
+  <geom name="microwave_body_hull_037" mesh="microwave_body_hull_037" class="microwave_hull"/>
+  <geom name="microwave_body_hull_038" mesh="microwave_body_hull_038" class="microwave_hull"/>
+  <geom name="microwave_body_hull_039" mesh="microwave_body_hull_039" class="microwave_hull"/>
+  <geom name="microwave_body_hull_040" mesh="microwave_body_hull_040" class="microwave_hull"/>
+  <geom name="microwave_body_hull_041" mesh="microwave_body_hull_041" class="microwave_hull"/>
+  <geom name="microwave_body_hull_042" mesh="microwave_body_hull_042" class="microwave_hull"/>
+  <geom name="microwave_body_hull_043" mesh="microwave_body_hull_043" class="microwave_hull"/>
+  <geom name="microwave_body_hull_044" mesh="microwave_body_hull_044" class="microwave_hull"/>
+  <geom name="microwave_body_hull_045" mesh="microwave_body_hull_045" class="microwave_hull"/>
+  <geom name="microwave_body_hull_046" mesh="microwave_body_hull_046" class="microwave_hull"/>
+  <geom name="microwave_body_hull_047" mesh="microwave_body_hull_047" class="microwave_hull"/>
+  <geom name="microwave_body_hull_048" mesh="microwave_body_hull_048" class="microwave_hull"/>
+  <geom name="microwave_body_hull_049" mesh="microwave_body_hull_049" class="microwave_hull"/>
+  <geom name="microwave_body_hull_050" mesh="microwave_body_hull_050" class="microwave_hull"/>
+  <geom name="microwave_body_hull_051" mesh="microwave_body_hull_051" class="microwave_hull"/>
+
+  <!--
+    The door OBJs share the cabinet frame.  The source joint coordinates are
+    kept (0 rad is the authored pose, about 32 deg ajar; 0.5585 rad is the
+    closed stop).  The body is baked at -pi/2 about the hinge axis and the
+    joint ref matches it, so qpos0 is the placement-ready open door.
+  -->
+  <body name="microwave_door" pos="-0.1820000 -0.2662000 0" quat="0.707106781 0 0 -0.707106781">
+    <joint name="microwave_door_hinge" type="hinge"
+           pos="-0.2241 -0.0421 0" axis="0 0 1"
+           range="-2.0943951 0.5585054" ref="-1.5707963"
+           damping="0.15" armature="0.002"/>
+    <geom name="microwave_door_visual" mesh="microwave_door_visual"
+          class="microwave_visual" material="microwave_door_visual"/>
+    <geom name="microwave_door_hull_000" mesh="microwave_door_hull_000" class="microwave_hull"/>
+    <geom name="microwave_door_hull_001" mesh="microwave_door_hull_001" class="microwave_hull"/>
+    <geom name="microwave_door_hull_002" mesh="microwave_door_hull_002" class="microwave_hull"/>
+    <geom name="microwave_door_hull_003" mesh="microwave_door_hull_003" class="microwave_hull"/>
+    <geom name="microwave_door_hull_004" mesh="microwave_door_hull_004" class="microwave_hull"/>
+    <geom name="microwave_door_hull_005" mesh="microwave_door_hull_005" class="microwave_hull"/>
+    <geom name="microwave_door_hull_006" mesh="microwave_door_hull_006" class="microwave_hull"/>
+    <geom name="microwave_door_hull_007" mesh="microwave_door_hull_007" class="microwave_hull"/>
+    <geom name="microwave_door_hull_008" mesh="microwave_door_hull_008" class="microwave_hull"/>
+    <geom name="microwave_door_hull_009" mesh="microwave_door_hull_009" class="microwave_hull"/>
+    <geom name="microwave_door_hull_010" mesh="microwave_door_hull_010" class="microwave_hull"/>
+    <geom name="microwave_door_hull_011" mesh="microwave_door_hull_011" class="microwave_hull"/>
+    <geom name="microwave_door_hull_012" mesh="microwave_door_hull_012" class="microwave_hull"/>
+    <geom name="microwave_door_hull_013" mesh="microwave_door_hull_013" class="microwave_hull"/>
+    <geom name="microwave_door_hull_014" mesh="microwave_door_hull_014" class="microwave_hull"/>
+    <geom name="microwave_door_hull_015" mesh="microwave_door_hull_015" class="microwave_hull"/>
+    <geom name="microwave_door_hull_016" mesh="microwave_door_hull_016" class="microwave_hull"/>
+    <geom name="microwave_door_hull_017" mesh="microwave_door_hull_017" class="microwave_hull"/>
+    <geom name="microwave_door_hull_018" mesh="microwave_door_hull_018" class="microwave_hull"/>
+    <geom name="microwave_door_hull_019" mesh="microwave_door_hull_019" class="microwave_hull"/>
+    <geom name="microwave_door_hull_020" mesh="microwave_door_hull_020" class="microwave_hull"/>
+    <geom name="microwave_door_hull_021" mesh="microwave_door_hull_021" class="microwave_hull"/>
+    <geom name="microwave_door_hull_022" mesh="microwave_door_hull_022" class="microwave_hull"/>
+    <geom name="microwave_door_hull_023" mesh="microwave_door_hull_023" class="microwave_hull"/>
+    <geom name="microwave_door_hull_024" mesh="microwave_door_hull_024" class="microwave_hull"/>
+    <geom name="microwave_door_hull_025" mesh="microwave_door_hull_025" class="microwave_hull"/>
+    <geom name="microwave_door_hull_026" mesh="microwave_door_hull_026" class="microwave_hull"/>
+    <geom name="microwave_door_hull_027" mesh="microwave_door_hull_027" class="microwave_hull"/>
+    <geom name="microwave_door_hull_028" mesh="microwave_door_hull_028" class="microwave_hull"/>
+    <geom name="microwave_door_hull_029" mesh="microwave_door_hull_029" class="microwave_hull"/>
+    <geom name="microwave_door_hull_030" mesh="microwave_door_hull_030" class="microwave_hull"/>
+    <geom name="microwave_door_hull_031" mesh="microwave_door_hull_031" class="microwave_hull"/>
+    <geom name="microwave_door_hull_032" mesh="microwave_door_hull_032" class="microwave_hull"/>
+    <geom name="microwave_door_hull_033" mesh="microwave_door_hull_033" class="microwave_hull"/>
+    <geom name="microwave_door_hull_034" mesh="microwave_door_hull_034" class="microwave_hull"/>
+    <geom name="microwave_door_hull_035" mesh="microwave_door_hull_035" class="microwave_hull"/>
+    <geom name="microwave_door_hull_036" mesh="microwave_door_hull_036" class="microwave_hull"/>
+    <geom name="microwave_door_hull_037" mesh="microwave_door_hull_037" class="microwave_hull"/>
+    <geom name="microwave_door_hull_038" mesh="microwave_door_hull_038" class="microwave_hull"/>
+    <geom name="microwave_door_hull_039" mesh="microwave_door_hull_039" class="microwave_hull"/>
+    <geom name="microwave_door_hull_040" mesh="microwave_door_hull_040" class="microwave_hull"/>
+    <geom name="microwave_door_hull_041" mesh="microwave_door_hull_041" class="microwave_hull"/>
+    <geom name="microwave_door_hull_042" mesh="microwave_door_hull_042" class="microwave_hull"/>
+    <geom name="microwave_door_hull_043" mesh="microwave_door_hull_043" class="microwave_hull"/>
+    <geom name="microwave_door_hull_044" mesh="microwave_door_hull_044" class="microwave_hull"/>
+    <geom name="microwave_door_hull_045" mesh="microwave_door_hull_045" class="microwave_hull"/>
+    <geom name="microwave_door_hull_046" mesh="microwave_door_hull_046" class="microwave_hull"/>
+    <geom name="microwave_door_hull_047" mesh="microwave_door_hull_047" class="microwave_hull"/>
+    <geom name="microwave_door_hull_048" mesh="microwave_door_hull_048" class="microwave_hull"/>
+    <geom name="microwave_door_hull_049" mesh="microwave_door_hull_049" class="microwave_hull"/>
+    <geom name="microwave_door_hull_050" mesh="microwave_door_hull_050" class="microwave_hull"/>
+    <geom name="microwave_door_hull_051" mesh="microwave_door_hull_051" class="microwave_hull"/>
+    <geom name="microwave_door_hull_052" mesh="microwave_door_hull_052" class="microwave_hull"/>
+    <geom name="microwave_door_hull_053" mesh="microwave_door_hull_053" class="microwave_hull"/>
+    <geom name="microwave_door_hull_054" mesh="microwave_door_hull_054" class="microwave_hull"/>
+    <geom name="microwave_door_hull_055" mesh="microwave_door_hull_055" class="microwave_hull"/>
+    <geom name="microwave_door_hull_056" mesh="microwave_door_hull_056" class="microwave_hull"/>
+    <geom name="microwave_door_hull_057" mesh="microwave_door_hull_057" class="microwave_hull"/>
+    <geom name="microwave_door_hull_058" mesh="microwave_door_hull_058" class="microwave_hull"/>
+    <geom name="microwave_door_hull_059" mesh="microwave_door_hull_059" class="microwave_hull"/>
+    <geom name="microwave_door_hull_060" mesh="microwave_door_hull_060" class="microwave_hull"/>
+    <geom name="microwave_door_hull_061" mesh="microwave_door_hull_061" class="microwave_hull"/>
+    <geom name="microwave_door_hull_062" mesh="microwave_door_hull_062" class="microwave_hull"/>
+    <geom name="microwave_door_hull_063" mesh="microwave_door_hull_063" class="microwave_hull"/>
+  </body>
+</mujocoinclude>

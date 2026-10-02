@@ -216,3 +216,8 @@ See [PlaceGen rack-plate asset migration](rack_plate_assets.md) for the correspo
 static draining-rack host migration: the rack visual mesh, explicit rib collision
 proxies, fixed observation cameras, shared plate payload, and ordered robot-layer
 composition boundary.
+
+See [Microwave and sweet-potato asset migration](microwave_sweet_potato_assets.md) for a
+vertex-coloured visual scans with hidden convex-hull collision geometry, a baked open door
+in the source hinge coordinates, a scanned free object whose rest pose and inertia are derived
+by simulation, and the horizontal UMI v3 insertion task.

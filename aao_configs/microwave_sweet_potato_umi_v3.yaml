@@ -1,0 +1,166 @@
+defaults:
+  - basis_mocap_eef_umi_v3
+  - _self_
+
+scene_name: microwave_sweet_potato
+task_name: microwave_sweet_potato_umi_v3
+
+env:
+  batch_size: 1
+  # umi_gripper_v3's stiff parallel-linkage equality constraints need the
+  # same 1200 Hz integration rate as pick_and_place_umi_v3.
+  sim_freq: 1200
+  # The gripper starts level behind the sweet potato: its +X approach axis
+  # points along world +Y (into the microwave), so the jaws close along world
+  # X and the 56 mm-thick jaw plane stays horizontal for the oven cavity.
+  # freejoint: pos(xyz) + quat(wxyz), +90 deg about world Z.
+  initial_joint_positions:
+    umi_freejoint: [0.20, -0.57, 0.20, 0.70710678, 0.0, 0.0, 0.70710678]
+  mask_objects: [sweet_potato, microwave_target]
+  operations: [pick, place]
+  viewer:
+    # Front-right view into the open cavity (looking toward +Y, -X).
+    lookat: [0.06, -0.02, 0.14]
+    distance: 0.95
+    azimuth: 120
+    elevation: -28
+    step_delay: 0.03
+    hold_seconds: 1.0
+
+task_operators:
+  arm:
+    control:
+      # The transfer carries a 0.2 kg tuber 0.4 m and threads it into a 0.1 m
+      # tall cavity, so allow a longer horizon.  Cartesian step clamping is
+      # deliberately not used: each clamped step is re-based on the measured
+      # EEF, so the soft mocap weld's steady sag accumulates into a downward
+      # drift on long lateral moves.
+      timeout_steps: 300
+      tolerance:
+        # The compliant mocap weld lags the target while it carries the
+        # tuber; match the pick_and_place_umi_v3 allowance.
+        position: 0.015
+        orientation: 0.10
+      grasp:
+        # Wait one second (30 Hz) after opening so placement is judged on a
+        # settled tuber rather than the release instant.
+        release_settle_steps: 30
+
+task:
+  randomization:
+    entities:
+      # Keep the home pose clear of the counter and cavity: small jitter only.
+      arm:
+        eef:
+          x: [-0.05, 0.05]
+          y: [-0.04, 0.04]
+          z: [-0.02, 0.04]
+          collision_radius: 0.15
+      # Slide the tuber on the counter; its resting roll and heading stay at
+      # the authored settled pose because the grasp is world-aligned.
+      sweet_potato:
+        x: [-0.03, 0.03]
+        y: [-0.03, 0.03]
+        collision_radius: 0.085
+  stages:
+    - name: pick_sweet_potato
+      object: sweet_potato
+      site: sweet_potato_site
+      operation: pick
+      operator: arm
+      param:
+        pre_move:
+          # Offsets are world-axis offsets from the tuber origin.  The jaw
+          # contact band sits 4-16 mm below the gripper mid-plane and the pads
+          # meet a 45 mm section 24 mm behind eef_pose, so the EEF targets
+          # (-3.4, -15.9, +9.3) mm to grip the section 40 mm behind the
+          # centre (the blunt end) at its widest height.
+          - position: [-0.0034, -0.16, 0.06]
+            # xyzw: +90 deg about world Z; EEF +X (approach) = world +Y.
+            orientation: [0.0, 0.0, 0.70710678, 0.70710678]
+            reference: object_world
+          # Drop to grasp height behind the tuber, then slide the open jaws
+          # (100 mm gap) forward around it.
+          - position: [-0.0034, -0.16, 0.0093]
+            reference: object_world
+          - position: [-0.0034, -0.0159, 0.0093]
+            reference: object_world
+        eef:
+          close: true
+        post_move:
+          # Lift clear of the counter to the cavity insertion height.
+          - position: [0.0, 0.0, 0.11]
+            reference: eef_world
+
+    - name: place_sweet_potato_in_microwave
+      object: microwave_target
+      site: microwave_target_site
+      operation: place
+      operator: arm
+      param:
+        pre_move:
+          # All goals move the held tuber, expressed in the turntable target
+          # frame (local +X points at the back wall).  The long axis is kept
+          # pointing into the cavity; roll about it stays free.
+          # 1) Line up 0.24 m in front of the target, 22 mm above its resting
+          #    height so the tuber clears the turntable's raised rim.
+          - controlled_frame:
+              kind: held_object
+              frame: sweet_potato_site
+            position: [-0.24, 0.0, 0.022]
+            reference: object
+            static: true
+            orientation_goal:
+              kind: axis_alignment
+              controlled_axis: [1.0, 0.0, 0.0]
+              target_axis:
+                vector: [1.0, 0.0, 0.0]
+                reference: object
+              direction: same
+            tolerance:
+              position: 0.02
+              orientation: 0.15
+          # 2) Slide straight in over the turntable.
+          - controlled_frame:
+              kind: held_object
+              frame: sweet_potato_site
+            position: [0.0, 0.0, 0.022]
+            reference: object
+            static: true
+            orientation_goal:
+              kind: axis_alignment
+              controlled_axis: [1.0, 0.0, 0.0]
+              target_axis:
+                vector: [1.0, 0.0, 0.0]
+                reference: object
+              direction: same
+            tolerance:
+              position: 0.02
+              orientation: 0.15
+          # 3) Lower to 6 mm above the settled pose and release there.
+          - controlled_frame:
+              kind: held_object
+              frame: sweet_potato_site
+            position: [0.0, 0.0, 0.006]
+            reference: object
+            static: true
+            orientation_goal:
+              kind: axis_alignment
+              controlled_axis: [1.0, 0.0, 0.0]
+              target_axis:
+                vector: [1.0, 0.0, 0.0]
+                reference: object
+              direction: same
+            tolerance:
+              position: 0.02
+              orientation: 0.15
+        eef:
+          close: false
+        post_move:
+          # Back the open jaws straight out of the cavity.
+          - position: [0.0, -0.25, 0.0]
+            reference: eef_world
+        placed_reference: pre_move
+        placed_tolerance:
+          position: 0.025
+          orientation: 0.20
