@@ -1,0 +1,56 @@
+# @package _global_
+#
+# Gaussian-splatting rendering. Scenes with GS assets ship a `demo_gs.xml`
+# whose layout matches the reconstructed PLYs; per-embodiment, per-scene and
+# per-task PLY bindings are merged from `render_assets/*/gs/` automatically.
+# Select a different background with `render_assets/background=<name>`.
+defaults:
+  - /render_assets/background: background_1
+  - _self_
+
+model_name: demo_gs
+gs_dir: ${assets_dir}/gs/scenes/${scene_name}
+
+env:
+  _target_: auto_atom.basis.mjc.gs_mujoco_env.BatchedGSUnifiedMujocoEnv
+  viewer:
+    lookat: [0.5, 0.08, 0.13]
+    distance: 0.8
+    azimuth: 135
+    elevation: -28
+    # disable: true
+  # gaussian_render:
+    # share_physics: false
+    #
+    # Optional: apply rigid transforms to individual per-body PLYs at load
+    # time. Useful when the physical MuJoCo body pose is correct but the
+    # reconstructed GS asset needs an extra local correction.
+    # - `position`: [x, y, z] translation in local GS coords
+    # - `orientation`: [qx, qy, qz, qw] or [roll, pitch, yaw]
+    # - `center`: optional pivot point for the rotation
+    # - `share_center_with`: reuse another body's centroid as the pivot
+    # Transform is applied before `body_mirrors`.
+    # body_transforms:
+    #   door_gs:
+    #     orientation: [0, 0, 1, 0]
+    #     center: [0.0, 0.0, 0.0]
+    # Optional: reflect individual per-body PLYs across a plane at load time.
+    # Keys must match entries in `body_gaussians` (defined in
+    # render_assets/*/gs configs, not here). Mirrored PLYs are cached under
+    # `.cache/gs_body_mirrors/`. Two ways to specify the reflection-plane
+    # normal:
+    #   A) `axis`: unit vector in the PLY's local (GS) coords (simplest when
+    #      the PLY is pre-rotated so body quat = identity).
+    #   B) `body_quat` (wxyz) + `body_axis`: the code computes
+    #      `gs_axis = R(body_quat)^T @ body_axis`. Use when the body has a
+    #      non-identity MuJoCo quaternion and you want to mirror along a
+    #      body-frame direction.
+    # The mirror-plane center defaults to the PLY centroid. Use `center`
+    # (explicit [x, y, z] in GS coords) or `share_center_with` (another
+    # body key, to keep paired objects aligned — e.g. door + knob).
+    # body_mirrors:
+    #   door_gs:
+    #     axis: [1, 0, 0]
+    #   door_knob_gs:
+    #     axis: [1, 0, 0]
+    #     share_center_with: door_gs

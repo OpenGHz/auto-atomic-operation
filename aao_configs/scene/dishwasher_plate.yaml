@@ -1,0 +1,8 @@
+# @package _global_
+scene_name: dishwasher_plate
+
+env:
+  cameras:
+    placement:
+      name: placement_camera
+      is_static: true

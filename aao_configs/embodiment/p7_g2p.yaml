@@ -1,0 +1,31 @@
+# @package _global_
+#
+# P7 arm + G2P gripper.
+defaults:
+  - _p7
+  - _self_
+
+env:
+  # The G2P linkage is stepped at 1200 Hz like the other stiff-linkage grippers.
+  sim_freq: 1200
+  scene:
+    layers:
+      robot:
+        kind: mjcf
+        path: ${assets_dir}/xmls/robots/p7_arm_with_g2p.xml
+        role: operator
+  # G2P passive linkage joints default from qpos0; only the driven claw slide
+  # is opened explicitly.
+  initial_joint_positions:
+    # G2P gripper drive joint (range -0.003..0.01075; lower bound = max open)
+    eef_umi_clawj: -0.003
+  operators:
+    arm:
+      eef_mapper:
+        _target_: auto_atom.mappers.finger_distance.FingerDistanceMapper
+        left_pad_geom: eef_left_finger_pad_upper
+        right_pad_geom: eef_right_finger_pad_upper
+        actuator_name: eef_claw_joint
+      ik_factory: auto_atom.backend.mjc.ik.p7_analytical_ik_solver.P7AnalyticalIKSolver
+
+backend: auto_atom.backend.mjc.ik.p7_analytical_ik_solver.build_p7_xf9600_backend

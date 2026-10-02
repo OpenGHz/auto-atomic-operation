@@ -1,0 +1,40 @@
+# @package _global_
+#
+# XF9600 mocap gripper.
+defaults:
+  - _mocap_gripper
+  - _self_
+
+# Top-down grasp with XF9600's flipped-z eef_pose site: eef_pose rest
+# orientation has x_eef = -x_world, y_eef = -y_world, z_eef = +z_world. This
+# world target (xyzw, 180° around (1,0,-1)/√2) puts x_eef = -z_world.
+eef_top_down_orientation: [0.70710678, 0.0, -0.70710678, 0.0]
+
+env:
+  # XF9600 fingers have a stiff 4-bar linkage (solref -400000 -2500). Running
+  # at 600 Hz produces numerical instabilities when the gripper moves fast;
+  # 1200 Hz (0.833 ms) keeps the constraints stable.
+  sim_freq: 1200
+  scene:
+    layers:
+      robot:
+        kind: mjcf
+        path: ${assets_dir}/xmls/robots/xf9600_mocap.xml
+        role: operator
+  # XF9600 exposes its wrist camera as ``eef_wrist_cam`` (attach prefix).
+  cameras:
+    wrist:
+      name: eef_wrist_cam
+  # Home pose at reset. Arm hangs 0.4m above the floor; gripper fully open
+  # (clawj = 0). Tasks can override ``xf9600_freejoint`` for task-specific homes.
+  initial_joint_positions:
+    # freejoint: pos(xyz) + quat(wxyz) — gripper hangs 0.4m above the floor.
+    xf9600_freejoint: [0.0, 0.0, 0.4, 1.0, 0.0, 0.0, 0.0]
+    # Single gripper drive joint (range 0..0.02, 0 = fully open).
+    eef_clawj: 0.0
+  operators:
+    arm:
+      eef_actuators: [eef_claw_joint]
+      root_body: xf9600_interface
+      mocap_body: xf9600_mocap
+      freejoint: xf9600_freejoint

@@ -1,0 +1,11 @@
+# @package env.gaussian_render
+#
+# Airbot Play arm per-body GS assets.
+body_gaussians:
+  arm_base: ${assets_dir}/gs/robots/airbot_play/arm_base.ply
+  link1: ${assets_dir}/gs/robots/airbot_play/link1.ply
+  link2: ${assets_dir}/gs/robots/airbot_play/link2.ply
+  link3: ${assets_dir}/gs/robots/airbot_play/link3.ply
+  link4: ${assets_dir}/gs/robots/airbot_play/link4.ply
+  link5: ${assets_dir}/gs/robots/airbot_play/link5.ply
+  link6: ${assets_dir}/gs/robots/airbot_play/link6.ply

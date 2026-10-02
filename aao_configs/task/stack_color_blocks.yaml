@@ -1,0 +1,105 @@
+# @package _global_
+defaults:
+  - override /scene: stack_color_blocks
+  - override /embodiment: robotiq_mocap
+  - _self_
+
+env:
+  mask_objects: [ "cube_blue", "cube_yellow", "cube_orange" ]
+  operations: [ "pick", "pick", "place" ]
+  viewer:
+    lookat: [ -0.2, 0.0, 0.55 ]
+    distance: 1.5
+    azimuth: 290
+    elevation: -20
+    step_delay: 0.025
+    hold_seconds: 1.0
+
+task:
+  randomization:
+    entities:
+      cube_blue:
+        x: [ -0.015, 0.015 ]
+        y: [ -0.015, 0.015 ]
+        collision_radius: 0.035
+      cube_orange:
+        x: [ -0.015, 0.015 ]
+        y: [ -0.015, 0.015 ]
+        collision_radius: 0.035
+      cube_yellow:
+        x: [ -0.015, 0.015 ]
+        y: [ -0.015, 0.015 ]
+        collision_radius: 0.035
+  stages:
+    # Stage 1: Pick blue cube
+    - name: pick_blue
+      object: cube_blue
+      operation: pick
+      operator: arm
+      param:
+        pre_move:
+          - position: [ 0.0, 0.0, 0.12 ]
+            orientation: ${eef_top_down_orientation}
+            reference: object_world
+          - position: [ 0.0, 0.0, 0.005 ]
+            reference: object_world
+        post_move:
+          - position: [ 0.0, 0.0, 0.2 ]
+            reference: eef_world
+        eef:
+          close: true
+
+    # Stage 2: Place blue on orange
+    # orange center z=0.085, orange top=0.110
+    # blue center when stacked = 0.110 + 0.025 = 0.135
+    # offset from orange center = 0.135 - 0.085 = 0.050
+    - name: place_blue_on_orange
+      object: cube_orange
+      operation: place
+      operator: arm
+      param:
+        pre_move:
+          - position: [ 0.0, 0.0, 0.15 ]
+            reference: object_world
+          - position: [ 0.0, 0.0, 0.05 ]
+            reference: object_world
+        post_move:
+          - position: [ 0.0, 0.0, 0.2 ]
+            reference: object_world
+        eef:
+          close: false
+
+    # Stage 3: Pick yellow cube
+    - name: pick_yellow
+      object: cube_yellow
+      operation: pick
+      operator: arm
+      param:
+        pre_move:
+          - position: [ 0.0, 0.0, 0.12 ]
+            reference: object_world
+          - position: [ 0.0, 0.0, 0.005 ]
+            reference: object_world
+        post_move:
+          - position: [ 0.0, 0.0, 0.2 ]
+            reference: eef_world
+        eef:
+          close: true
+
+    # Stage 4: Place yellow on blue (blue is now at z≈0.135, tracked dynamically)
+    # Same z-offset logic applies: 0.050
+    - name: place_yellow_on_blue
+      object: cube_blue
+      operation: place
+      operator: arm
+      param:
+        pre_move:
+          - position: [ 0.0, 0.0, 0.15 ]
+            reference: object_world
+          - position: [ 0.0, 0.0, 0.05 ]
+            reference: object_world
+        post_move:
+          - position: [ 0.0, 0.0, 0.2 ]
+            reference: object_world
+        eef:
+          close: false

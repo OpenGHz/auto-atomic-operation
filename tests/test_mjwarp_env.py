@@ -1,6 +1,6 @@
 """Equivalence tests for the MJWarp object-only environment.
 
-The comparisons run against the **real** ``rack_plate_p7_v4_umi_v3`` config in
+The comparisons run against the **real** ``task=rack_plate`` config in
 ``object_only`` mode rather than a synthetic scene, because that is what the
 port has to reproduce: layered MJCF, an operator layer stripped at the Hydra
 boundary, a config-declared object-mounted camera, and nested static scenery.
@@ -20,12 +20,12 @@ import pytest
 mujoco = pytest.importorskip("mujoco")
 pytest.importorskip("mujoco_warp")
 
-from hydra import compose, initialize_config_dir  # noqa: E402
 from omegaconf import OmegaConf  # noqa: E402
 
 from auto_atom.basis.mjc.mujoco_env import UnifiedMujocoEnv  # noqa: E402
 from auto_atom.basis.mjwarp.env import MjWarpObjectOnlyEnv  # noqa: E402
 from auto_atom.config.env_config import EnvConfig  # noqa: E402
+from auto_atom.config_loader import compose_task_config  # noqa: E402
 from auto_atom.contracts import (  # noqa: E402
     EnvProtocol,
     PoseConstraintEnvProtocol,
@@ -34,7 +34,7 @@ from auto_atom.execution_config import (  # noqa: E402
     prepare_task_config_for_instantiation,
 )
 
-_CONFIG_NAME = "rack_plate_p7_v4_umi_v3"
+_TASK = "rack_plate"
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 # Constraint-relevant scene entities: the manipulated plate, the two randomized
 # scenery bodies, and the placement target that rides the rack.
@@ -43,15 +43,15 @@ _ENTITIES = ("object", "rack", "plate_stand", "rack_target")
 
 def _env_config(batch_size: int) -> EnvConfig:
     config_dir = str(_REPO_ROOT / "aao_configs")
-    with initialize_config_dir(config_dir=config_dir, version_base=None):
-        cfg = compose(
-            config_name=_CONFIG_NAME,
-            overrides=[
-                "execution.mode=object_only",
-                f"env.batch_size={batch_size}",
-                "env.viewer=null",
-            ],
-        )
+    cfg = compose_task_config(
+        _TASK,
+        [
+            "execution.mode=object_only",
+            f"env.batch_size={batch_size}",
+            "env.viewer=null",
+        ],
+        config_dir=config_dir,
+    )
     prepared = prepare_task_config_for_instantiation(cfg)
     node = OmegaConf.to_container(prepared.env, resolve=True)
     node.pop("_target_", None)
@@ -238,15 +238,15 @@ def _physical_env_config(batch_size: int) -> EnvConfig:
     its analytical IK factory, which is what registration has to consume.
     """
     config_dir = str(_REPO_ROOT / "aao_configs")
-    with initialize_config_dir(config_dir=config_dir, version_base=None):
-        cfg = compose(
-            config_name=_CONFIG_NAME,
-            overrides=[
-                "execution.mode=physical",
-                f"env.batch_size={batch_size}",
-                "env.viewer=null",
-            ],
-        )
+    cfg = compose_task_config(
+        _TASK,
+        [
+            "execution.mode=physical",
+            f"env.batch_size={batch_size}",
+            "env.viewer=null",
+        ],
+        config_dir=config_dir,
+    )
     prepared = prepare_task_config_for_instantiation(cfg)
     node = OmegaConf.to_container(prepared.env, resolve=True)
     node.pop("_target_", None)

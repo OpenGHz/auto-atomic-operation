@@ -1,0 +1,7 @@
+# Transport stage objects kinematically without operators. Operator-owned
+# scene layers and cameras are dropped before the environment is built.
+defaults:
+  - physical
+  - _self_
+
+mode: object_only

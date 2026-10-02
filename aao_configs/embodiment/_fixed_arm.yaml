@@ -1,0 +1,26 @@
+# @package _global_
+#
+# Shared defaults for fixed-base arms controlled through IK. The home EEF pose
+# is not randomized by default; tasks opt in through task.randomization.
+
+env:
+  cameras:
+    wrist:
+      name: eef_wrist_cam
+
+task:
+  randomization:
+    entities:
+      arm:
+        eef:
+          x: [-0.0, 0.0]
+          y: [-0.0, 0.0]
+          z: [-0.0, 0.0]
+          collision_radius: 0.15
+        # base:
+        #   x: [-0.1, 0.1]
+        #   y: [-0.1, 0.1]
+        #   yaw: [-0.2, 0.2]
+
+task_operators:
+  arm: {}

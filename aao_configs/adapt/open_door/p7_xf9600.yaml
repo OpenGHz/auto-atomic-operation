@@ -1,0 +1,10 @@
+# @package _global_
+defaults:
+  - /adapt/_open_door/p7
+  - _self_
+
+task_name: open_door_p7_ik
+
+p7_open_door:
+  # 0.35 rad ≈ 20° — within the P7 arm's reachable workspace.
+  door_angle: 0.35

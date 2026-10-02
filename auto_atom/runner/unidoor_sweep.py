@@ -31,9 +31,10 @@ from typing_extensions import Self
 DEFAULT_ASSET_PACKAGE = Path(
     "assets/scene_assets/unidoor_lever_right_hinge/scene_asset_package.json"
 )
+DEFAULT_TASK = "open_door_unidoor"
 # V4 is the current UniDoor sweep baseline.  V3 remains selectable with the
-# explicit ``--config-name open_door_unidoor_p7_v3_umi_v3`` override.
-DEFAULT_CONFIG_NAME = "open_door_unidoor_p7_v4_umi_v3"
+# explicit ``--embodiment p7_v3_umi_v3`` override.
+DEFAULT_EMBODIMENT = "p7_v4_umi_v3"
 DEFAULT_OUTPUT_ROOT = Path("outputs/unidoor-sweeps")
 MANIFEST_NAME = "sweep_manifest.json"
 REPORT_NAME = "report.json"
@@ -66,8 +67,11 @@ class UniDoorSweepConfig(BaseModel, frozen=True):
         cli_kebab_case=True,
     )
 
-    config_name: str = DEFAULT_CONFIG_NAME
-    """Hydra task config passed to ``aao-demo``."""
+    task: str = DEFAULT_TASK
+    """``task`` config group option passed to ``aao-demo``."""
+
+    embodiment: str = DEFAULT_EMBODIMENT
+    """``embodiment`` config group option passed to ``aao-demo``."""
 
     asset_package: Path = DEFAULT_ASSET_PACKAGE
     """Scene asset package whose component index supplies door and handle IDs."""
@@ -333,7 +337,8 @@ def _select_ids(
 
 def _hydra_command(
     *,
-    config_name: str,
+    task: str,
+    embodiment: str,
     door_ids: Sequence[str],
     handle_ids: Sequence[str],
     batch_dir: Path,
@@ -352,8 +357,8 @@ def _hydra_command(
         "-m",
         "auto_atom.runner.demo",
         "--multirun",
-        "--config-name",
-        config_name,
+        f"task={task}",
+        f"embodiment={embodiment}",
         f"hydra/launcher={launcher}",
         "hydra/sweeper=basic",
         f"door_id={','.join(door_ids)}",
@@ -477,7 +482,8 @@ def _build_manifest(
             )
             batch_dir = sweep_dir / batch_relative_dir
             command = _hydra_command(
-                config_name=config.config_name,
+                task=config.task,
+                embodiment=config.embodiment,
                 door_ids=batch_doors,
                 handle_ids=batch_handles,
                 batch_dir=batch_dir,
@@ -541,7 +547,8 @@ def _build_manifest(
         "finished_at": None,
         "sweep_dir": str(sweep_dir),
         "config": {
-            "config_name": config.config_name,
+            "task": config.task,
+            "embodiment": config.embodiment,
             "asset_package": str(catalog.asset_package),
             "rounds": config.rounds,
             "max_updates": config.max_updates,
@@ -920,6 +927,17 @@ def _discover_jobs(sweep_dir: Path) -> list[dict[str, Any]]:
     return jobs
 
 
+def _task_selection(config: dict[str, Any]) -> list[str]:
+    """Hydra arguments selecting the swept task, as recorded in a manifest."""
+    if "task" not in config and "config_name" in config:
+        # Sweeps recorded before the config-group layout named a flat config.
+        return ["--config-name", str(config["config_name"])]
+    return [
+        f"task={config.get('task', DEFAULT_TASK)}",
+        f"embodiment={config.get('embodiment', DEFAULT_EMBODIMENT)}",
+    ]
+
+
 def _reproduction_command(
     manifest: dict[str, Any] | None,
     result: dict[str, Any],
@@ -931,8 +949,7 @@ def _reproduction_command(
         "-u",
         "-m",
         "auto_atom.runner.demo",
-        "--config-name",
-        str(config.get("config_name", DEFAULT_CONFIG_NAME)),
+        *_task_selection(config),
         f"door_id={result['door_id']}",
         f"handle_id={result['handle_id']}",
         "env.batch_size=1",
@@ -1181,8 +1198,15 @@ def _append_resume_batches(
     config = manifest.get("config")
     if not isinstance(config, dict):
         raise ValueError("Sweep manifest has no config object for resume.")
+    if "task" not in config and "config_name" in config:
+        raise ValueError(
+            "Sweep manifest predates the aao_configs config groups "
+            f"(config_name={config['config_name']!r}) and cannot be resumed; "
+            "start a new sweep with --task/--embodiment."
+        )
     required = {
-        "config_name",
+        "task",
+        "embodiment",
         "rounds",
         "max_updates",
         "seed",
@@ -1271,7 +1295,8 @@ def _append_resume_batches(
                 / f"{next_batch_num:04d}__{outer_role}_{outer_id}"
             )
             command = _hydra_command(
-                config_name=str(config["config_name"]),
+                task=str(config["task"]),
+                embodiment=str(config["embodiment"]),
                 door_ids=door_ids,
                 handle_ids=handle_ids,
                 batch_dir=sweep_dir / relative_batch_dir,

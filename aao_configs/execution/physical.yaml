@@ -1,0 +1,6 @@
+# Execute every waypoint and end-effector command through an operator.
+mode: physical
+object_motion:
+  mode: direct
+  max_linear_step: 0.02
+  max_angular_step: 0.15

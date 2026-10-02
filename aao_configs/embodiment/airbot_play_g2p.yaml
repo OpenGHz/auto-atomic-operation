@@ -1,0 +1,24 @@
+# @package _global_
+#
+# Airbot Play arm + G2P gripper.
+defaults:
+  - _airbot_play
+  - _self_
+
+env:
+  scene:
+    layers:
+      robot:
+        kind: mjcf
+        path: ${assets_dir}/xmls/robots/airbot_play_with_g2p.xml
+        role: operator
+  operators:
+    arm:
+      eef_actuators: [eef_claw_joint]
+      eef_mapper:
+        _target_: auto_atom.mappers.finger_distance.FingerDistanceMapper
+        left_pad_geom: eef_left_finger_pad_upper
+        right_pad_geom: eef_right_finger_pad_upper
+        actuator_name: eef_claw_joint
+      ik_params:
+        eef_type: none

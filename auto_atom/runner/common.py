@@ -17,6 +17,7 @@ from omegaconf import DictConfig, ListConfig, OmegaConf
 from pydantic import BaseModel
 
 from auto_atom.config.task import TaskFileConfig
+from auto_atom.config_loader import describe_run
 from auto_atom.execution_config import prepare_task_config_for_instantiation
 from auto_atom.runtime import (
     ComponentRegistry,
@@ -42,6 +43,13 @@ class ExampleLoopHooks:
 
 def get_config_dir() -> Path:
     return Path.cwd() / "aao_configs"
+
+
+def get_run_name() -> str:
+    """:func:`describe_run` for the current ``@hydra.main`` application."""
+    from hydra.core.hydra_config import HydraConfig
+
+    return describe_run(HydraConfig.get().runtime.choices)
 
 
 def prepare_task_file(

@@ -1,0 +1,49 @@
+# @package _global_
+defaults:
+  - override /simulator: mock
+  - override /scene: null
+  - override /embodiment: null
+  - _self_
+
+env:
+  name: mock_single_arm
+
+task:
+  env_name: mock_single_arm
+  seed: 7
+  stages:
+    - name: pick_cup
+      object: cup
+      operation: pick
+      operator: arm_a
+      param:
+        pre_move:
+          - position: [0.45, -0.10, 0.08]
+            rotation: [0.0, 1.57, 0.0]
+            reference: object_world
+        eef:
+          close: true
+    - name: place_on_shelf
+      object: shelf
+      operation: place
+      operator: arm_a
+      param:
+        pre_move:
+          - position: [0.10, 0.25, 0.16]
+            orientation: [0.0, 0.0, 0.0, 1.0]
+            reference: world
+        eef:
+          close: false
+    - name: observe_tray
+      object: tray
+      operation: move
+      operator: observer
+      blocking: false
+      param:
+        pre_move:
+          - position: [0.0, 0.0, 0.3]
+            reference: base
+
+task_operators:
+  arm_a: {}
+  observer: {}

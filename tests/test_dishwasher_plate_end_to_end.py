@@ -6,8 +6,8 @@ from pathlib import Path
 
 import mujoco
 import numpy as np
-from hydra import compose, initialize_config_dir
 
+from auto_atom.config_loader import compose_task_config
 from auto_atom.runner.common import prepare_task_file
 from auto_atom.runtime import ComponentRegistry, TaskRunner
 
@@ -22,14 +22,11 @@ def test_dishwasher_plate_completes_headless() -> None:
     """Run the real MuJoCo task and require both pick and place to succeed."""
 
     ComponentRegistry.clear()
-    with initialize_config_dir(
-        version_base=None,
-        config_dir=str(_ROOT / "aao_configs"),
-    ):
-        config = compose(
-            config_name="dishwasher_plate",
-            overrides=["env.batch_size=1", "env.viewer=null"],
-        )
+    config = compose_task_config(
+        "dishwasher_plate",
+        ["env.batch_size=1", "env.viewer=null"],
+        config_dir=_ROOT / "aao_configs",
+    )
 
     runner = TaskRunner().from_config(prepare_task_file(config))
     try:

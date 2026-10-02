@@ -6,10 +6,10 @@ from pathlib import Path
 
 import mujoco
 import pytest
-from hydra import compose, initialize_config_dir
 from pydantic import ValidationError
 
 from auto_atom.callbacks.door_latch import DoorLatchCallback, DoorLatchConfig
+from auto_atom.config_loader import compose_task_config
 from auto_atom.runner.common import prepare_task_file
 from auto_atom.runtime import TaskRunner
 
@@ -174,18 +174,15 @@ def test_bind_rejects_a_missing_lock_constraint() -> None:
 
 def test_default_open_door_task_binds_and_releases_the_hard_latch() -> None:
     root = Path(__file__).resolve().parents[1]
-    with initialize_config_dir(
-        version_base=None,
-        config_dir=str(root / "aao_configs"),
-    ):
-        config = compose(
-            config_name="open_door",
-            overrides=[
-                "env.cameras=[]",
-                "env.enabled_sensors=[]",
-                "env.viewer=null",
-            ],
-        )
+    config = compose_task_config(
+        "open_door",
+        [
+            "~env.cameras",
+            "env.enabled_sensors=[]",
+            "env.viewer=null",
+        ],
+        config_dir=root / "aao_configs",
+    )
 
     runner = TaskRunner().from_config(prepare_task_file(config))
     try:

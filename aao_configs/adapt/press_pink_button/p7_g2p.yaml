@@ -1,0 +1,20 @@
+# @package _global_
+defaults:
+  - /adapt/_press_button/p7_g2p
+  - _self_
+
+press_label: pink_button
+press_eef_close: 0.01075
+
+env:
+  viewer:
+    lookat: [0.53, 0.13, 0.1]
+
+task:
+  randomization:
+    entities:
+      button_pink:
+        x: [0.49, 0.57]
+        y: [0.09, 0.16]
+        reference: absolute_world
+        collision_radius: 0.05

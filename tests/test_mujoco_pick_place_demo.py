@@ -2,21 +2,23 @@ from pathlib import Path
 import sys
 
 import numpy as np
-from hydra import compose, initialize_config_dir
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from auto_atom.config_loader import compose_task_config
 from auto_atom.runner.common import prepare_task_file
 from auto_atom.runtime import ComponentRegistry, TaskRunner
 
 
 def test_franka_task_uses_stable_closed_loop_setup() -> None:
     """Franka keeps its validated home pose and refines IK error each step."""
-    config_dir = ROOT / "aao_configs"
-    with initialize_config_dir(version_base=None, config_dir=str(config_dir)):
-        cfg = compose(config_name="pick_and_place_franka")
+    cfg = compose_task_config(
+        "pick_and_place",
+        ["embodiment=franka_robotiq"],
+        config_dir=ROOT / "aao_configs",
+    )
 
     assert cfg.task_operators.arm.ik.joint_control_mode == "per_step_ik"
     eef_randomization = cfg.task.randomization.entities.arm.eef
@@ -26,12 +28,11 @@ def test_franka_task_uses_stable_closed_loop_setup() -> None:
 
 
 def main() -> None:
-    config_dir = ROOT / "aao_configs"
-    with initialize_config_dir(version_base=None, config_dir=str(config_dir)):
-        cfg = compose(
-            config_name="pick_and_place",
-            overrides=["env.batch_size=2", "env.viewer=null"],
-        )
+    cfg = compose_task_config(
+        "pick_and_place",
+        ["env.batch_size=2", "env.viewer=null"],
+        config_dir=ROOT / "aao_configs",
+    )
     task_file = prepare_task_file(cfg)
     runner = TaskRunner().from_config(task_file)
 

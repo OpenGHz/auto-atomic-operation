@@ -1,0 +1,74 @@
+# @package _global_
+#
+# Franka Panda + Robotiq 2F-85 (IK joint-space control).
+defaults:
+  - _fixed_arm
+  - _self_
+
+eef_top_down_orientation: [-0.70710678, 0.0, 0.70710678, 0.0]
+
+env:
+  scene:
+    layers:
+      robot:
+        kind: mjcf
+        path: ${assets_dir}/xmls/robots/panda_robotiq.xml
+        role: operator
+  cameras:
+    wrist:
+      name: wrist_cam
+  # Home pose at reset; the "home" posture of the Panda keyframe.
+  initial_joint_positions:
+    # Panda arm (7 hinges) — "home" posture.
+    joint1:  0.0006515062070403818
+    joint2: -0.7803480700396634
+    joint3:  0.00017030853030599173
+    joint4: -2.75422728452774
+    joint5:  0.0029799970628169147
+    joint6:  1.95947888200644
+    joint7: -0.7854
+    # 6 Robotiq 2F-85 gripper joints — fully open rest.
+    left_driver_joint:       0.0
+    left_spring_link_joint:  0.0
+    left_follower:           0.0
+    right_driver_joint:      0.0
+    right_spring_link_joint: 0.0
+    right_follower_joint:    0.0
+  operators:
+    arm:
+      arm_actuators:
+        - actuator1
+        - actuator2
+        - actuator3
+        - actuator4
+        - actuator5
+        - actuator6
+        - actuator7
+      eef_actuators: [fingers_actuator]
+      eef_output_name: eef
+      pose_site: eef_pose
+      tactile_prefixes: ["left_", "right_"]
+      root_body: link0
+      ik_factory: auto_atom.backend.mjc.ik.mink_ik_solver.MinkIKSolver
+      ik_params:
+        frame_name: eef_pose
+        root_body_name: link0
+        n_iterations: 300
+        dt: 0.1
+        position_cost: 1.0
+        orientation_cost: 1.0
+        posture_cost: 1e-4
+
+backend: auto_atom.backend.mjc.ik.mink_ik_solver.build_franka_backend
+
+task_operators:
+  arm:
+    max_joint_delta: 1.8 # max per-joint displacement per control step (rad)
+    ik:
+      joint_control_mode: solve_once_interpolate # per_step_ik | solve_once_interpolate
+      joint_interp_speed: 0.1 # max per-joint delta (rad) per control step during interpolation
+      n_iterations: 300 # IK integration steps per solve
+      dt: 0.1 # virtual timestep per IK step (s)
+      position_cost: 1.0 # EEF position tracking weight
+      orientation_cost: 1.0 # EEF orientation tracking weight
+      posture_cost: 1e-4 # joint posture regularization weight

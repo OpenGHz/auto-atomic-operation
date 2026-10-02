@@ -1,0 +1,79 @@
+# @package _global_
+#
+# Generic doorway host scene. The door itself is assembled from the UniDoor
+# scene asset package; select the components with `door_id=` / `handle_id=`.
+scene_name: open_door_unidoor
+door_id: D001
+handle_id: H001
+
+env:
+  cameras:
+    env1:
+      name: env1_cam
+      is_static: true
+    env0:
+      name: env0_cam
+      is_static: true
+    # The scene also authors `env2_cam` (door-facing view).
+  scene:
+    layers:
+      door:
+        kind: asset_assembly
+        package: ${oc.env:AAO_UNIDOOR_ASSET_PACKAGE,assets/scene_assets/unidoor_lever_right_hinge/scene_asset_package.json}
+        adapter: unidoor.lever_door@1
+        selection:
+          door: ${door_id}
+          handle: ${handle_id}
+        namespace: door
+        # Flip the door around its panel centre (rather than its hinge origin)
+        # so the handle and P7 are on the same side while the panel footprint
+        # stays in the existing camera/interaction region.
+        placement:
+          position: [1.54, 0.13939759036, -1.0]
+          orientation_xyzw: [0.0, 0.0, -0.707106781, 0.707106781]
+        verify_hashes: true
+        # Compile Praxis-compatible metric normalization from the selected
+        # component metadata.  The adapter consumes these generic rules; the
+        # host composer remains unaware of UniDoor geometry.
+        scaling:
+          - bodies: [door_frame, door_panel]
+            # Keep the selected handle and optional lock at their source size
+            # while the parent door assembly is normalized to 2 m.
+            preserve_bodies: [door_handle, door_lock]
+            meshes: [unidoor_frame_mesh, unidoor_panel_mesh]
+            source_bounds: door.geometry.panel_bounds_m
+            axis: z
+            target_extent_m: 2.0
+          # Handle-size normalization is intentionally disabled for now. Keep
+          # the recipe here so it can be restored without reconstructing it.
+          # - bodies: [door_handle]
+          #   meshes: [unidoor_handle_mesh]
+          #   source_bounds: handle.geometry.handle_bounds_m
+          #   axis: x
+          #   target_extent_m: 0.15
+          # - bodies: [door_lock]
+          #   meshes: [unidoor_lock_mesh]
+          #   source_bounds: handle.geometry.handle_bounds_m
+          #   axis: x
+          #   target_extent_m: 0.15
+          #   required: false
+          # - mesh_prefixes: [unidoor_handle_collision_]
+          #   source_bounds: handle.geometry.handle_bounds_m
+          #   axis: x
+          #   target_extent_m: 0.15
+          #   required: false
+        anchors:
+          - bodies: [door_handle]
+            source_bounds: door.geometry.panel_bounds_m
+            coordinates:
+              # Right-hinge package: the free edge is panel_bounds.min.x.
+              x: {edge: min, offset_m: 0.08}
+              y: {edge: max, multiplier: -1.0}
+              z: {value_m: 1.0}
+          - bodies: [door_lock]
+            source_bounds: door.geometry.panel_bounds_m
+            coordinates:
+              x: {edge: min, offset_m: 0.08}
+              y: {edge: max, multiplier: -1.0}
+              z: {value_m: 1.0}
+            required: false

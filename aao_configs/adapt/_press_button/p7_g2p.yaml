@@ -1,0 +1,52 @@
+# @package _global_
+#
+# P7 + G2P adaptation shared by adapt/press_<color>_button/p7_g2p. Only the
+# pressed button is randomized, inside a reach-limited region set per color.
+task_name: airbot_p7_press_${press_label}
+# G2P command held while pressing (range -0.003..0.01075).
+press_eef_close: 0.01
+
+env:
+  viewer:
+    distance: 0.8
+
+task:
+  randomization:
+    entities:
+      arm:
+        eef:
+          x: [-0.0, 0.0]
+          y: [-0.0, 0.0]
+          z: [-0.0, 0.0]
+      button_blue: null
+      button_green: null
+      button_pink: null
+  stages:
+    - name: press_${press_label}
+      object: ${object_name}
+      operation: press
+      operator: arm
+      param:
+        pre_move:
+          - position: [0.0, 0.0, 0.12]
+            orientation: ${eef_top_down_orientation}
+            reference: object_world
+          - position: [0.0, 0.0, 0.038]
+            reference: object_world
+            tolerance:
+              position: [0.015, 0.015, 0.025]
+              orientation: 0.12
+        eef:
+          close: true
+          joint_positions: ["${press_eef_close}"]
+        post_move:
+          - position: [0.0, 0.0, 0.12]
+            reference: object_world
+
+task_operators:
+  arm:
+    initial_state:
+      base_pose:
+        position: [0.90, 0.05, 0.15]
+        orientation: [0.0, 0.0, -1, 0]
+      eef: 0.01075

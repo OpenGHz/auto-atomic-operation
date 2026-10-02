@@ -1,0 +1,14 @@
+# @package _global_
+#
+# Composable P7 + XF9600 robot XML for robot-less task scenes. It avoids
+# generic geom names such as "table" so task scenes can keep their own table
+# geom names without MuJoCo name collisions.
+defaults:
+  - p7_xf9600
+  - _self_
+
+env:
+  scene:
+    layers:
+      robot:
+        path: ${assets_dir}/xmls/robots/p7_arm_with_xf9600_composable.xml

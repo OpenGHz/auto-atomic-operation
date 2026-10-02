@@ -1,0 +1,12 @@
+# @package _global_
+env:
+  viewer:
+    lookat: [0.5, 0.02, 0.08]
+    distance: 0.8
+    azimuth: 135
+    elevation: -28
+  gaussian_render:
+    body_gaussians:
+      cube_blue_gs: ${gs_dir}/cube_blue.ply
+      cube_yellow_gs: ${gs_dir}/cube_yellow.ply
+      cube_orange_gs: ${gs_dir}/cube_orange.ply

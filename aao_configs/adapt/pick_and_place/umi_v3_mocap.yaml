@@ -1,0 +1,32 @@
+# @package _global_
+pick_place:
+  pick_approach_z: 0.08
+  # The mocap eef_pose sits at base_link + 0.1486 (matching the arm version's
+  # tcp_frame + eef_pose offset of 0.1601 − 0.0115). At top-down approach this
+  # puts the open finger pads ~6.70 cm "above" the eef target in world z, the
+  # closed pads ~2.68 cm "above", and the block-side-contact pads (mid-close,
+  # pad_dist≈0.036) ~3.16 cm "above". To grip the block centrally, place the
+  # eef ~2.7 cm below the object centre so:
+  #   - open pads (eef + 6.70 cm) clear the block top by 4 cm,
+  #   - mid-close pads (eef + 3.16 cm) land just above centre,
+  #   - closed pads (eef + 2.68 cm) settle at the block centre.
+  pick_z: -0.027
+  place_approach_z: 0.15
+  # Pedestal top at z=0.14 (half-height 0.04, centre 0.10). Block half-height
+  # 0.018. With closed pads at eef + 2.68 cm and the block held centred on the
+  # pads, block_bottom = eef + 2.68 cm − 1.8 cm = eef + 0.88 cm. To land the
+  # block on the pedestal (block_bottom ≈ 0.14), the eef sits at z ≈ 0.131,
+  # i.e. +3.1 cm above the pedestal centre.
+  place_z: 0.031
+  retreat_z: 0.18
+
+task_operators:
+  arm:
+    control:
+      # The mocap weld is slightly compliant; once the gripper picks up
+      # the source_block its position lags the mocap target.  Loosen the
+      # position tolerance from the 0.008 default so the post-pick lift /
+      # place pose-reach checks accept that sag.
+      tolerance:
+        position: 0.015
+        orientation: 0.10

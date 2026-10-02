@@ -1,0 +1,81 @@
+# @package _global_
+defaults:
+  - override /scene: pick_and_place
+  - override /embodiment: robotiq_mocap
+  - _self_
+
+# Waypoint heights (m) along world z relative to the object origin. Grippers
+# grasp the block at different heights relative to their eef_pose, so
+# adapt/pick_and_place/<embodiment>.yaml retunes these instead of restating
+# the stages.
+pick_place:
+  pick_approach_z: 0.12
+  pick_z: 0.006
+  lift_z: 0.2
+  place_approach_z: 0.12
+  place_z: 0.066
+  retreat_z: 0.16
+
+env:
+  mask_objects: ["source_block", "target_pedestal"]
+  operations: ["pick", "place"]
+  viewer:
+    lookat: [0.04, 0.0, 0.1]
+    distance: 0.55
+    azimuth: 135
+    elevation: -28
+    step_delay: 0.03
+    hold_seconds: 1.0
+
+# execution:
+#   update_boundary: keypoint # control_tick | primitive | keypoint | stage
+#   render_internal_updates: false
+#   max_internal_updates_per_update: 10000
+#   interval_selection:
+#     start: { stage: pick_source, phase: post_move, waypoint: 0, side: before }
+#     stop: { stage: place_source, phase: post_move, waypoint: 0, side: after }
+#     max_fast_forward_updates: 10000
+
+task:
+  # Pose randomization applied at each reset.
+  # source_block has a free joint so its x/y and yaw are randomised.
+  # target_pedestal is a static body (no free joint) — omit it here.
+  randomization:
+    entities:
+      source_block:
+        x: [-0.03, 0.03]
+        y: [-0.03, 0.03]
+        # yaw: [-0.524, 0.524]   # ±30°
+        collision_radius: 0.04
+  stages:
+    - name: pick_source
+      object: source_block
+      operation: pick
+      operator: arm
+      param:
+        pre_move:
+          - position: [0.0, 0.0, "${pick_place.pick_approach_z}"]
+            orientation: ${eef_top_down_orientation}
+            reference: object_world
+          - position: [0.0, 0.0, "${pick_place.pick_z}"]
+            reference: object_world
+        post_move:
+          - position: [0.0, 0.0, "${pick_place.lift_z}"]
+            reference: eef_world
+        eef:
+          close: true
+    - name: place_source
+      object: target_pedestal
+      operation: place
+      operator: arm
+      param:
+        pre_move:
+          - position: [0.0, 0.0, "${pick_place.place_approach_z}"]
+            reference: object_world
+          - position: [0.0, 0.0, "${pick_place.place_z}"]
+            reference: object_world
+        post_move:
+          - position: [0.0, 0.0, "${pick_place.retreat_z}"]
+            reference: object_world
+        eef:
+          close: false

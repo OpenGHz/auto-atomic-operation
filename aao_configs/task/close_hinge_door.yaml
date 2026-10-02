@@ -1,0 +1,59 @@
+# @package _global_
+defaults:
+  - override /scene: open_close_hinge_door
+  - override /embodiment: robotiq_mocap
+  - _self_
+
+task_name: close_hinge_door
+
+env:
+  initial_joint_positions:
+    # Task-specific arm home — gripper horizontal, facing the hinge-door handle.
+    robotiq_freejoint: [-0.435, -0.117, 0.5575, 0.7071408, 0.7070727, 0.0, 0.0]
+    hinge_joint_1: -1.3
+  update_freq: 10
+  mask_objects: ["handle"]
+  operations: ["push"]
+  viewer:
+    lookat: [-0.2, 0.0, 0.55]
+    distance: 1.5
+    azimuth: 290
+    elevation: -20
+    step_delay: 0.025
+    hold_seconds: 1.5
+
+task:
+  stages:
+    # Grasp handle of the open door and push it closed.
+    # Door starts open at hinge_joint_1 = -1.3 rad (~75 deg).
+    # Arc angle +1.3 rad swings the door back to closed (joint → 0).
+    - name: push_close
+      object: handle
+      operation: push
+      operator: arm
+      param:
+        pre_move:
+          # Use `object` reference so approach direction rotates with the open door.
+          # The handle's local -X axis always points away from the door panel.
+          - position: [-0.30, 0.0, 0.0]
+            orientation: [0.70710678, 0.0, 0.0, 0.70710678]
+            reference: object_world
+          - position: [0.0, 0.0, 0.0]
+            reference: object_world
+        eef:
+          close: true
+        post_move:
+          # Arc move: rotate gripper until hinge_joint_1 reaches 0 (closed)
+          - arc:
+              pivot: hinge_joint_1
+              axis: [0, 0, 1]
+              angle: 0
+              absolute: true
+            reference: world
+
+task_operators:
+  arm:
+    initial_state:
+      eef_pose:
+        position: [-0.7324714064598083, 0.16528670489788055, 0.5574991106987]
+        orientation: [0.70683769, 0.01941596, 0.01940928, 0.70684282]

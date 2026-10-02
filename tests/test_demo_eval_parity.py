@@ -15,12 +15,12 @@ from typing import Any, List, Tuple
 
 import numpy as np
 import pytest
-from hydra import compose, initialize_config_dir
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from auto_atom.config_loader import compose_task_config
 from auto_atom.policy_eval import ConfigDrivenDemoPolicy, PolicyEvaluator
 from auto_atom.runner.common import prepare_task_file
 from auto_atom.runner.policy_eval import (
@@ -32,32 +32,28 @@ from auto_atom.runtime import ComponentRegistry, TaskRunner
 
 # Configs chosen to cover:
 #   - pick_and_place: no `site`, no waypoint randomization (baseline)
-#   - open_door_airbot_play_g2p: uses `site: handle_grasp_front_site` AND has
-#     per-waypoint `randomization` on the grasp pose — covers exactly the
+#   - open_door on airbot_play_g2p: uses `site: handle_grasp_front_site` AND
+#     has per-waypoint `randomization` on the grasp pose — covers exactly the
 #     fields whose missing forwarding caused the original eval regression.
 PARITY_CASES = [
     ("pick_and_place", []),
-    ("open_door_airbot_play_g2p", []),
+    ("open_door", ["embodiment=airbot_play_g2p"]),
 ]
 
 
-def _compose_cfg(config_name: str, extra_overrides: List[str]) -> Any:
-    config_dir = ROOT / "aao_configs"
+def _compose_cfg(task: str, extra_overrides: List[str]) -> Any:
     overrides = [
         "env.batch_size=2",
         "env.viewer=null",
         "task.seed=20260508",
         *extra_overrides,
     ]
-    with initialize_config_dir(version_base=None, config_dir=str(config_dir)):
-        return compose(config_name=config_name, overrides=overrides)
+    return compose_task_config(task, overrides, config_dir=ROOT / "aao_configs")
 
 
-def _run_demo(
-    config_name: str, extra_overrides: List[str]
-) -> Tuple[List[bool], List[str]]:
+def _run_demo(task: str, extra_overrides: List[str]) -> Tuple[List[bool], List[str]]:
     ComponentRegistry.clear()
-    cfg = _compose_cfg(config_name, extra_overrides)
+    cfg = _compose_cfg(task, extra_overrides)
     task_file = prepare_task_file(cfg)
     runner = TaskRunner().from_config(task_file)
     try:
@@ -76,11 +72,9 @@ def _run_demo(
         ComponentRegistry.clear()
 
 
-def _run_eval(
-    config_name: str, extra_overrides: List[str]
-) -> Tuple[List[bool], List[str]]:
+def _run_eval(task: str, extra_overrides: List[str]) -> Tuple[List[bool], List[str]]:
     ComponentRegistry.clear()
-    cfg = _compose_cfg(config_name, extra_overrides)
+    cfg = _compose_cfg(task, extra_overrides)
     task_file = prepare_task_file(cfg)
     policy = ConfigDrivenDemoPolicy()
     evaluator = PolicyEvaluator(
@@ -104,16 +98,16 @@ def _run_eval(
         ComponentRegistry.clear()
 
 
-@pytest.mark.parametrize("config_name,extra_overrides", PARITY_CASES)
-def test_demo_eval_parity(config_name: str, extra_overrides: List[str]) -> None:
-    demo_success, demo_records = _run_demo(config_name, extra_overrides)
-    eval_success, eval_records = _run_eval(config_name, extra_overrides)
+@pytest.mark.parametrize("task,extra_overrides", PARITY_CASES)
+def test_demo_eval_parity(task: str, extra_overrides: List[str]) -> None:
+    demo_success, demo_records = _run_demo(task, extra_overrides)
+    eval_success, eval_records = _run_eval(task, extra_overrides)
+    case = " ".join([f"task={task}", *extra_overrides])
     assert demo_success == eval_success, (
-        f"per-env success differs for {config_name}: "
-        f"demo={demo_success} eval={eval_success}"
+        f"per-env success differs for {case}: demo={demo_success} eval={eval_success}"
     )
     assert demo_records == eval_records, (
-        f"stage record statuses differ for {config_name}: "
+        f"stage record statuses differ for {case}: "
         f"demo={demo_records} eval={eval_records}"
     )
 
@@ -121,4 +115,4 @@ def test_demo_eval_parity(config_name: str, extra_overrides: List[str]) -> None:
 if __name__ == "__main__":
     for case in PARITY_CASES:
         test_demo_eval_parity(*case)
-        print(f"OK: {case[0]}")
+        print(f"OK: {' '.join([f'task={case[0]}', *case[1]])}")

@@ -1,0 +1,185 @@
+# @package _global_
+#
+# Open a UniDoor-assembled door with a fixed-base P7: grasp the handle, pull it
+# past the latch, then push the door open. Select door / handle components with
+# `door_id=` and `handle_id=` (see scene/open_door_unidoor.yaml).
+defaults:
+  - override /scene: open_door_unidoor
+  - override /embodiment: p7_v3_umi_v3
+  - _self_
+
+task_name: open_door_unidoor_p7_v3_umi_v3
+
+env:
+  # All operator-owned home joints are declared under
+  # task_operators.arm.initial_state below.  Clear the embodiment's joint map
+  # so this task has one source of truth for the arm home configuration.
+  initial_joint_positions: null
+  # Door-facing view authored by the scene for fixed-base arms.
+  cameras:
+    env1: null
+    env0: null
+    env2:
+      name: env2_cam
+      is_static: true
+  sim_freq: 1000
+  update_freq: 100
+  mask_objects: [door__door_handle]
+  # Heat-map focus for the manipulated mask object; task.stages below is the
+  # authoritative PICK -> PULL -> PUSH workflow.
+  operations: [push]
+  pre_step_callbacks:
+    - _target_: auto_atom.callbacks.door_latch.DoorLatchCallback
+      config:
+        _target_: auto_atom.callbacks.door_latch.DoorLatchConfig
+        lock_constraint: door__door_latch_lock
+        door_joint: door__door_hinge
+        handle_joint: door__handle_hinge
+        handle_direction: 1
+        unlock_travel: 0.12
+        relock_travel: 0.08
+        relock_zone: 0.02
+  viewer:
+    lookat: [ 1.25, 0.15, -0.2 ]
+    distance: 1.8
+    azimuth: 30
+    elevation: -15
+    step_delay: 0.005
+    hold_seconds: 0.5
+
+task:
+  # randomization:
+  #   arm:
+  #     base:
+  #       # Small independent perturbations around the handle-anchored base pose.
+  #       # Translation is in metres; rotation is in RPY radians.
+  #       # Axis-level references override this fallback when present.
+  #       reference: relative
+  #       x: [-0.01, 0.01]
+  #       y: [-0.01, 0.01]
+  #       # Randomize ±5 mm around the housework_mode_2 initial base height.
+  #       z: [-0.005, 0.005]
+  #       roll: [-0.02, 0.02]
+  #       pitch: [-0.02, 0.02]
+  #       yaw: [-0.03, 0.03]
+  stages:
+    - name: pick_handle
+      object: door__door_handle
+      site: door__handle_grasp_center
+      operation: pick
+      operator: arm
+      param:
+        pre_move:
+          # With the collision-free base placement, a 14 cm retreat leaves the
+          # first Cartesian waypoint at the edge of the P7's reachable set.
+          # Keep a 10 cm approach retreat so the initial waypoint has a stable
+          # IK solution before advancing through the grasp centre.
+          - position: [-0.10, 0.0, 0.0]
+            reference: object_world
+            orientation: [0.68997457, 0.19902274, -0.20541703, 0.66492774]
+            max_linear_step: 0.04
+            max_angular_step: 0.25
+          # Advance 2 cm through the catalog grasp centre.  This is the
+          # deepest tested offset that still establishes two-finger contact;
+          # 2.5 cm loses the left finger on D001/H003.
+          - position: [0.02, 0.0, 0.0]
+            reference: object_world
+            orientation: [0.68997457, 0.19902274, -0.20541703, 0.66492774]
+            max_linear_step: 0.04
+            max_angular_step: 0.2
+            tolerance:
+              # Catalog-wide controller residuals normally settle below
+              # 3.5 mm.  Keep this stricter than the 8 mm operator default,
+              # then let PICK's target-specific grasp check decide success.
+              position: 0.004
+
+    - name: pull_handle
+      object: door__door_handle
+      operation: pull
+      operator: arm
+      param:
+        # PULL intrinsically verifies the Stage target grasp before rotation and
+        # checks that the same target remains grasped after the effect trajectory.
+        post_move:
+          - arc:
+              pivot: door__handle_hinge
+              axis: [1, 0, 0]
+              # The UniDoor latch releases at 0.12 rad.  Keep a small margin
+              # without asking the P7 to follow the unreachable 0.45-rad arc.
+              angle: 0.15
+              absolute: true
+              max_step: 0.03
+            reference: world
+
+    - name: push_open
+      object: door__door_handle
+      operation: push
+      operator: arm
+      param:
+        # PULL has already rotated the handle and verified the retained grasp.
+        # PUSH has no EEF boundary; pre_move is the door-opening trajectory.
+        pre_move:
+          - arc:
+              pivot: door__door_hinge
+              axis: [0, 0, -1]
+              arc_length: 0.16
+              # absolute: true
+              max_step: 0.01
+            reference: world
+
+task_operators:
+  arm:
+    initial_state:
+      # Gripper control remains separate from the arm's raw joint home.
+      eef: 0.0
+      base_pose:
+        # Keep the horizontal placement relative to the selected handle while
+        # matching Praxis housework_mode_2's installation height and
+        # straight-ahead mounting orientation.
+        position:
+          x: 0.2474
+          # Move the Praxis home posture outward along the door normal so the
+          # UMI gripper starts on the handle side without intersecting the panel.
+          y: -0.56
+          z:
+            # AAO floor is z=-1.0; housework_mode_2 base is
+            # 0.980763327839126 m above it.
+            value: -0.019236672160874
+            reference: world
+          reference: door__handle_grasp_center
+        orientation:
+          # Housework mode physical mounting pitch is 0 deg. Since the P7
+          # source model grows along local +Z, AAO uses the equivalent +90 deg
+          # source-model pitch in world RPY.
+          roll: 0.0
+          pitch: 1.5707963267948966
+          yaw: 0.0
+      eef_pose:
+        # Start the TCP at the approach waypoint and point the gripper through
+        # the door panel normal.  The handle frame's local -Y is world -X for
+        # this right-hinge placement, so this is 10 cm in front of the handle
+        # on the robot side.  Identity world orientation makes UMI +X point
+        # along world +X, perpendicular to the door plane.
+        reference: world
+        position:
+          x: 0.0
+          y: -0.10
+          z: 0.0
+          reference: door__handle_grasp_center
+        orientation:
+          reference: world
+          roll: 0.0
+          pitch: 0.0
+          yaw: 0.0
+    control:
+      cartesian_max_linear_step: 0.025
+      cartesian_max_angular_step: 0.3
+      tolerance:
+        position: 0.008
+        orientation: 0.10
+        # The UMI v3 closing span is only 0.0165.  A 0.012 tolerance allowed
+        # close to finish before either finger made contact.
+        eef: 0.002
+    max_joint_delta: 0.35
+    ik:
+      joint_control_mode: per_step_ik

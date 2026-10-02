@@ -1,0 +1,12 @@
+# @package _global_
+env:
+  viewer:
+    lookat: [0.45, 0.0, 0.08]
+    distance: 0.8
+    azimuth: 135
+    elevation: -28
+  gaussian_render:
+    body_gaussians:
+      button_blue_gs: ${gs_dir}/button_blue.ply
+      button_green_gs: ${gs_dir}/button_green.ply
+      button_pink_gs: ${gs_dir}/button_pink.ply

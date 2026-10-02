@@ -1,0 +1,39 @@
+# @package _global_
+#
+# Shared P7 7-DoF arm binding. Options add the gripper, its MJCF and the
+# analytical IK solver variant.
+defaults:
+  - _fixed_arm
+  - _self_
+
+# Top-down approach orientation (xyzw) of the eef_pose site in world frame.
+eef_top_down_orientation: [0.70710678, 0.0, -0.70710678, 0.0]
+
+env:
+  # Forward-reach home pose for the 7 P7 hinges: lands the TCP near typical
+  # tabletop / door grasp targets and away from singularities.
+  initial_joint_positions:
+    joint1:  0.0016582
+    joint2: -0.305293
+    joint3: -0.00983217
+    joint4:  0.166931
+    joint5:  1.59943
+    joint6: -0.107997
+    joint7: -0.00103546
+  operators:
+    arm:
+      arm_actuators:
+        - joint1
+        - joint2
+        - joint3
+        - joint4
+        - joint5
+        - joint6
+        - joint7
+      eef_actuators: [eef_claw_joint]
+      eef_output_name: gripper
+      pose_site: eef_pose
+      root_body: p7_mount
+      ik_params:
+        flange_site_name: tool_site
+        tcp_site_name: eef_pose

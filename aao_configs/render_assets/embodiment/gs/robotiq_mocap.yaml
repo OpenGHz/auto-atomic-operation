@@ -1,0 +1,14 @@
+# @package env.gaussian_render
+#
+# Robotiq 2F-85 per-body GS assets.
+body_gaussians:
+  robotiq_interface: ${assets_dir}/gs/robots/robotiq/base.ply
+  robotiq_base: ${assets_dir}/gs/robots/robotiq/robotiq_base.ply
+  left_driver: ${assets_dir}/gs/robots/robotiq/left_driver.ply
+  left_coupler: ${assets_dir}/gs/robots/robotiq/left_coupler.ply
+  left_spring_link: ${assets_dir}/gs/robots/robotiq/left_spring_link.ply
+  left_follower: ${assets_dir}/gs/robots/robotiq/left_follower.ply
+  right_driver: ${assets_dir}/gs/robots/robotiq/right_driver.ply
+  right_coupler: ${assets_dir}/gs/robots/robotiq/right_coupler.ply
+  right_spring_link: ${assets_dir}/gs/robots/robotiq/right_spring_link.ply
+  right_follower: ${assets_dir}/gs/robots/robotiq/right_follower.ply

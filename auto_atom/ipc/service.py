@@ -126,13 +126,11 @@ def create_service(
 
         def exposed_from_config(
             self,
-            config_name: str,
+            task: str,
             overrides: Optional[List[str]] = None,
             sim_loop_frequency: float = 0.0,
         ) -> None:
-            task_file = load_task_file_hydra(
-                config_name, overrides=list(overrides or [])
-            )
+            task_file = load_task_file_hydra(task, overrides=list(overrides or []))
             self._evaluator = PolicyEvaluator(
                 action_applier=_action_applier,
                 observation_getter=_observation_getter,

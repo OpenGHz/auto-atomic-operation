@@ -1,20 +1,23 @@
-"""Console entry point that introspects the task configs in ``aao_configs/``.
+"""Console entry point that introspects the tasks in ``aao_configs/``.
 
-Unlike a flat directory listing, this only reports *runnable task* configs.
-A config is treated as a task when, after Hydra composition (so ``defaults``
-and mixins are merged in), it exposes a non-empty ``task.stages`` list. This
-paradigm naturally excludes building-block configs — bases, robot/eef
-definitions, mixins, and plain variable files — which never declare stages.
+Runnable tasks are the options of the ``task`` config group
+(``aao_configs/task/*.yaml``; ``_``-prefixed fragments are skipped). Each task
+is reported once for its default embodiment and once more for every
+embodiment it has a dedicated adaptation for
+(``aao_configs/adapt/<task>/<embodiment>.yaml``) — the validated
+task x embodiment combinations. A variant is kept when, after Hydra
+composition, it exposes a non-empty ``task.stages`` list.
 
-For each task it reports the task name, the objects it manipulates, the
-operations it performs, and a workflow generated from the ordered stages.
+For each variant it reports the Hydra overrides that select it, the objects it
+manipulates, the operations it performs, and a workflow generated from the
+ordered stages.
 
 Usage::
 
-    aao-info                 # list every runnable task
-    aao-info pick_and_place  # only the named config(s)
+    aao-info                 # list every runnable task variant
+    aao-info pick_and_place  # only the named task(s)
     aao-info --json          # machine-readable output
-    aao-info --verbose       # also report configs skipped as non-tasks
+    aao-info --verbose       # also report variants skipped as non-tasks
 """
 
 from __future__ import annotations
@@ -29,6 +32,9 @@ from hydra import compose, initialize_config_dir
 from hydra.core.global_hydra import GlobalHydra
 from omegaconf import OmegaConf
 from pydantic import BaseModel
+
+from auto_atom.config_loader import PRIMARY_CONFIG_NAME, task_overrides
+from auto_atom.execution_config import prepare_task_config_for_instantiation
 
 from .common import get_config_dir
 
@@ -89,12 +95,19 @@ class OperatorInfo(BaseModel):
 
 
 class TaskInfo(BaseModel):
-    """Introspected metadata for a single runnable task config."""
+    """Introspected metadata for one runnable task x embodiment variant."""
 
-    config_name: str
-    """The config file stem (what you pass to ``--config-name``)."""
+    task: str
+    """The ``task`` config group option (what you pass as ``task=``)."""
+    embodiment: str = ""
+    """The ``embodiment`` config group option this variant was composed with."""
+    default_embodiment: bool = True
+    """Whether ``embodiment`` is the task's own default (no override needed)."""
     scene_name: str = ""
     """The scene the task runs in (``scene_name`` in the composed config)."""
+    renders: List[str] = []
+    """``render`` options with assets for this scene (``render_assets/scene/<render>``);
+    native ``mujoco`` rendering is always available for simulated tasks."""
     operators: List[OperatorInfo] = []
     """Operating subjects — the operator(s) that perform the stages, each with
     its robot model when known."""
@@ -149,6 +162,19 @@ class TaskInfo(BaseModel):
         """Ordered, human-readable description of the task flow."""
         return [stage.describe() for stage in self.stages]
 
+    @property
+    def overrides(self) -> List[str]:
+        """Hydra overrides selecting this variant, e.g. for ``aao-demo``."""
+        selected = [f"task={self.task}"]
+        if self.embodiment and not self.default_embodiment:
+            selected.append(f"embodiment={self.embodiment}")
+        return selected
+
+    @property
+    def label(self) -> str:
+        """Short display / sort key: the task plus any non-default embodiment."""
+        return " ".join(self.overrides).replace("task=", "", 1)
+
 
 def _unique_preserving_order(values: List[str]) -> List[str]:
     seen: set[str] = set()
@@ -184,29 +210,63 @@ def _clear_progress() -> None:
     sys.stderr.flush()
 
 
-def discover_config_names(config_dir: Path) -> List[str]:
-    """Return the stems of every top-level ``*.yaml`` in ``config_dir``.
-
-    Subdirectories (e.g. ``env/``, ``test/``) are intentionally excluded — they
-    hold config groups and scratch configs, not runnable tasks.
-    """
-    return sorted(p.stem for p in config_dir.glob("*.yaml"))
+def _option_stems(directory: Path) -> List[str]:
+    """Selectable config options in ``directory`` (``_`` fragments skipped)."""
+    return sorted(
+        p.stem for p in directory.glob("*.yaml") if not p.name.startswith("_")
+    )
 
 
-def load_task_info(config_name: str) -> Optional[TaskInfo]:
-    """Compose ``config_name`` and return its :class:`TaskInfo`.
+def discover_task_names(config_dir: Path) -> List[str]:
+    """Return every option of the ``task`` config group."""
+    return _option_stems(config_dir / "task")
 
-    Returns ``None`` when the config composes but declares no stages (i.e. it
-    is a building-block config, not a task). Raises on composition errors so
+
+def discover_adapted_embodiments(config_dir: Path, task: str) -> List[str]:
+    """Embodiments with a dedicated ``adapt/<task>/<embodiment>.yaml``."""
+    return _option_stems(config_dir / "adapt" / task)
+
+
+def _scene_renders(config_dir: Optional[Path], scene_name: str) -> List[str]:
+    if not scene_name:
+        return []
+    renders = ["mujoco"]
+    if config_dir is not None:
+        assets = config_dir / "render_assets" / "scene"
+        renders += sorted(p.parent.name for p in assets.glob(f"*/{scene_name}.yaml"))
+    return renders
+
+
+def load_task_info(
+    task: str,
+    embodiment: Optional[str] = None,
+    config_dir: Optional[Path] = None,
+) -> Optional[TaskInfo]:
+    """Compose ``task`` (optionally on ``embodiment``) and return its info.
+
+    Must run inside an initialized Hydra config-dir context. Returns ``None``
+    when the composition declares no stages. Raises on composition errors so
     the caller can decide whether to report or swallow them.
     """
-    cfg = compose(config_name=config_name)
-    data = OmegaConf.to_container(cfg, resolve=False)
+    overrides = [f"embodiment={embodiment}"] if embodiment else []
+    cfg = compose(
+        config_name=PRIMARY_CONFIG_NAME,
+        overrides=task_overrides(task, overrides),
+        return_hydra_config=True,
+    )
+    choices = OmegaConf.to_container(cfg.hydra.runtime.choices)
+    OmegaConf.set_struct(cfg, False)
+    del cfg["hydra"]
+    prepared = prepare_task_config_for_instantiation(cfg)
+    try:
+        data = OmegaConf.to_container(prepared, resolve=True)
+    except Exception:  # noqa: BLE001 — e.g. unset env vars; names stay readable
+        data = OmegaConf.to_container(prepared, resolve=False)
     if not isinstance(data, dict):
         return None
 
-    task = data.get("task") or {}
-    raw_stages = task.get("stages") if isinstance(task, dict) else None
+    task_cfg = data.get("task") or {}
+    raw_stages = task_cfg.get("stages") if isinstance(task_cfg, dict) else None
     if not raw_stages:
         return None
 
@@ -250,9 +310,13 @@ def load_task_info(config_name: str) -> Optional[TaskInfo]:
     sole_model = robots[0] if len(robots) == 1 else ""
     operators = [OperatorInfo(name=n, model=sole_model) for n in operator_names]
 
+    selected_embodiment = str(choices.get("embodiment") or "")
     return TaskInfo(
-        config_name=config_name,
+        task=task,
+        embodiment=selected_embodiment,
+        default_embodiment=embodiment is None,
         scene_name=str(data.get("scene_name", "") or ""),
+        renders=_scene_renders(config_dir, str(data.get("scene_name", "") or "")),
         operators=operators,
         robots=robots,
         declared_objects=_as_str_list(env.get("mask_objects")),
@@ -270,25 +334,31 @@ def collect_task_infos(
     verbose: bool = False,
     progress: Optional[bool] = None,
 ) -> List[TaskInfo]:
-    """Compose the matching configs and keep the ones that are tasks.
+    """Compose every matching task variant and keep the ones with stages.
 
     ``name_patterns`` is a list of ``fnmatch`` globs (e.g. ``open_door*``)
-    matched against the discovered top-level config stems; when omitted, every
-    top-level config is considered. An exact name is just a glob that matches
-    itself, so composition happens only for configs that match. Composition
-    runs under a single Hydra context.
+    matched against the ``task`` group options; when omitted, every task is
+    considered. An exact name is just a glob that matches itself, so
+    composition happens only for tasks that match. Each task is composed on
+    its default embodiment and on every embodiment it has an adaptation for.
+    Composition runs under a single Hydra context.
 
     ``progress`` shows a transient ``[i/total]`` line on stderr while composing
     (composition is the slow part). ``None`` (default) auto-enables it only when
     stderr is a TTY, so piped/redirected output stays clean.
     """
-    candidates = discover_config_names(config_dir)
+    tasks = discover_task_names(config_dir)
     if name_patterns:
-        candidates = [
+        tasks = [
             name
-            for name in candidates
+            for name in tasks
             if any(fnmatch(name, pattern) for pattern in name_patterns)
         ]
+    candidates: List[tuple[str, Optional[str]]] = [
+        (task, embodiment)
+        for task in tasks
+        for embodiment in [None, *discover_adapted_embodiments(config_dir, task)]
+    ]
     infos: List[TaskInfo] = []
 
     if progress is None:
@@ -298,11 +368,12 @@ def collect_task_infos(
     # A single Hydra init serves every compose() call in the loop.
     GlobalHydra.instance().clear()
     with initialize_config_dir(config_dir=str(config_dir), version_base=None):
-        for i, name in enumerate(candidates, start=1):
+        for i, (task, embodiment) in enumerate(candidates, start=1):
+            name = task if embodiment is None else f"{task} embodiment={embodiment}"
             if progress:
                 _write_progress(i, total, name)
             try:
-                info = load_task_info(name)
+                info = load_task_info(task, embodiment, config_dir)
             except Exception as exc:  # noqa: BLE001 — report, never abort the sweep
                 if verbose:
                     if progress:
@@ -321,12 +392,17 @@ def collect_task_infos(
                         file=sys.stderr,
                     )
                 continue
+            if not info.default_embodiment and any(
+                other.task == task and other.embodiment == info.embodiment
+                for other in infos
+            ):
+                continue  # the adaptation targets the task's own default
             infos.append(info)
 
     if progress:
         _clear_progress()
 
-    infos.sort(key=lambda t: t.config_name)
+    infos.sort(key=lambda t: (t.task, not t.default_embodiment, t.embodiment))
     return infos
 
 
@@ -347,8 +423,8 @@ def filter_task_infos(
     - ``objects``: keep a task that references an object containing at least
       one listed substring (case-insensitive).
     - ``scenes``: keep a task whose ``scene_name`` matches at least one glob.
-    - ``robots``: keep a task whose robot model contains at least one listed
-      substring (case-insensitive) — the operating subject's model.
+    - ``robots``: keep a task whose embodiment name or robot model contains at
+      least one listed substring (case-insensitive).
     """
 
     def keep(info: TaskInfo) -> bool:
@@ -366,7 +442,7 @@ def filter_task_infos(
                 return False
         if robots:
             needles = [r.lower() for r in robots]
-            haystack = [r.lower() for r in info.robots]
+            haystack = [r.lower() for r in [info.embodiment, *info.robots] if r]
             if not any(needle in robot for needle in needles for robot in haystack):
                 return False
         return True
@@ -379,12 +455,18 @@ def render_text(infos: List[TaskInfo]) -> str:
     if not infos:
         return "No runnable task configs found."
 
-    lines: List[str] = [f"Runnable tasks ({len(infos)}):", ""]
+    lines: List[str] = [f"Runnable task variants ({len(infos)}):", ""]
     for info in infos:
-        header = info.config_name
-        if info.scene_name and info.scene_name != info.config_name:
+        header = info.label
+        if info.scene_name and info.scene_name != info.task:
             header += f"  (scene: {info.scene_name})"
         lines.append(header)
+        lines.append(f"  run:        aao-demo {' '.join(info.overrides)}")
+        if info.embodiment:
+            suffix = " (default)" if info.default_embodiment else ""
+            lines.append(f"  embodiment: {info.embodiment}{suffix}")
+        if len(info.renders) > 1:
+            lines.append(f"  render:     {' | '.join(info.renders)}")
         if info.operators:
             actors = ", ".join(
                 f"{op.name} ({op.model})" if op.model else op.name
@@ -423,6 +505,7 @@ def render_json(infos: List[TaskInfo]) -> str:
     payload = []
     for info in infos:
         entry = info.model_dump()
+        entry["overrides"] = info.overrides
         entry["objects"] = info.objects
         entry["operations"] = info.operations
         entry["workflow"] = info.workflow
@@ -433,7 +516,8 @@ def render_json(infos: List[TaskInfo]) -> str:
 # Vocabulary fields, in display order. Each maps to the sorted set of values
 # seen across the tasks — a controlled vocabulary for keyword-driven retrieval.
 _VOCAB_LABELS = {
-    "configs": "configs",
+    "tasks": "tasks",
+    "embodiments": "embodiments",
     "scenes": "scenes",
     "operators": "operators",
     "robots": "robots",
@@ -453,7 +537,9 @@ def build_vocabulary(infos: List[TaskInfo]) -> "dict[str, List[str]]":
     """
     buckets: "dict[str, set[str]]" = {key: set() for key in _VOCAB_LABELS}
     for info in infos:
-        buckets["configs"].add(info.config_name)
+        buckets["tasks"].add(info.task)
+        if info.embodiment:
+            buckets["embodiments"].add(info.embodiment)
         if info.scene_name:
             buckets["scenes"].add(info.scene_name)
         buckets["operators"].update(op.name for op in info.operators)
@@ -475,7 +561,7 @@ def render_vocab_text(vocab: "dict[str, List[str]]") -> str:
     """Render the aggregated vocabulary as a readable, wrapped glossary."""
     import textwrap
 
-    n_tasks = len(vocab.get("configs", []))
+    n_tasks = len(vocab.get("tasks", []))
     if n_tasks == 0:
         return "No runnable task configs found."
 
@@ -522,14 +608,14 @@ def _flatten_csv(values: Optional[List[str]]) -> List[str]:
 def main(argv: Optional[List[str]] = None) -> None:
     parser = argparse.ArgumentParser(
         prog="aao-info",
-        description="Introspect and filter runnable task configs in aao_configs/.",
+        description="Introspect and filter runnable tasks in aao_configs/task/.",
     )
     parser.add_argument(
         "patterns",
         nargs="*",
         metavar="PATTERN",
         help=(
-            "Glob pattern(s) matched against config names, e.g. 'open_door*' "
+            "Glob pattern(s) matched against task names, e.g. 'open_door*' "
             "(an exact name matches itself); default: all runnable tasks."
         ),
     )
@@ -565,7 +651,7 @@ def main(argv: Optional[List[str]] = None) -> None:
         action="append",
         default=[],
         metavar="MODEL",
-        help="Keep tasks whose robot model contains this substring "
+        help="Keep tasks whose embodiment or robot model contains this substring "
         "(repeatable / comma-separated).",
     )
     parser.add_argument(

@@ -1,0 +1,19 @@
+# @package _global_
+defaults:
+  - /adapt/_press_button/p7_g2p
+  - _self_
+
+press_label: blue_button
+
+env:
+  viewer:
+    lookat: [0.45, 0.02, 0.1]
+
+task:
+  randomization:
+    entities:
+      button_blue:
+        x: [0.40, 0.48]
+        y: [-0.02, 0.06]
+        reference: absolute_world
+        collision_radius: 0.05

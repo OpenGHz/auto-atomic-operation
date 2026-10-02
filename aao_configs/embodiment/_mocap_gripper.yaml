@@ -1,0 +1,30 @@
+# @package _global_
+#
+# Shared shape of a free-floating gripper driven through a mocap weld.
+# Scene XMLs stay robot-less; each option injects its gripper MJCF as the
+# `robot` scene layer.
+
+env:
+  operators:
+    arm:
+      arm_actuators: []
+      eef_output_name: gripper
+      pose_site: eef_pose
+      imu_acc: imu_acc
+      imu_gyro: imu_gyro
+      imu_quat: imu_quat
+      pose_sensor_pos: global_gripper_pos
+      pose_sensor_quat: global_gripper_quat
+
+task:
+  randomization:
+    entities:
+      arm:
+        eef:
+          x: [-0.3, 0.35]
+          y: [-0.32, 0.10]
+          z: [-0.0, 0.2]
+          collision_radius: 0.15
+
+task_operators:
+  arm: {}

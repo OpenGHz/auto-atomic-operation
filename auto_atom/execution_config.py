@@ -5,11 +5,15 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from omegaconf import DictConfig, OmegaConf
+from omegaconf import DictConfig, ListConfig, OmegaConf
 
 
 def prepare_task_config_for_instantiation(cfg: DictConfig) -> DictConfig:
     """Return an isolated config tree ready for Hydra instantiation.
+
+    Keyed ``env.cameras`` / ``env.scene.layers`` collections are first
+    flattened into the ordered lists the environment expects (see
+    :func:`normalize_env_collections`).
 
     ``object_only`` is resolved before Hydra constructs the environment so
     operator-owned MJCF layers and cameras never enter the simulation model.
@@ -18,6 +22,7 @@ def prepare_task_config_for_instantiation(cfg: DictConfig) -> DictConfig:
     """
 
     prepared = OmegaConf.create(OmegaConf.to_container(cfg, resolve=False))
+    normalize_env_collections(prepared)
     if (
         OmegaConf.select(prepared, "execution.mode", default="physical")
         != "object_only"
@@ -110,6 +115,66 @@ def prepare_task_config_for_instantiation(cfg: DictConfig) -> DictConfig:
         removed_camera_names,
     )
     return prepared
+
+
+def normalize_env_collections(cfg: DictConfig) -> None:
+    """Flatten keyed environment collections in place.
+
+    Config groups declare ``env.scene.layers`` and ``env.cameras`` as mappings
+    keyed by a slot name so a later config can replace one entry, or remove it
+    with ``null``, without restating the whole list. Both become lists in slot
+    insertion order with ``null`` slots dropped; list values pass through.
+
+    Every camera then inherits ``env.camera_defaults`` (resolution and
+    modalities) underneath its own fields, and cameras whose role is not in
+    ``env.camera_roles`` are dropped. Both helper keys are consumed here.
+    """
+
+    env = cfg.get("env")
+    if not isinstance(env, DictConfig):
+        return
+
+    scene = env.get("scene")
+    if isinstance(scene, DictConfig) and "layers" in scene:
+        scene.layers = _slots_to_list(scene.layers)
+
+    camera_defaults = env.pop("camera_defaults", None)
+    camera_roles = env.pop("camera_roles", None)
+    if "cameras" not in env:
+        return
+    cameras = _slots_to_list(env.cameras)
+    if cameras is None:
+        return
+    defaults = (
+        OmegaConf.to_container(camera_defaults, resolve=True)
+        if isinstance(camera_defaults, DictConfig)
+        else {}
+    )
+    roles = (
+        set(OmegaConf.to_container(camera_roles, resolve=True))
+        if isinstance(camera_roles, ListConfig)
+        else None
+    )
+    retained = []
+    for camera in cameras:
+        if roles is not None and _camera_role(camera) not in roles:
+            continue
+        retained.append(OmegaConf.merge(defaults, camera) if defaults else camera)
+    env.cameras = retained
+
+
+def _slots_to_list(value: Any) -> Any:
+    if isinstance(value, DictConfig):
+        return [item for item in value.values() if item is not None]
+    if isinstance(value, ListConfig):
+        return [item for item in value if item is not None]
+    return value
+
+
+def _camera_role(camera: Any) -> str:
+    if _is_operator_camera(camera):
+        return "operator"
+    return str(_mapping_value(camera, "role", None) or "scene")
 
 
 def _mapping_value(value: Any, key: str, default: Any) -> Any:

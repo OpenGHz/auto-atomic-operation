@@ -10,8 +10,8 @@ from pathlib import Path
 import mujoco
 import numpy as np
 import pytest
-from omegaconf import OmegaConf
 
+from auto_atom.config_loader import compose_task_config
 from auto_atom.scene_composition import (
     MjcfLayerConfig,
     SceneConfig,
@@ -25,7 +25,7 @@ _SCENE_FILE = "demo.xml"
 _COLLISION_ROOT = _ROOT / "assets/collision/dishwasher_plate"
 _ROBOT_XML = _ROOT / "assets/xmls/robots/robotiq.xml"
 _XF9600_XML = _ROOT / "assets/xmls/robots/xf9600_mocap.xml"
-_TASK_CONFIG = _ROOT / "aao_configs/dishwasher_plate.yaml"
+_CONFIG_DIR = _ROOT / "aao_configs"
 
 _ASSET_DIGESTS = {
     "assets/meshes/dishwasher_plate/dishwasher031/Body001.obj": (
@@ -379,7 +379,7 @@ def test_source_table_exposes_the_configured_plate_rim_grasp() -> None:
     plate_bottom = data.geom_xpos[plate, 2] - model.geom_size[plate, 1]
     assert table_top == pytest.approx(plate_bottom, abs=1.0e-12)
 
-    task = OmegaConf.load(_TASK_CONFIG)
+    task = compose_task_config("dishwasher_plate", config_dir=_CONFIG_DIR)
     np.testing.assert_allclose(
         task.env.initial_joint_positions.xf9600_freejoint,
         [-0.665, -0.360, 0.223671074, 0.0, 0.0, -0.70710678, 0.70710678],

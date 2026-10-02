@@ -1,0 +1,2 @@
+# Keep static scene cameras and object-mounted cameras; drop wrist cameras.
+roles: [scene, object]

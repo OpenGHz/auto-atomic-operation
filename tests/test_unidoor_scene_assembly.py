@@ -9,9 +9,10 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from hydra import compose, initialize_config_dir
 from omegaconf import OmegaConf, open_dict
 
+from auto_atom.config_loader import compose_task_config
+from auto_atom.execution_config import prepare_task_config_for_instantiation
 from auto_atom.runner.common import prepare_task_file
 from auto_atom.runtime import TaskRunner
 from auto_atom.scene_composition import (
@@ -946,10 +947,11 @@ def test_demo_places_handle_and_robot_on_the_same_door_side() -> None:
     ).is_file():
         pytest.skip("local UniDoor catalog is unavailable")
 
-    with initialize_config_dir(version_base=None, config_dir=str(config_dir)):
-        config = compose(config_name="open_door_unidoor_p7_v3_umi_v3")
+    config = compose_task_config("open_door_unidoor", config_dir=config_dir)
     scene = SceneConfig.model_validate(
-        OmegaConf.to_container(config.env.scene, resolve=True)
+        OmegaConf.to_container(
+            prepare_task_config_for_instantiation(config).env.scene, resolve=True
+        )
     )
     model = load_composed_scene(scene)
     data = mujoco.MjData(model)
@@ -997,10 +999,11 @@ def test_demo_compiles_praxis_metric_normalization() -> None:
     host = root / "assets" / "xmls" / "scenes" / "open_door_unidoor" / "demo.xml"
     if not package.is_file() or not catalog.is_file() or not host.is_file():
         pytest.skip("local UniDoor scene assets are unavailable")
-    with initialize_config_dir(version_base=None, config_dir=str(root / "aao_configs")):
-        config = compose(config_name="open_door_unidoor_p7_v3_umi_v3")
+    config = compose_task_config("open_door_unidoor", config_dir=root / "aao_configs")
     scene = SceneConfig.model_validate(
-        OmegaConf.to_container(config.env.scene, resolve=True)
+        OmegaConf.to_container(
+            prepare_task_config_for_instantiation(config).env.scene, resolve=True
+        )
     )
     artifact = compile_scene(scene)
     xml = ET.fromstring(artifact.xml)
@@ -1047,8 +1050,7 @@ def test_demo_compiles_praxis_metric_normalization() -> None:
 
 def test_demo_final_approach_targets_the_explicit_grasp_site() -> None:
     root = Path(__file__).resolve().parents[1]
-    with initialize_config_dir(version_base=None, config_dir=str(root / "aao_configs")):
-        config = compose(config_name="open_door_unidoor_p7_v3_umi_v3")
+    config = compose_task_config("open_door_unidoor", config_dir=root / "aao_configs")
 
     pick_stage, pull_stage, push_stage = config.task.stages
     assert pick_stage.name == "pick_handle"
@@ -1119,21 +1121,18 @@ def test_operator_base_pose_can_be_anchored_to_a_named_scene_frame() -> None:
     ).is_file():
         pytest.skip("local UniDoor catalog is unavailable")
 
-    with initialize_config_dir(
-        version_base=None,
-        config_dir=str(root / "aao_configs"),
-    ):
-        config = compose(
-            config_name="open_door_unidoor_p7_v3_umi_v3",
-            overrides=[
-                "door_id=D001",
-                "handle_id=HL016",
-                "env.batch_size=1",
-                "env.cameras=[]",
-                "env.enabled_sensors=[]",
-                "env.viewer=null",
-            ],
-        )
+    config = compose_task_config(
+        "open_door_unidoor",
+        [
+            "door_id=D001",
+            "handle_id=HL016",
+            "env.batch_size=1",
+            "~env.cameras",
+            "env.enabled_sensors=[]",
+            "env.viewer=null",
+        ],
+        config_dir=root / "aao_configs",
+    )
     with open_dict(config):
         config.task_operators.arm.initial_state = {
             "base_pose": {
@@ -1185,19 +1184,16 @@ def test_view_scene_and_runtime_share_collision_free_unidoor_home() -> None:
     ).is_file():
         pytest.skip("local UniDoor catalog is unavailable")
 
-    with initialize_config_dir(
-        version_base=None,
-        config_dir=str(root / "aao_configs"),
-    ):
-        config = compose(
-            config_name="open_door_unidoor_p7_v3_umi_v3",
-            overrides=[
-                "env.batch_size=1",
-                "env.cameras=[]",
-                "env.enabled_sensors=[]",
-                "env.viewer=null",
-            ],
-        )
+    config = compose_task_config(
+        "open_door_unidoor",
+        [
+            "env.batch_size=1",
+            "~env.cameras",
+            "env.enabled_sensors=[]",
+            "env.viewer=null",
+        ],
+        config_dir=root / "aao_configs",
+    )
     from examples.view_scene import _load_backend
 
     viewer_backend = _load_backend(config)
@@ -1285,19 +1281,16 @@ def test_demo_grasps_before_unlatching_and_unlocks_before_opening() -> None:
     ).is_file():
         pytest.skip("local UniDoor catalog is unavailable")
 
-    with initialize_config_dir(
-        version_base=None,
-        config_dir=str(root / "aao_configs"),
-    ):
-        config = compose(
-            config_name="open_door_unidoor_p7_v3_umi_v3",
-            overrides=[
-                "env.batch_size=1",
-                "env.cameras=[]",
-                "env.enabled_sensors=[]",
-                "env.viewer=null",
-            ],
-        )
+    config = compose_task_config(
+        "open_door_unidoor",
+        [
+            "env.batch_size=1",
+            "~env.cameras",
+            "env.enabled_sensors=[]",
+            "env.viewer=null",
+        ],
+        config_dir=root / "aao_configs",
+    )
     runner = TaskRunner().from_config(prepare_task_file(config))
     try:
         backend = runner._context.backend

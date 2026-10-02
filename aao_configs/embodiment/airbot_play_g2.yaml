@@ -1,0 +1,30 @@
+# @package _global_
+#
+# Airbot Play arm + G2 gripper (no tactile sensors).
+defaults:
+  - _airbot_play
+  - _self_
+
+env:
+  enabled_sensors:
+    - camera
+    - pose
+    - joint_position
+    - joint_velocity
+    - joint_effort
+  scene:
+    layers:
+      robot:
+        kind: mjcf
+        path: ${assets_dir}/xmls/robots/airbot_play_with_g2.xml
+        role: operator
+  operators:
+    arm:
+      eef_actuators: [eef_g2_driver]
+      eef_mapper:
+        _target_: auto_atom.mappers.finger_distance.FingerDistanceMapper
+        left_pad_geom: eef_left_finger_pad
+        right_pad_geom: eef_right_finger_pad
+        actuator_name: eef_g2_driver
+      ik_params:
+        eef_type: G2

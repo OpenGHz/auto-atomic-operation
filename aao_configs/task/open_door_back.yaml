@@ -1,0 +1,31 @@
+# @package _global_
+#
+# Back-side variant of open_door.
+#
+# Instead of mirroring the robot/cameras to the opposite side of the
+# doorway, keep the robot layout unchanged and rotate the whole door-frame
+# assembly by 180° about the door centre's vertical axis. This makes the
+# back-side handle face the original robot side while preserving the
+# object-relative waypoint logic of the front-side task.
+#
+# The Airbot waypoints use `site: handle_grasp_${door_side}_site` together
+# with `reference: object` on all key waypoints, so once the doorway is
+# rotated adapt/open_door_back/<embodiment> only needs to switch `door_side`
+# to `back`.
+#
+# Door-centre world coordinates are approximately (1.54, 0.55). The
+# frame root (`door_frame_physics`) is point-symmetric in x/y about that
+# centre: (1.54, 0.10) -> (1.54, 1.00). Orientation changes from +90°
+# yaw in the XML to -90° yaw here, i.e. a 180° turn about world z
+# through the door centre.
+defaults:
+  - override /scene: open_door
+  - override /embodiment: airbot_play_g2p
+  - _self_
+
+task:
+  initial_pose:
+    # mirror the door
+    door_frame_physics:
+      position: [ 1.54, 1.0, -1 ]
+      orientation: [ 0.0, 0.0, -0.7071067811865475, 0.7071067811865476 ]

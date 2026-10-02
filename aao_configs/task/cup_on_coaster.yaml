@@ -1,0 +1,71 @@
+# @package _global_
+defaults:
+  - override /scene: cup_on_coaster
+  - override /embodiment: robotiq_mocap
+  - _self_
+
+env:
+  mask_objects: ["cup", "coaster"]
+  operations: ["pick", "place"]
+  viewer:
+    lookat: [0.04, 0.0, 0.09]
+    distance: 0.6
+    azimuth: 135
+    elevation: -28
+    step_delay: 0.03
+    hold_seconds: 1.0
+
+task:
+  randomization:
+    entities:
+      cup:
+        x: [0.2, 0.5]
+        y: [-0.32, 0.25]
+        collision_radius: 0.04
+        reference: absolute_world
+      coaster:
+        x: [0.2, 0.5]
+        y: [-0.32, 0.25]
+        collision_radius: 0.04
+        reference: absolute_world
+  stages:
+    - name: pick_cup
+      object: cup
+      operation: pick
+      operator: arm
+      param:
+        pre_move:
+          # Approach high above the cup (center z=0.085)
+          - position: [0.0, 0.0, 0.12]
+            orientation: ${eef_top_down_orientation}
+            reference: object_world
+          # Descend to grasp height (0.006 above cup center)
+          - position: [0.0, 0.0, 0.006]
+            reference: object_world
+        post_move:
+          - position: [0.0, 0.0, 0.1]
+            reference: eef_world
+        eef:
+          close: true
+    - name: place_cup
+      object: coaster
+      operation: place
+      operator: arm
+      param:
+        pre_move:
+          # Approach above coaster (center z=0.07)
+          - position: [0.0, 0.0, 0.1]
+            reference: object_world
+          # Lower so cup bottom rests on coaster top
+          # coaster top=0.08, cup center when placed=0.08+0.025=0.105
+          # offset from coaster center = 0.105 - 0.07 = 0.035
+          - position: [0.0, 0.0, 0.04]
+            reference: object_world
+        post_move:
+          - position: [0.0, 0.0, 0.18]
+            reference: object_world
+        eef:
+          close: false
+        placed_tolerance:
+          position: [null, null, null]
+          orientation: [null, null, null]

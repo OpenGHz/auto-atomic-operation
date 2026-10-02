@@ -1,0 +1,16 @@
+# Sensor streams exposed in captured observations and the defaults merged into
+# every `env.cameras` entry.
+sensors:
+  - camera
+  - pose
+  - tactile
+  - joint_position
+  - joint_velocity
+  - joint_effort
+camera:
+  width: 640
+  height: 352
+  enable_color: true
+  enable_depth: true
+  enable_mask: false
+  enable_heat_map: true

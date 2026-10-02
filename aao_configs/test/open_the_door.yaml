@@ -1,35 +1,27 @@
 # @package _global_
+#
+# Scratch override for GS benchmarks: color-only 640x480 wrist + door cameras.
+#     ... task=open_door_back render=gs +test=open_the_door
 
-cam_width: 640
-cam_height: 480
-enable_color: true
-enable_depth: false
-enable_mask: false
-enable_heat_map: false
+observation:
+  camera:
+    width: 640
+    height: 480
+    enable_color: true
+    enable_depth: false
+    enable_mask: false
+    enable_heat_map: false
 
 env:
   batch_size: 5
   warmup: true
   to_numpy: true
   structured: false
-  cameras:
-    - name: eef_wrist_cam
-      role: operator
-      width: ${cam_width}
-      height: ${cam_height}
-      enable_color: ${enable_color}
-      enable_depth: ${enable_depth}
-      enable_mask: ${enable_mask}
-      enable_heat_map: ${enable_heat_map}
-      parent_frame: eef_pose
-      is_static: false
-    - name: env2_cam
-      width: ${cam_width}
-      height: ${cam_height}
-      enable_color: ${enable_color}
-      enable_depth: ${enable_depth}
-      enable_mask: ${enable_mask}
-      enable_heat_map: ${enable_heat_map}
-      is_static: true
   enabled_sensors:
     - camera
+  cameras:
+    env1: null
+    env0: null
+    env2:
+      name: env2_cam
+      is_static: true

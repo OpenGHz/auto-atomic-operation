@@ -1,0 +1,6 @@
+# @package _global_
+defaults:
+  - _press_button
+  - _self_
+
+object_name: button_pink

@@ -1,0 +1,13 @@
+# @package _global_
+scene_name: open_door
+
+env:
+  cameras:
+    env1:
+      name: env1_cam
+      is_static: true
+    env0:
+      name: env0_cam
+      is_static: true
+    # The scene also authors `env2_cam` (door-facing view used by fixed-base
+    # arms) and `topside`.

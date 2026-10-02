@@ -14,6 +14,7 @@ from auto_atom.runtime import TaskRunner
 
 from .common import (
     ExampleLoopHooks,
+    describe_run,
     get_config_dir,
     prepare_task_file,
     print_final_summary,
@@ -24,7 +25,7 @@ from .common import (
 
 @hydra.main(
     config_path=str(get_config_dir()),
-    config_name="pick_and_place",
+    config_name="config",
     version_base=None,
 )
 def main(cfg: DictConfig) -> None:
@@ -81,7 +82,8 @@ def main(cfg: DictConfig) -> None:
             path=Path(hydra_cfg.runtime.output_dir) / "summary.json",
             init_time_sec=init_time,
             run_config={
-                "config_name": hydra_cfg.job.config_name,
+                "run_name": describe_run(hydra_cfg.runtime.choices),
+                "choices": dict(hydra_cfg.runtime.choices),
                 "batch_size": runner._context.backend.batch_size,
                 "perf_count": perf_count,
                 "print_updates": print_updates,

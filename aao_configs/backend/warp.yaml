@@ -3,22 +3,15 @@
 # GPU (mujoco_warp) backend.  Select it from the command line without editing
 # any task config:
 #
-#     aao-demo --config-name <task> +backend=warp
+#     aao-demo task=<task> backend=warp
 #
-# The leading `+` is required: this group is deliberately not listed in any
-# config's `defaults`, so there is no entry to override -- `+` appends one.
-# That is also what makes it win.  Every robot basis config re-asserts its own
-# CPU builder in its `_self_`, which composes after an inherited defaults entry
-# and would overwrite the group; an appended group composes last, so it wins on
-# any task config regardless of how deep its inheritance chain is.  A plain
-# `backend=warp` fails with "Could not override 'backend'".
-#
-# No `@_global_` is needed on the command line: the `# @package _global_`
-# header above already places this file's content at the config root.
+# The `backend` entry of `config.yaml` composes after the simulator,
+# embodiment, task and adapt entries, so its builder and `env._target_` win
+# over the robot-specific CPU builders they set.
 #
 # Physical execution supports mocap operators and joint-mode `per_step_ik`
 # or `solve_once_interpolate`, selected by the task's existing control config.
-# Object-only execution is also available with `execution.mode=object_only`.
+# Object-only execution is also available with `execution=object_only`.
 # The Warp env has no interactive viewer path.
 #
 # MJWarp disables `noslip_iterations` on its compiled model with a warning;

@@ -1,0 +1,11 @@
+# @package env.gaussian_render
+#
+# Background pose transform: [x, y, z] (pure translation) or
+# [x, y, z, qx, qy, qz, qw] (full rigid-body transform). Initial offsets were
+# estimated by aligning the densest near-horizontal plane around the
+# background's likely tabletop height to the repo's common GS tabletop
+# reference (table center ~= [0.45, 0.06], table top z ~= 0.0742). They may
+# still need small per-scene refinement with the replay/compare tools.
+background_ply: ${assets_dir}/gs/backgrounds/simple_room.ply
+background_transforms:
+  simple_room: [-0.0248, 0.1106, 0.0736]

@@ -1,0 +1,29 @@
+# @package _global_
+#
+# P7 arm v3 + UMI gripper v3. The v3 arm has slightly different DH than the
+# original P7, but the shared home pose still lands the TCP near typical
+# tabletop / door grasp targets.
+defaults:
+  - _p7
+  - _self_
+
+env:
+  scene:
+    layers:
+      robot:
+        kind: mjcf
+        path: ${assets_dir}/xmls/robots/p7_arm_v3_with_umi_gripper_v3.xml
+        role: operator
+  initial_joint_positions:
+    # UMI gripper v3 driven slide (range 0..0.0165; lower bound = max open)
+    eef_claw_joint: 0.0
+  operators:
+    arm:
+      eef_mapper:
+        _target_: auto_atom.mappers.finger_distance.FingerDistanceMapper
+        left_pad_geom: eef_left_finger_collision
+        right_pad_geom: eef_right_finger_collision
+        actuator_name: eef_claw_joint
+      ik_factory: auto_atom.backend.mjc.ik.p7_v3_analytical_ik_solver.P7V3AnalyticalIKSolver
+
+backend: auto_atom.backend.mjc.ik.p7_v3_analytical_ik_solver.build_p7_v3_umi_v3_backend

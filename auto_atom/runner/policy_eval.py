@@ -123,7 +123,7 @@ def _call_policy(
 
 @hydra.main(
     config_path=str(get_config_dir()),
-    config_name="pick_and_place",
+    config_name="config",
     version_base=None,
 )
 def main(cfg: DictConfig) -> None:

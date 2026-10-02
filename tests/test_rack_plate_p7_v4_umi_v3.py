@@ -7,9 +7,9 @@ from pathlib import Path
 
 import mujoco
 import numpy as np
-from hydra import compose, initialize_config_dir
 
 from auto_atom.config.reference import PoseReference
+from auto_atom.config_loader import compose_task_config
 from auto_atom.runner.common import prepare_task_file
 from auto_atom.runtime import ComponentRegistry, TaskRunner
 
@@ -87,21 +87,18 @@ def _pixel_of_body(
 
 def test_rack_plate_p7_v4_umi_v3_completes_headless() -> None:
     ComponentRegistry.clear()
-    with initialize_config_dir(
-        version_base=None,
-        config_dir=str(_ROOT / "aao_configs"),
-    ):
-        config = compose(
-            config_name="rack_plate_p7_v4_umi_v3",
-            overrides=[
-                "env.viewer=null",
-                # This test covers the physical grasp/place path, so it runs the
-                # design scene rather than a sampled one: the plate stands in a
-                # marginal balance, and where a sample leans it is a different
-                # subject than the path asserted here.
-                "++task.randomization.enabled=false",
-            ],
-        )
+    config = compose_task_config(
+        "rack_plate",
+        [
+            "env.viewer=null",
+            # This test covers the physical grasp/place path, so it runs the
+            # design scene rather than a sampled one: the plate stands in a
+            # marginal balance, and where a sample leans it is a different
+            # subject than the path asserted here.
+            "++task.randomization.enabled=false",
+        ],
+        config_dir=_ROOT / "aao_configs",
+    )
 
     runner = TaskRunner().from_config(prepare_task_file(config))
     try:
@@ -292,14 +289,11 @@ def test_rack_plate_p7_v4_umi_v3_object_only_transports_the_plate() -> None:
     kinematically through its own free joint.
     """
     ComponentRegistry.clear()
-    with initialize_config_dir(
-        version_base=None,
-        config_dir=str(_ROOT / "aao_configs"),
-    ):
-        config = compose(
-            config_name="rack_plate_p7_v4_umi_v3",
-            overrides=["env.viewer=null", "execution.mode=object_only"],
-        )
+    config = compose_task_config(
+        "rack_plate",
+        ["env.viewer=null", "execution.mode=object_only"],
+        config_dir=_ROOT / "aao_configs",
+    )
 
     runner = TaskRunner().from_config(prepare_task_file(config))
     try:
@@ -343,14 +337,11 @@ def test_randomization_master_switch_reproduces_one_scene() -> None:
         overrides = ["env.viewer=null", f"task.seed={seed}"]
         if not enabled:
             overrides.append("++task.randomization.enabled=false")
-        with initialize_config_dir(
-            version_base=None,
-            config_dir=str(_ROOT / "aao_configs"),
-        ):
-            config = compose(
-                config_name="rack_plate_p7_v4_umi_v3",
-                overrides=overrides,
-            )
+        config = compose_task_config(
+            "rack_plate",
+            overrides,
+            config_dir=_ROOT / "aao_configs",
+        )
         runner = TaskRunner().from_config(prepare_task_file(config))
         try:
             env = runner.get_env().envs[0]
@@ -387,18 +378,15 @@ def test_plate_camera_is_mounted_on_the_plate_in_both_modes() -> None:
 
     def layout(mode: str) -> tuple[list[str], str, str]:
         ComponentRegistry.clear()
-        with initialize_config_dir(
-            version_base=None,
-            config_dir=str(_ROOT / "aao_configs"),
-        ):
-            config = compose(
-                config_name="rack_plate_p7_v4_umi_v3",
-                overrides=[
-                    "env.viewer=null",
-                    f"execution.mode={mode}",
-                    "++task.randomization.enabled=false",
-                ],
-            )
+        config = compose_task_config(
+            "rack_plate",
+            [
+                "env.viewer=null",
+                f"execution.mode={mode}",
+                "++task.randomization.enabled=false",
+            ],
+            config_dir=_ROOT / "aao_configs",
+        )
         runner = TaskRunner().from_config(prepare_task_file(config))
         try:
             backend = runner._context.backend
@@ -456,18 +444,15 @@ def test_plate_camera_rides_the_plate_through_object_only_transport() -> None:
     """The plate camera moves with the plate, not through its own bookkeeping."""
 
     ComponentRegistry.clear()
-    with initialize_config_dir(
-        version_base=None,
-        config_dir=str(_ROOT / "aao_configs"),
-    ):
-        config = compose(
-            config_name="rack_plate_p7_v4_umi_v3",
-            overrides=[
-                "env.viewer=null",
-                "execution.mode=object_only",
-                "++task.randomization.enabled=false",
-            ],
-        )
+    config = compose_task_config(
+        "rack_plate",
+        [
+            "env.viewer=null",
+            "execution.mode=object_only",
+            "++task.randomization.enabled=false",
+        ],
+        config_dir=_ROOT / "aao_configs",
+    )
 
     runner = TaskRunner().from_config(prepare_task_file(config))
     try:
@@ -515,18 +500,15 @@ def test_randomization_moves_the_scenery_not_the_slot_centre() -> None:
     rack_positions: list[np.ndarray] = []
     for seed in (3, 11, 23, 31, 47, 59):
         ComponentRegistry.clear()
-        with initialize_config_dir(
-            version_base=None,
-            config_dir=str(_ROOT / "aao_configs"),
-        ):
-            config = compose(
-                config_name="rack_plate_p7_v4_umi_v3",
-                overrides=[
-                    "env.viewer=null",
-                    "execution.mode=object_only",
-                    f"task.seed={seed}",
-                ],
-            )
+        config = compose_task_config(
+            "rack_plate",
+            [
+                "env.viewer=null",
+                "execution.mode=object_only",
+                f"task.seed={seed}",
+            ],
+            config_dir=_ROOT / "aao_configs",
+        )
         runner = TaskRunner().from_config(prepare_task_file(config))
         try:
             env = runner.get_env().envs[0]

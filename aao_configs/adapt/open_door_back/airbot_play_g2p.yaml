@@ -1,0 +1,17 @@
+# @package _global_
+#
+# Reuse the front-side Airbot program against the doorway rotated by
+# task/open_door_back: grasp the back-side handle site and reverse the unlock arc.
+defaults:
+  - /adapt/open_door/airbot_play_g2p
+  - _self_
+
+door_side: back
+reverse: true
+
+task_operators:
+  arm:
+    initial_state:
+      base_pose:
+        position: [ 1.0, 0.8, -0.48 ] # should match the XML `link0` pose
+        orientation: [ 0, 0, 0, 1 ]

@@ -1,0 +1,88 @@
+# @package _global_
+defaults:
+  - override /scene: open_door
+  - override /embodiment: robotiq_mocap
+  - _self_
+
+task_name: open_door
+
+env:
+  # Task-specific arm home — gripper facing the door handle. Shifted for the
+  # consolidated demo.xml: door frame is at world (1.54, 0.1, -1.0) vs the
+  # legacy robotiq scene's (1.49, 0.1, 0.0), so the arm home moves +0.05 x
+  # and -1.0 z to keep the same relative pose to the handle.
+  initial_joint_positions:
+    robotiq_freejoint: [1.285, 0.3155, -0.195, 0.5, 0.5, -0.5, -0.5]
+  mask_objects: ["handle_lever_body", "handle_body_phys"]
+  operations: ["pick", "push"]
+  pre_step_callbacks:
+    - _target_: auto_atom.callbacks.door_latch.DoorLatchCallback
+      config:
+        _target_: auto_atom.callbacks.door_latch.DoorLatchConfig
+        lock_constraint: door_latch_lock
+        door_joint: door_hinge
+        handle_joint: handle_hinge
+        handle_direction: 1
+        unlock_travel: 0.12
+        relock_travel: 0.08
+        relock_zone: 0.02
+  viewer:
+    lookat: [1.45, 0.12, 0.8]
+    distance: 1.2
+    azimuth: 210
+    elevation: -18
+    step_delay: 0.025
+    hold_seconds: 1.0
+
+task:
+  stages:
+    - name: rotate_handle
+      object: handle_lever_body
+      operation: pick
+      operator: arm
+      param:
+        pre_move:
+          - position: [0.095, 0.106, 0.0]
+            reference: object
+            max_linear_step: 0.02
+            max_angular_step: 0.25
+          - position: [0.095, 0.055, 0.0]
+            reference: object
+            max_linear_step: 0.01
+            max_angular_step: 0.2
+        eef:
+          close: true
+        post_move:
+          - arc:
+              pivot: handle_hinge
+              axis: [0, 1, 0]
+              angle: 0.45
+              absolute: true
+              max_step: 0.03
+            reference: world
+    - name: push_open
+      object: handle_body_phys
+      operation: push
+      operator: arm
+      param:
+        pre_move:
+          - position: [0.0, 0.0, 0.0]
+            reference: eef_world
+            max_linear_step: 0.01
+            max_angular_step: 0.15
+        post_move:
+          - arc:
+              pivot: handle_hinge
+              axis: [0, 1, 0]
+              angle: 0.55
+              absolute: true
+              max_step: 0.03
+            reference: world
+          - arc:
+              pivot: door_hinge
+              axis: [0, 0, -1]
+              angle: -1.2
+              absolute: true
+              max_step: 0.04
+            reference: world
+

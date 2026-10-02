@@ -5,12 +5,13 @@ from pathlib import Path
 import mujoco
 import numpy as np
 import pytest
-from hydra import compose, initialize_config_dir
 from omegaconf import OmegaConf
 
 from auto_atom.backend.mjc.ik.third_party_ik.p7_arm_v3_analytical_ik import (
     KDL_7DOF,
 )
+from auto_atom.config_loader import compose_task_config
+from auto_atom.execution_config import prepare_task_config_for_instantiation
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -31,12 +32,16 @@ def _body_or_site_transform(
 
 
 def test_v4_demo_incrementally_overrides_robot_and_kinematics() -> None:
-    with initialize_config_dir(version_base=None, config_dir=str(CONFIG_DIR)):
-        v3 = compose(config_name="open_door_unidoor_p7_v3_umi_v3")
-        v4 = compose(config_name="open_door_unidoor_p7_v4_umi_v3")
+    v3 = compose_task_config(
+        "open_door_unidoor", ["embodiment=p7_v3_umi_v3"], config_dir=CONFIG_DIR
+    )
+    v4 = compose_task_config(
+        "open_door_unidoor", ["embodiment=p7_v4_umi_v3"], config_dir=CONFIG_DIR
+    )
 
     assert v4.task_name == "open_door_unidoor_p7_v4_umi_v3"
-    assert v4.env.scene.layers[-1].path.endswith("p7_arm_v4_with_umi_gripper_v3.xml")
+    v4_layers = prepare_task_config_for_instantiation(v4).env.scene.layers
+    assert v4_layers[-1].path.endswith("p7_arm_v4_with_umi_gripper_v3.xml")
     v3_task = OmegaConf.to_container(v3.task, resolve=True)
     v4_task = OmegaConf.to_container(v4.task, resolve=True)
     # ``env_name`` is derived from each task name and intentionally changes so
@@ -57,10 +62,11 @@ def test_v4_demo_incrementally_overrides_robot_and_kinematics() -> None:
 
 
 def test_v4_configured_fk_matches_mujoco_flange() -> None:
-    with initialize_config_dir(version_base=None, config_dir=str(CONFIG_DIR)):
-        config = compose(config_name="open_door_unidoor_p7_v4_umi_v3")
+    config = compose_task_config(
+        "open_door_unidoor", ["embodiment=p7_v4_umi_v3"], config_dir=CONFIG_DIR
+    )
 
-    robot_path = ROOT / str(config.operator_robot_xml)
+    robot_path = ROOT / str(config.env.scene.layers.robot.path)
     model = mujoco.MjModel.from_xml_path(str(robot_path))
     data = mujoco.MjData(model)
     mujoco.mj_forward(model, data)

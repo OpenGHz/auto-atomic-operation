@@ -1,0 +1,38 @@
+# @package _global_
+defaults:
+  - /adapt/_cup_on_coaster/p7
+  - _self_
+
+p7_cup_on_coaster:
+  grasp_z: 0.01
+  retreat_z: 0.02
+
+task:
+  randomization:
+    entities:
+      cup:
+        x: [-0.1, 0.0]
+        y: [-0.3, 0.05]
+      coaster:
+        x: [-0.1, 0.0]
+        y: [-0.1, 0.25]
+      arm:
+        base:
+          x: [-0.15, 0.1]
+          y: [-0.2, 0.08]
+        # eef:
+        #   x: [-0.03, 0.07]
+        #   y: [-0.15, 0.20]
+        #   z: [-0.005, 0.005]
+
+task_operators:
+  arm:
+    initial_state:
+      base_pose:
+        position: [0.1, 0.0, 0.2]
+        orientation: [0.0, 0.0, 0.0, 1.0]
+      eef_pose:
+        # Derived from a verified real-arm joint config:
+        # j = [-2.13088, -0.54817, 2.66519, -0.33772, 0.46073, -0.22401, -0.59409]
+        # FK in p7_mount frame, cross-checked by P7V3 analytical IK.
+        position: [0.2785, 0.0, 0.0]

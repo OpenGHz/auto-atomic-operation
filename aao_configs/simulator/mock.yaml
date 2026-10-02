@@ -1,0 +1,10 @@
+# @package _global_
+#
+# Simulator-free mock environment for pipeline smoke tests. Tasks selecting it
+# also clear the `scene` and `embodiment` groups.
+
+env:
+  _target_: auto_atom.mock.create_mock_env
+  kind: mock_env
+
+backend: auto_atom.mock.build_mock_backend

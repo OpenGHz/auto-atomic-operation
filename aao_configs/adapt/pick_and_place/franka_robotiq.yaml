@@ -1,0 +1,62 @@
+# @package _global_
+#
+# Joint-space IK tracking needs per-waypoint Cartesian step limits, so the
+# Franka variant restates the stages instead of only retuning heights.
+task:
+  stages:
+    - name: pick_source
+      object: source_block
+      operation: pick
+      operator: arm
+      param:
+        pre_move:
+          - position: [0.0, 0.0, 0.12]
+            orientation: ${eef_top_down_orientation}
+            reference: object_world
+            max_linear_step: 0.1
+            max_angular_step: 0.9
+          - position: [0.0, 0.0, 0.006]
+            reference: object_world
+            max_linear_step: 0.02
+            max_angular_step: 0.8
+        post_move:
+          - position: [0.0, 0.0, 0.2]
+            reference: eef_world
+            max_linear_step: 0.035
+            max_angular_step: 0.8
+        eef:
+          close: true
+    - name: place_source
+      object: target_pedestal
+      operation: place
+      operator: arm
+      param:
+        pre_move:
+          - position: [0.0, 0.0, 0.12]
+            reference: object_world
+            max_linear_step: 0.02
+            max_angular_step: 0.8
+          - position: [0.0, 0.0, 0.063]
+            reference: object_world
+            max_linear_step: 0.012
+            max_angular_step: 0.8
+        post_move:
+          - position: [0.0, 0.0, 0.16]
+            reference: object_world
+            max_linear_step: 0.015
+            max_angular_step: 0.8
+        eef:
+          close: false
+
+task_operators:
+  arm:
+    ik:
+      # Closed-loop IK is required for the randomized object poses and close
+      # approach waypoints. A single solve can retain centimetres of residual
+      # EEF error and then hold that joint target until the primitive times out.
+      joint_control_mode: per_step_ik
+      joint_interp_speed: 0.9
+    initial_state:
+      base_pose:
+        position: [-0.45, -0.06, 0.0]
+        orientation: [0, 0, 0, 1]

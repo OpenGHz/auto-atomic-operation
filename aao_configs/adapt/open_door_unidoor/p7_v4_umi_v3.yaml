@@ -1,0 +1,6 @@
+# @package _global_
+#
+# The V4 arm reuses the complete UniDoor scene, asset selection, staged
+# PICK -> PULL -> PUSH workflow and operator home pose; only the embodiment
+# (MJCF + IK kinematics) differs.
+task_name: open_door_unidoor_p7_v4_umi_v3

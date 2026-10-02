@@ -1,6 +1,6 @@
 """Contract tests for the MJWarp object-only backend.
 
-Built from the real ``rack_plate_p7_v4_umi_v3`` task file in ``object_only``
+Built from the real ``task=rack_plate`` task file in ``object_only``
 mode, so the whole chain under test is the production one: Hydra composition,
 operator stripping, scene compilation, handler collection, and a reset that runs
 constrained randomization through ``RandomizationHost``.
@@ -16,7 +16,6 @@ import pytest
 mujoco = pytest.importorskip("mujoco")
 pytest.importorskip("mujoco_warp")
 
-from hydra import compose, initialize_config_dir  # noqa: E402
 from omegaconf import OmegaConf  # noqa: E402
 
 from auto_atom.backend.mjwarp.backend import (  # noqa: E402
@@ -28,13 +27,14 @@ from auto_atom.basis.mjwarp.env import MjWarpObjectOnlyEnv  # noqa: E402
 from auto_atom.config.env_config import EnvConfig  # noqa: E402
 from auto_atom.config.reference import RandomizationReference  # noqa: E402
 from auto_atom.config.task import AutoAtomConfig  # noqa: E402
+from auto_atom.config_loader import compose_task_config  # noqa: E402
 from auto_atom.contracts import SceneBackend  # noqa: E402
 from auto_atom.execution_config import (  # noqa: E402
     prepare_task_config_for_instantiation,
 )
 from auto_atom.runtime import ComponentRegistry  # noqa: E402
 
-_CONFIG_NAME = "rack_plate_p7_v4_umi_v3"
+_TASK = "rack_plate"
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -106,17 +106,15 @@ def test_object_collection_ignores_reference_modes_and_absent_operator_specs(par
 def _build(batch_size: int = 2) -> MjWarpObjectOnlyBackend:
     """Compose the real task file and build the backend it describes."""
     ComponentRegistry.clear()
-    with initialize_config_dir(
-        config_dir=str(_REPO_ROOT / "aao_configs"), version_base=None
-    ):
-        cfg = compose(
-            config_name=_CONFIG_NAME,
-            overrides=[
-                "execution.mode=object_only",
-                f"env.batch_size={batch_size}",
-                "env.viewer=null",
-            ],
-        )
+    cfg = compose_task_config(
+        _TASK,
+        [
+            "execution.mode=object_only",
+            f"env.batch_size={batch_size}",
+            "env.viewer=null",
+        ],
+        config_dir=_REPO_ROOT / "aao_configs",
+    )
     prepared = prepare_task_config_for_instantiation(cfg)
 
     env_node = OmegaConf.to_container(prepared.env, resolve=True)
@@ -342,17 +340,15 @@ def test_builder_rejects_operators_the_env_cannot_drive():
     bare "not registered" KeyError from inside the assembly.
     """
     ComponentRegistry.clear()
-    with initialize_config_dir(
-        config_dir=str(_REPO_ROOT / "aao_configs"), version_base=None
-    ):
-        cfg = compose(
-            config_name=_CONFIG_NAME,
-            overrides=[
-                "execution.mode=object_only",
-                "env.batch_size=1",
-                "env.viewer=null",
-            ],
-        )
+    cfg = compose_task_config(
+        _TASK,
+        [
+            "execution.mode=object_only",
+            "env.batch_size=1",
+            "env.viewer=null",
+        ],
+        config_dir=_REPO_ROOT / "aao_configs",
+    )
     prepared = prepare_task_config_for_instantiation(cfg)
     env_node = OmegaConf.to_container(prepared.env, resolve=True)
     env_node.pop("_target_", None)
@@ -393,17 +389,15 @@ def _build_physical(batch_size: int = 2):
     from auto_atom.config.randomization import ResolvedRandomizationConfig
 
     ComponentRegistry.clear()
-    with initialize_config_dir(
-        config_dir=str(_REPO_ROOT / "aao_configs"), version_base=None
-    ):
-        cfg = compose(
-            config_name=_CONFIG_NAME,
-            overrides=[
-                "execution.mode=physical",
-                f"env.batch_size={batch_size}",
-                "env.viewer=null",
-            ],
-        )
+    cfg = compose_task_config(
+        _TASK,
+        [
+            "execution.mode=physical",
+            f"env.batch_size={batch_size}",
+            "env.viewer=null",
+        ],
+        config_dir=_REPO_ROOT / "aao_configs",
+    )
     prepared = prepare_task_config_for_instantiation(cfg)
 
     env_node = OmegaConf.to_container(prepared.env, resolve=True)
@@ -502,17 +496,15 @@ def test_object_only_operator_surface_still_refuses(backend):
 def _build_via_builder(batch_size: int = 2):
     """Build in physical mode through the real builder, as a task file would."""
     ComponentRegistry.clear()
-    with initialize_config_dir(
-        config_dir=str(_REPO_ROOT / "aao_configs"), version_base=None
-    ):
-        cfg = compose(
-            config_name=_CONFIG_NAME,
-            overrides=[
-                "execution.mode=physical",
-                f"env.batch_size={batch_size}",
-                "env.viewer=null",
-            ],
-        )
+    cfg = compose_task_config(
+        _TASK,
+        [
+            "execution.mode=physical",
+            f"env.batch_size={batch_size}",
+            "env.viewer=null",
+        ],
+        config_dir=_REPO_ROOT / "aao_configs",
+    )
     prepared = prepare_task_config_for_instantiation(cfg)
     env_node = OmegaConf.to_container(prepared.env, resolve=True)
     env_node.pop("_target_", None)

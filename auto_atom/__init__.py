@@ -90,7 +90,12 @@ from auto_atom.contracts import (
     require_env_capability,
 )
 
-from .config_loader import load_config, load_task_file, load_task_file_hydra
+from .config_loader import (
+    compose_task_config,
+    load_config,
+    load_task_file,
+    load_task_file_hydra,
+)
 from .execution_timeline import CompiledKeypoint, ExecutionTimeline
 from .mock import MockOperatorHandler, MockSceneBackend
 from .policy_eval import ConfigDrivenDemoPolicy, PolicyEvaluator
@@ -229,5 +234,6 @@ __all__ = [
     "load_config",
     "load_task_file",
     "load_task_file_hydra",
+    "compose_task_config",
     "require_env_capability",
 ]

@@ -1,8 +1,6 @@
 from pathlib import Path
 import sys
 
-from hydra import compose, initialize_config_dir
-
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -10,17 +8,17 @@ if str(ROOT) not in sys.path:
 import pytest
 
 from auto_atom.config.randomization import OperatorRandomizationConfig, PoseRandomRange
+from auto_atom.config_loader import compose_task_config
 from auto_atom.runner.common import prepare_task_file
 from auto_atom.runtime import ComponentRegistry, TaskRunner
 
 
 def _load_task_file(overrides: list[str] | None = None):
-    config_dir = ROOT / "aao_configs"
-    with initialize_config_dir(version_base=None, config_dir=str(config_dir)):
-        cfg = compose(
-            config_name="pick_and_place",
-            overrides=["env.batch_size=1", "env.viewer=null", *(overrides or [])],
-        )
+    cfg = compose_task_config(
+        "pick_and_place",
+        ["env.batch_size=1", "env.viewer=null", *(overrides or [])],
+        config_dir=ROOT / "aao_configs",
+    )
     return prepare_task_file(cfg)
 
 

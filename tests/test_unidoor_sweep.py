@@ -151,11 +151,10 @@ def test_parse_config_accepts_kebab_case_and_comma_lists() -> None:
     assert config.stop_on_failure is True
     assert config.verbose is False
     assert config.dry_run is True
-    assert parse_config([]).config_name == "open_door_unidoor_p7_v4_umi_v3"
-    assert (
-        parse_config(["--config-name", "open_door_unidoor_p7_v3_umi_v3"]).config_name
-        == "open_door_unidoor_p7_v3_umi_v3"
-    )
+    assert parse_config([]).task == "open_door_unidoor"
+    assert parse_config([]).embodiment == "p7_v4_umi_v3"
+    assert parse_config(["--embodiment", "p7_v3_umi_v3"]).embodiment == "p7_v3_umi_v3"
+    assert parse_config(["--task", "open_door"]).task == "open_door"
 
     assert parse_config(["--no-stop-on-failure"]).stop_on_failure is False
     assert parse_config(["--verbose"]).verbose is True
@@ -322,6 +321,9 @@ def test_manifest_uses_bounded_joblib_batches(tmp_path: Path) -> None:
         "auto_atom.runner.demo",
         "--multirun",
     ]
+    assert "task=open_door_unidoor" in first_command
+    assert "embodiment=p7_v4_umi_v3" in first_command
+    assert "--config-name" not in first_command
     assert "handle_id=H001,H002" in first_command
     assert "hydra/launcher=joblib" in first_command
     assert "hydra.launcher.n_jobs=2" in first_command
@@ -592,6 +594,8 @@ def test_aggregate_classifies_all_result_states(tmp_path: Path) -> None:
     assert task_failure["final_stage"] == ["pick_handle"]
     assert task_failure["failure_reasons"] == ["primitive timeout"]
     assert task_failure["reproduce_command"].startswith("env ")
+    assert "task=open_door_unidoor" in task_failure["reproduce_command"]
+    assert "embodiment=p7_v4_umi_v3" in task_failure["reproduce_command"]
     assert "door_id=D001" in task_failure["reproduce_command"]
     assert "handle_id=H002" in task_failure["reproduce_command"]
 
@@ -768,6 +772,23 @@ def test_resume_versions_only_unresolved_job_outputs(tmp_path: Path) -> None:
     new_batch = manifest["batches"][-1]
     assert new_batch["handle_ids"] == ["H002"]
     assert "handle_id=H002" in new_batch["argv"]
+    assert "task=open_door_unidoor" in new_batch["argv"]
+    assert "embodiment=p7_v4_umi_v3" in new_batch["argv"]
+
+
+def test_resume_rejects_manifest_from_flat_config_layout(tmp_path: Path) -> None:
+    package_path = _asset_package(tmp_path, doors=("D001",))
+    sweep_dir = tmp_path / "sweep"
+    config = UniDoorSweepConfig(asset_package=package_path)
+    manifest = _build_manifest(config, load_catalog(config), sweep_dir)
+    sweep_dir.mkdir()
+    del manifest["config"]["task"], manifest["config"]["embodiment"]
+    manifest["config"]["config_name"] = "open_door_unidoor_p7_v4_umi_v3"
+
+    pending = _unresolved_jobs(manifest, sweep_dir)
+    manifest["resume_count"] = 1
+    with pytest.raises(ValueError, match="predates"):
+        _append_resume_batches(manifest, sweep_dir, pending)
 
 
 def test_run_stops_on_task_failure_and_persists_resume_cursor(

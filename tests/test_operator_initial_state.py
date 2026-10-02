@@ -18,7 +18,12 @@ def _build_press_button_backend(overrides: list[str] | None = None):
     task_file = load_task_file_hydra(
         "press_blue_button",
         config_dir=ROOT / "aao_configs",
-        overrides=["env.batch_size=1", "env.viewer=null", *(overrides or [])],
+        overrides=[
+            "render=gs",
+            "env.batch_size=1",
+            "env.viewer=null",
+            *(overrides or []),
+        ],
     )
     backend = task_file.backend(task_file.task, task_file.task_operators)
     backend.setup(task_file.task)

@@ -1,0 +1,12 @@
+# @package _global_
+#
+# Airbot Play arm + XF9600 gripper.
+defaults:
+  - airbot_play_g2p
+  - _self_
+
+env:
+  scene:
+    layers:
+      robot:
+        path: ${assets_dir}/xmls/robots/airbot_play_with_xf9600.xml

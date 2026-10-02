@@ -66,15 +66,16 @@ class RemotePolicyEvaluator:
 
     def from_config(
         self,
-        config_name: str,
+        task: str,
         overrides: Optional[List[str]] = None,
         sim_loop_frequency: float = 0.0,
     ) -> "RemotePolicyEvaluator":
+        """Compose ``task=<task>`` plus ``overrides`` on the server and load it."""
         t0 = time.perf_counter()
-        self._conn.root.from_config(config_name, overrides or [], sim_loop_frequency)
+        self._conn.root.from_config(task, overrides or [], sim_loop_frequency)
         logger.info(
             "from_config(%s, %s) done in %.3fs",
-            config_name,
+            task,
             overrides,
             time.perf_counter() - t0,
         )

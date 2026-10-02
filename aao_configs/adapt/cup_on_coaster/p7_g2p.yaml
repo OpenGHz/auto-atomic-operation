@@ -1,0 +1,35 @@
+# @package _global_
+defaults:
+  - /adapt/_cup_on_coaster/p7
+  - _self_
+
+p7_cup_on_coaster:
+  grasp_z: 0.03
+  retreat_z: 0.1
+
+task:
+  randomization:
+    entities:
+      cup:
+        x: [-0.06, 0.1]
+        y: [-0.35, 0.1]
+      coaster:
+        x: [-0.06, 0.1]
+        y: [-0.15, 0.3]
+      arm:
+        # base:
+        #   x: [-0.015, 0.015]
+        #   y: [-0.015, 0.015]
+        eef:
+          x: [-0.01, 0.15]
+          y: [-0.2, 0.25]
+          z: [-0.005, 0.005]
+
+task_operators:
+  arm:
+    initial_state:
+      base_pose:
+        position: [0.2, 0.0, 0.1]
+        orientation: [0.0, 0.0, 0.0, 1.0]
+      eef_pose:
+        position: [0.2, 0.0, 0.15]

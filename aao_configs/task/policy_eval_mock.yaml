@@ -1,0 +1,33 @@
+# @package _global_
+defaults:
+  - override /simulator: mock
+  - override /scene: null
+  - override /embodiment: null
+  - _self_
+
+env:
+  name: mock_policy_eval
+  batch_size: 1
+
+task:
+  env_name: mock_policy_eval
+  seed: 7
+  stages:
+    - name: observe_home_pose
+      object: ""
+      operation: move
+      operator: arm
+      param:
+        pre_move:
+          - position: [0.2, 0.0, 0.3]
+            orientation: [0.0, 0.0, 0.0, 1.0]
+            reference: world
+
+task_operators:
+  arm: {}
+
+policy:
+  _target_: auto_atom.ConfigDrivenDemoPolicy
+
+rounds: 1
+use_input: false

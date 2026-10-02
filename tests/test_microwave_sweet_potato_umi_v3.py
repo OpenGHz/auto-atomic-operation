@@ -6,8 +6,8 @@ from pathlib import Path
 
 import mujoco
 import numpy as np
-from hydra import compose, initialize_config_dir
 
+from auto_atom.config_loader import compose_task_config
 from auto_atom.runner.common import prepare_task_file
 from auto_atom.runtime import ComponentRegistry, TaskRunner
 
@@ -40,14 +40,11 @@ def _descendant_bodies(model: mujoco.MjModel, root_body: int) -> set[int]:
 
 def test_microwave_sweet_potato_umi_v3_completes_headless() -> None:
     ComponentRegistry.clear()
-    with initialize_config_dir(
-        version_base=None,
-        config_dir=str(_ROOT / "aao_configs"),
-    ):
-        config = compose(
-            config_name="microwave_sweet_potato_umi_v3",
-            overrides=["env.viewer=null"],
-        )
+    config = compose_task_config(
+        "microwave_sweet_potato",
+        ["env.viewer=null"],
+        config_dir=_ROOT / "aao_configs",
+    )
 
     runner = TaskRunner().from_config(prepare_task_file(config))
     try:
@@ -115,7 +112,9 @@ def test_microwave_sweet_potato_umi_v3_completes_headless() -> None:
                         and carrying_started
                         and not placement_released
                     ):
-                        carried_contacts.append((geom_names[other], float(contact.dist)))
+                        carried_contacts.append(
+                            (geom_names[other], float(contact.dist))
+                        )
                 if pair & fingers and pair & microwave_geoms:
                     microwave_finger_contacts.append(
                         (

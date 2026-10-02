@@ -1,0 +1,29 @@
+# @package _global_
+scene_name: rack_plate
+
+env:
+  cameras:
+    # Object-centric view: the camera rides the plate, so it is the only
+    # moving viewpoint that survives `execution=object_only` (the
+    # operator-owned wrist camera is stripped with its layer).  MuJoCo
+    # derives its world pose from the plate body, so the kinematic transport
+    # moves it with no per-step work.  The scene does not author a `<camera>`
+    # for the plate, so this declaration is what creates it — mount frame,
+    # mount pose and optics all live here.
+    plate:
+      name: plate_cam
+      role: object
+      parent_frame: object
+      is_static: false
+      calibration:
+        fovy_deg: 60
+        extrinsics:
+          # 0.25 m out along the plate face normal (object +X, the axis the UMI
+          # jaws pinch) looking back at the plate, with the plate's +Z as image
+          # up.  Orientation is [x, y, z, w].
+          position: [0.25, 0.0, 0.0]
+          orientation: [0.5, 0.5, 0.5, 0.5]
+    # One static environment camera.
+    rack_front:
+      name: rack_camera_front
+      is_static: true

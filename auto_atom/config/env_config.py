@@ -10,6 +10,7 @@ Split out of the former ``auto_atom.basis.mjc.mujoco_basis`` monolith.
 """
 
 import math
+from collections.abc import Mapping
 from enum import Enum
 from typing import Any, Dict, List, Literal, Optional, Set, Tuple
 
@@ -491,17 +492,22 @@ class EnvConfig(BaseModel, frozen=True):
     """Scene-level joint qpos overrides applied after every reset.
 
     Use ``null`` in a task override to clear inherited defaults when all
-    operator-owned joints are declared under ``task_operators``. A scalar is
-    used for a 1-DOF joint; a list supplies all qpos slots for a ball or
-    freejoint. Operator-scoped values are applied later through each
-    operator's ``initial_state.joint_positions``.
+    operator-owned joints are declared under ``task_operators``, or set one
+    joint to ``null`` to drop only that inherited entry. A scalar is used for
+    a 1-DOF joint; a list supplies all qpos slots for a ball or freejoint.
+    Operator-scoped values are applied later through each operator's
+    ``initial_state.joint_positions``.
     """
 
     @field_validator("initial_joint_positions", mode="before")
     @classmethod
     def _normalize_initial_joint_positions(cls, value: object) -> object:
         """Treat Hydra ``null`` as an intentional clear of inherited defaults."""
-        return {} if value is None else value
+        if value is None:
+            return {}
+        if isinstance(value, Mapping):
+            return {name: qpos for name, qpos in value.items() if qpos is not None}
+        return value
 
     viewer: ViewerConfig | None = None
     """Viewer configuration. If None, the passive viewer is not launched."""

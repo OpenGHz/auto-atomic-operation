@@ -1,0 +1,242 @@
+# @package _global_
+defaults:
+  - override /scene: rack_plate
+  - override /embodiment: p7_v4_umi_v3
+  - _self_
+
+task_name: rack_plate_p7_v4_umi_v3
+
+env:
+  batch_size: 1
+  sim_freq: 1200
+  update_freq: 30
+  initial_joint_positions: null
+  cameras:
+    wrist:
+      rgb_clip_range_m: [0.001, 50.0]
+      depth_clip_range_m: [0.001, 5.0]
+  mask_objects: [object, rack_target]
+  operations: [pick, place]
+  viewer:
+    lookat: [-0.12, 0.0, 0.12]
+    distance: 0.75
+    azimuth: 135
+    elevation: -25
+    step_delay: 0.02
+    hold_seconds: 1.0
+
+task:
+  seed: 7
+  randomization:
+    entities:
+      # The base config ships a wide home-EEF range.  This task is placed to
+      # reach both the source stand (x=-0.40) and the rack (x=-0.126), so the
+      # arm is deliberately left at its home pose for now.
+      arm: null
+      # `object_only` transports the plate kinematically, so its source pose is
+      # free scene state rather than a physical resting pose: the plate is
+      # sampled as a floating world-frame box instead of being leaned back into
+      # the four-post stand, which is scenery here.  The box is the
+      # `rack_camera_front` visibility region itself -- every centre here keeps
+      # the plate's conservative support sphere (radius 0.124 m) inside the
+      # 640 x 352 frame with an 8 px margin -- trimmed at z=0.13 so the plate
+      # stays above the floor instead of being clipped by it.  The disc
+      # therefore fills the view from edge to edge instead of one corner patch,
+      # and `visible_in` below is the guarantee for every sample.  The three
+      # orientation axes are free, so the plate may arrive at any attitude.
+      object:
+        proposal:
+          reference: absolute_world
+          x: [-1.050, 1.050]
+          y: [-0.550, 0.550]
+          z: [0.130, 0.370]
+          roll: [-3.14159, 3.14159]
+          pitch: [-3.14159, 3.14159]
+          yaw: [-3.14159, 3.14159]
+          collision_radius: 0.088
+        constraints:
+          visible_in:
+            cameras: [rack_camera_front]
+            geometry: bounding_sphere
+            margin_px: 8
+      # Scene variety lives in the scenery: the rack the plate is placed into
+      # and the stand it is picked from.  Both rest on the floor, so they only
+      # slide and turn -- keeping roll/pitch at their authored zero avoids
+      # sinking a corner through the table -- and the rack's yaw stays small
+      # because the place waypoints approach the slot along world axes.
+      # `collision_radius: -1` derives each radius from its own support
+      # geometry, so the plate is kept clear of the real footprint.
+      rack:
+        x: [-0.050, 0.050]
+        y: [-0.050, 0.050]
+        yaw: [-0.050, 0.050]
+        collision_radius: -1
+      plate_stand:
+        x: [-0.060, 0.060]
+        y: [-0.060, 0.060]
+        yaw: [-0.150, 0.150]
+        collision_radius: -1
+      # `rack_target` deliberately has no entry: the placement point is a child
+      # body of the rack (`rack_target` rides `rack` in the scene), so it is
+      # never sampled on its own and stays the slot centre by construction.
+    cameras:
+      # Static rack view: plain world-frame viewpoint jitter.
+      rack_camera_front:
+        x: [-0.015, 0.015]
+        y: [-0.015, 0.015]
+        z: [-0.010, 0.010]
+        roll: [-0.02, 0.02]
+        pitch: [-0.02, 0.02]
+        yaw: [-0.02, 0.02]
+      # Wrist camera: the sampled world pose is stored as a parent-local
+      # extrinsic, so this varies the camera's mounting offset on the wrist.
+      # It is dropped together with the operator under `execution.mode:
+      # object_only`.
+      eef_wrist_cam:
+        roll: [-0.015, 0.015]
+        pitch: [-0.015, 0.015]
+        yaw: [-0.015, 0.015]
+      # Plate camera: `role: object` cameras sample their install offset
+      # relative to the plate instead of a world pose, so this mirrors the
+      # wrist camera's extrinsic jitter on the object side.
+      plate_cam:
+        roll: [-0.015, 0.015]
+        pitch: [-0.015, 0.015]
+        yaw: [-0.015, 0.015]
+  stages:
+    - name: pick_plate
+      object: object
+      site: object_site
+      operation: pick
+      operator: arm
+      param:
+        pre_move:
+          # The plate starts leaned in the four-post stand.  Both approach
+          # poses use the plate frame, so the translation follows the actual
+          # object pose instead of assuming a world-aligned disk.
+          - position: [0.0, -0.025, 0.17]
+            reference: object
+            static: true
+            orientation_goal:
+              kind: axis_alignment
+              # The UMI jaws close along EEF +Y.  The plate mesh normal is
+              # object +X; the jaws therefore face it in the opposite sense.
+              controlled_axis: [0.0, 1.0, 0.0]
+              target_axis:
+                vector: [1.0, 0.0, 0.0]
+                reference: object
+              direction: opposite
+            max_linear_step: 0.02
+            max_angular_step: 0.20
+          - position: [0.0, -0.025, 0.0]
+            reference: object
+            static: true
+            orientation_goal:
+              kind: axis_alignment
+              controlled_axis: [0.0, 1.0, 0.0]
+              target_axis:
+                vector: [1.0, 0.0, 0.0]
+                reference: object
+              direction: opposite
+            max_linear_step: 0.01
+            max_angular_step: 0.10
+        eef:
+          close: true
+        post_move:
+          - position: [0.0, 0.0, 0.15]
+            reference: eef_world
+            max_linear_step: 0.02
+            max_angular_step: 0.15
+
+    - name: place_plate
+      object: rack_target
+      site: rack_target_site
+      operation: place
+      operator: arm
+      param:
+        pre_move:
+          # Lift first so the plate clears the stand and rack rim.
+          - position: [0.0, 0.0, 0.12]
+            reference: eef_world
+            max_linear_step: 0.02
+            max_angular_step: 0.15
+          # Move above the slot before lowering.  This waypoint is expressed
+          # in the rack target frame, so the object remains the controlled
+          # frame while the EEF-to-plate grasp transform is measured at run
+          # time.
+          - controlled_frame:
+              kind: held_object
+              frame: object_site
+            position: [0.0, 0.0, 0.18]
+            reference: object
+            static: true
+            orientation_goal:
+              kind: axis_alignment
+              controlled_axis: [1.0, 0.0, 0.0]
+              target_axis:
+                vector: [1.0, 0.0, 0.0]
+                reference: world
+              direction: same
+            tolerance:
+              position: 0.012
+              orientation: 0.10
+          # The target frame is the settled centre of the first rack slot.  The
+          # smaller plate is released 17 mm above that centre so it can fall
+          # onto the rack floor without driving the gripper into the ribs.
+          # The migrated plate's local +X is its physical normal after the
+          # authored mesh rotation, so constrain that axis to the slot normal
+          # while leaving the in-plane twist unconstrained.
+          - controlled_frame:
+              kind: held_object
+              frame: object_site
+            position: [0.0, 0.0, 0.017]
+            reference: object
+            static: true
+            orientation_goal:
+              kind: axis_alignment
+              controlled_axis: [1.0, 0.0, 0.0]
+              target_axis:
+                vector: [1.0, 0.0, 0.0]
+                reference: world
+              direction: same
+            tolerance:
+              position: 0.015
+              orientation: 0.10
+        eef:
+          close: false
+        placed_reference: pre_move
+        placed_tolerance:
+          position: 0.025
+          orientation: 0.10
+
+task_operators:
+  arm:
+    initial_state:
+      # Mount the V4 arm midway between the source stand (x=-0.4) and rack
+      # (x≈0), with its +X axis pointing from the front of the table toward the
+      # work area.  The EEF home below is expressed in this rotated base frame.
+      base_pose:
+        position: [-0.20, -0.5, 0.075]
+        # XYZW quaternion: +90° about world Z, so base +X points toward +Y.
+        orientation: [0.0, 0.0, 0.70710678, 0.70710678]
+      eef_pose:
+        # Same world pose as before, represented relative to the rotated base:
+        # R_base^T * (p_world - p_base) = [0.605, 0, 0.055165074].
+        position: [0.605, 0.0, 0.055165074]
+        orientation: [0.0, 0.0, 0.0, 1.0]
+        reference: base
+      eef: 0.0
+    control:
+      timeout_steps: 900
+      cartesian_max_linear_step: 0.02
+      cartesian_max_angular_step: 0.20
+      tolerance:
+        position: 0.012
+        orientation: 0.10
+        eef: 0.002
+        placed:
+          position: 0.02
+          orientation: 0.10
+    ik:
+      joint_control_mode: per_step_ik
+      max_joint_delta: 0.25

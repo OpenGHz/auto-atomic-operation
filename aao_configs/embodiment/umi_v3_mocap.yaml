@@ -1,0 +1,41 @@
+# @package _global_
+#
+# UMI gripper v3 mocap.
+defaults:
+  - _mocap_gripper
+  - _self_
+
+# Top-down grasp: x_eef of umi_gripper_v3's eef_pose rests along the gripper's
+# +x approach axis (identity orientation in base_link). The world target
+# (xyzw, 180° around (1,0,-1)/√2) puts x_eef = -z_world (approach down).
+eef_top_down_orientation: [0.70710678, 0.0, -0.70710678, 0.0]
+
+env:
+  # umi_gripper_v3 has stiff parallel-linkage equality constraints, similar
+  # to xf9600. Step at 1200 Hz (0.833 ms) to keep the constraints stable
+  # while the gripper closes.
+  sim_freq: 1200
+  scene:
+    layers:
+      robot:
+        kind: mjcf
+        path: ${assets_dir}/xmls/robots/umi_gripper_v3_mocap.xml
+        role: operator
+  # umi_gripper_v3 exposes its wrist camera as ``eef_wrist_cam`` (attach prefix).
+  cameras:
+    wrist:
+      name: eef_wrist_cam
+  # Home pose at reset. Gripper hangs 0.4m above the floor; the driven
+  # claw slide opens (qpos=0 = max open). Tasks can override
+  # ``umi_freejoint`` for task-specific homes.
+  initial_joint_positions:
+    # freejoint: pos(xyz) + quat(wxyz) — gripper hangs 0.4m above the floor.
+    umi_freejoint: [0.0, 0.0, 0.4, 1.0, 0.0, 0.0, 0.0]
+    # Single driven gripper joint (range 0..0.0165, 0 = fully open).
+    eef_claw_joint: 0.0
+  operators:
+    arm:
+      eef_actuators: [eef_claw_joint]
+      root_body: umi_interface
+      mocap_body: umi_mocap
+      freejoint: umi_freejoint

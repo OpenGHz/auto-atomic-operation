@@ -18,12 +18,12 @@ import pytest
 mujoco = pytest.importorskip("mujoco")
 pytest.importorskip("mujoco_warp")
 
-from hydra import compose, initialize_config_dir  # noqa: E402
 from omegaconf import OmegaConf  # noqa: E402
 
 from auto_atom.basis.mjc.mujoco_env import BatchedUnifiedMujocoEnv  # noqa: E402
 from auto_atom.basis.mjwarp.env import MjWarpObjectOnlyEnv  # noqa: E402
 from auto_atom.config.env_config import EnvConfig  # noqa: E402
+from auto_atom.config_loader import compose_task_config  # noqa: E402
 from auto_atom.contracts import ObservationEnvProtocol  # noqa: E402
 from auto_atom.execution_config import (  # noqa: E402
     prepare_task_config_for_instantiation,
@@ -41,12 +41,13 @@ def _config(batch_size: int, *, enable_mask: bool = False) -> EnvConfig:
         "env.viewer=null",
     ]
     if enable_mask:
-        # A top-level interpolation variable, not an env.* field.
-        overrides.append("enable_mask=true")
-    with initialize_config_dir(
-        config_dir=str(_REPO_ROOT / "aao_configs"), version_base=None
-    ):
-        cfg = compose(config_name="rack_plate_p7_v4_umi_v3", overrides=overrides)
+        # The observation group's camera defaults, not an env.* field.
+        overrides.append("observation.camera.enable_mask=true")
+    cfg = compose_task_config(
+        "rack_plate",
+        overrides,
+        config_dir=_REPO_ROOT / "aao_configs",
+    )
     node = OmegaConf.to_container(
         prepare_task_config_for_instantiation(cfg).env, resolve=True
     )

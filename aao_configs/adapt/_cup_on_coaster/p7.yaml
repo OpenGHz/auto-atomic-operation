@@ -1,0 +1,92 @@
+# @package _global_
+#
+# Shared P7 adaptation of cup_on_coaster: the arm base sits behind the table
+# and both objects are randomized relative to it. The demo_gs.xml layout is
+# used for native MuJoCo rendering as well. Per-gripper heights live in
+# `p7_cup_on_coaster`.
+task_name: airbot_p7_cup_on_coaster
+model_name: demo_gs
+max_updates: 650
+
+env:
+  sim_freq: 1000
+  update_freq: 50
+  viewer:
+    # Same viewpoint as the GS rendering of this scene.
+    lookat: [0.45, 0.05, 0.08]
+    distance: 0.8
+    azimuth: 135
+    elevation: -28
+    step_delay: 0.005
+    hold_seconds: 0.5
+
+task:
+  randomization:
+    entities:
+      cup:
+        collision_radius: 0.04
+        reference: arm.base
+      coaster:
+        collision_radius: 0.04
+        reference: arm.base
+  stages:
+    - name: pick_cup
+      object: cup
+      operation: pick
+      operator: arm
+      param:
+        pre_move:
+          - position: [0.0, 0.0, 0.10]
+            orientation: ${eef_top_down_orientation}
+            reference: object_world
+          - position: [0.0, 0.0, "${p7_cup_on_coaster.grasp_z}"]
+            reference: object_world
+            # max_linear_step: 0.04
+            # max_angular_step: 0.2
+        eef:
+          close: true
+        post_move:
+          - position: [0.0, 0.0, 0.03]
+            reference: eef_world
+            max_linear_step: 0.02
+            max_angular_step: 0.1
+
+    - name: place_cup
+      object: coaster
+      operation: place
+      operator: arm
+      param:
+        pre_move:
+          - position: [0.0, 0.0, 0.09]
+            reference: object_world
+            max_linear_step: 0.05
+            max_angular_step: 0.2
+        eef:
+          close: false
+        post_move:
+          - position: [0.0, 0.0, "${p7_cup_on_coaster.retreat_z}"]
+            reference: eef_world
+            max_linear_step: 0.05
+            max_angular_step: 0.25
+        placed_tolerance:
+          position: [0.1, 0.1, 0.1]
+          orientation: [null, null, null]
+
+task_operators:
+  arm:
+    initial_state:
+      eef_pose:
+        orientation: [0.70710678, 0.0, -0.70710678, 0.0]
+        reference: base
+    control:
+      timeout_steps: 220
+      cartesian_max_linear_step: 0.025
+      cartesian_max_angular_step: 0.3
+      tolerance:
+        position: 0.008
+        orientation: 0.10
+        eef: 0.001
+    max_joint_delta: 0.35
+    ik:
+      joint_control_mode: solve_once_interpolate
+      joint_interp_speed: 0.05

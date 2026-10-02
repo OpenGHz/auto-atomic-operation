@@ -3,9 +3,9 @@ from types import SimpleNamespace
 
 import mujoco
 import numpy as np
-from hydra import compose, initialize_config_dir
 
 from auto_atom.config.env_config import EnvConfig
+from auto_atom.config_loader import compose_task_config
 from auto_atom.basis.mjc.mujoco_basis import MujocoBasis
 from auto_atom.scene_composition import (
     MjcfLayerConfig,
@@ -45,14 +45,11 @@ def test_hide_operators_defaults_to_false() -> None:
 
 
 def test_pick_and_place_accepts_hide_operators_override() -> None:
-    with initialize_config_dir(
-        version_base=None,
-        config_dir=str(ROOT / "aao_configs"),
-    ):
-        cfg = compose(
-            config_name="pick_and_place",
-            overrides=["env.hide_operators_in_camera=true"],
-        )
+    cfg = compose_task_config(
+        "pick_and_place",
+        ["env.hide_operators_in_camera=true"],
+        config_dir=ROOT / "aao_configs",
+    )
 
     assert cfg.env.hide_operators_in_camera is True
 

@@ -1,0 +1,2 @@
+# Keep only operator-mounted (wrist) cameras.
+roles: [operator]

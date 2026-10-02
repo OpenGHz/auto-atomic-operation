@@ -1,0 +1,48 @@
+# @package _global_
+defaults:
+  - override /scene: open_close_drawer
+  - override /embodiment: robotiq_mocap
+  - _self_
+
+task_name: close_drawer
+
+env:
+  initial_joint_positions:
+    # Task-specific arm home — gripper horizontal, facing the drawer.
+    robotiq_freejoint: [0.0, -0.2, 0.15, 0.7071408, 0.7070727, 0.0, 0.0]
+    drawer_slide: -0.12
+  mask_objects: ["handle"]
+  operations: ["pull"]
+  viewer:
+    lookat: [0.0, 0.04, 0.12]
+    distance: 0.75
+    azimuth: 155
+    elevation: -22
+    step_delay: 0.025
+    hold_seconds: 1.0
+
+task:
+  stages:
+    # Grasp the handle and push the drawer closed.
+    # Drawer starts fully open: joint=-0.12 m, handle world pos = (0, -0.071, 0.132).
+    # Gripper is horizontal: tool x-axis points toward the cabinet handle.
+    # EEF orientation for this grasp in the new eef_pose frame: [0.5, 0.5, 0.5, 0.5] (xyzw).
+    - name: push_close
+      object: handle
+      operation: pull
+      operator: arm
+      param:
+        pre_move:
+          # Step 1: align with handle height, stay 10 cm in front
+          - position: [0.0, -0.10, 0.01]
+            orientation: [0.5, 0.5, 0.5, 0.5]
+            reference: object_world
+          # Step 2: advance to grasp position — EEF at handle center in Y
+          - position: [0.0, 0.0, 0.01]
+            reference: object_world
+        eef:
+          close: true
+        post_move:
+          # Push forward 12 cm in +Y (world) to fully close the drawer (joint range −0.12 → 0)
+          - position: [0.0, 0.12, 0.0]
+            reference: eef_world

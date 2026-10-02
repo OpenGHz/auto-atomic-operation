@@ -1,5 +1,0 @@
-# Some compatibility variables are used to avoid errors
-# when external references cannot find the corresponding variable.
-
-bg3dgs_dir: null
-bg3dgs_name: null

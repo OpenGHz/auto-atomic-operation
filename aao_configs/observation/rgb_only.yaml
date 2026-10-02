@@ -1,0 +1,9 @@
+# Color-only 640x480 camera streams (no depth, mask or heat map).
+defaults:
+  - default
+  - _self_
+
+camera:
+  height: 480
+  enable_depth: false
+  enable_heat_map: false

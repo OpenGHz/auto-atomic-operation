@@ -1,0 +1,12 @@
+# @package _global_
+defaults:
+  - /adapt/_open_door/p7
+  - _self_
+
+task_name: open_door_p7_v3_umi_v3
+
+p7_open_door:
+  # Angle kept modest because the v3 arm reaches its workspace limit before
+  # the door rotates much further (the door radius is ~0.7m, beyond the arm's
+  # effective reach once the handle has been pulled past ~15°).
+  door_angle: 0.20

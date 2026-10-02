@@ -1,0 +1,64 @@
+# @package _global_
+#
+# Press the single button named by `object_name` in the press_three_buttons
+# scene. Included by the press_<color>_button tasks.
+defaults:
+  - override /scene: press_three_buttons
+  - override /embodiment: robotiq_mocap
+  - _self_
+
+env:
+  mask_objects: ["${object_name}"]
+  operations: ["press"]
+  viewer:
+    lookat: [0.06, -0.03, 0.1]
+    distance: 0.6
+    azimuth: 135
+    elevation: -28
+    step_delay: 0.03
+    hold_seconds: 1.0
+
+task:
+  randomization:
+    entities:
+      arm:
+        eef:
+          x: [-0.2, 0.21]
+          y: [-0.2, 0.06]
+          z: [-0.1, 0.07]
+          collision_radius: 0.15
+      button_blue:
+        x: [0.2, 0.7]
+        y: [-0.25, 0.15]
+        reference: absolute_world
+        collision_radius: 0.05
+      button_green:
+        x: [0.2, 0.7]
+        y: [-0.25, 0.15]
+        reference: absolute_world
+        collision_radius: 0.05
+      button_pink:
+        x: [0.2, 0.7]
+        y: [-0.25, 0.15]
+        reference: absolute_world
+        collision_radius: 0.05
+  stages:
+    - name: press_${object_name}
+      object: ${object_name}
+      operation: press
+      operator: arm
+      param:
+        pre_move:
+          - position: [0.0, 0.0, 0.12]
+            orientation: ${eef_top_down_orientation}
+            reference: object_world
+          - position: [0.0, 0.0, 0.05]
+            reference: object_world
+        post_move:
+          - position: [0.0, 0.0, 0.12]
+            reference: object_world
+
+task_operators:
+  arm:
+    initial_state:
+      eef: 0.7 # partially closed to avoid preloading an empty gripper before press

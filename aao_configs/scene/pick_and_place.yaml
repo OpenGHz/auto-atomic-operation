@@ -1,0 +1,11 @@
+# @package _global_
+scene_name: pick_and_place
+
+env:
+  cameras:
+    env1:
+      name: env1_cam
+      is_static: true
+    env0:
+      name: env0_cam
+      is_static: true

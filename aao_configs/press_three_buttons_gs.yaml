@@ -1,4 +1,0 @@
-defaults:
-  - press_three_buttons
-  - press_three_buttons_gs_mixin
-  - _self_

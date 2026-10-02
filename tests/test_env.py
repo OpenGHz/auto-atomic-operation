@@ -1,28 +1,31 @@
 """Test MuJoCo environment construction from task configs.
 
 Uses the same Hydra config infrastructure as ``aao-demo`` / ``record_demo``.
-Switch tasks with ``--config-name``:
+Switch tasks with the ``task`` config group:
 
-    python tests/test_mujoco.py --config-name pick_and_place
-    python tests/test_mujoco.py --config-name cup_on_coaster
-    python tests/test_mujoco.py --config-name press_three_buttons
+    python tests/test_env.py task=pick_and_place
+    python tests/test_env.py task=cup_on_coaster
+    python tests/test_env.py task=press_three_buttons
 """
 
 import numpy as np
 import hydra
 from hydra.utils import instantiate
 from omegaconf import DictConfig, OmegaConf
+from auto_atom.execution_config import prepare_task_config_for_instantiation
 from auto_atom.runner.common import get_config_dir
 from auto_atom.runtime import ComponentRegistry
 
 
 @hydra.main(
     config_path=str(get_config_dir()),
-    config_name="pick_and_place",
+    config_name="config",
     version_base=None,
 )
 def main(cfg: DictConfig) -> None:
     ComponentRegistry.clear()
+    # Flatten the keyed env.cameras / env.scene.layers slots into lists.
+    cfg = prepare_task_config_for_instantiation(cfg)
     if "env" not in cfg or cfg.env is None:
         raise RuntimeError("Config must contain an 'env' section.")
     env = instantiate(cfg.env)
