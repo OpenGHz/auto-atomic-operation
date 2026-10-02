@@ -81,6 +81,23 @@ def reset_model_data(
     synchronize_mocap_bodies(model, data)
 
 
+def forward_without_contacts(model: mujoco.MjModel, data: mujoco.MjData) -> None:
+    """Run ``mj_forward`` with contact generation disabled.
+
+    Used before configured home joints are in place: at ``qpos0`` a free-floating
+    operator sits at its authored origin, which can bury it in scene geometry.
+    The resulting burst of penetrating contacts can exhaust the constraint arena
+    (MuJoCo then crashes inside ``mj_forward``), and none of those contacts
+    describe a state the simulation will ever step from.
+    """
+    saved_disableflags = model.opt.disableflags
+    model.opt.disableflags |= int(mujoco.mjtDisableBit.mjDSBL_CONTACT)
+    try:
+        mujoco.mj_forward(model, data)
+    finally:
+        model.opt.disableflags = saved_disableflags
+
+
 def _is_joint_position_actuator(model: mujoco.MjModel, actuator_id: int) -> bool:
     """Return whether ``actuator_id`` accepts a scalar joint-position target."""
 
@@ -121,7 +138,8 @@ def _hold_position_actuators(
     # Actuator controls target transmission length, which equals raw qpos only
     # for the common scalar joint transmission with unit gear.  Forward first
     # so non-unit gears and other supported joint transmissions are respected.
-    mujoco.mj_forward(model, data)
+    # Lengths do not depend on contacts, and free joints may still be at qpos0.
+    forward_without_contacts(model, data)
     for actuator_id_raw in actuator_ids:
         actuator_id = int(actuator_id_raw)
         if not _is_joint_position_actuator(model, actuator_id):

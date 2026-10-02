@@ -30,6 +30,7 @@ import numpy as np
 from pydantic import PositiveFloat
 
 from auto_atom.basis.mjc.model_initialization import (
+    forward_without_contacts,
     reset_model_data,
     synchronize_mocap_bodies,
 )
@@ -115,7 +116,9 @@ class MujocoBasis:
             mujoco.mj_resetDataKeyframe(self.model, self.data, 0)
         else:
             mujoco.mj_resetData(self.model, self.data)
-        mujoco.mj_forward(self.model, self.data)
+        # Home joints are applied by the reset at the end of construction; the
+        # authored qpos0 pose may overlap scene geometry, so skip its contacts.
+        forward_without_contacts(self.model, self.data)
         self._sync_mocap_to_freejoint()
 
         # Bind pre-step callbacks (already instantiated by Hydra).

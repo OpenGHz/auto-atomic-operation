@@ -284,7 +284,9 @@ class TactileSensorManager:
 
     def _compute_site_2d_coords(self):
         """从 mj_data.site_xpos 读取 3D 坐标，用 PCA 投影到方差最大的 2D 平面。"""
-        mujoco.mj_forward(self.mj_model, self.mj_data)
+        # 只需要 site_xpos：构造时 operator 可能仍在 qpos0 与场景几何重叠，
+        # 完整的 mj_forward 会为这些穿透接触耗尽约束内存。
+        mujoco.mj_kinematics(self.mj_model, self.mj_data)
         for prefix in self.panel_order:
             ids = self.site_ids.get(prefix, [])
             if len(ids) == 0:
