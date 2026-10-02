@@ -76,13 +76,15 @@ def _parse_args(argv: list[str]) -> tuple[str, int, bool, list[str]]:
 
 TASK, N, do_profile, overrides = _parse_args(sys.argv[1:])
 
-# Benchmark defaults: disable viewer, keep data on GPU.
-# User overrides can still override these (last wins in Hydra).
+# Benchmark defaults: disable viewer, keep GS data on GPU. `++` sets a key
+# whether or not a config (e.g. `+test=open_the_door`) already defines it;
+# user overrides listed later still win. `to_numpy` only exists on the GS env.
 bench_defaults = [
-    "+env.viewer.disable=true",
-    "+env.to_numpy=false",
-    "+env.structured=false",
+    "++env.viewer.disable=true",
+    "++env.structured=false",
 ]
+if "render=gs" in overrides:
+    bench_defaults.append("++env.to_numpy=false")
 overrides = bench_defaults + overrides
 
 # Setup

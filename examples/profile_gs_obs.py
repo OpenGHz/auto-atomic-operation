@@ -58,11 +58,13 @@ def _parse_args(argv: list[str]) -> tuple[str, int, list[str]]:
 
 task, iterations, overrides = _parse_args(sys.argv[1:])
 
+# `++` sets a key whether or not a config (e.g. `+test=open_the_door`)
+# already defines it; user overrides listed later still win.
 bench_defaults = [
     "render=gs",
-    "+env.viewer.disable=true",
-    "+env.to_numpy=false",
-    "+env.structured=false",
+    "++env.viewer.disable=true",
+    "++env.to_numpy=false",
+    "++env.structured=false",
 ]
 overrides = bench_defaults + overrides
 

@@ -20,7 +20,7 @@ python examples/bench_env.py open_door_back 30 render=gs +test=open_the_door env
 python examples/bench_env.py open_door_back 10 --profile render=gs +test=open_the_door env.batch_size=2
 ```
 
-> 注：`+test=open_the_door` 会显式设置 `env.to_numpy=true / structured=false`。bench_env.py 默认注入 `+env.to_numpy=false …` 与之冲突时，需要把 bench 默认改为 `++env.to_numpy=false …`（或在命令行用 `++` 显式覆盖），让 to_numpy=false 的"GPU 直留"路径生效。
+> 注：`+test=open_the_door` 会显式设置 `env.to_numpy=true / structured=false`。bench_env.py 以 `++` 注入默认值（`++env.to_numpy=false` 仅在 `render=gs` 时注入），因此可以和该覆盖组合，且 bench 的 `to_numpy=false`"GPU 直留"路径生效；命令行之后再写的覆盖仍然优先。
 
 ---
 
@@ -216,8 +216,8 @@ mask 循环中每个 object 都调用 `batch_update_gaussians(body_pos, body_qua
 ### 7. Benchmark 默认关闭 viewer 和 to_numpy
 
 `bench_env.py` 自动注入以下 Hydra overrides:
-- `+env.viewer.disable=true` — 关闭 MuJoCo viewer 窗口
-- `+env.to_numpy=false` — color/depth 留在 GPU，省去 `.cpu()` 传输
+- `++env.viewer.disable=true` — 关闭 MuJoCo viewer 窗口
+- `++env.to_numpy=false` — color/depth 留在 GPU，省去 `.cpu()` 传输（仅 `render=gs`；原生 MuJoCo 环境没有该字段）
 
 **实际提升**: 关闭 viewer + `to_numpy=false` 让 color/depth 留在 GPU，省掉若干次 `.cpu()`，bench 比起原始默认快约 **2×**。
 
