@@ -415,6 +415,25 @@ def test_junit_no_tests_collected_requires_clean_zero_test_suite(
     assert _junit_no_tests_collected(junit) is False
 
 
+def test_junit_no_tests_collected_accepts_module_level_skip(tmp_path: Path) -> None:
+    # pytest exits with code 5 for a module skipped by importorskip and
+    # reports the skip as one collected test.
+    junit = tmp_path / "skipped.xml"
+    junit.write_text(
+        '<testsuites name="pytest tests"><testsuite errors="0" failures="0" '
+        'skipped="1" tests="1" /></testsuites>',
+        encoding="utf-8",
+    )
+    assert _junit_no_tests_collected(junit) is True
+
+    junit.write_text(
+        '<testsuites><testsuite errors="0" failures="0" skipped="1" tests="2" />'
+        "</testsuites>",
+        encoding="utf-8",
+    )
+    assert _junit_no_tests_collected(junit) is False
+
+
 def test_junit_no_tests_collected_rejects_missing_or_malformed_files(
     tmp_path: Path,
 ) -> None:

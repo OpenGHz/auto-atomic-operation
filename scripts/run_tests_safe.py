@@ -1421,18 +1421,28 @@ def _classify_batch(
 
 
 def _junit_no_tests_collected(path: Path) -> bool:
-    """Recognize pytest's collection code without masking collection errors."""
+    """Recognize pytest's collection code without masking collection errors.
+
+    A module skipped as a whole (``pytest.importorskip`` / module-level
+    ``pytest.skip``) also exits with code 5 but reports its skip as one
+    collected test, so every reported test must be a skip.
+    """
     if not path.is_file():
         return False
     try:
         root = ElementTree.parse(path).getroot()
     except (ElementTree.ParseError, OSError, ValueError):
         return False
-    suites = [root, *root.findall(".//testsuite")]
-    tests = sum(int(suite.attrib.get("tests", "0")) for suite in suites)
-    failures = sum(int(suite.attrib.get("failures", "0")) for suite in suites)
-    errors = sum(int(suite.attrib.get("errors", "0")) for suite in suites)
-    return tests == 0 and failures == 0 and errors == 0
+    suites = list(root.iter("testsuite")) or [root]
+
+    def total(key: str) -> int:
+        return sum(int(suite.attrib.get(key, "0")) for suite in suites)
+
+    return (
+        total("failures") == 0
+        and total("errors") == 0
+        and total("tests") == total("skipped")
+    )
 
 
 @contextmanager

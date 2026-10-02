@@ -92,8 +92,17 @@ class _NonCallableStepEnv(_BareEnv):
     step = 42
 
 
+class _OpaqueStepCallable:
+    # ``inspect.signature`` rejects a non-Signature ``__signature__``. NumPy
+    # ufuncs (formerly used here) became introspectable in NumPy 2.
+    __signature__ = "opaque"
+
+    def __call__(self, *args: object, **kwargs: object) -> None:
+        pass
+
+
 class _OpaqueStepEnv(_BareEnv):
-    step = np.add
+    step = _OpaqueStepCallable()
 
 
 class _AsyncStepEnv(_BareEnv):
