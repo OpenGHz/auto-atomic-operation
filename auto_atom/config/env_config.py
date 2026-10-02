@@ -482,6 +482,12 @@ class EnvConfig(BaseModel, frozen=True):
     """Whether observation timestamps should be emitted in nanoseconds instead of seconds."""
     sim_freq: float | None = None
     """Physics simulation frequency in Hz. If None, uses the timestep defined in the XML model."""
+    gravity: tuple[float, float, float] | None = None
+    """World gravity vector in m/s^2, e.g. ``[0, 0, 0]`` to disable gravity.
+
+    Overrides the composed scene's ``<option gravity>`` after the model is
+    loaded. If None, uses the gravity defined in the XML model.
+    """
     update_freq: float | None = None
     """Control update frequency in Hz. Must be <= sim_freq. If None, defaults to sim_freq (n_substeps=1)."""
     ctrl_interpolation: bool = False

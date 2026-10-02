@@ -84,6 +84,8 @@ class MjWarpObjectOnlyEnv:
         )
         if config.sim_freq is not None:
             self.host_model.opt.timestep = 1.0 / config.sim_freq
+        if config.gravity is not None:
+            self.host_model.opt.gravity[:] = config.gravity
         host_data = self._initial_host_data()
         self.state = MjWarpSceneState(
             self.host_model,

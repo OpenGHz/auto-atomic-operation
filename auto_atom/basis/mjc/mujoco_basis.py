@@ -82,6 +82,8 @@ class MujocoBasis:
         )
         if config.sim_freq is not None:
             self.model.opt.timestep = 1.0 / config.sim_freq
+        if config.gravity is not None:
+            self.model.opt.gravity[:] = config.gravity
 
         # MuJoCo's body/camera pose arrays are model (not data) state.  Task
         # randomization and initial-pose overrides legitimately mutate these
