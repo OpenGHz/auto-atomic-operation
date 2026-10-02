@@ -1,5 +1,5 @@
 # @package _global_
-task_name: airbot_p7_arrange_flowers_gs
+task_name: airbot_p7_arrange_flowers
 
 env:
   viewer:

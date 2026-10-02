@@ -84,6 +84,6 @@ for i in range(m.nbody):
 
 ## 受影响场景
 
-此问题在 `arrange_flowers` 的 `demo.xml` 和 `demo_gs.xml` 中修复（2026-04-03）。
+此问题在 `arrange_flowers` 的 `demo.xml` 和 `demo_gs.xml` 中修复（2026-04-03）。之后 `arrange_flowers` 删除了 `demo.xml`，native 与 GS 渲染共用 `demo_gs.xml`。
 
 新建场景时若使用多 part mesh 作为可抓取物体，应注意检查 density 设置。

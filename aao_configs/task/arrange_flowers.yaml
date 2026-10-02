@@ -9,8 +9,9 @@ env:
   operations: ["pick", "place"]
   update_freq: 15
   viewer:
-    lookat: [0.04, 0.0, 0.1]
-    distance: 0.55
+    # Same viewpoint as the GS rendering of this scene.
+    lookat: [0.5, 0.08, 0.13]
+    distance: 0.8
     azimuth: 135
     elevation: -28
     step_delay: 0.03

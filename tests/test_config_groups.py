@@ -91,6 +91,35 @@ def test_gs_render_merges_scene_assets(task: str) -> None:
     assert render["body_gaussians"]
 
 
+def _differing_keys(native: object, gs: object, path: str = "") -> set[str]:
+    if isinstance(native, dict) and isinstance(gs, dict):
+        keys: set[str] = set()
+        for key in native.keys() | gs.keys():
+            if key not in native or key not in gs:
+                keys.add(f"{path}{key}")
+            else:
+                keys |= _differing_keys(native[key], gs[key], f"{path}{key}.")
+        return keys
+    return set() if native == gs else {path.rstrip(".")}
+
+
+@pytest.mark.parametrize("embodiment", [None, "p7_g2p"])
+def test_shared_layout_scene_differs_only_in_gs_rendering(
+    embodiment: str | None,
+) -> None:
+    # scene/arrange_flowers.yaml selects demo_gs.xml for both renderers.
+    overrides = [f"embodiment={embodiment}"] if embodiment else []
+    native = _prepared("arrange_flowers", overrides)
+    gs = _prepared("arrange_flowers", [*overrides, "render=gs"])
+
+    assert native["env"]["scene"]["base"].endswith("/arrange_flowers/demo_gs.xml")
+    assert _differing_keys(native, gs) == {
+        "env._target_",
+        "env.gaussian_render",
+        "gs_dir",
+    }
+
+
 def test_embodiment_swap_and_adaptation() -> None:
     robotiq = _prepared("pick_and_place")
     xf9600 = _prepared("pick_and_place", ["embodiment=xf9600_mocap"])

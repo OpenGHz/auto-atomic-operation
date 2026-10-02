@@ -32,7 +32,7 @@ overrides win over everything:
 | 2 | `execution` | `execution/` | `physical` or `object_only` execution |
 | 3 | `observation` | `observation/` | Sensor streams and camera defaults (`observation.camera.width`, `enable_depth`, ...) |
 | 4 | `camera_layout` | `camera_layout/` | Which camera roles are kept (`all`, `operator_only`, `no_operator`) |
-| 5 | `scene` | `scene/` | `scene_name` (the MJCF under `assets/xmls/scenes/<scene_name>/`), static cameras, scene asset layers |
+| 5 | `scene` | `scene/` | `scene_name` (the MJCF under `assets/xmls/scenes/<scene_name>/`), static cameras, scene asset layers; `model_name: demo_gs` when native rendering shares the GS-aligned layout (`arrange_flowers`) |
 | 6 | `embodiment` | `embodiment/` | Robot MJCF layer, operator binding, IK, home pose, wrist camera, `eef_top_down_orientation` |
 | 7 | `task` | `task/` | Stages, objects, operations, randomization, viewer framing |
 | 8 | `render` | `render/` | `mujoco` (native) or `gs` (Gaussian splatting) |
