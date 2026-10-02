@@ -23,9 +23,9 @@ task_operators:
   arm:
     control:
       # The mocap weld is slightly compliant; once the gripper picks up
-      # the source_block its position lags the mocap target by ~1 cm.
-      # Loosen the position tolerance from the 0.008 default so the
-      # post-pick lift / place pose-reach checks accept that sag.
+      # the source_block its position lags the mocap target.  Loosen the
+      # position tolerance from the 0.008 default so the post-pick lift /
+      # place pose-reach checks accept that sag.
       tolerance:
         position: 0.015
         orientation: 0.10

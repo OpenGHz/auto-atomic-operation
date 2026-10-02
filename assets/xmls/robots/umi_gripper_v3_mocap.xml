@@ -45,7 +45,11 @@
   </worldbody>
 
   <equality>
-    <weld body1="umi_mocap" body2="umi_interface" solref="0.3 1" solimp="0.95 0.99 0.001"/>
+    <!-- Only the interface is gravity-compensated, so the gripper links and
+         any held payload hang on this weld.  A 0.3 s time constant let a held
+         0.2 kg tuber pitch the EEF ~4 cm off its command; 0.10 s (the
+         xf9600_mocap value) bounds that sag while keeping motion smooth. -->
+    <weld body1="umi_mocap" body2="umi_interface" solref="0.10 1" solimp="0.95 0.99 0.001"/>
   </equality>
 
   <sensor>
