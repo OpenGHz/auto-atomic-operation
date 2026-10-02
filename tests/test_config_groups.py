@@ -103,16 +103,29 @@ def _differing_keys(native: object, gs: object, path: str = "") -> set[str]:
     return set() if native == gs else {path.rstrip(".")}
 
 
-@pytest.mark.parametrize("embodiment", [None, "p7_g2p"])
-def test_shared_layout_scene_differs_only_in_gs_rendering(
-    embodiment: str | None,
-) -> None:
-    # scene/arrange_flowers.yaml selects demo_gs.xml for both renderers.
-    overrides = [f"embodiment={embodiment}"] if embodiment else []
-    native = _prepared("arrange_flowers", overrides)
-    gs = _prepared("arrange_flowers", [*overrides, "render=gs"])
+SHARED_LAYOUT_VARIANTS = [
+    ("arrange_flowers", None),
+    ("arrange_flowers", "p7_g2p"),
+    ("cup_on_coaster", None),
+    ("cup_on_coaster", "p7_g2p"),
+    ("cup_on_coaster", "p7_v3_umi_v3"),
+]
 
-    assert native["env"]["scene"]["base"].endswith("/arrange_flowers/demo_gs.xml")
+
+@pytest.mark.parametrize(
+    ("task", "embodiment"),
+    SHARED_LAYOUT_VARIANTS,
+    ids=[f"{t}-{e or 'default'}" for t, e in SHARED_LAYOUT_VARIANTS],
+)
+def test_shared_layout_scene_differs_only_in_gs_rendering(
+    task: str, embodiment: str | None
+) -> None:
+    # scene/<task>.yaml selects demo_gs.xml for both renderers.
+    overrides = [f"embodiment={embodiment}"] if embodiment else []
+    native = _prepared(task, overrides)
+    gs = _prepared(task, [*overrides, "render=gs"])
+
+    assert native["env"]["scene"]["base"].endswith(f"/{task}/demo_gs.xml")
     assert _differing_keys(native, gs) == {
         "env._target_",
         "env.gaussian_render",

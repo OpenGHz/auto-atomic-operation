@@ -1,11 +1,9 @@
 # @package _global_
 #
 # Shared P7 adaptation of cup_on_coaster: the arm base sits behind the table
-# and both objects are randomized relative to it. The demo_gs.xml layout is
-# used for native MuJoCo rendering as well. Per-gripper heights live in
+# and both objects are randomized relative to it. Per-gripper heights live in
 # `p7_cup_on_coaster`.
 task_name: airbot_p7_cup_on_coaster
-model_name: demo_gs
 max_updates: 650
 
 env:

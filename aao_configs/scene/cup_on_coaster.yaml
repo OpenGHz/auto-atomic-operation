@@ -1,5 +1,8 @@
 # @package _global_
 scene_name: cup_on_coaster
+# Native and GS rendering share the GS-aligned layout (table, cup, coaster and
+# cameras in the reconstructed frame), so `render=gs` changes only the renderer.
+model_name: demo_gs
 
 env:
   cameras:

@@ -32,7 +32,7 @@ overrides win over everything:
 | 2 | `execution` | `execution/` | `physical` or `object_only` execution |
 | 3 | `observation` | `observation/` | Sensor streams and camera defaults (`observation.camera.width`, `enable_depth`, ...) |
 | 4 | `camera_layout` | `camera_layout/` | Which camera roles are kept (`all`, `operator_only`, `no_operator`) |
-| 5 | `scene` | `scene/` | `scene_name` (the MJCF under `assets/xmls/scenes/<scene_name>/`), static cameras, scene asset layers; `model_name: demo_gs` when native rendering shares the GS-aligned layout (`arrange_flowers`) |
+| 5 | `scene` | `scene/` | `scene_name` (the MJCF under `assets/xmls/scenes/<scene_name>/`), static cameras, scene asset layers; `model_name: demo_gs` when native rendering shares the GS-aligned layout (`arrange_flowers`, `cup_on_coaster`) |
 | 6 | `embodiment` | `embodiment/` | Robot MJCF layer, operator binding, IK, home pose, wrist camera, `eef_top_down_orientation` |
 | 7 | `task` | `task/` | Stages, objects, operations, randomization, viewer framing |
 | 8 | `render` | `render/` | `mujoco` (native) or `gs` (Gaussian splatting) |
@@ -210,11 +210,13 @@ task:
 
 If the task needs new objects, add a scene: `scene/<scene>.yaml` sets
 `scene_name` (the robot-less host MJCF is
-`assets/xmls/scenes/<scene_name>/demo.xml`) and its static cameras as slots:
+`assets/xmls/scenes/<scene_name>/demo.xml`, or `demo_gs.xml` with
+`model_name: demo_gs`) and its static cameras as slots:
 
 ```yaml
 # @package _global_
 scene_name: cup_on_coaster
+model_name: demo_gs   # native and GS rendering share the GS-aligned layout
 
 env:
   cameras:
