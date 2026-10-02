@@ -273,4 +273,6 @@ Parity with the flat layout was checked before the old files were removed:
   `hang_toothbrush_cup` crashed on both layouts at construction time (fixed separately: MuJoCo
   ran out of constraint memory for the contacts of the operator buried at
   `qpos0`); after the fix it runs, but its `pick_cup` stage does not succeed (the
-  GS variant fails the same way on both layouts).
+  GS variant fails the same way on both layouts). The GS variant was later fixed
+  separately by stiffening the Robotiq mocap weld; the native scene layout still
+  does not complete `pick_cup`.

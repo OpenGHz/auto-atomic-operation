@@ -167,7 +167,7 @@ Robotiq 的物理 body 通过 weld 约束跟随 mocap body：
 ```xml
 <weld body1="robotiq_mocap"
       body2="robotiq_interface"
-      solref="0.3 1"
+      solref="0.05 1"
       solimp="0.95 0.99 0.001"/>
 ```
 

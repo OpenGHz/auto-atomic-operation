@@ -28,10 +28,10 @@ MuJoCo 中 `type="mesh"` 的 geom 设置 `density` 后，质量 = mesh 体积 ×
 机器人通过 mocap weld 约束跟踪目标位置（`robotiq.xml`）：
 
 ```xml
-<weld body1="robotiq_mocap" body2="robotiq_interface" solref="0.3 1" solimp="0.95 0.99 0.001"/>
+<weld body1="robotiq_mocap" body2="robotiq_interface" solref="0.05 1" solimp="0.95 0.99 0.001"/>
 ```
 
-`solref="0.3 1"` 定义了约束的刚度和阻尼。当抓取的物体过重时，重力产生的下拉力超过 weld 约束能提供的跟踪力，导致机器人无法将物体抬升到目标位置。
+`solref="0.05 1"` 定义了约束的刚度和阻尼。当抓取的物体过重时，重力产生的下拉力超过 weld 约束能提供的跟踪力，导致机器人无法将物体抬升到目标位置。
 
 ### 对比：同场景中其他物体
 

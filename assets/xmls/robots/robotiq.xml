@@ -119,7 +119,11 @@
   </contact>
 
   <equality>
-    <weld body1="robotiq_mocap" body2="robotiq_interface" solref="0.3 1" solimp="0.95 0.99 0.001"/>
+    <!-- 50 ms time constant. The eef_pose site sits 0.149 m from the welded
+         body, so a soft weld lets grip forces tilt a held object enough to
+         miss the default 1 cm / 0.08 rad reach tolerance (0.3 timed out
+         hang_toothbrush_cup's lift); 0.02 is too stiff for close_drawer. -->
+    <weld body1="robotiq_mocap" body2="robotiq_interface" solref="0.05 1" solimp="0.95 0.99 0.001"/>
     <connect anchor="-0.0179014 -0.00651468 0.0044" body1="right_follower" body2="right_coupler" solimp="0.95 0.99 0.001" solref="0.005 1"/>
     <connect anchor="-0.0179014 -0.00651468 0.0044" body1="left_follower" body2="left_coupler" solimp="0.95 0.99 0.001" solref="0.005 1"/>
     <joint joint1="right_driver_joint" joint2="left_driver_joint" polycoef="0 1 0 0 0" solimp="0.95 0.99 0.001" solref="0.005 1"/>
