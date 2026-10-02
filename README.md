@@ -49,6 +49,15 @@ pip install -e ".[mujoco]"    # with the built-in MuJoCo backend
 pip install -e ".[gs]"        # with 3D Gaussian Splatting rendering
 ```
 
+Alternatively, [pixi](https://pixi.sh) creates a project-local environment (Python 3.12,
+editable install with the MuJoCo extra, pytest, and asset-inspection tools) from
+`pyproject.toml` and `pixi.lock`:
+
+```bash
+pixi install
+pixi run aao-demo --config-name pick_and_place
+```
+
 MuJoCo demo assets live in Git LFS. After cloning, install Git LFS and pull them:
 
 ```bash
