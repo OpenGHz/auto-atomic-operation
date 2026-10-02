@@ -1,15 +1,17 @@
 """Interactively tune GS background xyz offset with live color + mask preview.
 
+The task is always composed with ``render=gs``.
+
 Usage:
     /home/ghz/.mini_conda3/envs/airbot_play_data/bin/python \
-        examples/tune_gs_background_transform.py --config-name press_three_buttons_gs
+        examples/tune_gs_background_transform.py --task press_three_buttons
 
     /home/ghz/.mini_conda3/envs/airbot_play_data/bin/python \
-        examples/tune_gs_background_transform.py --config-name wipe_the_table_gs \
+        examples/tune_gs_background_transform.py --task wipe_the_table \
         --camera env1_cam --step 0.002
 
-Extra Hydra overrides can be appended after ``--``:
-    ... -- --bg3dgs_name=discover-lab2
+Extra Hydra overrides (embodiment, GS background, ...) can be appended after ``--``:
+    ... -- embodiment=p7_g2p render_assets/background=discover-lab2
 """
 
 from __future__ import annotations
@@ -20,9 +22,10 @@ from typing import Any
 
 import cv2
 import numpy as np
-from hydra import compose, initialize_config_dir
 from omegaconf import DictConfig, OmegaConf
 
+from auto_atom.config_loader import compose_task_run
+from auto_atom.execution_config import prepare_task_config_for_instantiation
 from auto_atom.runner.common import get_config_dir, prepare_task_file
 from auto_atom.runtime import ComponentRegistry
 
@@ -40,7 +43,11 @@ HELP_TEXT = [
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--config-name", default="press_three_buttons_gs")
+    parser.add_argument(
+        "--task",
+        default="press_three_buttons",
+        help="Task to compose (always with render=gs).",
+    )
     parser.add_argument(
         "--camera",
         action="append",
@@ -77,13 +84,13 @@ def _parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def _compose_cfg(config_name: str, overrides: list[str]) -> DictConfig:
-    config_dir = get_config_dir()
-    with initialize_config_dir(
-        config_dir=str(config_dir),
-        version_base=None,
-    ):
-        return compose(config_name=config_name, overrides=overrides)
+def _compose_cfg(task: str, overrides: list[str]) -> tuple[DictConfig, str]:
+    """Compose ``task`` with GS rendering; return the prepared cfg and run name.
+
+    The prepared config has ``env.cameras`` flattened into a list.
+    """
+    cfg, run_name = compose_task_run(task, ["render=gs", *overrides], get_config_dir())
+    return prepare_task_config_for_instantiation(cfg), run_name
 
 
 def _resolve_camera_names(
@@ -310,7 +317,7 @@ def _render_preview(
 def main() -> None:
     args = _parse_args()
     overrides = [ov for ov in args.overrides if ov != "--"]
-    cfg = _compose_cfg(args.config_name, overrides)
+    cfg, run_name = _compose_cfg(args.task, overrides)
     camera_names = _resolve_camera_names(cfg, args.camera, args.all_cameras)
     cfg = _prepare_cfg_for_preview(cfg, camera_names, keep_viewer=args.viewer)
 
@@ -327,9 +334,7 @@ def main() -> None:
     )
     offset = initial.copy()
     step = float(args.step)
-    window_name = (
-        f"GS background tuner | {args.config_name} | {', '.join(camera_names)}"
-    )
+    window_name = f"GS background tuner | {run_name} | {', '.join(camera_names)}"
 
     print(f"Cameras: {camera_names}")
     print(f"Initial offset: {offset.tolist()}")

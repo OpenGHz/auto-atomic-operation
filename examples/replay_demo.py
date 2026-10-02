@@ -1,7 +1,10 @@
 """Replay recorded low-level actions with the DataReplayRunner.
 
-By default this script loads ``outputs/records/demos/<config_name>.npz``
-produced by ``record_demo.py`` and replays the saved sequence step by step.
+By default this script loads ``outputs/records/demos/<run_name>.npz``
+produced by ``record_demo.py`` with the same ``task=`` / ``embodiment=`` /
+``render=`` choices (``<run_name>`` is ``<task>__<embodiment>[__<render>]``,
+see ``auto_atom.runner.common.describe_run``) and replays the saved sequence
+step by step.
 It also supports loading mcap files for joint-level replay, in two formats
 (auto-detected): the legacy ROS2 CDR format (``sensor_msgs/JointState``) and
 the newer Foxglove flatbuffer format (``foxglove.JointStates``).
@@ -9,15 +12,15 @@ the newer Foxglove flatbuffer format (``foxglove.JointStates``).
 Examples:
 
     # NPZ demos
-    python examples/replay_demo.py --config-name press_three_buttons
-    python examples/replay_demo.py --config-name pick_and_place +replay.mode=ctrl
-    python examples/replay_demo.py --config-name pick_and_place +replay.save_gif=true
-    python examples/replay_demo.py --config-name pick_and_place +replay.demo_name=my_demo
+    python examples/replay_demo.py task=press_three_buttons
+    python examples/replay_demo.py task=pick_and_place +replay.mode=ctrl
+    python examples/replay_demo.py task=pick_and_place +replay.save_gif=true
+    python examples/replay_demo.py task=pick_and_place +replay.demo_name=my_demo
 
     # ROS2 mcap replay (joint mode, auto-selected when mcap_path is set)
-    python examples/replay_demo.py --config-name pick_and_place \
+    python examples/replay_demo.py task=pick_and_place \
         +replay.mcap_path=data/recording_20260401_185226.mcap
-    python examples/replay_demo.py --config-name pick_and_place \
+    python examples/replay_demo.py task=pick_and_place \
         +replay.mcap_path=data/recording.mcap \
         +replay.arm_topic=/robot/right_arm/joint_state \
         +replay.gripper_topic=/robot/right_gripper/distance \
@@ -26,7 +29,7 @@ Examples:
 
     # Foxglove flatbuffer mcap replay (arm/gripper topics auto-resolve to the
     # airbot commanded /action/... joint_position streams)
-    python examples/replay_demo.py --config-name open_door_airbot_play_g2p \
+    python examples/replay_demo.py task=open_door embodiment=airbot_play_g2p \
         +replay.mcap_path=data/replay/george.mcap
 """
 
@@ -38,7 +41,6 @@ from collections import defaultdict
 import hydra
 import imageio.v3 as iio
 import numpy as np
-from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, OmegaConf, open_dict
 from PIL import Image
 from pydantic import Field
@@ -48,7 +50,7 @@ from auto_atom import (
     ObservationEnvProtocol,
     require_env_capability,
 )
-from auto_atom.runner.common import get_config_dir
+from auto_atom.runner.common import get_config_dir, get_run_name
 from auto_atom.runner.data_replay import (
     DataReplayConfig,
     DataReplayRunner,
@@ -167,7 +169,7 @@ def make_observation_getter(
 
 @hydra.main(
     config_path=str(get_config_dir()),
-    config_name="pick_and_place",
+    config_name="config",
     version_base=None,
 )
 def main(cfg: DictConfig) -> None:
@@ -177,8 +179,7 @@ def main(cfg: DictConfig) -> None:
 
     script_cfg = ReplayScriptConfig.model_validate(raw.pop("replay", {}))
 
-    config_name = HydraConfig.get().job.config_name
-    demo_name = script_cfg.demo_name or config_name
+    demo_name = script_cfg.demo_name or get_run_name()
     project_root = hydra.utils.get_original_cwd()
     video_dir = os.path.join(project_root, "outputs", "records", "videos")
     os.makedirs(video_dir, exist_ok=True)

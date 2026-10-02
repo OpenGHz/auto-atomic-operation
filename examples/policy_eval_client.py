@@ -9,8 +9,13 @@ Usage::
 
     # Terminal 2: run this client
     python examples/policy_eval_client.py
-    python examples/policy_eval_client.py --config-name cup_on_coaster
+    python examples/policy_eval_client.py --task cup_on_coaster
+    python examples/policy_eval_client.py --task press_blue_button --override embodiment=p7_g2p --override render=gs
     python examples/policy_eval_client.py --host 10.0.0.5 --port 9999
+
+Without ``--task`` the client evaluates ``task=press_three_buttons render=gs``.
+The demo defaults to ``outputs/records/demos/<run_name>.npz`` as written by
+``record_demo.py`` with the same task and overrides.
 """
 
 from __future__ import annotations
@@ -22,7 +27,11 @@ from typing import Any
 import numpy as np
 
 from auto_atom import TaskUpdate
+from auto_atom.config_loader import compose_task_run
 from auto_atom.ipc import RemotePolicyEvaluator
+
+DEFAULT_TASK = "press_three_buttons"
+DEFAULT_OVERRIDES = ["render=gs"]
 
 
 def load_demo(path: Path) -> dict:
@@ -101,32 +110,53 @@ class RecordedDemoPolicy:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Remote policy evaluation client")
-    parser.add_argument("--config-name", default="press_three_buttons_gs")
+    parser.add_argument(
+        "--task",
+        default=None,
+        help=f"Task to evaluate (default: {DEFAULT_TASK} with "
+        f"{' '.join(DEFAULT_OVERRIDES)}).",
+    )
+    parser.add_argument(
+        "--override",
+        action="append",
+        default=[],
+        metavar="KEY=VALUE",
+        help="Hydra override for the composed config (repeatable), "
+        "e.g. --override embodiment=p7_g2p --override render=gs.",
+    )
     parser.add_argument(
         "--demo-path",
         type=Path,
         default=None,
-        help="Path to demo .npz file (default: assets/demos/<config_name>.npz)",
+        help="Path to demo .npz file (default: outputs/records/demos/<run_name>.npz)",
     )
     parser.add_argument("--host", default="localhost")
     parser.add_argument("--port", type=int, default=18861)
     args = parser.parse_args()
 
-    config_name: str = args.config_name
-    demo_path: Path = (
-        args.demo_path or Path("outputs/records/demos") / f"{config_name}.npz"
+    task: str = args.task or DEFAULT_TASK
+    overrides: list[str] = (
+        list(args.override) if args.task else [*DEFAULT_OVERRIDES, *args.override]
     )
+    if args.demo_path is not None:
+        demo_path: Path = args.demo_path
+    else:
+        # record_demo.py names its output after the run (task/embodiment/render).
+        _, run_name = compose_task_run(task, overrides)
+        demo_path = Path("outputs/records/demos") / f"{run_name}.npz"
 
     if not demo_path.exists():
         raise FileNotFoundError(
             f"Demo not found: {demo_path}\n"
             f"Record first: python examples/record_demo.py "
-            f"--config-name {config_name} env.batch_size=1"
+            f"{' '.join([f'task={task}', *overrides])} env.batch_size=1"
         )
 
     evaluator = RemotePolicyEvaluator(host=args.host, port=args.port)
     evaluator.from_config(
-        config_name, overrides=["env.batch_size=1"], sim_loop_frequency=10.0
+        task,
+        overrides=[*overrides, "env.batch_size=1"],
+        sim_loop_frequency=10.0,
     )
     demo = normalize_demo_for_batch(load_demo(demo_path), evaluator.batch_size)
     print(f"Loaded {len(demo['position'])} steps from {demo_path}")

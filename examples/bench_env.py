@@ -1,13 +1,20 @@
 """Minimal benchmark: capture_observation + update timing.
 
 Usage:
-    python examples/bench_env.py <config_name> [iterations] [hydra overrides...]
+    python examples/bench_env.py [task] [iterations] [--profile] [hydra overrides...]
+
+``task`` is an option of the ``task`` config group. Without it the benchmark
+runs ``task=cup_on_coaster render=gs``; with it, pass ``render=gs`` /
+``embodiment=...`` as overrides when needed.
 
 Examples:
-    python examples/bench_env.py press_three_buttons_gs
-    python examples/bench_env.py press_three_buttons_gs 50 env.batch_size=4
+    python examples/bench_env.py press_three_buttons render=gs
+    python examples/bench_env.py press_three_buttons 50 render=gs env.batch_size=4
     python examples/bench_env.py env.batch_size=10
-    python examples/bench_env.py cup_on_coaster_gs 20 --profile
+    python examples/bench_env.py cup_on_coaster 20 --profile render=gs
+
+Results are saved to ``outputs/bench/<run_name>.json`` where ``<run_name>`` is
+``<task>__<embodiment>[__<render>]``.
 """
 
 import json
@@ -20,9 +27,10 @@ import numpy as np
 from auto_atom import (
     ObservationEnvProtocol,
     SimulationLoopEnvProtocol,
-    load_task_file_hydra,
     require_env_capability,
 )
+from auto_atom.config_loader import compose_task_run
+from auto_atom.runner.common import prepare_task_file
 
 
 def _log_progress(message: str) -> None:
@@ -33,37 +41,40 @@ def _looks_like_override(arg: str) -> bool:
     return "=" in arg or arg.startswith(("+", "~"))
 
 
-def _looks_like_config_name(arg: str) -> bool:
+def _looks_like_task_name(arg: str) -> bool:
     if _looks_like_override(arg) or arg.isdigit():
         return False
-    return (Path.cwd() / "aao_configs" / f"{arg}.yaml").exists()
+    return (Path.cwd() / "aao_configs" / "task" / f"{arg}.yaml").exists()
 
 
 def _parse_args(argv: list[str]) -> tuple[str, int, bool, list[str]]:
-    # Parse args: [config] [N] [--profile] [hydra overrides...]
+    # Parse args: [task] [N] [--profile] [hydra overrides...]
     args = list(argv)
     do_profile = "--profile" in args
     if do_profile:
         args.remove("--profile")
 
-    config_name = "cup_on_coaster_gs"
+    task = "cup_on_coaster"
     iterations = 10
     overrides: list[str] = []
 
     idx = 0
-    if idx < len(args) and _looks_like_config_name(args[idx]):
-        config_name = args[idx]
+    if idx < len(args) and _looks_like_task_name(args[idx]):
+        task = args[idx]
         idx += 1
+    else:
+        # The default benchmark is the GS variant of the default task.
+        overrides.append("render=gs")
 
     if idx < len(args) and args[idx].isdigit():
         iterations = int(args[idx])
         idx += 1
 
-    overrides = args[idx:]
-    return config_name, iterations, do_profile, overrides
+    overrides += args[idx:]
+    return task, iterations, do_profile, overrides
 
 
-CONFIG_NAME, N, do_profile, overrides = _parse_args(sys.argv[1:])
+TASK, N, do_profile, overrides = _parse_args(sys.argv[1:])
 
 # Benchmark defaults: disable viewer, keep data on GPU.
 # User overrides can still override these (last wins in Hydra).
@@ -75,10 +86,9 @@ bench_defaults = [
 overrides = bench_defaults + overrides
 
 # Setup
-_log_progress(
-    f"loading config={CONFIG_NAME} overrides={overrides or '[]'} iterations={N}"
-)
-task_file = load_task_file_hydra(CONFIG_NAME, overrides=overrides)
+_log_progress(f"loading task={TASK} overrides={overrides or '[]'} iterations={N}")
+cfg, RUN_NAME = compose_task_run(TASK, overrides)
+task_file = prepare_task_file(cfg)
 _log_progress("building backend")
 backend = task_file.backend(task_file.task, task_file.task_operators)
 _log_progress("setting up backend")
@@ -99,7 +109,7 @@ simulation_env = require_env_capability(
     expected_batch_size=backend.batch_size,
 )
 
-print(f"config={CONFIG_NAME}  batch_size={backend.batch_size}  iterations={N}")
+print(f"run={RUN_NAME}  batch_size={backend.batch_size}  iterations={N}")
 
 # Warmup (exclude from stats)
 _log_progress("running warmup")
@@ -200,7 +210,8 @@ def _stat_dict(arr_ms: np.ndarray) -> dict:
 
 
 bench_result = {
-    "config_name": CONFIG_NAME,
+    "run_name": RUN_NAME,
+    "task": TASK,
     "batch_size": backend.batch_size,
     "iterations": N,
     "overrides": overrides,
@@ -209,7 +220,7 @@ bench_result = {
     "total": _stat_dict(total),
 }
 
-out_path = Path("outputs") / "bench" / f"{CONFIG_NAME}.json"
+out_path = Path("outputs") / "bench" / f"{RUN_NAME}.json"
 out_path.parent.mkdir(parents=True, exist_ok=True)
 out_path.write_text(json.dumps(bench_result, indent=2, ensure_ascii=False) + "\n")
 print(f"\nBenchmark saved to {out_path.resolve()}")

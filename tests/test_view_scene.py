@@ -99,8 +99,7 @@ def test_script_cli_config_enables_object_frames_without_consuming_hydra_args() 
         "view_scene.py",
         "--debug",
         "--show-object-frames",
-        "--config-name",
-        "pick_and_place",
+        "task=pick_and_place",
         "--",
         "--show-object-frames",
     ]
@@ -111,8 +110,7 @@ def test_script_cli_config_enables_object_frames_without_consuming_hydra_args() 
     assert config.show_object_frames
     assert argv == [
         "view_scene.py",
-        "--config-name",
-        "pick_and_place",
+        "task=pick_and_place",
         "--",
         "--show-object-frames",
     ]
@@ -434,9 +432,9 @@ def test_native_viewer_skips_the_camera_overlay_when_disabled(
 def test_script_cli_config_controls_camera_previews() -> None:
     assert view_scene.ViewSceneCliConfig().show_cameras is True
 
-    argv = ["view_scene.py", "--no-show-cameras", "--config-name", "pick_and_place"]
+    argv = ["view_scene.py", "--no-show-cameras", "task=pick_and_place"]
 
     config = view_scene._parse_script_cli_config(argv)
 
     assert config.show_cameras is False
-    assert argv == ["view_scene.py", "--config-name", "pick_and_place"]
+    assert argv == ["view_scene.py", "task=pick_and_place"]

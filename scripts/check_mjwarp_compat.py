@@ -30,7 +30,9 @@ Examples::
     python scripts/check_mjwarp_compat.py --probe-python /tmp/mjw/venv/bin/python
 
     # Stages separately.
-    python scripts/check_mjwarp_compat.py export --config-name rack_plate_p7_v4_umi_v3
+    python scripts/check_mjwarp_compat.py export --task rack_plate
+    python scripts/check_mjwarp_compat.py export --task open_door \\
+        --override embodiment=p7_v3_umi_v3
     /tmp/mjw/venv/bin/python scripts/check_mjwarp_compat.py probe outputs/mjwarp-compat
 
 A ``.mjb`` is tied to the MuJoCo version that wrote it, so the manifest records
@@ -56,7 +58,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Sequence
 
-DEFAULT_CONFIG = "rack_plate_p7_v4_umi_v3"
+DEFAULT_TASK = "rack_plate"
 DEFAULT_OUT_DIR = Path("outputs/mjwarp-compat")
 DEFAULT_MODES = ("physical", "object_only")
 DEFAULT_NWORLD = 2
@@ -85,7 +87,8 @@ MANIFEST_NAME = "manifest.json"
 
 
 def export_models(
-    config_name: str,
+    task: str,
+    overrides: Sequence[str],
     out_dir: Path,
     modes: Sequence[str],
 ) -> Path:
@@ -94,12 +97,13 @@ def export_models(
     The scene is built through ``prepare_task_config_for_instantiation`` and
     ``load_composed_scene`` so operator layers, config-declared cameras and
     ``execution.mode`` stripping behave exactly as they do in a real run.
+    Files are named after the run (``<task>__<embodiment>[__<render>]``).
     """
     import mujoco
-    from hydra import compose, initialize_config_dir
     from omegaconf import OmegaConf
 
     from auto_atom.config.env_config import EnvConfig
+    from auto_atom.config_loader import compose_task_run
     from auto_atom.execution_config import prepare_task_config_for_instantiation
     from auto_atom.scene_composition import load_composed_scene
 
@@ -111,10 +115,12 @@ def export_models(
 
     out_dir.mkdir(parents=True, exist_ok=True)
     entries: list[dict[str, Any]] = []
+    run_name = ""
 
     for mode in modes:
-        with initialize_config_dir(config_dir=str(config_dir), version_base=None):
-            cfg = compose(config_name=config_name, overrides=[f"execution.mode={mode}"])
+        cfg, run_name = compose_task_run(
+            task, [*overrides, f"execution.mode={mode}"], config_dir
+        )
         prepared = prepare_task_config_for_instantiation(cfg)
         env_node = OmegaConf.to_container(prepared.env, resolve=True)
         env_node.pop("_target_", None)
@@ -124,7 +130,7 @@ def export_models(
             env_config.scene,
             cameras=env_config.camera_elements(),
         )
-        path = out_dir / f"{config_name}.{mode}.mjb"
+        path = out_dir / f"{run_name}.{mode}.mjb"
         mujoco.mj_saveModel(model, str(path), None)
 
         # Camera specs travel with the model so the probe can render exactly
@@ -166,7 +172,9 @@ def export_models(
     manifest_path.write_text(
         json.dumps(
             {
-                "config_name": config_name,
+                "run_name": run_name,
+                "task": task,
+                "overrides": list(overrides),
                 "mujoco_version": mujoco.__version__,
                 "models": entries,
             },
@@ -561,9 +569,18 @@ def build_parser() -> argparse.ArgumentParser:
         help=f"Directory for exported models (default: {DEFAULT_OUT_DIR}).",
     )
     parser.add_argument(
-        "--config-name",
-        default=DEFAULT_CONFIG,
-        help=f"aao_configs task file to export (default: {DEFAULT_CONFIG}).",
+        "--task",
+        default=DEFAULT_TASK,
+        help=f"aao_configs task to export (default: {DEFAULT_TASK}).",
+    )
+    parser.add_argument(
+        "--override",
+        action="append",
+        dest="overrides",
+        default=[],
+        metavar="KEY=VALUE",
+        help="Hydra override applied when composing the task; repeatable "
+        "(e.g. --override embodiment=p7_v3_umi_v3).",
     )
     parser.add_argument(
         "--mode",
@@ -630,8 +647,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     modes = tuple(args.modes) if args.modes else DEFAULT_MODES
 
     if args.stage in ("export", "both"):
-        print(f"=== export ({args.config_name}) ===")
-        export_models(args.config_name, out_dir, modes)
+        print(f"=== export ({' '.join([f'task={args.task}', *args.overrides])}) ===")
+        export_models(args.task, args.overrides, out_dir, modes)
         print()
 
     if args.stage == "export":

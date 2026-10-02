@@ -2,7 +2,8 @@
 
 This script loads a scene config (GS or native MuJoCo), resets to the initial
 keyframe, renders available per-camera outputs, and saves them under
-``outputs/rendering_<backend>_<config>_<timestamp>/``.
+``outputs/rendering_<backend>_<run_name>_<timestamp>/`` where ``<run_name>``
+is ``<task>__<embodiment>[__<render>]``.
 
 Saved files per camera:
 
@@ -17,11 +18,10 @@ before the extension, for example ``<camera>_rgb_env2.png``.
 
 Usage::
 
-    python examples/save_rendering.py
-    python examples/save_rendering.py --config-name press_three_buttons
-    python examples/save_rendering.py --config-name press_three_buttons_gs
-    python examples/save_rendering.py show=true
-    python examples/save_rendering.py +recorder.enabled=true
+    python examples/save_rendering.py task=press_three_buttons
+    python examples/save_rendering.py task=press_three_buttons render=gs
+    python examples/save_rendering.py task=press_three_buttons +show=true
+    python examples/save_rendering.py task=press_three_buttons +recorder.enabled=true
 """
 
 from __future__ import annotations
@@ -33,11 +33,10 @@ import hydra
 import imageio.v3 as iio
 import matplotlib.pyplot as plt
 import numpy as np
-from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, OmegaConf
 from pydantic import BaseModel, Field
 
-from auto_atom.runner.common import get_config_dir, prepare_task_file
+from auto_atom.runner.common import get_config_dir, get_run_name, prepare_task_file
 from auto_atom.runtime import ComponentRegistry, TaskRunner
 
 
@@ -282,7 +281,7 @@ def _select_video_frame(
 
 @hydra.main(
     config_path=str(get_config_dir()),
-    config_name="press_three_buttons",
+    config_name="config",
     version_base=None,
 )
 def main(cfg: DictConfig) -> None:
@@ -303,10 +302,10 @@ def main(cfg: DictConfig) -> None:
 
     runner = TaskRunner().from_config(task_file)
     batch_size = int(getattr(env, "batch_size", 1))
-    config_name = HydraConfig.get().job.config_name
+    run_name = get_run_name()
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     render_tag = "gs" if use_gs else "mj"
-    out_dir = Path("outputs") / f"rendering_{render_tag}_{config_name}_{timestamp}"
+    out_dir = Path("outputs") / f"rendering_{render_tag}_{run_name}_{timestamp}"
     out_dir.mkdir(parents=True, exist_ok=True)
     video_frames: dict[str, list[list[np.ndarray]]] = {
         cam_name: [[] for _ in range(batch_size)]

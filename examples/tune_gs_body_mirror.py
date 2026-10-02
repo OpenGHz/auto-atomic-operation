@@ -34,14 +34,15 @@ Keyboard (matches ``gs_frame_tuner.py`` conventions):
   b                print help
   q / Esc          quit
 
-Usage:
-    python3 examples/tune_gs_body_mirror.py --config-name open_door_airbot_play_back_gs
+Usage (the task is always composed with ``render=gs``):
+    python3 examples/tune_gs_body_mirror.py --task open_door_back
     python3 examples/tune_gs_body_mirror.py \
-        --config-name open_door_airbot_play_back_gs \
+        --task open_door_back \
         --camera env0_cam --bg-index 3 --width 720 --height 540
 
 Extra Hydra overrides can be appended after ``--``:
     ... -- env.gaussian_render.minibatch=256
+    ... -- embodiment=airbot_play_g2p render_assets/background=simple_room
 """
 
 from __future__ import annotations
@@ -56,11 +57,12 @@ import cv2
 import mujoco
 import numpy as np
 import torch
-from hydra import compose, initialize_config_dir
 from omegaconf import DictConfig, OmegaConf
 from PySide6 import QtCore, QtGui, QtWidgets
 from scipy.spatial.transform import Rotation
 
+from auto_atom.config_loader import compose_task_run
+from auto_atom.execution_config import prepare_task_config_for_instantiation
 from auto_atom.runner.common import get_config_dir, prepare_task_file
 from auto_atom.runtime import ComponentRegistry
 
@@ -71,7 +73,11 @@ from auto_atom.runtime import ComponentRegistry
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--config-name", default="open_door_airbot_play_back_gs")
+    parser.add_argument(
+        "--task",
+        default="open_door_back",
+        help="Task to compose (always with render=gs).",
+    )
     parser.add_argument(
         "--camera",
         default=None,
@@ -107,10 +113,13 @@ def _parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def _compose_cfg(config_name: str, overrides: list[str]) -> DictConfig:
-    config_dir = get_config_dir()
-    with initialize_config_dir(config_dir=str(config_dir), version_base=None):
-        return compose(config_name=config_name, overrides=overrides)
+def _compose_cfg(task: str, overrides: list[str]) -> tuple[DictConfig, str]:
+    """Compose ``task`` with GS rendering; return the prepared cfg and run name.
+
+    The prepared config has ``env.cameras`` flattened into a list.
+    """
+    cfg, run_name = compose_task_run(task, ["render=gs", *overrides], get_config_dir())
+    return prepare_task_config_for_instantiation(cfg), run_name
 
 
 def _resolve_camera_name(cfg: DictConfig, requested: str | None) -> str:
@@ -625,6 +634,7 @@ class TunerWindow(QtWidgets.QWidget):
         states: list[MirrorState],
         camera_name: str,
         args: argparse.Namespace,
+        run_name: str,
         backend=None,
     ) -> None:
         super().__init__()
@@ -650,7 +660,7 @@ class TunerWindow(QtWidgets.QWidget):
         self.step_rot = math.radians(float(args.rot_step_deg))
 
         self.setWindowTitle(
-            f"GS body_mirror tuner | {args.config_name} | orbit from '{camera_name}'"
+            f"GS body_mirror tuner | {run_name} | orbit from '{camera_name}'"
         )
         self.label = QtWidgets.QLabel(alignment=QtCore.Qt.AlignCenter)
         self.label.setMinimumSize(args.width * 2, args.height)
@@ -955,7 +965,7 @@ class TunerWindow(QtWidgets.QWidget):
 def main() -> None:
     args = _parse_args()
     overrides = [ov for ov in args.overrides if ov != "--"]
-    cfg = _compose_cfg(args.config_name, overrides)
+    cfg, run_name = _compose_cfg(args.task, overrides)
     camera_name = _resolve_camera_name(cfg, args.camera)
     cfg = _prepare_cfg_for_preview(cfg, bg_index=args.bg_index)
 
@@ -965,7 +975,7 @@ def main() -> None:
     gs_cfg = env.config.gaussian_render
     if not gs_cfg.body_mirrors:
         raise ValueError(
-            f"Config '{args.config_name}' has no env.gaussian_render.body_mirrors "
+            f"Config '{run_name}' has no env.gaussian_render.body_mirrors "
             "entries — nothing to tune."
         )
 
@@ -991,7 +1001,7 @@ def main() -> None:
         )
 
     qt_app = QtWidgets.QApplication.instance() or QtWidgets.QApplication(sys.argv)
-    window = TunerWindow(env, states, camera_name, args, backend=backend)
+    window = TunerWindow(env, states, camera_name, args, run_name, backend=backend)
     window.show()
     qt_app.exec()
 

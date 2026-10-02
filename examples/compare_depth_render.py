@@ -7,19 +7,20 @@ the first frame from every configured camera using:
 - GS foreground accumulated depth
 - GS composited depth (press_da_button-style)
 
-Results are saved to ``outputs/compare_depth_<config>_<timestamp>.png``.
+Results are saved to ``outputs/compare_depth_<run_name>_<timestamp>.png``
+where ``<run_name>`` is ``<task>__<embodiment>__gs``.
 
 Usage::
 
-    # Default config: press_three_buttons_gs
-    python examples/compare_depth_render.py
+    # Requires Gaussian Splatting rendering: always pass render=gs
+    python examples/compare_depth_render.py task=press_three_buttons render=gs
 
-    # Any other GS scene config (Hydra --config-name override)
-    python examples/compare_depth_render.py --config-name cup_on_coaster_gs
-    python examples/compare_depth_render.py --config-name stack_color_blocks_gs
+    # Any other task / embodiment with GS assets
+    python examples/compare_depth_render.py task=cup_on_coaster render=gs
+    python examples/compare_depth_render.py task=stack_color_blocks render=gs
 
     # Display the result interactively (pass as Hydra override)
-    python examples/compare_depth_render.py show=true
+    python examples/compare_depth_render.py task=press_three_buttons render=gs +show=true
 """
 
 from __future__ import annotations
@@ -35,7 +36,7 @@ from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig
 
 from auto_atom.basis.mjc.gs_mujoco_env import _apply_gs_clip_to_depth
-from auto_atom.runner.common import get_config_dir, prepare_task_file
+from auto_atom.runner.common import get_config_dir, get_run_name, prepare_task_file
 from auto_atom.runtime import ComponentRegistry, TaskRunner
 
 
@@ -113,9 +114,21 @@ def _to_depth_image(depth: np.ndarray) -> np.ndarray:
     return arr
 
 
+def _require_gs_render() -> None:
+    """Exit with a usage hint unless the run selected ``render=gs``."""
+    render = HydraConfig.get().runtime.choices.get("render")
+    if render != "gs":
+        raise SystemExit(
+            f"compare_depth_render.py compares Gaussian Splatting against native "
+            f"MuJoCo depth, but render={render} was selected. Pass render=gs, "
+            "e.g.\n    python examples/compare_depth_render.py "
+            "task=press_three_buttons render=gs"
+        )
+
+
 def _save_comparison(
     rows: List[Tuple[str, np.ndarray, np.ndarray, np.ndarray]],
-    config_name: str,
+    run_name: str,
     out_path: Path,
     show: bool,
 ) -> None:
@@ -130,7 +143,7 @@ def _save_comparison(
         constrained_layout=True,
     )
     fig.suptitle(
-        f"Depth Comparison  |  {config_name}",
+        f"Depth Comparison  |  {run_name}",
         fontsize=13,
         y=1.02,
     )
@@ -162,10 +175,11 @@ def _save_comparison(
 
 @hydra.main(
     config_path=str(get_config_dir()),
-    config_name="press_three_buttons_gs",
+    config_name="config",
     version_base=None,
 )
 def main(cfg: DictConfig) -> None:
+    _require_gs_render()
     show: bool = bool(cfg.get("show", False))
 
     task_file = prepare_task_file(cfg)
@@ -273,12 +287,12 @@ def main(cfg: DictConfig) -> None:
         print("No camera depths captured. Ensure the scene has configured cameras.")
         return
 
-    config_name = HydraConfig.get().job.config_name
+    run_name = get_run_name()
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     out_dir = Path("outputs")
     out_dir.mkdir(exist_ok=True)
-    out_path = out_dir / f"compare_depth_{config_name}_{timestamp}.png"
-    _save_comparison(rows, config_name, out_path, show=show)
+    out_path = out_dir / f"compare_depth_{run_name}_{timestamp}.png"
+    _save_comparison(rows, run_name, out_path, show=show)
 
 
 if __name__ == "__main__":

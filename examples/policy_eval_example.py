@@ -4,7 +4,7 @@ Demonstrates the full record -> evaluate pipeline:
 
 1. Record a demo (any batch_size)::
 
-    python examples/record_demo.py --config-name press_three_buttons_gs
+    python examples/record_demo.py task=press_three_buttons render=gs
 
 2. Evaluate by replaying the recorded actions::
 
@@ -30,9 +30,11 @@ from auto_atom import (
     load_task_file_hydra,
     require_env_capability,
 )
+from auto_atom.config_loader import compose_task_run
 
-CONFIG_NAME = "press_three_buttons_gs"
-DEMO_PATH = Path("outputs/records/demos") / f"{CONFIG_NAME}.npz"
+TASK = "press_three_buttons"
+OVERRIDES = ["render=gs"]
+DEMO_DIR = Path("outputs/records/demos")
 
 
 # ---------------------------------------------------------------------------
@@ -143,20 +145,23 @@ class RecordedDemoPolicy:
 
 
 def main() -> None:
-    if not DEMO_PATH.exists():
+    # record_demo.py names its output after the run (task/embodiment/render).
+    _, run_name = compose_task_run(TASK, OVERRIDES)
+    demo_path = DEMO_DIR / f"{run_name}.npz"
+    if not demo_path.exists():
         raise FileNotFoundError(
-            f"Demo not found: {DEMO_PATH}\n"
+            f"Demo not found: {demo_path}\n"
             f"Record first: python examples/record_demo.py "
-            f"--config-name {CONFIG_NAME}"
+            f"task={TASK} {' '.join(OVERRIDES)}"
         )
 
-    demo = load_demo(DEMO_PATH)
+    demo = load_demo(demo_path)
     batch_size = demo["batch_size"]
     task_file = load_task_file_hydra(
-        CONFIG_NAME, overrides=[f"env.batch_size={batch_size}"]
+        TASK, overrides=[*OVERRIDES, f"env.batch_size={batch_size}"]
     )
     print(
-        f"Loaded {len(demo['position'])} steps from {DEMO_PATH} "
+        f"Loaded {len(demo['position'])} steps from {demo_path} "
         f"(batch_size={batch_size})"
     )
 

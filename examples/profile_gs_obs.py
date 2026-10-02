@@ -1,10 +1,17 @@
 """torch.profiler around capture_observation for back_gs perf analysis.
 
 Usage:
-    python examples/profile_gs_obs.py [config_name] [iterations] [hydra overrides...]
+    python examples/profile_gs_obs.py [task] [iterations] [hydra overrides...]
 
-Defaults: config_name=open_door_airbot_play_back_gs, iterations=8 (after warmup).
-Output: prints CUDA self-time top-20 and saves Chrome trace to outputs/bench/.
+Examples:
+    python examples/profile_gs_obs.py
+    python examples/profile_gs_obs.py open_door_back 16 env.batch_size=4
+    python examples/profile_gs_obs.py press_blue_button 8 embodiment=p7_g2p
+
+Defaults: task=open_door_back, iterations=8 (after warmup). ``render=gs`` is
+always applied (a later ``render=...`` override wins).
+Output: prints CUDA self-time top-20 and saves Chrome trace to
+outputs/bench/profiles/<run_name>_b<batch_size>/.
 """
 
 from __future__ import annotations
@@ -23,14 +30,15 @@ from torch.profiler import (
 from auto_atom import (
     ObservationEnvProtocol,
     SimulationLoopEnvProtocol,
-    load_task_file_hydra,
     require_env_capability,
 )
+from auto_atom.config_loader import compose_task_run
+from auto_atom.runner.common import prepare_task_file
 
 
 def _parse_args(argv: list[str]) -> tuple[str, int, list[str]]:
     args = list(argv)
-    config_name = "open_door_airbot_play_back_gs"
+    task = "open_door_back"
     iterations = 8
 
     idx = 0
@@ -39,26 +47,28 @@ def _parse_args(argv: list[str]) -> tuple[str, int, list[str]]:
         and "=" not in args[idx]
         and not args[idx].startswith(("+", "~"))
     ):
-        if (Path.cwd() / "aao_configs" / f"{args[idx]}.yaml").exists():
-            config_name = args[idx]
+        if (Path.cwd() / "aao_configs" / "task" / f"{args[idx]}.yaml").exists():
+            task = args[idx]
             idx += 1
     if idx < len(args) and args[idx].isdigit():
         iterations = int(args[idx])
         idx += 1
-    return config_name, iterations, args[idx:]
+    return task, iterations, args[idx:]
 
 
-config_name, iterations, overrides = _parse_args(sys.argv[1:])
+task, iterations, overrides = _parse_args(sys.argv[1:])
 
 bench_defaults = [
+    "render=gs",
     "+env.viewer.disable=true",
     "+env.to_numpy=false",
     "+env.structured=false",
 ]
 overrides = bench_defaults + overrides
 
-print(f"[profile] config={config_name} iters={iterations} overrides={overrides}")
-task_file = load_task_file_hydra(config_name, overrides=overrides)
+print(f"[profile] task={task} iters={iterations} overrides={overrides}")
+cfg, run_name = compose_task_run(task, overrides)
+task_file = prepare_task_file(cfg)
 backend = task_file.backend(task_file.task, task_file.task_operators)
 backend.setup(task_file.task)
 backend.reset()
@@ -84,7 +94,7 @@ for _ in range(2):
     simulation_env.update()
 torch.cuda.synchronize()
 
-trace_dir = Path("outputs/bench/profiles") / f"{config_name}_b{backend.batch_size}"
+trace_dir = Path("outputs/bench/profiles") / f"{run_name}_b{backend.batch_size}"
 trace_dir.mkdir(parents=True, exist_ok=True)
 
 prof_schedule = schedule(wait=1, warmup=1, active=iterations, repeat=1)

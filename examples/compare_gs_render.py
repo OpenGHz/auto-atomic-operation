@@ -2,19 +2,21 @@
 
 Loads a GS-enabled scene config, resets to the initial keyframe, and renders the
 first frame from every configured camera in both GS and native MuJoCo modes.
-Results are saved to ``outputs/compare_<config>_<timestamp>.png``.
+Results are saved to ``outputs/compare_<run_name>_<timestamp>.png`` where
+``<run_name>`` is ``<task>__<embodiment>__gs``.
 
 Usage::
 
-    # Default config: press_three_buttons_gs
-    python examples/compare_gs_render.py
+    # Requires Gaussian Splatting rendering: always pass render=gs
+    python examples/compare_gs_render.py task=press_three_buttons render=gs
 
-    # Any other GS scene config (Hydra --config-name override)
-    python examples/compare_gs_render.py --config-name cup_on_coaster_gs
-    python examples/compare_gs_render.py --config-name stack_color_blocks_gs
+    # Any other task / embodiment with GS assets
+    python examples/compare_gs_render.py task=cup_on_coaster render=gs
+    python examples/compare_gs_render.py task=stack_color_blocks render=gs
+    python examples/compare_gs_render.py task=press_blue_button embodiment=p7_g2p render=gs
 
     # Display the result interactively (pass as Hydra override)
-    python examples/compare_gs_render.py show=true
+    python examples/compare_gs_render.py task=press_three_buttons render=gs +show=true
 
 Must be run from the project root (same working directory as `aao-demo`).
 """
@@ -31,7 +33,7 @@ import numpy as np
 from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig
 
-from auto_atom.runner.common import get_config_dir, prepare_task_file
+from auto_atom.runner.common import get_config_dir, get_run_name, prepare_task_file
 from auto_atom.runtime import ComponentRegistry, TaskRunner
 
 # ---------------------------------------------------------------------------
@@ -74,9 +76,21 @@ def _resolve_single_env(env):
     return env
 
 
+def _require_gs_render() -> None:
+    """Exit with a usage hint unless the run selected ``render=gs``."""
+    render = HydraConfig.get().runtime.choices.get("render")
+    if render != "gs":
+        raise SystemExit(
+            f"compare_gs_render.py compares Gaussian Splatting against native "
+            f"MuJoCo rendering, but render={render} was selected. Pass render=gs, "
+            "e.g.\n    python examples/compare_gs_render.py "
+            "task=press_three_buttons render=gs"
+        )
+
+
 def _save_comparison(
     rows: List[Tuple[str, np.ndarray, np.ndarray]],
-    config_name: str,
+    run_name: str,
     out_path: Path,
     show: bool,
 ) -> None:
@@ -85,7 +99,7 @@ def _save_comparison(
     n = len(rows)
     fig, axes = plt.subplots(n, 2, figsize=(14, 4.5 * n), squeeze=False)
     fig.suptitle(
-        f"GS vs Native MuJoCo  |  {config_name}",
+        f"GS vs Native MuJoCo  |  {run_name}",
         fontsize=13,
         y=1.002,
     )
@@ -115,10 +129,11 @@ def _save_comparison(
 
 @hydra.main(
     config_path=str(get_config_dir()),
-    config_name="press_three_buttons_gs",
+    config_name="config",
     version_base=None,
 )
 def main(cfg: DictConfig) -> None:
+    _require_gs_render()
     show: bool = bool(cfg.get("show", False))
 
     # ── 1. Instantiate env with resolved Hydra config ───────────────────────
@@ -160,13 +175,13 @@ def main(cfg: DictConfig) -> None:
         return
 
     # ── 5. Save figure ───────────────────────────────────────────────────────
-    config_name = HydraConfig.get().job.config_name
+    run_name = get_run_name()
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     out_dir = Path("outputs")
     out_dir.mkdir(exist_ok=True)
-    out_path = out_dir / f"compare_{config_name}_{timestamp}.png"
+    out_path = out_dir / f"compare_{run_name}_{timestamp}.png"
 
-    _save_comparison(rows, config_name, out_path, show=show)
+    _save_comparison(rows, run_name, out_path, show=show)
 
 
 if __name__ == "__main__":

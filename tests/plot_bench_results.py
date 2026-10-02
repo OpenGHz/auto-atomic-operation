@@ -156,7 +156,12 @@ def write_analysis(
     lines: list[str] = []
     lines.append("# Benchmark Analysis")
     lines.append("")
-    lines.append(f"- config_name: `{manifest['config_name']}`")
+    # Suites recorded before the config-group layout only stored config_name.
+    run_name = manifest.get("run_name", manifest.get("config_name"))
+    lines.append(f"- run_name: `{run_name}`")
+    if "task" in manifest:
+        lines.append(f"- task: `{manifest['task']}`")
+        lines.append(f"- overrides: `{manifest['overrides']}`")
     lines.append(f"- batch_sizes: `{manifest['batch_sizes']}`")
     lines.append("")
     lines.append(

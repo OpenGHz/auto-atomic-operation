@@ -1,7 +1,9 @@
 """Estimate initial GS background xyz offsets from background PLY geometry.
 
-This reproduces the heuristic used earlier to populate
-`aao_configs/gs_mixin.yaml`:
+This reproduces the heuristic used earlier to populate the
+`background_transforms` entry of each
+`aao_configs/render_assets/background/<name>.yaml` (selected at run time with
+the `render_assets/background=<name>` override):
 
 1. Build a Z histogram over all points.
 2. Take the top-N densest bins.

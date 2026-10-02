@@ -16,10 +16,13 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from auto_atom.config_loader import compose_task_run
+
 
 DEFAULT_PYTHON = "/home/ghz/.mini_conda3/envs/airbot_play_data/bin/python"
 DEFAULT_BATCH_SIZES = [1, 2, 4, 8]
-DEFAULT_CONFIG = "cup_on_coaster_gs"
+DEFAULT_TASK = "cup_on_coaster"
+DEFAULT_OVERRIDES = ["render=gs"]
 DEFAULT_MAX_UPDATES = 300
 DEFAULT_ITERATIONS = 100
 DEFAULT_SAMPLE_INTERVAL_SEC = 0.1
@@ -33,9 +36,19 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--python", default=DEFAULT_PYTHON, help="Python executable.")
     parser.add_argument(
-        "--config-name",
-        default=DEFAULT_CONFIG,
-        help="Task config name used by both benchmarks.",
+        "--task",
+        default=DEFAULT_TASK,
+        help="Option of the `task` config group used by both benchmarks.",
+    )
+    parser.add_argument(
+        "overrides",
+        nargs="*",
+        default=DEFAULT_OVERRIDES,
+        help=(
+            "Hydra overrides applied to both benchmarks, e.g. `render=gs "
+            "embodiment=p7_g2p`. Defaults to `render=gs`. Separate them with "
+            "`--` when they follow `--batch-sizes`."
+        ),
     )
     parser.add_argument(
         "--batch-sizes",
@@ -77,11 +90,14 @@ def main() -> int:
     run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
     suite_dir = output_root / run_id
     suite_dir.mkdir(parents=True, exist_ok=True)
+    run_name = resolve_run_name(repo_root, args.task, args.overrides)
 
     manifest = {
         "run_id": run_id,
         "created_at": datetime.now().isoformat(timespec="seconds"),
-        "config_name": args.config_name,
+        "task": args.task,
+        "overrides": args.overrides,
+        "run_name": run_name,
         "batch_sizes": args.batch_sizes,
         "python": args.python,
         "iterations": args.iterations,
@@ -99,7 +115,8 @@ def main() -> int:
             repo_root=repo_root,
             suite_dir=suite_dir,
             python_exe=args.python,
-            config_name=args.config_name,
+            task=args.task,
+            overrides=args.overrides,
             batch_size=batch_size,
             max_updates=args.max_updates,
             perf_count=False,
@@ -113,7 +130,8 @@ def main() -> int:
             repo_root=repo_root,
             suite_dir=suite_dir,
             python_exe=args.python,
-            config_name=args.config_name,
+            task=args.task,
+            overrides=args.overrides,
             batch_size=batch_size,
             max_updates=args.max_updates,
             perf_count=True,
@@ -127,7 +145,9 @@ def main() -> int:
             repo_root=repo_root,
             suite_dir=suite_dir,
             python_exe=args.python,
-            config_name=args.config_name,
+            task=args.task,
+            overrides=args.overrides,
+            run_name=run_name,
             batch_size=batch_size,
             iterations=args.iterations,
         )
@@ -138,12 +158,19 @@ def main() -> int:
     return 0
 
 
+def resolve_run_name(repo_root: Path, task: str, overrides: list[str]) -> str:
+    """Return the run name ``examples/bench_env.py`` names its output after."""
+    _, run_name = compose_task_run(task, overrides, repo_root / "aao_configs")
+    return run_name
+
+
 def run_task_benchmark(
     *,
     repo_root: Path,
     suite_dir: Path,
     python_exe: str,
-    config_name: str,
+    task: str,
+    overrides: list[str],
     batch_size: int,
     max_updates: int,
     perf_count: bool,
@@ -158,8 +185,8 @@ def run_task_benchmark(
         python_exe,
         "-m",
         "auto_atom.runner.demo",
-        "--config-name",
-        config_name,
+        f"task={task}",
+        *overrides,
         "env.viewer=null",
         f"+perf_count={'true' if perf_count else 'false'}",
         "+print_updates=false",
@@ -218,7 +245,9 @@ def run_env_benchmark(
     repo_root: Path,
     suite_dir: Path,
     python_exe: str,
-    config_name: str,
+    task: str,
+    overrides: list[str],
+    run_name: str,
     batch_size: int,
     iterations: int,
 ) -> dict[str, Any]:
@@ -230,8 +259,9 @@ def run_env_benchmark(
     command = [
         python_exe,
         "examples/bench_env.py",
-        config_name,
+        task,
         str(iterations),
+        *overrides,
         f"env.batch_size={batch_size}",
     ]
     run_command(
@@ -242,7 +272,7 @@ def run_env_benchmark(
         sample_interval_sec=0.0,
     )
 
-    default_output = repo_root / "outputs" / "bench" / f"{config_name}.json"
+    default_output = repo_root / "outputs" / "bench" / f"{run_name}.json"
     if not default_output.exists():
         raise FileNotFoundError(
             f"Expected env benchmark output missing: {default_output}"

@@ -9,7 +9,11 @@ or operators outside a reasonable workspace.
 Usage::
 
     python examples/tune_randomization_extremes.py
-    python examples/tune_randomization_extremes.py --config-name cup_on_coaster
+    python examples/tune_randomization_extremes.py task=cup_on_coaster
+    python examples/tune_randomization_extremes.py task=open_door embodiment=p7_xf9600
+
+Reloads re-compose ``aao_configs/config.yaml`` with the same command-line
+overrides (including ``task=`` / ``embodiment=``).
 """
 
 from __future__ import annotations
@@ -24,9 +28,7 @@ from typing import Callable, Dict, List, Optional
 
 import hydra
 import numpy as np
-from hydra import compose, initialize_config_dir
 from hydra.core.global_hydra import GlobalHydra
-from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, OmegaConf
 
 from auto_atom.backend.mjc.mujoco_backend import MujocoTaskBackend
@@ -40,7 +42,8 @@ from auto_atom.config.randomization import (
 )
 from auto_atom.config.reference import PoseReference, RandomizationReference
 from auto_atom.config.task import AutoAtomConfig, OperatorConfig, OperatorInitialState
-from auto_atom.runner.common import get_config_dir, prepare_task_file
+from auto_atom.config_loader import compose_task_config
+from auto_atom.runner.common import get_config_dir, get_run_name, prepare_task_file
 from auto_atom.runtime import TaskRunner
 from auto_atom.utils.pose import (
     PoseState,
@@ -1007,12 +1010,12 @@ class RandomizationInspectorApp:
         self,
         root: tk.Tk,
         initial_cfg: DictConfig,
-        config_name: str,
+        run_name: str,
         overrides: List[str],
     ):
         self.root = root
         self.initial_cfg = initial_cfg
-        self.config_name = config_name
+        self.run_name = run_name
         self.overrides = overrides
         self.runner: Optional[TaskRunner] = None
         self.backend: Optional[MujocoTaskBackend] = None
@@ -1020,12 +1023,10 @@ class RandomizationInspectorApp:
 
     def _load_cfg(self) -> DictConfig:
         GlobalHydra.instance().clear()
-        with initialize_config_dir(
-            config_dir=str(get_config_dir()),
-            version_base=None,
-            job_name="tune_randomization_extremes_reload",
-        ):
-            return compose(config_name=self.config_name, overrides=self.overrides)
+        # The CLI overrides carry the task=/embodiment=/... group selections.
+        return compose_task_config(
+            overrides=self.overrides, config_dir=get_config_dir()
+        )
 
     def _extract_tuning_config(self, cfg: DictConfig) -> ReloadedTuningConfig:
         return _parse_tuning_config(cfg)
@@ -1056,7 +1057,7 @@ class RandomizationInspectorApp:
         )
 
     def reload_randomization(self) -> None:
-        print(f"[reload_randomization] config_name={self.config_name}")
+        print(f"[reload_randomization] run={self.run_name}")
         if self.backend is None or self.inspector is None:
             self._start_backend()
             return
@@ -1069,7 +1070,7 @@ class RandomizationInspectorApp:
         )
 
     def full_reload(self) -> None:
-        print(f"[full_reload] config_name={self.config_name}")
+        print(f"[full_reload] run={self.run_name}")
         preferred_case_name = (
             self.inspector.case_var.get() if self.inspector is not None else None
         )
@@ -1099,17 +1100,15 @@ class RandomizationInspectorApp:
 
 @hydra.main(
     config_path=str(get_config_dir()),
-    config_name="pick_and_place",
+    config_name="config",
     version_base=None,
 )
 def main(cfg: DictConfig) -> None:
     _enable_high_dpi_awareness()
     root = tk.Tk()
     _configure_tk_dpi_and_fonts(root)
-    hydra_cfg = HydraConfig.get()
-    config_name = hydra_cfg.job.config_name or "pick_and_place"
     overrides = _collect_cli_overrides(sys.argv[1:])
-    app = RandomizationInspectorApp(root, cfg, config_name, overrides)
+    app = RandomizationInspectorApp(root, cfg, get_run_name(), overrides)
     try:
         app.reload_randomization()
 

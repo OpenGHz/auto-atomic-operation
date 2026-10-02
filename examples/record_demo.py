@@ -1,18 +1,24 @@
 """Record a demo as MP4/GIF plus replayable low-dimensional data.
 
-Uses the same config files as ``aao-demo``. Switch tasks with ``--config-name``
-and override any value via Hydra:
+Uses the same config files as ``aao-demo``. Switch tasks with ``task=...``
+(plus ``embodiment=...`` / ``render=gs``) and override any value via Hydra:
 
-    python examples/record_demo.py --config-name pick_and_place
-    python examples/record_demo.py --config-name cup_on_coaster
-    python examples/record_demo.py --config-name stack_color_blocks
-    python examples/record_demo.py --config-name press_three_buttons
+    python examples/record_demo.py task=pick_and_place
+    python examples/record_demo.py task=cup_on_coaster
+    python examples/record_demo.py task=stack_color_blocks
+    python examples/record_demo.py task=press_three_buttons
+    python examples/record_demo.py task=press_three_buttons render=gs
+    python examples/record_demo.py task=pick_and_place embodiment=xf9600_mocap
 
-Video files are written to ``assets/videos/<config_name>.mp4`` and
-``assets/videos/<config_name>.gif`` for single-env recording, or
-``assets/videos/<config_name>_env<idx>.mp4`` / ``.gif`` when recording
+Files are named by the run name ``<task>__<embodiment>[__<render>]`` (see
+``auto_atom.runner.common.describe_run``), e.g. ``pick_and_place__robotiq_mocap``.
+Video files are written to ``outputs/records/videos/<run_name>.mp4`` and
+``outputs/records/videos/<run_name>.gif`` for single-env recording, or
+``outputs/records/videos/<run_name>_env<idx>.mp4`` / ``.gif`` when recording
 multiple envs in parallel. Replay data is written to
-``assets/demos/<config_name>.npz`` and ``assets/demos/<config_name>.json``.
+``outputs/records/demos/<run_name>.npz`` and
+``outputs/records/demos/<run_name>.json``; ``replay_demo.py`` with the same
+``task=`` / ``embodiment=`` / ``render=`` choices loads it back.
 
 Extra Hydra overrides:
 
@@ -37,7 +43,7 @@ from PIL import Image
 from pydantic import BaseModel, Field
 
 from auto_atom.backend.mjc.mujoco_backend import MujocoTaskBackend
-from auto_atom.runner.common import get_config_dir, prepare_task_file
+from auto_atom.runner.common import get_config_dir, get_run_name, prepare_task_file
 from auto_atom.runtime import TaskRunner
 
 
@@ -206,7 +212,7 @@ def _split_frame_batch(data: object) -> list[np.ndarray]:
 
 @hydra.main(
     config_path=str(get_config_dir()),
-    config_name="pick_and_place",
+    config_name="config",
     version_base=None,
 )
 def main(cfg: DictConfig) -> None:
@@ -293,18 +299,18 @@ def main(cfg: DictConfig) -> None:
         print("No frames captured — is the backend a MujocoTaskBackend?")
         return
 
-    config_name = HydraConfig.get().job.config_name
+    run_name = get_run_name()
     project_root = hydra.utils.get_original_cwd()
     video_dir = os.path.join(project_root, "outputs/records", "videos")
     demo_dir = os.path.join(project_root, "outputs/records", "demos")
     os.makedirs(video_dir, exist_ok=True)
     os.makedirs(demo_dir, exist_ok=True)
-    demo_npz_path = os.path.join(demo_dir, f"{config_name}.npz")
-    demo_json_path = os.path.join(demo_dir, f"{config_name}.json")
+    demo_npz_path = os.path.join(demo_dir, f"{run_name}.npz")
+    demo_json_path = os.path.join(demo_dir, f"{run_name}.json")
 
     def build_video_path(ext: str, env_index: int) -> str:
         suffix = "" if batch_size == 1 else f"_env{env_index}"
-        return os.path.join(video_dir, f"{config_name}{suffix}.{ext}")
+        return os.path.join(video_dir, f"{run_name}{suffix}.{ext}")
 
     ds = rec_cfg.frame_downsample
     video_fps = (
@@ -347,7 +353,8 @@ def main(cfg: DictConfig) -> None:
         with open(demo_json_path, "w", encoding="utf-8") as f:
             json.dump(
                 {
-                    "config_name": config_name,
+                    "run_name": run_name,
+                    "choices": dict(HydraConfig.get().runtime.choices),
                     "camera": resolved_camera,
                     "fps": rec_cfg.fps,
                     "max_updates": rec_cfg.max_updates,
