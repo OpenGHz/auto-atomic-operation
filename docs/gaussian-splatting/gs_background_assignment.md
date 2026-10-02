@@ -554,14 +554,14 @@ env:
 
 ```yaml
 env:
-  batch_size: 3
+  batch_size: 5
 ```
 
-在 batched 模式下，`BatchedGSUnifiedMujocoEnv` 会传 `max_combinations=batch_size=3`，
-即只 materialize 3 个 wall×inside 组合给 3 个环境用，无放回采样保证不重复（前提是
+在 batched 模式下，`BatchedGSUnifiedMujocoEnv` 会传 `max_combinations=batch_size=5`，
+即只 materialize 5 个 wall×inside 组合给 5 个环境用，无放回采样保证不重复（前提是
 笛卡尔积总数 ≥ batch_size）。
 
-如果保持默认 `randomize_background_on_reset: false`，这 3 个环境的背景会在初始化后固定。若希望每次 reset 都重新抽一组背景，需要显式配置：
+如果保持默认 `randomize_background_on_reset: false`，这 5 个环境的背景会在初始化后固定。若希望每次 reset 都重新抽一组背景，需要显式配置：
 
 ```yaml
 env:
