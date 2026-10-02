@@ -1,4 +1,8 @@
 import numpy as np
+import pytest
+
+# Gaussian splatting lives in the pixi `gs` environment (`pixi run -e gs test`).
+pytest.importorskip("gaussian_renderer")
 
 from gaussian_renderer.core.gaussiandata import GaussianData
 from gaussian_renderer.core.util_gau import save_ply

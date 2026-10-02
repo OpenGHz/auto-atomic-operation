@@ -3,6 +3,10 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import numpy as np
+import pytest
+
+# Gaussian splatting lives in the pixi `gs` environment (`pixi run -e gs test`).
+pytest.importorskip("gaussian_renderer")
 
 import auto_atom.basis.mjc.gs_mujoco_env as gs_env
 from auto_atom.basis.mjc.gs_mujoco_env import GaussianRenderConfig

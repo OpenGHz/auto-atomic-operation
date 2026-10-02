@@ -58,6 +58,16 @@ pixi install
 pixi run aao-demo task=pick_and_place
 ```
 
+Gaussian-splatting rendering uses the separate `gs` environment (Python 3.10,
+torch 2.4 / CUDA 12.4 and prebuilt gsplat kernels; needs an NVIDIA driver with
+CUDA >= 12.4):
+
+```bash
+pixi install -e gs
+pixi run -e gs gs-assets                          # download assets/gs/ (set HF_ENDPOINT for a mirror)
+pixi run -e gs aao-demo task=cup_on_coaster render=gs
+```
+
 MuJoCo demo assets live in Git LFS. After cloning, install Git LFS and pull them:
 
 ```bash
@@ -102,7 +112,7 @@ For all CLI flags, Hydra overrides, and `aao-eval` usage, see the [CLI Reference
 
 ### 3D Gaussian Splatting demos
 
-GS rendering is selected with `render=gs` (e.g. `aao-demo task=cup_on_coaster render=gs`); otherwise the runs are identical to the native MuJoCo demos. Asset bundles live on Hugging Face:
+GS rendering is selected with `render=gs` (e.g. `aao-demo task=cup_on_coaster render=gs`); otherwise the runs are identical to the native MuJoCo demos. Asset bundles live on Hugging Face (`pixi run -e gs gs-assets` downloads them in the pixi setup):
 
 ```bash
 pip install huggingface_hub "httpx[socks]"

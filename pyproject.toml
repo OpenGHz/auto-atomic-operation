@@ -66,14 +66,18 @@ channels = ["conda-forge"]
 platforms = ["linux-64"]
 
 [tool.pixi.dependencies]
-python = "3.12.*"
 pip = "*"
+
+# The Python pin lives in features so the `gs` environment can use 3.10.
+[tool.pixi.feature.py312.dependencies]
+python = "3.12.*"
 
 [tool.pixi.pypi-dependencies]
 auto-atomic-operation = { path = ".", editable = true, extras = ["mujoco"] }
 pytest = "*"
 # Imported by IPC, replay, and viewer camera-overlay code paths and their tests.
-# The heavy GPU extras (gs, mjwarp) are intentionally not part of this env.
+# The heavy GPU extras are not part of this env; Gaussian splatting lives in
+# the separate `gs` environment below.
 rpyc = "*"
 imageio = "*"
 opencv-python = "*"
@@ -83,6 +87,35 @@ pillow = "*"
 
 [tool.pixi.tasks]
 test = "python scripts/run_tests_safe.py"
+
+# Gaussian-splatting environment: `pixi run -e gs ...`.
+# gsplat only publishes prebuilt CUDA wheels for CPython 3.10 and torch <= 2.4;
+# the generic PyPI wheel JIT-compiles its kernels and would need a full CUDA
+# toolkit (nvcc) inside the env. Pin the prebuilt torch 2.4 / CUDA 12.4 pair
+# instead; it runs on any driver that supports CUDA >= 12.4.
+[tool.pixi.feature.gs.dependencies]
+python = "3.10.*"
+# gaussian_renderer uses torch.compile; Triton builds its CUDA driver shim and
+# kernels with a host C compiler at runtime.
+c-compiler = "*"
+
+[tool.pixi.feature.gs.pypi-dependencies]
+auto-atomic-operation = { path = ".", editable = true, extras = ["mujoco", "gs"] }
+torch = { version = "==2.4.1", index = "https://download.pytorch.org/whl/cu124" }
+gsplat = { url = "https://github.com/nerfstudio-project/gsplat/releases/download/v1.5.3/gsplat-1.5.3%2Bpt24cu124-cp310-cp310-linux_x86_64.whl" }
+# GS scripts under examples/ plot with matplotlib.
+matplotlib = "*"
+# Provides `hf` for the gs-assets task.
+huggingface_hub = "*"
+
+[tool.pixi.feature.gs.tasks]
+# Gaussian scene assets live on Hugging Face (gitignored under assets/gs/).
+# Set HF_ENDPOINT to use a mirror when huggingface.co is unreachable.
+gs-assets = "hf download OpenGHz/auto-atom-assets --repo-type=dataset --include 'assets/gs/*' --local-dir ."
+
+[tool.pixi.environments]
+default = ["py312"]
+gs = ["gs"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -56,6 +56,17 @@ pip install huggingface_hub "httpx[socks]"
 hf download OpenGHz/auto-atom-assets --repo-type=dataset --include "assets/gs/*" --local-dir .
 ```
 
+With [pixi](https://pixi.sh), the `gs` environment bundles the Gaussian-splatting
+stack (Python 3.10, torch 2.4 / CUDA 12.4, prebuilt gsplat kernels) and an asset
+download task:
+
+```bash
+pixi install -e gs
+pixi run -e gs gs-assets          # set HF_ENDPOINT to use a mirror
+pixi run -e gs aao-demo task=cup_on_coaster render=gs
+pixi run -e gs test               # full test suite including the GS tests
+```
+
 ## Quick Start
 
 ### 1. Define a task in YAML

@@ -3,6 +3,10 @@ import sys
 
 import mujoco
 import numpy as np
+import pytest
+
+# Gaussian splatting lives in the pixi `gs` environment (`pixi run -e gs test`).
+pytest.importorskip("gaussian_renderer")
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:

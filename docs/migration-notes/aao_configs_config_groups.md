@@ -255,9 +255,22 @@ Parity with the flat layout was checked before the old files were removed:
   `place_blocks_on_disk`, `arrange_flowers`, `close_drawer`,
   `close_hinge_door`, `open_drawer`, `open_hinge_door`, `stack_color_blocks`,
   and `wipe_the_table`.
-- **Not run.** Franka (`mink` was not installed), UniDoor (the asset payload
-  was not present), and `hang_toothbrush_cup` (segfault) could not be run in
-  the verification environment; each failed identically on the old and new
-  layouts.
-- **GS variants** were checked by composition only, because gsplat/torch were
-  not available in the verification environment.
+- **GS runtime check.** In the pixi `gs` environment, 13 GS variants were run
+  side by side with the same `aao-demo` settings and produced identical
+  results: `press_blue_button` (`robotiq_mocap`, `p7_g2p`),
+  `press_pink_button` (`p7_g2p`), `press_three_buttons`, `cup_on_coaster`,
+  `arrange_flowers` (`robotiq_mocap`, `p7_g2p`), `stack_color_blocks`,
+  `wipe_the_table` (`robotiq_mocap`, `p7_g2p`), `open_door` (`airbot_play_g2p`),
+  `open_door_back`, and `hang_toothbrush_cup`.
+- **GS image check.** One post-reset observation was captured from 12 GS
+  variants with the old and new layouts; every color and heat-map image is
+  pixel-identical. The two open_door variants pick their wall background and
+  inside offset randomly on every construction, so they were compared with
+  `wall_name=wall0 ~env.gaussian_render.background_transform_randomization`.
+- **Not run.** Franka (`mink` was not installed) and UniDoor (the asset payload
+  was not present) could not be run in the verification environment; each
+  failed identically on the old and new layouts. Native-rendered
+  `hang_toothbrush_cup` crashed on both layouts at construction time (fixed separately: MuJoCo
+  ran out of constraint memory for the contacts of the operator buried at
+  `qpos0`); after the fix it runs, but its `pick_cup` stage does not succeed (the
+  GS variant fails the same way on both layouts).
