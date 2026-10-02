@@ -25,6 +25,9 @@ env:
   enabled_sensors: ${observation.sensors}
   sim_freq: 600
   update_freq: 30
+  # World gravity vector (m/s^2) overriding the scene's <option gravity>,
+  # e.g. [0, 0, 0] to disable gravity. null keeps the XML value.
+  gravity: null
   # Remove configured operator body subtrees from native MuJoCo RGB/depth/
   # segmentation rendering without changing physics or the passive viewer.
   hide_operators_in_camera: false
