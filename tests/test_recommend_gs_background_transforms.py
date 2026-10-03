@@ -7,7 +7,7 @@ pytest.importorskip("gaussian_renderer")
 from gaussian_renderer.core.gaussiandata import GaussianData
 from gaussian_renderer.core.util_gau import save_ply
 
-from examples.recommend_gs_background_transforms import estimate_background_offset
+from scripts.render.gs.recommend_gs_background_transforms import estimate_background_offset
 
 
 def test_estimate_background_offset_recovers_tabletop_center(tmp_path):

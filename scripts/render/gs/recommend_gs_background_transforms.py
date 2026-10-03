@@ -15,13 +15,13 @@ the `render_assets/background=<name>` override):
 
 Examples:
     /home/ghz/.mini_conda3/envs/airbot_play_data/bin/python \
-        examples/recommend_gs_background_transforms.py
+        scripts/render/gs/recommend_gs_background_transforms.py
 
     /home/ghz/.mini_conda3/envs/airbot_play_data/bin/python \
-        examples/recommend_gs_background_transforms.py assets/gs/backgrounds/table.ply
+        scripts/render/gs/recommend_gs_background_transforms.py assets/gs/backgrounds/table.ply
 
     /home/ghz/.mini_conda3/envs/airbot_play_data/bin/python \
-        examples/recommend_gs_background_transforms.py \
+        scripts/render/gs/recommend_gs_background_transforms.py \
         --target-center 0.45 0.06 \
         --target-z 0.0742 \
         --yaml

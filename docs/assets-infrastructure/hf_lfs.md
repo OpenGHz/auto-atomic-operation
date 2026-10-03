@@ -70,5 +70,5 @@ hf download OpenGHz/auto-atom-assets --repo-type=dataset --include "assets/gs/*"
 
 ## Verification
 1. Fresh clone -> `hf download OpenGHz/auto-atom-assets --repo-type=dataset --include "assets/gs/*" --local-dir .` -> verify `assets/gs/` populated
-2. `python examples/compare_gs_render.py` -- verify GS PLY loading
+2. `python scripts/render/gs/compare_gs_render.py` -- verify GS PLY loading
 3. `git log --all --full-history -- assets/gs/` -- confirm no history remains

@@ -2,14 +2,14 @@
 
 Renders per-camera outputs from a task scene and saves them to disk. Supports both native MuJoCo and Gaussian Splatting backends.
 
-**Script:** [examples/save_rendering.py](../examples/save_rendering.py)
+**Script:** [scripts/render/save_rendering.py](../../scripts/render/save_rendering.py)
 
 ## Usage
 
 ```bash
-python examples/save_rendering.py task=press_three_buttons
-python examples/save_rendering.py task=press_three_buttons render=gs
-python examples/save_rendering.py task=press_three_buttons +show=true
+python scripts/render/save_rendering.py task=press_three_buttons
+python scripts/render/save_rendering.py task=press_three_buttons render=gs
+python scripts/render/save_rendering.py task=press_three_buttons +show=true
 ```
 
 Select the run with `task=` (plus `embodiment=` when needed) exactly as for
@@ -21,7 +21,7 @@ Example for the open-door back-side GS task and the test override:
 
 ```bash
 /home/ghz/.mini_conda3/envs/airbot_play_data/bin/python \
-  examples/save_rendering.py \
+  scripts/render/save_rendering.py \
   task=open_door_back render=gs \
   +test=open_the_door
 ```
@@ -75,8 +75,8 @@ The same convention is used for every configured camera. Missing optional stream
 Enable the recorder to capture an MP4 or GIF of the full task rollout:
 
 ```bash
-python examples/save_rendering.py task=press_three_buttons +recorder.enabled=true
-python examples/save_rendering.py task=press_three_buttons +recorder.enabled=true +recorder.save_gif=true +recorder.fps=15
+python scripts/render/save_rendering.py task=press_three_buttons +recorder.enabled=true
+python scripts/render/save_rendering.py task=press_three_buttons +recorder.enabled=true +recorder.save_gif=true +recorder.fps=15
 ```
 
 | Recorder option | Default | Description |
@@ -108,5 +108,5 @@ For `batch_size=1`, video filenames keep the original form:
 Pass `+show=true` to open a matplotlib window after rendering the first frame:
 
 ```bash
-python examples/save_rendering.py task=press_three_buttons +show=true
+python scripts/render/save_rendering.py task=press_three_buttons +show=true
 ```

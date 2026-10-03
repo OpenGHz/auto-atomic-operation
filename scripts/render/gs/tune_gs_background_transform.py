@@ -4,10 +4,10 @@ The task is always composed with ``render=gs``.
 
 Usage:
     /home/ghz/.mini_conda3/envs/airbot_play_data/bin/python \
-        examples/tune_gs_background_transform.py --task press_three_buttons
+        scripts/render/gs/tune_gs_background_transform.py --task press_three_buttons
 
     /home/ghz/.mini_conda3/envs/airbot_play_data/bin/python \
-        examples/tune_gs_background_transform.py --task wipe_the_table \
+        scripts/render/gs/tune_gs_background_transform.py --task wipe_the_table \
         --camera env1_cam --step 0.002
 
 Extra Hydra overrides (embodiment, GS background, ...) can be appended after ``--``:

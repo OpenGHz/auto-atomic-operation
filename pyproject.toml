@@ -104,7 +104,7 @@ c-compiler = "*"
 auto-atomic-operation = { path = ".", editable = true, extras = ["mujoco", "gs"] }
 torch = { version = "==2.4.1", index = "https://download.pytorch.org/whl/cu124" }
 gsplat = { url = "https://github.com/nerfstudio-project/gsplat/releases/download/v1.5.3/gsplat-1.5.3%2Bpt24cu124-cp310-cp310-linux_x86_64.whl" }
-# GS scripts under examples/ plot with matplotlib.
+# GS scripts under scripts/render/gs/ plot with matplotlib.
 matplotlib = "*"
 # Provides `hf` for the gs-assets task.
 huggingface_hub = "*"

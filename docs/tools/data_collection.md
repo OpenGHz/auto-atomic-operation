@@ -155,22 +155,22 @@ python scripts/data/replay_demo.py task=cup_on_coaster \
 
 ## Compare GS Render
 
-[`examples/compare_gs_render.py`](../examples/compare_gs_render.py) renders the initial frame of a GS-enabled scene from every configured camera in both Gaussian Splatting and native MuJoCo modes, then saves a side-by-side comparison image.
+[`scripts/render/gs/compare_gs_render.py`](../../scripts/render/gs/compare_gs_render.py) renders the initial frame of a GS-enabled scene from every configured camera in both Gaussian Splatting and native MuJoCo modes, then saves a side-by-side comparison image.
 
 ### Basic usage
 
 The script requires GS rendering, so always pass `render=gs`:
 
 ```bash
-python examples/compare_gs_render.py task=press_three_buttons render=gs
+python scripts/render/gs/compare_gs_render.py task=press_three_buttons render=gs
 
 # Other tasks / embodiments with GS assets
-python examples/compare_gs_render.py task=cup_on_coaster render=gs
-python examples/compare_gs_render.py task=stack_color_blocks render=gs
-python examples/compare_gs_render.py task=hang_toothbrush_cup render=gs
-python examples/compare_gs_render.py task=wipe_the_table render=gs
-python examples/compare_gs_render.py task=arrange_flowers render=gs
-python examples/compare_gs_render.py task=press_blue_button embodiment=p7_g2p render=gs
+python scripts/render/gs/compare_gs_render.py task=cup_on_coaster render=gs
+python scripts/render/gs/compare_gs_render.py task=stack_color_blocks render=gs
+python scripts/render/gs/compare_gs_render.py task=hang_toothbrush_cup render=gs
+python scripts/render/gs/compare_gs_render.py task=wipe_the_table render=gs
+python scripts/render/gs/compare_gs_render.py task=arrange_flowers render=gs
+python scripts/render/gs/compare_gs_render.py task=press_blue_button embodiment=p7_g2p render=gs
 ```
 
 Output images are saved to `outputs/compare_<run_name>_<timestamp>.png`, where
@@ -183,12 +183,12 @@ Output images are saved to `outputs/compare_<run_name>_<timestamp>.png`, where
 | `+show` | `false` | Display the comparison interactively with matplotlib |
 
 ```bash
-python examples/compare_gs_render.py task=press_three_buttons render=gs +show=true
+python scripts/render/gs/compare_gs_render.py task=press_three_buttons render=gs +show=true
 ```
 
 ## Compare Depth Render
 
-[`examples/compare_depth_render.py`](../examples/compare_depth_render.py) renders the initial frame of a GS-enabled scene from every configured camera and compares three depth variants side-by-side:
+[`scripts/render/gs/compare_depth_render.py`](../../scripts/render/gs/compare_depth_render.py) renders the initial frame of a GS-enabled scene from every configured camera and compares three depth variants side-by-side:
 
 - native MuJoCo depth buffer
 - GS foreground accumulated depth
@@ -199,11 +199,11 @@ python examples/compare_gs_render.py task=press_three_buttons render=gs +show=tr
 The script requires GS rendering, so always pass `render=gs`:
 
 ```bash
-python examples/compare_depth_render.py task=press_three_buttons render=gs
+python scripts/render/gs/compare_depth_render.py task=press_three_buttons render=gs
 
 # Other tasks with GS assets
-python examples/compare_depth_render.py task=cup_on_coaster render=gs
-python examples/compare_depth_render.py task=stack_color_blocks render=gs
+python scripts/render/gs/compare_depth_render.py task=cup_on_coaster render=gs
+python scripts/render/gs/compare_depth_render.py task=stack_color_blocks render=gs
 ```
 
 Output images are saved to `outputs/compare_depth_<run_name>_<timestamp>.png`.
@@ -215,7 +215,7 @@ Output images are saved to `outputs/compare_depth_<run_name>_<timestamp>.png`.
 | `+show` | `false` | Display the comparison interactively with matplotlib |
 
 ```bash
-python examples/compare_depth_render.py task=press_three_buttons render=gs +show=true
+python scripts/render/gs/compare_depth_render.py task=press_three_buttons render=gs +show=true
 ```
 
 ## Depth Source Notes

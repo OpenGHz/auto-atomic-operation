@@ -2,7 +2,7 @@
 
 Interactive Qt + OpenCV tool for tuning a `body_mirrors` entry on a Gaussian-Splatting environment with a live side-by-side native MuJoCo + GS render. Every keystroke mutates the in-memory `BodyMirrorSpec`, regenerates the mirrored PLY through `gs_cfg.resolved_body_gaussians()` (cached under `.cache/gs_body_mirrors/`), rebuilds the env's foreground GS renderer, and re-renders both panels through a shared orbit camera.
 
-**Script:** [examples/tune_gs_body_mirror.py](../examples/tune_gs_body_mirror.py)
+**Script:** [scripts/render/gs/tune_gs_body_mirror.py](../../scripts/render/gs/tune_gs_body_mirror.py)
 
 ## When to use
 
@@ -15,8 +15,8 @@ See [GS Body Transforms & Mirrors](../gaussian-splatting/gs_body_transforms_mirr
 The task is always composed with `render=gs`:
 
 ```bash
-python examples/tune_gs_body_mirror.py --task open_door_back
-python examples/tune_gs_body_mirror.py \
+python scripts/render/gs/tune_gs_body_mirror.py --task open_door_back
+python scripts/render/gs/tune_gs_body_mirror.py \
     --task open_door_back \
     --camera env0_cam --bg-index 3 --width 720 --height 540
 ```
@@ -33,9 +33,9 @@ python examples/tune_gs_body_mirror.py \
 Hydra overrides can be appended after `--`:
 
 ```bash
-python examples/tune_gs_body_mirror.py --task open_door_back \
+python scripts/render/gs/tune_gs_body_mirror.py --task open_door_back \
     -- env.gaussian_render.minibatch=256
-python examples/tune_gs_body_mirror.py --task open_door_back \
+python scripts/render/gs/tune_gs_body_mirror.py --task open_door_back \
     -- embodiment=airbot_play_g2p render_assets/background=simple_room
 ```
 

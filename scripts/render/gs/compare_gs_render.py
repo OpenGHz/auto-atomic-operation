@@ -8,15 +8,15 @@ Results are saved to ``outputs/compare_<run_name>_<timestamp>.png`` where
 Usage::
 
     # Requires Gaussian Splatting rendering: always pass render=gs
-    python examples/compare_gs_render.py task=press_three_buttons render=gs
+    python scripts/render/gs/compare_gs_render.py task=press_three_buttons render=gs
 
     # Any other task / embodiment with GS assets
-    python examples/compare_gs_render.py task=cup_on_coaster render=gs
-    python examples/compare_gs_render.py task=stack_color_blocks render=gs
-    python examples/compare_gs_render.py task=press_blue_button embodiment=p7_g2p render=gs
+    python scripts/render/gs/compare_gs_render.py task=cup_on_coaster render=gs
+    python scripts/render/gs/compare_gs_render.py task=stack_color_blocks render=gs
+    python scripts/render/gs/compare_gs_render.py task=press_blue_button embodiment=p7_g2p render=gs
 
     # Display the result interactively (pass as Hydra override)
-    python examples/compare_gs_render.py task=press_three_buttons render=gs +show=true
+    python scripts/render/gs/compare_gs_render.py task=press_three_buttons render=gs +show=true
 
 Must be run from the project root (same working directory as `aao-demo`).
 """
@@ -83,7 +83,7 @@ def _require_gs_render() -> None:
         raise SystemExit(
             f"compare_gs_render.py compares Gaussian Splatting against native "
             f"MuJoCo rendering, but render={render} was selected. Pass render=gs, "
-            "e.g.\n    python examples/compare_gs_render.py "
+            "e.g.\n    python scripts/render/gs/compare_gs_render.py "
             "task=press_three_buttons render=gs"
         )
 

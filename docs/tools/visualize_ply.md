@@ -2,23 +2,23 @@
 
 Interactive point-cloud viewer for Gaussian Splatting PLY files. Supports both standard PLY files (explicit x/y/z with optional RGB) and compressed SuperSplat-style PLY files with packed vertex fields.
 
-**Script:** [examples/visualize_ply.py](../examples/visualize_ply.py)
+**Script:** [scripts/render/gs/visualize_ply.py](../../scripts/render/gs/visualize_ply.py)
 
 ## Usage
 
 ```bash
 # Single file
-python examples/visualize_ply.py assets/gs/scenes/press_three_buttons/background.ply
+python scripts/render/gs/visualize_ply.py assets/gs/scenes/press_three_buttons/background.ply
 
 # All PLY files in a directory
-python examples/visualize_ply.py assets/gs/scenes/press_three_buttons/
+python scripts/render/gs/visualize_ply.py assets/gs/scenes/press_three_buttons/
 
 # Save to image without interactive display
-python examples/visualize_ply.py assets/gs/scenes/press_three_buttons/background.ply \
+python scripts/render/gs/visualize_ply.py assets/gs/scenes/press_three_buttons/background.ply \
     --save /tmp/preview.png --no-show
 
 # Batch save from a directory
-python examples/visualize_ply.py assets/gs/scenes/press_three_buttons/ \
+python scripts/render/gs/visualize_ply.py assets/gs/scenes/press_three_buttons/ \
     --save-dir /tmp/ply_previews/ --no-show
 ```
 

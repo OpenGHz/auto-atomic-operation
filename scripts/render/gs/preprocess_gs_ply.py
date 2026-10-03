@@ -15,19 +15,19 @@ See docs/gs_rendering_alignment.md for the full explanation.
 Usage examples::
 
     # Rotate a single PLY by a quaternion (xyzw)
-    python examples/preprocess_gs_ply.py \\
+    python scripts/render/gs/preprocess_gs_ply.py \\
         third_party/.../button_blue.ply \\
         -o assets/gs/scenes/press_three_buttons/button_blue.ply \\
         -r 0.46159 0.02322 0.01209 0.88671
 
     # Rotate all PLYs in a directory using MuJoCo euler angles (intrinsic XYZ, radians)
-    python examples/preprocess_gs_ply.py \\
+    python scripts/render/gs/preprocess_gs_ply.py \\
         third_party/.../3dgs/ \\
         -o assets/gs/scenes/my_task/ \\
         --euler 0.959931089 0.052359878 0.0
 
     # Dry run: print what would be done without writing files
-    python examples/preprocess_gs_ply.py \\
+    python scripts/render/gs/preprocess_gs_ply.py \\
         third_party/.../3dgs/ \\
         -o assets/gs/scenes/my_task/ \\
         --euler 0.959931089 0.052359878 0.0 \\

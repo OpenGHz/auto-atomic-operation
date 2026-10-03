@@ -35,8 +35,8 @@ Keyboard (matches ``gs_frame_tuner.py`` conventions):
   q / Esc          quit
 
 Usage (the task is always composed with ``render=gs``):
-    python3 examples/tune_gs_body_mirror.py --task open_door_back
-    python3 examples/tune_gs_body_mirror.py \
+    python3 scripts/render/gs/tune_gs_body_mirror.py --task open_door_back
+    python3 scripts/render/gs/tune_gs_body_mirror.py \
         --task open_door_back \
         --camera env0_cam --bg-index 3 --width 720 --height 540
 

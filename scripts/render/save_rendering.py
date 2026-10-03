@@ -18,10 +18,10 @@ before the extension, for example ``<camera>_rgb_env2.png``.
 
 Usage::
 
-    python examples/save_rendering.py task=press_three_buttons
-    python examples/save_rendering.py task=press_three_buttons render=gs
-    python examples/save_rendering.py task=press_three_buttons +show=true
-    python examples/save_rendering.py task=press_three_buttons +recorder.enabled=true
+    python scripts/render/save_rendering.py task=press_three_buttons
+    python scripts/render/save_rendering.py task=press_three_buttons render=gs
+    python scripts/render/save_rendering.py task=press_three_buttons +show=true
+    python scripts/render/save_rendering.py task=press_three_buttons +recorder.enabled=true
 """
 
 from __future__ import annotations

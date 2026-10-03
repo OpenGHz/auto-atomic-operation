@@ -13,14 +13,14 @@ where ``<run_name>`` is ``<task>__<embodiment>__gs``.
 Usage::
 
     # Requires Gaussian Splatting rendering: always pass render=gs
-    python examples/compare_depth_render.py task=press_three_buttons render=gs
+    python scripts/render/gs/compare_depth_render.py task=press_three_buttons render=gs
 
     # Any other task / embodiment with GS assets
-    python examples/compare_depth_render.py task=cup_on_coaster render=gs
-    python examples/compare_depth_render.py task=stack_color_blocks render=gs
+    python scripts/render/gs/compare_depth_render.py task=cup_on_coaster render=gs
+    python scripts/render/gs/compare_depth_render.py task=stack_color_blocks render=gs
 
     # Display the result interactively (pass as Hydra override)
-    python examples/compare_depth_render.py task=press_three_buttons render=gs +show=true
+    python scripts/render/gs/compare_depth_render.py task=press_three_buttons render=gs +show=true
 """
 
 from __future__ import annotations
@@ -121,7 +121,7 @@ def _require_gs_render() -> None:
         raise SystemExit(
             f"compare_depth_render.py compares Gaussian Splatting against native "
             f"MuJoCo depth, but render={render} was selected. Pass render=gs, "
-            "e.g.\n    python examples/compare_depth_render.py "
+            "e.g.\n    python scripts/render/gs/compare_depth_render.py "
             "task=press_three_buttons render=gs"
         )
 

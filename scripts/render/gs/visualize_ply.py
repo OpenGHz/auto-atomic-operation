@@ -7,13 +7,13 @@ This script supports:
 
 Examples:
     /home/ghz/.mini_conda3/envs/airbot_play_data/bin/python \
-        examples/visualize_ply.py third_party/3dgs/backgrounds/franka_table.ply
+        scripts/render/gs/visualize_ply.py third_party/3dgs/backgrounds/franka_table.ply
 
     /home/ghz/.mini_conda3/envs/airbot_play_data/bin/python \
-        examples/visualize_ply.py third_party/3dgs/backgrounds --limit 80000
+        scripts/render/gs/visualize_ply.py third_party/3dgs/backgrounds --limit 80000
 
     /home/ghz/.mini_conda3/envs/airbot_play_data/bin/python \
-        examples/visualize_ply.py third_party/3dgs/backgrounds/airbot_play_background.ply \
+        scripts/render/gs/visualize_ply.py third_party/3dgs/backgrounds/airbot_play_background.ply \
         --save /tmp/airbot_background.png --no-show
 """
 

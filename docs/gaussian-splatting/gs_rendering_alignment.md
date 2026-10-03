@@ -66,23 +66,23 @@ You can verify by cross-checking against the Franka scene keyframe quaternion (w
 
 ### Step 2: Pre-Rotate the PLY File
 
-Use the provided convenience script `examples/preprocess_gs_ply.py`, which wraps `transform_gaussian` and handles both single-file and batch-directory modes:
+Use the provided convenience script `scripts/render/gs/preprocess_gs_ply.py`, which wraps `transform_gaussian` and handles both single-file and batch-directory modes:
 
 ```bash
 # Rotate all PLYs in a source directory using MuJoCo euler angles (radians)
-python examples/preprocess_gs_ply.py \
+python scripts/render/gs/preprocess_gs_ply.py \
     third_party/.../3dgs/ \
     -o assets/gs/scenes/my_task/ \
     --euler 0.959931089 0.052359878 0.0
 
 # Or supply the xyzw quaternion directly (skips the euler conversion step)
-python examples/preprocess_gs_ply.py \
+python scripts/render/gs/preprocess_gs_ply.py \
     third_party/.../button_blue.ply \
     -o assets/gs/scenes/my_task/button_blue.ply \
     -r 0.46159 0.02322 0.01209 0.88671
 
 # Dry run: preview which files would be written without touching disk
-python examples/preprocess_gs_ply.py \
+python scripts/render/gs/preprocess_gs_ply.py \
     third_party/.../3dgs/ \
     -o assets/gs/scenes/my_task/ \
     --euler 0.959931089 0.052359878 0.0 \
@@ -94,7 +94,7 @@ The script accepts either `--euler ax ay az` (MuJoCo intrinsic XYZ, radians) or 
 For `press_three_buttons`, the pre-rotated files are stored in `assets/gs/scenes/press_three_buttons/` and were generated with:
 
 ```bash
-python examples/preprocess_gs_ply.py \
+python scripts/render/gs/preprocess_gs_ply.py \
     third_party/press_da_button/gs_playground/models/tasks/table30/_01_press_three_buttons/3dgs/ \
     -o assets/gs/scenes/press_three_buttons/ \
     --euler 0.959931089 0.052359878 0.0
@@ -161,19 +161,19 @@ The `body_gaussians` keys must match the **outer** (`*_gs`) body names in the XM
 
 ## Visual Comparison Tool
 
-Use `examples/compare_gs_render.py` to render the first frame of a GS scene and compare GS vs native MuJoCo images side-by-side per camera.
+Use `scripts/render/gs/compare_gs_render.py` to render the first frame of a GS scene and compare GS vs native MuJoCo images side-by-side per camera.
 
 ```bash
 # GS rendering is required: always pass render=gs
-python examples/compare_gs_render.py task=press_three_buttons render=gs
+python scripts/render/gs/compare_gs_render.py task=press_three_buttons render=gs
 
 # Any other task / embodiment with GS assets
-python examples/compare_gs_render.py task=cup_on_coaster render=gs
-python examples/compare_gs_render.py task=stack_color_blocks render=gs
-python examples/compare_gs_render.py task=press_blue_button embodiment=p7_g2p render=gs
+python scripts/render/gs/compare_gs_render.py task=cup_on_coaster render=gs
+python scripts/render/gs/compare_gs_render.py task=stack_color_blocks render=gs
+python scripts/render/gs/compare_gs_render.py task=press_blue_button embodiment=p7_g2p render=gs
 
 # Display result interactively (in addition to saving)
-python examples/compare_gs_render.py task=press_three_buttons render=gs +show=true
+python scripts/render/gs/compare_gs_render.py task=press_three_buttons render=gs +show=true
 ```
 
 Must be run from the project root. Output is saved to `outputs/compare_<run_name>_<timestamp>.png`, where `<run_name>` is `<task>__<embodiment>__gs` (e.g. `press_three_buttons__robotiq_mocap__gs`).

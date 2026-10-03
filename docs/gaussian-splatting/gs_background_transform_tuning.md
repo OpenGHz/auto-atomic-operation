@@ -35,7 +35,7 @@ Recommended workflow:
 
 ## 1. Automatic Offset Recommendation
 
-Use [`examples/recommend_gs_background_transforms.py`](../examples/recommend_gs_background_transforms.py) to estimate an initial xyz offset from the background PLY geometry.
+Use [`scripts/render/gs/recommend_gs_background_transforms.py`](../../scripts/render/gs/recommend_gs_background_transforms.py) to estimate an initial xyz offset from the background PLY geometry.
 
 ### What the script does
 
@@ -61,14 +61,14 @@ Estimate offsets for every background in `assets/gs/backgrounds/`:
 
 ```bash
 /home/ghz/.mini_conda3/envs/airbot_play_data/bin/python \
-    examples/recommend_gs_background_transforms.py
+    scripts/render/gs/recommend_gs_background_transforms.py
 ```
 
 Estimate a single background:
 
 ```bash
 /home/ghz/.mini_conda3/envs/airbot_play_data/bin/python \
-    examples/recommend_gs_background_transforms.py \
+    scripts/render/gs/recommend_gs_background_transforms.py \
     assets/gs/backgrounds/discover-lab2.ply
 ```
 
@@ -76,7 +76,7 @@ Print only a YAML-ready block:
 
 ```bash
 /home/ghz/.mini_conda3/envs/airbot_play_data/bin/python \
-    examples/recommend_gs_background_transforms.py \
+    scripts/render/gs/recommend_gs_background_transforms.py \
     --yaml
 ```
 
@@ -107,7 +107,7 @@ Example with a different target reference:
 
 ```bash
 /home/ghz/.mini_conda3/envs/airbot_play_data/bin/python \
-    examples/recommend_gs_background_transforms.py \
+    scripts/render/gs/recommend_gs_background_transforms.py \
     --target-center 0.45 0.06 \
     --target-z 0.0742 \
     --yaml
@@ -115,7 +115,7 @@ Example with a different target reference:
 
 ## 2. Interactive Offset Tuning
 
-Use [`examples/tune_gs_background_transform.py`](../examples/tune_gs_background_transform.py) to interactively refine a background offset with live preview.
+Use [`scripts/render/gs/tune_gs_background_transform.py`](../../scripts/render/gs/tune_gs_background_transform.py) to interactively refine a background offset with live preview.
 
 The script updates the GS background offset at runtime and refreshes the rendered preview immediately.
 
@@ -135,7 +135,7 @@ Launch the tuner on one camera:
 
 ```bash
 /home/ghz/.mini_conda3/envs/airbot_play_data/bin/python \
-    examples/tune_gs_background_transform.py \
+    scripts/render/gs/tune_gs_background_transform.py \
     --task press_three_buttons
 ```
 
@@ -143,7 +143,7 @@ Select a specific background:
 
 ```bash
 /home/ghz/.mini_conda3/envs/airbot_play_data/bin/python \
-    examples/tune_gs_background_transform.py \
+    scripts/render/gs/tune_gs_background_transform.py \
     --task press_three_buttons \
     -- render_assets/background=discover-lab2
 ```
@@ -152,7 +152,7 @@ Tune with a specific camera and smaller step:
 
 ```bash
 /home/ghz/.mini_conda3/envs/airbot_play_data/bin/python \
-    examples/tune_gs_background_transform.py \
+    scripts/render/gs/tune_gs_background_transform.py \
     --task wipe_the_table \
     --camera env1_cam \
     --step 0.002
@@ -164,7 +164,7 @@ You can preview multiple cameras at once:
 
 ```bash
 /home/ghz/.mini_conda3/envs/airbot_play_data/bin/python \
-    examples/tune_gs_background_transform.py \
+    scripts/render/gs/tune_gs_background_transform.py \
     --task press_three_buttons \
     --camera env1_cam \
     --camera wrist_cam
