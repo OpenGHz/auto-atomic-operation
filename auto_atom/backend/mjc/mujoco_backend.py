@@ -1862,14 +1862,16 @@ class MujocoTaskBackend(SceneBackend):
         Labels are the plan's action labels (an object name, or
         ``<operator>.base`` / ``<operator>.eef``) or a camera name. Objects,
         operators, and cameras live in separate handler families, so the labels
-        are resolved across them rather than from one namespace.
+        are resolved across them rather than from one namespace. Operator
+        baselines are recorded under the bare operator name, so the
+        ``.base`` / ``.eef`` suffix selects the family and is stripped.
         """
-        for recorded in (
-            self._default_object_poses,
-            self._default_operator_base_poses,
-            self._default_operator_eef_poses,
-            self._default_camera_poses,
-        ):
+        owner, attribute = parse_entity_reference(label)
+        if attribute == "base":
+            return self._default_operator_base_poses.get(owner)
+        if attribute == "eef":
+            return self._default_operator_eef_poses.get(owner)
+        for recorded in (self._default_object_poses, self._default_camera_poses):
             pose = recorded.get(label)
             if pose is not None:
                 return pose

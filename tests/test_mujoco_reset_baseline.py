@@ -358,6 +358,47 @@ def test_masked_initial_pose_keeps_unselected_camera_baseline() -> None:
     )
 
 
+def test_baseline_pose_resolves_operator_part_labels() -> None:
+    """The executor asks for ``<op>.base`` / ``<op>.eef``; a miss would make it
+    fall back to the live pose and silently drop delta-carry."""
+
+    class _Operator:
+        name = "arm"
+
+        def __init__(self) -> None:
+            self.base = PoseState(position=[[1.0, 0.0, 0.0]])
+            self.eef = PoseState(position=[[1.0, 0.0, 0.5]])
+
+        def get_base_pose(self) -> PoseState:
+            return self.base
+
+        def get_end_effector_pose(self) -> PoseState:
+            return self.eef
+
+    operator = _Operator()
+    backend = MujocoTaskBackend(
+        env=type("BatchEnv", (), {"batch_size": 1, "envs": [object()]})(),
+        operator_handlers={"arm": operator},
+        object_handlers={"object": _BatchObject(PoseState(position=[[2.0, 0.0, 0.0]]))},
+    )
+    backend._record_default_poses()
+    operator.base = PoseState(position=[[9.0, 9.0, 9.0]])
+    operator.eef = PoseState(position=[[8.0, 8.0, 8.0]])
+
+    np.testing.assert_allclose(
+        backend.baseline_pose("arm.base").position[0], [1.0, 0.0, 0.0]
+    )
+    np.testing.assert_allclose(
+        backend.baseline_pose("arm.eef").position[0], [1.0, 0.0, 0.5]
+    )
+    np.testing.assert_allclose(
+        backend.baseline_pose("object").position[0], [2.0, 0.0, 0.0]
+    )
+    assert backend.baseline_pose("arm") is None
+    assert backend.baseline_pose("ghost.base") is None
+    assert backend.baseline_pose("no_such_target") is None
+
+
 def test_shared_operator_pose_requires_row_zero_consistency() -> None:
     class SharedEnv:
         batch_size = 3
