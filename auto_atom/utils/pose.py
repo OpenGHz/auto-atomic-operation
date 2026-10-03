@@ -571,7 +571,7 @@ def orientation_within_tolerance_nullable(
         r1, p1, y1 = quaternion_to_rpy(np.asarray(q1, dtype=np.float64))
         r2, p2, y2 = quaternion_to_rpy(np.asarray(q2, dtype=np.float64))
         diffs = [abs(r1 - r2), abs(p1 - p2), abs(y1 - y2)]
-        for diff, tol in zip(diffs, tolerance):
+        for diff, tol in zip(diffs, tolerance, strict=True):
             if tol is not None and diff > float(tol):
                 return False
         return True

@@ -443,7 +443,9 @@ class ExecutionTimeline:
         stage_ranges: list[tuple[int, int]] = []
         stage_plans: list[StageExecutionPlan] = []
         primitive_offset = 0
-        for plan, nominal_actions in zip(compiled_plans, nominal_templates):
+        for plan, nominal_actions in zip(
+            compiled_plans, nominal_templates, strict=True
+        ):
             if strict:
                 # Validate the builder's contract on the nominal program so a
                 # malformed primitive cannot be hidden by dropping its

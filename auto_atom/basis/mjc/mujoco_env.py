@@ -1421,7 +1421,9 @@ class UnifiedMujocoEnv(MujocoBasis):
                     int(self.model.jnt_dofadr[joint_id]),
                 )
             )
-        for (qpos_address, dof_address), joint_value in zip(addresses, values):
+        for (qpos_address, dof_address), joint_value in zip(
+            addresses, values, strict=True
+        ):
             self.data.qpos[qpos_address] = float(joint_value)
             self.data.qvel[dof_address] = 0.0
         mujoco.mj_forward(self.model, self.data)
@@ -2128,7 +2130,10 @@ class BatchedUnifiedMujocoEnv:
             or adapter.batch_size != self.batch_size
             or adapter.mode != mode
             or len(adapter.envs) != len(self.envs)
-            or any(left is not right for left, right in zip(adapter.envs, self.envs))
+            or any(
+                left is not right
+                for left, right in zip(adapter.envs, self.envs, strict=True)
+            )
         ):
             adapter = BatchExecutionAdapter(self.envs, self.batch_size, mode)
             self._batch_execution = adapter

@@ -490,7 +490,9 @@ def render_text(infos: List[TaskInfo]) -> str:
                 f"differs from stage operations {info.stage_operations}"
             )
         lines.append("  workflow:")
-        for i, (stage, phrase) in enumerate(zip(info.stages, info.workflow), start=1):
+        for i, (stage, phrase) in enumerate(
+            zip(info.stages, info.workflow, strict=True), start=1
+        ):
             label = f" [{stage.name}]" if stage.name else ""
             lines.append(f"    {i}. {phrase}{label}")
         lines.append("")

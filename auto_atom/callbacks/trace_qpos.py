@@ -47,7 +47,7 @@ class TraceQposCallback:
         if self._step % self._every != 0:
             return
         parts = [f"step={self._step:4d}"]
-        for name, idx in zip(self._joint_names, self._joint_qidx):
+        for name, idx in zip(self._joint_names, self._joint_qidx, strict=True):
             if idx >= 0:
                 parts.append(f"{name}={float(data.qpos[idx]):+.4f}")
         if self._eef_site_id >= 0:

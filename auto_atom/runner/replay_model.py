@@ -172,9 +172,12 @@ class ReplayTrajectory:
         values = self.arrays["joint"][0]
         if values.ndim > 1:
             values = values[0]
+        # joint_names may be empty or cover only part of the recorded width.
         result = {
             name: float(value)
-            for name, value in zip(self.joint_names, np.asarray(values).reshape(-1))
+            for name, value in zip(
+                self.joint_names, np.asarray(values).reshape(-1), strict=False
+            )
         }
         if "scene_joint" in self.arrays:
             scene_values = self.arrays["scene_joint"][0]
@@ -186,6 +189,7 @@ class ReplayTrajectory:
                     for name, value in zip(
                         self.scene_joint_names,
                         np.asarray(scene_values).reshape(-1),
+                        strict=True,
                     )
                 }
             )

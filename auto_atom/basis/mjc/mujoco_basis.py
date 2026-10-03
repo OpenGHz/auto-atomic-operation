@@ -455,7 +455,9 @@ class MujocoBasis:
             )
 
         interest_object_operations: dict[str, str] = {}
-        for object_name, operation_name in zip(object_names, operation_names):
+        for object_name, operation_name in zip(
+            object_names, operation_names, strict=True
+        ):
             if self.config.mask_objects and object_name not in self._mask_object_pairs:
                 raise ValueError(
                     f"Object '{object_name}' is not configured in mask_objects: {self.config.mask_objects}"

@@ -848,5 +848,5 @@ class MjWarpObjectOnlyEnv:
                 )
         self._interest_object_operations = [
             (obj, op) if obj and op else ("", "")
-            for obj, op in zip(objects, operations)
+            for obj, op in zip(objects, operations, strict=True)
         ]

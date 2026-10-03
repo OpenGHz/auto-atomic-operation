@@ -786,7 +786,7 @@ def select_randomization_region(
         if total_volume > 0.0:
             sampled = float(rng.uniform(0.0, total_volume))
             cumulative = 0.0
-            for region, volume in zip(regions, volumes):
+            for region, volume in zip(regions, volumes, strict=True):
                 cumulative += volume
                 if sampled <= cumulative:
                     return region

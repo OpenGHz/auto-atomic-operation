@@ -153,7 +153,7 @@ def _merge_background_plys(
     # zero — no view-dependent effect from those points).
     max_sh_dim = max(sh.shape[1] for sh in sh_arrays)
     padded_sh: list[np.ndarray] = []
-    for p, sh in zip(plys, sh_arrays):
+    for p, sh in zip(plys, sh_arrays, strict=True):
         if sh.shape[1] == max_sh_dim:
             padded_sh.append(sh)
             continue
@@ -211,7 +211,7 @@ def create_image_data_batch(
 ):
     return [
         create_image_data(image, time_sec, frame_id, tobytes)
-        for image, time_sec in zip(image_batch, timestamps / 1e9)
+        for image, time_sec in zip(image_batch, timestamps / 1e9, strict=True)
     ]
 
 

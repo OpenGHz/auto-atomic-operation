@@ -368,7 +368,7 @@ class CameraOverlay:
         rects = self._layout_rects(sizes, per_row, viewport)
         return [
             (rect, self._draw_tile(name, frame, rect))
-            for (name, frame), rect in zip(frames, rects)
+            for (name, frame), rect in zip(frames, rects, strict=True)
         ]
 
     def _aspect(self, camera_name: str) -> float:

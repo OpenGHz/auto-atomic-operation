@@ -52,12 +52,17 @@ class McapDemo:
         self.scene_joint_names = list(scene_joint_names or [])
 
     def first_frame_joint_positions(self) -> Dict[str, float]:
-        result = {n: float(v) for n, v in zip(self.joint_names, self.joint[0])}
+        # Recordings may omit gripper joint names; map only the named columns.
+        result = {
+            n: float(v) for n, v in zip(self.joint_names, self.joint[0], strict=False)
+        }
         if self.scene_joint is not None:
             result.update(
                 {
                     n: float(v)
-                    for n, v in zip(self.scene_joint_names, self.scene_joint[0])
+                    for n, v in zip(
+                        self.scene_joint_names, self.scene_joint[0], strict=True
+                    )
                 }
             )
         return result
