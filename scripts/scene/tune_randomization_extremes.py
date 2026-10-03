@@ -8,7 +8,8 @@ reasonable workspace.
 The tool only chooses values (each range's min, max, or midpoint). Every case
 is applied by the backend's own reset with those values in place of the draws,
 so the scene is exactly what the runtime produces for them; "Random Sample" is
-a plain runtime reset.
+a plain runtime reset. The Left / Right arrow keys step to the previous / next
+case while the panel has keyboard focus.
 
 Usage::
 
@@ -363,6 +364,10 @@ class RandomizationInspector:
                 text="Full Reload",
                 command=self.full_reload_callback,
             ).pack(side="left", padx=6)
+        # Arrow keys step through the cases from anywhere in the panel. Binding
+        # the toplevel replaces the previous inspector's keys after a reload.
+        root.bind("<Left>", lambda _event: self.prev_case())
+        root.bind("<Right>", lambda _event: self.next_case())
 
         self.desc_var = tk.StringVar(value=self.cases[0].description)
         ttk.Label(controls, textvariable=self.desc_var, wraplength=700).pack(
@@ -738,6 +743,10 @@ class RandomizationInspectorApp:
         self._start_backend()
         if self.inspector is not None and preferred_case_name is not None:
             self.inspector.reload_randomization(preferred_case_name=preferred_case_name)
+        # The rebuilt scene opens a new viewer window, which takes the keyboard
+        # focus; the reload was requested from this panel, so hand it back for
+        # the arrow keys to keep working.
+        self.root.focus_force()
 
     def close(self) -> None:
         if self.runner is not None:
