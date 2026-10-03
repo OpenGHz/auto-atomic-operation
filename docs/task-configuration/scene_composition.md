@@ -341,7 +341,7 @@ MJCF mesh geom。不同凸块不会合并，因为 MuJoCo 对单个 mesh 使用�
 
 host 不再需要为每个机器人复制 keyframe。`env.initial_joint_positions` 仍在
 `MujocoBasis.reset()` 中应用；scalar、free、ball joint 的写入规则保持不变。
-`examples/view_scene.py` 在 reload 时重新读取同一个 `SceneConfig`，因此 viewer
+`scripts/scene/view_scene.py` 在 reload 时重新读取同一个 `SceneConfig`，因此 viewer
 和实际环境共享 compiler、namespace、integrity 检查和 home-pose 逻辑。
 
 ## 相关文档

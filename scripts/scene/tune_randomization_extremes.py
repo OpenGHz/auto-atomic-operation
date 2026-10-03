@@ -8,9 +8,9 @@ or operators outside a reasonable workspace.
 
 Usage::
 
-    python examples/tune_randomization_extremes.py
-    python examples/tune_randomization_extremes.py task=cup_on_coaster
-    python examples/tune_randomization_extremes.py task=open_door embodiment=p7_xf9600
+    python scripts/scene/tune_randomization_extremes.py
+    python scripts/scene/tune_randomization_extremes.py task=cup_on_coaster
+    python scripts/scene/tune_randomization_extremes.py task=open_door embodiment=p7_xf9600
 
 Reloads re-compose ``aao_configs/config.yaml`` with the same command-line
 overrides (including ``task=`` / ``embodiment=``).

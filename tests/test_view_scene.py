@@ -14,7 +14,7 @@ from omegaconf import OmegaConf
 
 from auto_atom.backend.mjc.mujoco_backend import MujocoTaskBackend
 from auto_atom.backend.mjc import viewer as viewer_module
-from examples import view_scene
+from scripts.scene import view_scene
 
 
 class _FakeEnv:

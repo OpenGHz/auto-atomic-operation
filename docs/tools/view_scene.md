@@ -26,17 +26,17 @@ client over the backend seam.
 Named pose references and reset ordering follow the backend contract.  The
 viewer does not reinterpret them or create a second source of truth.
 
-**Script:** [examples/view_scene.py](../../examples/view_scene.py)
+**Script:** [scripts/scene/view_scene.py](../../scripts/scene/view_scene.py)
 
 ## Usage
 
 ```bash
-python examples/view_scene.py task=pick_and_place
-python examples/view_scene.py task=open_door_back render=gs
-python examples/view_scene.py task=open_door embodiment=p7_xf9600
-python examples/view_scene.py --debug task=open_door embodiment=p7_xf9600
-python examples/view_scene.py --show-object-frames task=open_door embodiment=p7_xf9600
-python examples/view_scene.py --no-show-cameras task=open_door embodiment=p7_xf9600
+python scripts/scene/view_scene.py task=pick_and_place
+python scripts/scene/view_scene.py task=open_door_back render=gs
+python scripts/scene/view_scene.py task=open_door embodiment=p7_xf9600
+python scripts/scene/view_scene.py --debug task=open_door embodiment=p7_xf9600
+python scripts/scene/view_scene.py --show-object-frames task=open_door embodiment=p7_xf9600
+python scripts/scene/view_scene.py --no-show-cameras task=open_door embodiment=p7_xf9600
 ```
 
 Press `Ctrl+C` in the terminal to close the viewer and tear down the backend;
@@ -54,7 +54,7 @@ The run is selected with the same config groups as `aao-demo` (`task=`,
 can be appended, optionally after `--`:
 
 ```bash
-python examples/view_scene.py task=open_door embodiment=p7_xf9600 \
+python scripts/scene/view_scene.py task=open_door embodiment=p7_xf9600 \
     -- env.initial_joint_positions.joint1=0.5
 ```
 

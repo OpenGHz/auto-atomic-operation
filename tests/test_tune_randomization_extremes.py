@@ -12,7 +12,7 @@ from auto_atom.config.randomization import (
 )
 from auto_atom.randomization_executor import RandomizationExecutor
 from auto_atom.utils.pose import PoseState
-from examples.tune_randomization_extremes import (
+from scripts.scene.tune_randomization_extremes import (
     ExtremeCase,
     RandomizationInspector,
     RandomizationTarget,

@@ -15,15 +15,15 @@ through the backend before rebuilding its nominal targets. Named references
 are resolved at reload/reset time and are held as fixed world anchors while a
 task runs.
 
-**Script:** [examples/tune_randomization_extremes.py](../examples/tune_randomization_extremes.py)
+**Script:** [scripts/scene/tune_randomization_extremes.py](../../scripts/scene/tune_randomization_extremes.py)
 
 ## Usage
 
 ```bash
-python examples/tune_randomization_extremes.py
-python examples/tune_randomization_extremes.py task=cup_on_coaster
-python examples/tune_randomization_extremes.py task=arrange_flowers
-python examples/tune_randomization_extremes.py task=open_door embodiment=p7_xf9600
+python scripts/scene/tune_randomization_extremes.py
+python scripts/scene/tune_randomization_extremes.py task=cup_on_coaster
+python scripts/scene/tune_randomization_extremes.py task=arrange_flowers
+python scripts/scene/tune_randomization_extremes.py task=open_door embodiment=p7_xf9600
 ```
 
 Without `task=` the primary config's default task (`pick_and_place`) is used.

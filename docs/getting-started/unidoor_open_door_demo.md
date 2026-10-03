@@ -147,7 +147,7 @@ aao-demo \
 需要交互式查看场景时，在有可用 OpenGL/桌面的机器上运行：
 
 ```bash
-python examples/view_scene.py \
+python scripts/scene/view_scene.py \
   task=open_door_unidoor embodiment=p7_v4_umi_v3
 ```
 

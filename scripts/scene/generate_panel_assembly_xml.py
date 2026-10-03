@@ -2,7 +2,7 @@
 
 Example:
     /home/ghz/.mini_conda3/envs/airbot_play_data/bin/python \
-        examples/generate_panel_assembly_xml.py \
+        scripts/scene/generate_panel_assembly_xml.py \
         examples/panel_assembly/layout_7x3.yaml
 """
 

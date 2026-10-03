@@ -1,6 +1,6 @@
 # Panel XML Assembly
 
-[`examples/generate_panel_assembly_xml.py`](../examples/generate_panel_assembly_xml.py) can generate a final MJCF scene by taking:
+[`scripts/scene/generate_panel_assembly_xml.py`](../../scripts/scene/generate_panel_assembly_xml.py) can generate a final MJCF scene by taking:
 
 - one panel/base XML
 - one 2-D layout definition
@@ -12,28 +12,28 @@ This is useful when you have a mechanical layout drawing such as a `7 x 3` panel
 
 ## Related files
 
-- Script: [`examples/generate_panel_assembly_xml.py`](../examples/generate_panel_assembly_xml.py)
+- Script: [`scripts/scene/generate_panel_assembly_xml.py`](../../scripts/scene/generate_panel_assembly_xml.py)
 - Core generator: [`auto_atom/utils/panel_xml_builder.py`](../auto_atom/utils/panel_xml_builder.py)
-- Example config: [`examples/panel_assembly/layout_7x3.yaml`](../examples/panel_assembly/layout_7x3.yaml)
-- Example panel XML: [`examples/panel_assembly/demo_panel_base.xml`](../examples/panel_assembly/demo_panel_base.xml)
+- Example config: [`examples/panel_assembly/layout_7x3.yaml`](../../examples/panel_assembly/layout_7x3.yaml)
+- Example panel XML: [`examples/panel_assembly/demo_panel_base.xml`](../../examples/panel_assembly/demo_panel_base.xml)
 - Example object XMLs:
-  - [`examples/panel_assembly/objects/red_switch.xml`](../examples/panel_assembly/objects/red_switch.xml)
-  - [`examples/panel_assembly/objects/green_knob.xml`](../examples/panel_assembly/objects/green_knob.xml)
-  - [`examples/panel_assembly/objects/amber_lamp.xml`](../examples/panel_assembly/objects/amber_lamp.xml)
+  - [`examples/panel_assembly/objects/red_switch.xml`](../../examples/panel_assembly/objects/red_switch.xml)
+  - [`examples/panel_assembly/objects/green_knob.xml`](../../examples/panel_assembly/objects/green_knob.xml)
+  - [`examples/panel_assembly/objects/amber_lamp.xml`](../../examples/panel_assembly/objects/amber_lamp.xml)
 
 ## Basic usage
 
 Generate the final panel XML from a YAML config:
 
 ```bash
-python examples/generate_panel_assembly_xml.py \
+python scripts/scene/generate_panel_assembly_xml.py \
   examples/panel_assembly/layout_7x3.yaml
 ```
 
 Override the output path if needed:
 
 ```bash
-python examples/generate_panel_assembly_xml.py \
+python scripts/scene/generate_panel_assembly_xml.py \
   examples/panel_assembly/layout_7x3.yaml \
   --output outputs/panel_assembly_demo.xml
 ```
@@ -239,7 +239,7 @@ Asset and default names are intentionally not namespaced, so shared materials an
 
 ## Example: 7 x 3 panel
 
-The example config in [`examples/panel_assembly/layout_7x3.yaml`](../examples/panel_assembly/layout_7x3.yaml) encodes the layout:
+The example config in [`examples/panel_assembly/layout_7x3.yaml`](../../examples/panel_assembly/layout_7x3.yaml) encodes the layout:
 
 - columns: `-349.80`, `-233.20`, `-116.60`, `0`, `116.60`, `233.20`, `349.80`
 - rows: `120`, `0`, `-120`

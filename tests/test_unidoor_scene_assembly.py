@@ -1194,7 +1194,7 @@ def test_view_scene_and_runtime_share_collision_free_unidoor_home() -> None:
         ],
         config_dir=root / "aao_configs",
     )
-    from examples.view_scene import _load_backend
+    from scripts.scene.view_scene import _load_backend
 
     viewer_backend = _load_backend(config)
     viewer_env = viewer_backend.get_env().envs[0]

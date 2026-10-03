@@ -467,7 +467,7 @@ task_operators:
 env.set_joint_limit_warning_enabled(True)
 ```
 
-`examples/tune_randomization_extremes.py` 在打开时强制 enable，因为它的本职就是
+`scripts/scene/tune_randomization_extremes.py` 在打开时强制 enable，因为它的本职就是
 扫极端 pose 找出工作空间边界。
 
 ### 行为
