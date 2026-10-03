@@ -217,7 +217,7 @@ test.py
 AGENTS.md
 CLAUDE.md
 MUJOCO_LOG.TXT
-data/
+/data/
 
 # AOCI agent host integration (machine-bound; do not commit)
 .codex/config.toml

@@ -479,8 +479,8 @@ python examples/policy_eval_client.py --host 10.0.0.5 --port 9999
 ```
 
 The client replays `outputs/records/demos/<run_name>.npz`, written by
-`examples/record_demo.py` with the same task and overrides (for the default:
-`python examples/record_demo.py task=press_three_buttons render=gs env.batch_size=1`);
+`scripts/data/record_demo.py` with the same task and overrides (for the default:
+`python scripts/data/record_demo.py task=press_three_buttons render=gs env.batch_size=1`);
 pass `--demo-path` to use another file.
 
 ## Recommended Integration Pattern

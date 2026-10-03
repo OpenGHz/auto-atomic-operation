@@ -4,7 +4,7 @@ This guide covers the scripts used to record task demonstrations and compare ren
 
 ## Record Demo Video
 
-[`examples/record_demo.py`](../examples/record_demo.py) runs a task in the MuJoCo backend and saves the camera feed as a GIF and/or MP4. It also exports replayable demo data, including low-dimensional observations, action pose targets, and low-level control actions. It reuses the same Hydra configs as `aao-demo`.
+[`scripts/data/record_demo.py`](../../scripts/data/record_demo.py) runs a task in the MuJoCo backend and saves the camera feed as a GIF and/or MP4. It also exports replayable demo data, including low-dimensional observations, action pose targets, and low-level control actions. It reuses the same Hydra configs as `aao-demo`.
 
 ### Basic usage
 
@@ -12,9 +12,9 @@ Select the run with the same config groups as `aao-demo` (`task=`, optionally
 `embodiment=` and `render=gs`):
 
 ```bash
-python examples/record_demo.py task=pick_and_place
-python examples/record_demo.py task=pick_and_place embodiment=xf9600_mocap
-python examples/record_demo.py task=press_three_buttons render=gs
+python scripts/data/record_demo.py task=pick_and_place
+python scripts/data/record_demo.py task=pick_and_place embodiment=xf9600_mocap
+python scripts/data/record_demo.py task=press_three_buttons render=gs
 ```
 
 ### Hide the robot from native camera data
@@ -27,7 +27,7 @@ geoms) from native MuJoCo RGB, depth, mask, and heat-map rendering:
 aao-demo task=pick_and_place \
     env.hide_operators_in_camera=true +perf_count=true
 
-python examples/record_demo.py task=pick_and_place \
+python scripts/data/record_demo.py task=pick_and_place \
     env.hide_operators_in_camera=true
 ```
 
@@ -81,25 +81,25 @@ All options are injected via Hydra with the `+recorder.` prefix:
 
 ```bash
 # Save MP4 only
-python examples/record_demo.py task=pick_and_place \
+python scripts/data/record_demo.py task=pick_and_place \
     +recorder.save_mp4=true +recorder.save_gif=false
 
 # Use a different camera and higher FPS
-python examples/record_demo.py task=cup_on_coaster \
+python scripts/data/record_demo.py task=cup_on_coaster \
     +recorder.camera=env0_cam +recorder.fps=30
 
 # Wider GIF output
-python examples/record_demo.py task=stack_color_blocks \
+python scripts/data/record_demo.py task=stack_color_blocks \
     +recorder.gif_width=480
 
 # Stop recording automatically after 200 updates
-python examples/record_demo.py task=press_three_buttons \
+python scripts/data/record_demo.py task=press_three_buttons \
     +recorder.max_updates=200
 ```
 
 ## Replay Recorded Demo
 
-[`examples/replay_demo.py`](../examples/replay_demo.py) replays data recorded by `record_demo.py`. It supports two replay modes:
+[`scripts/data/replay_demo.py`](../../scripts/data/replay_demo.py) replays data recorded by `record_demo.py`. It supports two replay modes:
 
 - `ctrl`: replay the saved low-level MuJoCo control actions from `outputs/records/demos/<run_name>.npz`
 - `pose`: replay the saved `action/<operator>/pose` targets from `outputs/records/demos/<run_name>.json` to validate whether the recorded pose targets are themselves sufficient
@@ -111,13 +111,13 @@ the default `<run_name>` matches.
 
 ```bash
 # Replay saved low-level ctrl actions
-python examples/replay_demo.py task=pick_and_place
+python scripts/data/replay_demo.py task=pick_and_place
 
 # Replay saved action pose targets
-python examples/replay_demo.py task=pick_and_place +replay.mode=pose
+python scripts/data/replay_demo.py task=pick_and_place +replay.mode=pose
 
 # Replay another recorded demo name (e.g. one recorded before the run-name scheme)
-python examples/replay_demo.py task=pick_and_place \
+python scripts/data/replay_demo.py task=pick_and_place \
     +replay.demo_name=my_demo +replay.mode=pose
 ```
 
@@ -141,15 +141,15 @@ All options are injected via Hydra with the `+replay.` prefix:
 
 ```bash
 # Save replay MP4 only
-python examples/replay_demo.py task=open_hinge_door \
+python scripts/data/replay_demo.py task=open_hinge_door \
     +replay.save_mp4=true +replay.save_gif=false
 
 # Use pose replay to validate recorded pose targets
-python examples/replay_demo.py task=open_hinge_door \
+python scripts/data/replay_demo.py task=open_hinge_door \
     +replay.mode=pose
 
 # Replay from another camera
-python examples/replay_demo.py task=cup_on_coaster \
+python scripts/data/replay_demo.py task=cup_on_coaster \
     +replay.camera=env0_cam
 ```
 

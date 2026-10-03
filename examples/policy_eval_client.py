@@ -148,7 +148,7 @@ def main() -> None:
     if not demo_path.exists():
         raise FileNotFoundError(
             f"Demo not found: {demo_path}\n"
-            f"Record first: python examples/record_demo.py "
+            f"Record first: python scripts/data/record_demo.py "
             f"{' '.join([f'task={task}', *overrides])} env.batch_size=1"
         )
 

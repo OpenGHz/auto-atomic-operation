@@ -33,21 +33,21 @@ arrays owned by the trajectory in place. `load_on_initialize: false` and
 ```bash
 # NPZ demos (default: outputs/records/demos/<run_name>.npz, where <run_name> is
 # <task>__<embodiment>[__<render>], e.g. press_three_buttons__robotiq_mocap)
-python examples/replay_demo.py task=press_three_buttons
-python examples/replay_demo.py task=pick_and_place +replay.mode=ctrl
-python examples/replay_demo.py task=pick_and_place +replay.demo_name=my_demo
+python scripts/data/replay_demo.py task=press_three_buttons
+python scripts/data/replay_demo.py task=pick_and_place +replay.mode=ctrl
+python scripts/data/replay_demo.py task=pick_and_place +replay.demo_name=my_demo
 
 # ROS2 mcap replay (auto-selects joint mode)
-python examples/replay_demo.py task=pick_and_place \
+python scripts/data/replay_demo.py task=pick_and_place \
     +replay.mcap_path=data/recording.mcap
 
 # Foxglove flatbuffer mcap replay — arm/gripper topics auto-resolve to the
 # airbot commanded /action/... joint_position streams
-python examples/replay_demo.py task=open_door embodiment=airbot_play_g2p \
+python scripts/data/replay_demo.py task=open_door embodiment=airbot_play_g2p \
     +replay.mcap_path=data/replay/george.mcap
 
 # Custom topics
-python examples/replay_demo.py task=pick_and_place \
+python scripts/data/replay_demo.py task=pick_and_place \
     +replay.mcap_path=data/recording.mcap \
     +replay.arm_topic=/robot/right_arm/joint_state \
     +replay.gripper_topic=/robot/right_gripper/distance \

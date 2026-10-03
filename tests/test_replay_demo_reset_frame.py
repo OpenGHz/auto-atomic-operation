@@ -8,7 +8,7 @@ import numpy as np
 
 
 def _load_replay_demo_module():
-    module_path = Path(__file__).resolve().parents[1] / "examples" / "replay_demo.py"
+    module_path = Path(__file__).resolve().parents[1] / "scripts" / "data" / "replay_demo.py"
     spec = importlib.util.spec_from_file_location("replay_demo", module_path)
     if spec is None or spec.loader is None:
         raise RuntimeError(f"Cannot load module from {module_path}")

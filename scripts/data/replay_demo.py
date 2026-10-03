@@ -12,15 +12,15 @@ the newer Foxglove flatbuffer format (``foxglove.JointStates``).
 Examples:
 
     # NPZ demos
-    python examples/replay_demo.py task=press_three_buttons
-    python examples/replay_demo.py task=pick_and_place +replay.mode=ctrl
-    python examples/replay_demo.py task=pick_and_place +replay.save_gif=true
-    python examples/replay_demo.py task=pick_and_place +replay.demo_name=my_demo
+    python scripts/data/replay_demo.py task=press_three_buttons
+    python scripts/data/replay_demo.py task=pick_and_place +replay.mode=ctrl
+    python scripts/data/replay_demo.py task=pick_and_place +replay.save_gif=true
+    python scripts/data/replay_demo.py task=pick_and_place +replay.demo_name=my_demo
 
     # ROS2 mcap replay (joint mode, auto-selected when mcap_path is set)
-    python examples/replay_demo.py task=pick_and_place \
+    python scripts/data/replay_demo.py task=pick_and_place \
         +replay.mcap_path=data/recording_20260401_185226.mcap
-    python examples/replay_demo.py task=pick_and_place \
+    python scripts/data/replay_demo.py task=pick_and_place \
         +replay.mcap_path=data/recording.mcap \
         +replay.arm_topic=/robot/right_arm/joint_state \
         +replay.gripper_topic=/robot/right_gripper/distance \
@@ -29,7 +29,7 @@ Examples:
 
     # Foxglove flatbuffer mcap replay (arm/gripper topics auto-resolve to the
     # airbot commanded /action/... joint_position streams)
-    python examples/replay_demo.py task=open_door embodiment=airbot_play_g2p \
+    python scripts/data/replay_demo.py task=open_door embodiment=airbot_play_g2p \
         +replay.mcap_path=data/replay/george.mcap
 """
 

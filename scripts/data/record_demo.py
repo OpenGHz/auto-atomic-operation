@@ -3,12 +3,12 @@
 Uses the same config files as ``aao-demo``. Switch tasks with ``task=...``
 (plus ``embodiment=...`` / ``render=gs``) and override any value via Hydra:
 
-    python examples/record_demo.py task=pick_and_place
-    python examples/record_demo.py task=cup_on_coaster
-    python examples/record_demo.py task=stack_color_blocks
-    python examples/record_demo.py task=press_three_buttons
-    python examples/record_demo.py task=press_three_buttons render=gs
-    python examples/record_demo.py task=pick_and_place embodiment=xf9600_mocap
+    python scripts/data/record_demo.py task=pick_and_place
+    python scripts/data/record_demo.py task=cup_on_coaster
+    python scripts/data/record_demo.py task=stack_color_blocks
+    python scripts/data/record_demo.py task=press_three_buttons
+    python scripts/data/record_demo.py task=press_three_buttons render=gs
+    python scripts/data/record_demo.py task=pick_and_place embodiment=xf9600_mocap
 
 Files are named by the run name ``<task>__<embodiment>[__<render>]`` (see
 ``auto_atom.runner.common.describe_run``), e.g. ``pick_and_place__robotiq_mocap``.
@@ -22,12 +22,12 @@ multiple envs in parallel. Replay data is written to
 
 Extra Hydra overrides:
 
-    python examples/record_demo.py +recorder.camera=env0_cam
-    python examples/record_demo.py +recorder.fps=15
-    python examples/record_demo.py +recorder.gif_width=480
-    python examples/record_demo.py +recorder.max_updates=200
-    python examples/record_demo.py +recorder.frame_downsample=2
-    python examples/record_demo.py +recorder.frame_downsample=3 +recorder.downsample_sync_fps=false
+    python scripts/data/record_demo.py +recorder.camera=env0_cam
+    python scripts/data/record_demo.py +recorder.fps=15
+    python scripts/data/record_demo.py +recorder.gif_width=480
+    python scripts/data/record_demo.py +recorder.max_updates=200
+    python scripts/data/record_demo.py +recorder.frame_downsample=2
+    python scripts/data/record_demo.py +recorder.frame_downsample=3 +recorder.downsample_sync_fps=false
 """
 
 import json

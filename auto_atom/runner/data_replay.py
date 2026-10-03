@@ -1,6 +1,6 @@
 """DataReplayRunner – replays recorded demonstration data through PolicyEvaluator.
 
-This module extracts the core replay logic from ``examples/replay_demo.py`` into
+This module extracts the core replay logic from ``scripts/data/replay_demo.py`` into
 a runner class that conforms to the :class:`RunnerBase` interface, so it can be
 driven by an external manager via the standard ``reset`` / ``update`` / ``close``
 lifecycle.

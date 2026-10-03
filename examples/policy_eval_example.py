@@ -4,7 +4,7 @@ Demonstrates the full record -> evaluate pipeline:
 
 1. Record a demo (any batch_size)::
 
-    python examples/record_demo.py task=press_three_buttons render=gs
+    python scripts/data/record_demo.py task=press_three_buttons render=gs
 
 2. Evaluate by replaying the recorded actions::
 
@@ -151,7 +151,7 @@ def main() -> None:
     if not demo_path.exists():
         raise FileNotFoundError(
             f"Demo not found: {demo_path}\n"
-            f"Record first: python examples/record_demo.py "
+            f"Record first: python scripts/data/record_demo.py "
             f"task={TASK} {' '.join(OVERRIDES)}"
         )
 

@@ -15,7 +15,7 @@
 |---|---|---|
 | `TaskRunner` + `aao-demo` | 配置驱动的规则化任务执行（宏步进、interval selection） | `auto_atom/runtime.py`、`auto_atom/runner/demo.py` |
 | `PolicyEvaluator` + `aao-eval` | 外部 policy 闭环执行，每个 control tick 一次 action | `auto_atom/policy_eval.py`、`auto_atom/runner/policy_eval.py` |
-| `examples/record_demo.py` | 录一段 → 落盘 `npz`/`mp4`，**离线**、**有界** | `examples/record_demo.py` |
+| `scripts/data/record_demo.py` | 录一段 → 落盘 `npz`/`mp4`，**离线**、**有界** | `scripts/data/record_demo.py` |
 | `DataReplayRunner` | 反向：从 `npz`/`mcap` 读已有轨迹回放 | `auto_atom/runner/data_replay.py` |
 | [Integrating AAO with External Data Collection Programs](../tools/external_data_collection.md) | 把“调度 episode / 映射 schema / 流式写出 / 重试”**整体留给 host collector** | 文档 |
 
@@ -475,7 +475,7 @@ flowchart LR
 
 | 概念 | 是否被本提案取代 |
 |---|---|
-| `examples/record_demo.py` | 不取代。它产出**可视化 + 可回放**的 npz/mp4；stream 产出**训练样本**，不写可视化文件。 |
+| `scripts/data/record_demo.py` | 不取代。它产出**可视化 + 可回放**的 npz/mp4；stream 产出**训练样本**，不写可视化文件。 |
 | `DataReplayRunner` | 不取代。它消费已有轨迹；stream 生产新轨迹。两者可组合（把回放数据也包成 `EpisodeSource`，做混合采样）。 |
 | `external_data_collection.md` 的 host collector | **收敛**：文中“调度/映射/流式写出/重试”的通用部分由 `EpisodeStream` 承担；host 只剩“输入队列、ack、落盘格式”。实现后该文档的一节应指向 `docs/tools/streaming_data_loader.md`。 |
 | `auto_atom.ipc` | 复用，不取代：作为形态 C 的传输层。 |
