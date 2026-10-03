@@ -499,6 +499,17 @@ class MjWarpObjectOnlyBackend(SceneBackend):
             return
         raise ValueError(f"Unknown target part '{kind}' for '{owner}'.")
 
+    def set_scene_joint_positions(
+        self,
+        joint_names: Sequence[str],
+        positions: np.ndarray,
+        env_mask: np.ndarray,
+    ) -> None:
+        """Write named hinge/slide joints at rest into the masked worlds."""
+        self.env.state.set_scene_joint_positions(
+            joint_names, positions, world_mask=env_mask
+        )
+
     def camera_names(self) -> List[str]:
         return self.env.camera_names()
 

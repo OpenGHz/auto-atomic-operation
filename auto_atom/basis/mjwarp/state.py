@@ -489,6 +489,50 @@ class MjWarpSceneState:
         qpos_adr = int(self.host_model.jnt_qposadr[joint])
         return float(self.data.qpos.numpy()[world][qpos_adr])
 
+    def set_scene_joint_positions(
+        self,
+        joint_names: Sequence[str],
+        positions: np.ndarray,
+        world_mask: Optional[np.ndarray] = None,
+    ) -> None:
+        """Write named hinge/slide joints at rest, one row per world.
+
+        The named counterpart of :meth:`set_joint_positions` for passive scene
+        joints such as a door hinge; ``positions`` is ``(n,)`` or
+        ``(nworld, n)``.
+        """
+        import mujoco
+
+        scalar_types = {
+            int(mujoco.mjtJoint.mjJNT_HINGE),
+            int(mujoco.mjtJoint.mjJNT_SLIDE),
+        }
+        qpos_indices: list[int] = []
+        dof_indices: list[int] = []
+        for joint_name in joint_names:
+            joint = int(
+                mujoco.mj_name2id(
+                    self.host_model, mujoco.mjtObj.mjOBJ_JOINT, joint_name
+                )
+            )
+            if joint < 0:
+                raise KeyError(
+                    f"No joint named '{joint_name}' found in the MuJoCo model."
+                )
+            if int(self.host_model.jnt_type[joint]) not in scalar_types:
+                raise ValueError(
+                    f"Scene joint '{joint_name}' must be a hinge or slide joint "
+                    "because it takes one scalar position."
+                )
+            qpos_indices.append(int(self.host_model.jnt_qposadr[joint]))
+            dof_indices.append(int(self.host_model.jnt_dofadr[joint]))
+        self.set_joint_positions(
+            qpos_indices,
+            positions,
+            dof_indices=dof_indices,
+            world_mask=world_mask,
+        )
+
     def get_joint_frame_pose(
         self,
         joint_name: str,

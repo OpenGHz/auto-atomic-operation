@@ -250,6 +250,38 @@ def test_free_joint_write_rejects_non_free_joint(host_model):
         state.set_free_joint_pose("nope", np.zeros(3), np.array([0.0, 0.0, 0.0, 1.0]))
 
 
+def test_scene_joint_write_sets_one_angle_per_masked_world(host_model):
+    """A named hinge write lands per world, at rest, and skips unmasked worlds."""
+    state = MjWarpSceneState(host_model, nworld=2)
+    joint = mujoco.mj_name2id(host_model, mujoco.mjtObj.mjOBJ_JOINT, "swing_hinge")
+    dof = int(host_model.jnt_dofadr[joint])
+    qvel = state.data.qvel.numpy().copy()
+    qvel[:, dof] = 1.0
+    state.data.qvel.assign(qvel)
+
+    state.set_scene_joint_positions(
+        ["swing_hinge"],
+        np.array([[0.0], [0.7]]),
+        world_mask=np.array([False, True]),
+    )
+
+    assert state.get_joint_angle("swing_hinge", world_index=0) == pytest.approx(0.0)
+    assert state.get_joint_angle("swing_hinge", world_index=1) == pytest.approx(0.7)
+    np.testing.assert_allclose(state.data.qvel.numpy()[:, dof], [1.0, 0.0])
+    # The kinematics pass ran: the arm swung about the hinge in world 1 only.
+    still, _ = state.get_body_pose("swing_arm", world_index=0)
+    swung, _ = state.get_body_pose("swing_arm", world_index=1)
+    assert not np.allclose(still, swung, atol=1e-4)
+
+
+def test_scene_joint_write_rejects_unknown_and_multi_dof_joints(host_model):
+    state = MjWarpSceneState(host_model, nworld=1)
+    with pytest.raises(KeyError, match="No joint named 'nope'"):
+        state.set_scene_joint_positions(["nope"], np.zeros(1))
+    with pytest.raises(ValueError, match="must be a hinge or slide"):
+        state.set_scene_joint_positions(["mover_free"], np.zeros(1))
+
+
 # ----------------------------------------------------------------------
 # Deferred kinematics passes
 # ----------------------------------------------------------------------
