@@ -1,7 +1,8 @@
 # @package _global_
 #
 # Microwave placement shared by the microwave_sweet_potato presets: it moves
-# and turns on the counter, and its feet stay on the counter for every sample.
+# and turns on the counter, its feet stay on the counter for every sample,
+# and its door opens to a random angle.
 task:
   randomization:
     entities:
@@ -11,3 +12,9 @@ task:
         yaw: [-0.26, 0.26]
         # The tuber is placed relative to the cabinet, not against it.
         collision_radius: 0.0
+    joints:
+      # Door opening from 90 deg (square to the front) to the 152 deg stop.
+      # The hinge reads 0.5585 rad closed and opens toward negative values;
+      # below about 85 deg the free edge swings in front of the cavity and
+      # the gripper brushes it on the way in.
+      microwave_door_hinge: [-2.0943, -1.0123]

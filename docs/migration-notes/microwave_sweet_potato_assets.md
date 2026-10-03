@@ -151,8 +151,20 @@ aao-demo task=microwave_sweet_potato randomization=microwave_sweet_potato/zero_g
 Both presets move the microwave on the counter (x -10/+4 cm, y -3/0 cm, yaw ±15°;
 the feet stay on the counter for every yaw) and place the tuber relative to it
 (`reference: microwave`, x -20/+4 cm, y +1/+5 cm, heading ±30°), so the tuber is
-always in front of the open cavity and clear of the door. Both use only the existing
-entity and per-waypoint randomization.
+always in front of the open cavity and clear of the door. Both also open the door
+to a random angle between 90° (square to the front) and the 152° stop, through
+`task.randomization.joints` (`microwave_door_hinge: [-2.0943, -1.0123]`; the hinge
+reads 0.5585 rad closed and opens toward negative values).
+
+Below about 85° the door's free edge swings in front of the cavity. In door sweeps
+at fixed angles (20 episodes per angle and preset), `gravity` succeeded 1/20 at
+44°, 10/20 at 55° and 16/20 at 66°, and `zero_gravity` 2/20, 12/20 and 16/20; the
+failures had the gripper or the carried tuber hitting the door and pushing it. At
+78–84° a finger still brushed the door in single episodes and pushed it by up to
+0.17 rad; one of 40 `gravity` episodes at 80° failed that way. At 88°, over 40
+episodes per preset, nothing touched the door and the closest gripper mesh stayed
+17.7 mm from its hulls. The two `gravity` failures at 88° fail the same way at 80°
+and 84° without touching the door.
 
 `gravity` leaves the tuber resting on the counter; turning about the vertical keeps
 its settled resting pose. The gripper's home pose is placed relative to the tuber
@@ -242,7 +254,11 @@ the minimum gripper–microwave clearance is 5.4 mm. Each preset also runs two s
 episodes headless and checks that the gripper starts above the tuber. In 40-episode
 sweeps (batch 1, four seeds), the default randomization and `zero_gravity` succeeded
 40/40 and `gravity` 39/40. The `gravity` failure dropped the tuber during insertion
-after a 19° grasp. No episode showed gripper–microwave or gripper–counter contact;
+after a 19° grasp. With the door randomized as well (40 episodes per preset, two
+seeds, doors drawn between 91° and 151°), `zero_gravity` succeeded 40/40 and
+`gravity` 39/40, with no gripper or tuber contact with the door. The `gravity`
+failure dropped the tuber while sliding it in, and it fails the same way with the
+door pinned at its default 122°. No episode showed gripper–microwave or gripper–counter contact;
 the minimum render-mesh clearances were 5.7 mm (`gravity`) and 0.0 mm
 (`zero_gravity`, one episode grazing the cavity lip with a render-only linkage
 mesh).

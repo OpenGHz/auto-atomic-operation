@@ -221,10 +221,19 @@ def test_randomization_presets_complete_headless(preset: str) -> None:
         potato = _id(model, mujoco.mjtObj.mjOBJ_BODY, "sweet_potato")
         target = _id(model, mujoco.mjtObj.mjOBJ_SITE, "microwave_target_site")
         eef = _id(model, mujoco.mjtObj.mjOBJ_SITE, "eef_pose")
+        door = int(
+            model.jnt_qposadr[
+                _id(model, mujoco.mjtObj.mjOBJ_JOINT, "microwave_door_hinge")
+            ]
+        )
         microwave_starts = []
+        door_angles = []
         for _ in range(2):
             update = runner.reset()
             microwave_starts.append(data.xpos[microwave].copy())
+            # The door opens between square to the front and its stop.
+            door_angles.append(float(data.qpos[door]))
+            assert -2.0943 <= door_angles[-1] <= -1.0123
             # Without gravity the tuber floats well clear of the counter top
             # (z = 0.06); with it, the tuber rests there in its settled pose.
             potato_height = float(data.xpos[potato][2])
@@ -245,7 +254,8 @@ def test_randomization_presets_complete_headless(preset: str) -> None:
                 float(np.linalg.norm(data.xpos[potato] - data.site_xpos[target]))
                 < 0.025
             )
-        # The microwave itself is randomized on the counter.
+        # The microwave itself is randomized on the counter, door included.
         assert float(np.linalg.norm(microwave_starts[0] - microwave_starts[1])) > 1e-3
+        assert abs(door_angles[0] - door_angles[1]) > 1e-3
     finally:
         runner.close()
