@@ -225,6 +225,9 @@ def test_randomization_presets_complete_headless(preset: str) -> None:
         potato = _id(model, mujoco.mjtObj.mjOBJ_BODY, "sweet_potato")
         target = _id(model, mujoco.mjtObj.mjOBJ_SITE, "microwave_target_site")
         eef = _id(model, mujoco.mjtObj.mjOBJ_SITE, "eef_pose")
+        front = _id(model, mujoco.mjtObj.mjOBJ_CAMERA, "env1_cam")
+        front_spec = single_env._camera_specs["env1_cam"]
+        half_fovy = np.tan(np.radians(float(model.cam_fovy[front])) / 2.0)
         door = int(
             model.jnt_qposadr[
                 _id(model, mujoco.mjtObj.mjOBJ_JOINT, "microwave_door_hinge")
@@ -243,6 +246,17 @@ def test_randomization_presets_complete_headless(preset: str) -> None:
             potato_height = float(data.xpos[potato][2])
             if zero_gravity:
                 assert potato_height > 0.15
+                # Placed by the front camera's view rather than the counter:
+                # the tuber's centre projects inside the image.
+                camera_point = data.cam_xmat[front].reshape(3, 3).T @ (
+                    data.xpos[potato] - data.cam_xpos[front]
+                )
+                depth = -float(camera_point[2])
+                assert depth > 0.0
+                assert abs(camera_point[1]) / depth < half_fovy
+                assert abs(camera_point[0]) / depth < (
+                    half_fovy * front_spec.width / front_spec.height
+                )
             else:
                 assert potato_height == pytest.approx(0.0821, abs=1e-3)
             # The home pose follows the tuber, so the gripper starts above it

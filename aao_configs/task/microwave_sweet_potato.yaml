@@ -105,11 +105,13 @@ task:
           z: [-0.02, 0.04]
           collision_radius: 0.15
       # Slide the tuber on the counter.  The presets under
-      # randomization/microwave_sweet_potato/ widen this considerably.
+      # randomization/microwave_sweet_potato/ widen this considerably; the
+      # proposal/constraints form lets a preset add constraints.
       sweet_potato:
-        x: [-0.03, 0.03]
-        y: [-0.03, 0.03]
-        collision_radius: 0.085
+        proposal:
+          x: [-0.03, 0.03]
+          y: [-0.03, 0.03]
+          collision_radius: 0.085
   stages:
     - name: pick_sweet_potato
       object: sweet_potato

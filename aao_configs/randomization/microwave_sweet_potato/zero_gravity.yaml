@@ -4,7 +4,8 @@
 #
 #     aao-demo task=microwave_sweet_potato randomization=microwave_sweet_potato/zero_gravity
 #
-# The tuber floats in front of the open cavity in a random attitude.  The
+# The tuber floats in front of the open cavity in a random attitude,
+# wherever the front camera sees it, not only over the counter.  The
 # pick fixes only the gripper's approach axis along the tuber's long axis and
 # approaches along that axis, so it does not depend on the tuber's spin, and
 # the jaws close at the gripper's own (randomized) roll.  The placement pose
@@ -49,23 +50,33 @@ task:
         eef:
           reference: sweet_potato
           follow: position
-          x: [-0.12, 0.12]
-          y: [-0.08, 0.10]
-          z: [-0.05, 0.15]
+          x: [-0.06, 0.06]
+          y: [-0.04, 0.05]
+          z: [-0.02, 0.08]
           # Jaw roll about the approach axis, kept through the grasp and
           # levelled before insertion.
           roll: [-0.785, 0.785]
-          pitch: [-0.25, 0.25]
-          yaw: [-0.4, 0.4]
+          pitch: [-0.12, 0.12]
+          yaw: [-0.2, 0.2]
           collision_radius: 0.15
-      # Floats 10-22 cm above its resting height in front of the cavity, with
-      # any spin about its long axis plus a random heading and elevation.
+      # Floats anywhere in front of the cavity that the front camera sees,
+      # also beyond the counter's edges, with any spin about its long axis
+      # plus a random heading and elevation.  The box only keeps it clear of
+      # the counter top, the cabinet and the opened door; visible_in trims it
+      # to the camera view.
       sweet_potato:
-        reference: microwave
-        x: [-0.20, 0.04]
-        y: [0.01, 0.05]
-        z: [0.10, 0.22]
-        roll: [-3.14159, 3.14159]
-        pitch: [-0.35, 0.35]
-        yaw: [-0.52, 0.52]
-        collision_radius: 0.085
+        proposal:
+          reference: microwave
+          x: [-0.25, 0.45]
+          y: [-0.20, 0.05]
+          z: [0.10, 0.40]
+          roll: [-3.14159, 3.14159]
+          pitch: [-0.35, 0.35]
+          yaw: [-0.52, 0.52]
+        constraints:
+          visible_in:
+            # Fixed cameras only: the home pose follows the tuber and is
+            # sampled after it, so the wrist camera is not final yet.
+            cameras: [env1_cam]
+            geometry: bounding_sphere
+            margin_px: 8

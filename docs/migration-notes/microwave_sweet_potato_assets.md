@@ -151,8 +151,8 @@ aao-demo task=microwave_sweet_potato randomization=microwave_sweet_potato/zero_g
 
 Both presets move the microwave on the counter (x -10/+4 cm, y -3/0 cm, yaw ±15°;
 the feet stay on the counter for every yaw) and place the tuber relative to it
-(`reference: microwave`, x -20/+4 cm, y +1/+5 cm, heading ±30°), so the tuber is
-always in front of the open cavity and clear of the door. Both also open the door
+(`reference: microwave`), so the tuber is always in front of the open cavity and
+clear of the door. Both also open the door
 to a random angle between 90° (square to the front) and the 152° stop, through
 `task.randomization.joints` (`microwave_door_hinge: [-2.0943, -1.0123]`; the hinge
 reads 0.5585 rad closed and opens toward negative values).
@@ -167,10 +167,11 @@ episodes per preset, nothing touched the door and the closest gripper mesh staye
 17.7 mm from its hulls. The two `gravity` failures at 88° fail the same way at 80°
 and 84° without touching the door.
 
-`gravity` leaves the tuber resting on the counter; turning about the vertical keeps
-its settled resting pose. The gripper's home pose is placed relative to the tuber
-(`reference: sweet_potato`), so it always starts above and behind it, and then
-jittered by x ±12 cm, y -8/+10 cm, z -5/+15 cm and ±0.25/±0.25/±0.4 rad. The grasp
+`gravity` slides the tuber on the counter (x -20/+4 cm, y +1/+5 cm, heading ±30°);
+turning about the vertical keeps its settled resting pose. The gripper's home pose
+is placed relative to the tuber (`reference: sweet_potato`), so it always starts
+above and behind it, and then jittered by x ±6 cm, y -4/+5 cm, z -2/+8 cm and
+±0.12/±0.12/±0.2 rad (roll/pitch/yaw). The grasp
 tilts nose-down by 0–20° about the jaw axis, pivoting about the jaw contact. To get
 that pivot, the pick is written in `sweet_potato_grasp_frame`, which is randomized
 relative to the tuber with a roll offset (`reference: sweet_potato`,
@@ -189,14 +190,29 @@ relative to the tuber with a roll offset (`reference: sweet_potato`,
   but beyond about 30° the gripper body rises into the cavity lip; the render-only
   meshes clip the hulls by 7 mm at 35° and 28 mm at 45°.
 
-`zero_gravity` sets `env.gravity: [0, 0, 0]`. The tuber floats 10–22 cm above its
+`zero_gravity` sets `env.gravity: [0, 0, 0]`. The tuber floats 10–40 cm above its
 rest height with a random heading (±30°), long-axis elevation (±20°) and spin about
-its long axis (±180°). The pick fixes only the gripper's approach axis along the
+its long axis (±180°), anywhere the front camera sees it. It need not be over the
+counter: the proposal box (x -25/+45 cm, y -20/+5 cm around its rest position) is
+wider than the counter top, and `visible_in` on `env1_cam` (bounding sphere, 8 px
+margin) trims it to the view. The box's own limits only keep the tuber clear of
+the counter top (z), the cabinet (+y) and the opened door (-x). Over 300 resets 93
+tubers started beyond the counter's edges; the tuber mesh stayed at least 43 px
+inside the 640×352 image, 8.6 cm above the counter top, and 9.0 cm and 11.8 cm
+from the cabinet and door hulls.
+
+`visible_in` names `env1_cam` instead of `all`: the gripper's home pose follows the
+tuber and is sampled after it, so the wrist camera's view is not final when the
+tuber is checked, and the executor rejects a check on an operator-mounted camera
+in that order.
+
+The pick fixes only the gripper's approach axis along the
 tuber's long axis (`pick_orientation: approach_axis`) and lines up and closes on that
 axis, so it does not depend on the tuber's spin. The jaws close at the gripper's own
 roll, which comes from its home pose (±45°). The home pose follows only the tuber's
 position (`reference: sweet_potato`, `follow: position`), so it always starts
-7–26 cm above and behind it. With the default `follow: pose` it would orbit the
+10–20 cm above and 35–44 cm behind it, jittered by x ±6 cm and ±0.12/±0.2 rad of
+pitch/yaw. With the default `follow: pose` it would orbit the
 tuber's long axis with the spin: over 40 resets 15 started below the tuber and 19
 upside down. A floating tuber is pushed by the closing jaws instead of resting on the
 counter, which changes several settings:
@@ -252,17 +268,16 @@ scans sit about 2 mm inside the hulls, so hull clearance also bounds visual clip
 requires a final error of at most 0.025 m after one more second of free settling.
 The recorded run completes in 127 control updates with a 5.1 mm settled error, and
 the minimum gripper–microwave clearance is 5.4 mm. Each preset also runs two seeded
-episodes headless and checks that the gripper starts above the tuber. In 40-episode
-sweeps (batch 1, four seeds), the default randomization and `zero_gravity` succeeded
-40/40 and `gravity` 39/40. The `gravity` failure dropped the tuber during insertion
-after a 19° grasp. With the door randomized as well (40 episodes per preset, two
-seeds, doors drawn between 91° and 151°), `zero_gravity` succeeded 40/40 and
-`gravity` 39/40, with no gripper or tuber contact with the door. The `gravity`
-failure dropped the tuber while sliding it in, and it fails the same way with the
-door pinned at its default 122°. No episode showed gripper–microwave or gripper–counter contact;
-the minimum render-mesh clearances were 5.7 mm (`gravity`) and 0.0 mm
-(`zero_gravity`, one episode grazing the cavity lip with a render-only linkage
-mesh).
+episodes headless and checks the camera set (`env1_cam` and the wrist camera), that
+the gripper starts above the tuber, that a floating tuber's centre is inside the
+front image, and the door range. In sweeps of the current presets (batch 1, 20
+episodes per seed), the default randomization succeeded 20/20, and over four seeds
+`zero_gravity` succeeded 80/80 and `gravity` 77/80. The three `gravity` failures
+dropped the tuber while sliding it in after grasps tilted 15–16°, the occasional
+slip of a tilted grasp described above. No episode showed gripper or tuber contact
+with the door, or gripper contact with the cabinet or counter; the minimum
+render-mesh clearances to the microwave hulls were 5.6 mm (`gravity`) and 0.6 mm
+(`zero_gravity`).
 
 ## Provenance and integrity
 
