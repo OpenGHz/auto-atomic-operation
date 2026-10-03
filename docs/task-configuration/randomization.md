@@ -229,6 +229,8 @@ task:
       <name>: ...
     cameras:               # per-camera entries (see "Camera Pose Randomization")
       <camera>: ...
+    joints:                # per-joint ranges (see "Joint Position Randomization")
+      <joint>: [min, max]
 ```
 
 `entities` keys are object or operator names.
@@ -245,8 +247,8 @@ defaults; an advanced `RandomizationSpec` is fully explicit. The placement
 ### Master switch
 
 `enabled` (default `true`) turns the whole scope off without touching its
-entries. With `enabled: false` no pose is sampled at all: objects, operators,
-and cameras keep their reset / `initial_pose` values, and a waypoint's own
+entries. With `enabled: false` nothing is sampled at all: objects, operators,
+cameras, and joints keep their reset / `initial_pose` values, and a waypoint's own
 `randomization` is skipped as well, so the run reproduces one deterministic
 scene regardless of `task.seed`. The entries stay configured and are still
 validated, so a disabled scope cannot conceal an invalid one.
@@ -1036,6 +1038,38 @@ no operator base frame and do not participate in entity dependency ordering.
 - Sampled camera poses are included in the `initial_poses` details returned by
   `TaskRunner.reset()` under a `"_cameras"` key.
 
+## Joint Position Randomization
+
+Passive scene joints, such as a door hinge or a drawer slide, are randomized
+under `task.randomization.joints`. Keys are logical joint names resolved by the
+selected backend; each value is an inclusive `[min, max]` range.
+
+```yaml
+task:
+  randomization:
+    joints:
+      microwave_door_hinge: [-2.0943, -1.0123]   # radians
+```
+
+### Semantics
+
+- Every reset draws one position per environment, uniformly from the range,
+  and writes it with zero velocity. Values are in the joint's own coordinates
+  (radians for a hinge, metres for a slide), the same values
+  `env.initial_joint_positions` takes.
+- The range is **absolute**: the draw replaces the reset value rather than
+  offsetting it, so a range is read directly against the joint's limits.
+- Only 1-DOF joints are accepted; an unknown name or a ball/free joint fails
+  the reset. Operator joints keep their home state from
+  `task_operators.<name>.initial_state`.
+- Joints are set first, before operator, camera, and object pose sampling, so
+  pose constraints and visibility checks see the articulated scene.
+- Joint entries own no `distribution` or `constraints`: draws are independent
+  per reset and are not checked against collisions. Choose a range in which
+  every value leaves the task feasible.
+- Draws use the same `task.seed` RNG as pose randomization.
+- Data replay clears `joints` together with `entities`.
+
 ## Reset Contract and Observability
 
 The configuration describes this observable reset contract:
@@ -1044,9 +1078,9 @@ The configuration describes this observable reset contract:
 2. Object, operator, and camera initial-state overrides are reapplied. Named
    initialization references are resolved as anchors for this reset.
 3. Those effective poses become the baselines for `relative` randomization.
-4. Object and operator randomization is sampled with dependency ordering and
-   collision rejection; camera and waypoint randomization follow their scopes
-   described above.
+4. Joint positions are drawn first. Object and operator randomization is then
+   sampled with dependency ordering and collision rejection; camera and
+   waypoint randomization follow their scopes described above.
 5. `TaskRunner.reset()` returns realized task-relevant poses in
    `TaskUpdate.details["initial_poses"]`. Operator entries contain both
    `base_pose` and `eef_pose`; camera entries are grouped under `"_cameras"`.

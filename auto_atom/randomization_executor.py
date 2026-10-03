@@ -30,6 +30,7 @@ from typing import (
     Mapping,
     Optional,
     Protocol,
+    Sequence,
     Set,
     Tuple,
     Union,
@@ -230,6 +231,20 @@ class RandomizationHost(Protocol):
 
         ``kind`` is ``object``, ``operator_base`` or ``operator_eef``: the same
         element addressing ``live_pose`` reads with.
+        """
+        ...
+
+    def set_scene_joint_positions(
+        self,
+        joint_names: Sequence[str],
+        positions: np.ndarray,
+        env_mask: np.ndarray,
+    ) -> None:
+        """Write named 1-DOF scene joints at rest into the masked envs.
+
+        ``positions`` has one row per environment and one column per name;
+        rows of unmasked environments are ignored. Only needed by a scope that
+        configures ``joints``.
         """
         ...
 
@@ -1744,8 +1759,24 @@ class RandomizationExecutor:
         )
         self._host.set_camera_mount_pose(camera_name, sampled, env_mask)
 
+    def apply_joint_randomization(self, env_mask: np.ndarray) -> None:
+        """Draw every configured joint position for the masked environments."""
+        joints = self.scope.joints
+        if not joints:
+            return
+        positions = np.zeros((self._host.batch_size, len(joints)), dtype=np.float64)
+        rng = self._host.rng
+        for env_index in np.flatnonzero(env_mask):
+            positions[env_index] = [
+                rng.uniform(low, high) for low, high in joints.values()
+            ]
+        self._host.set_scene_joint_positions(list(joints), positions, env_mask)
+
     def apply_randomization(self, env_mask: np.ndarray) -> None:
         self.begin_reset()
+        # Articulation first: an object's support geometry and the cameras'
+        # view of it are evaluated against the scene as these joints leave it.
+        self.apply_joint_randomization(env_mask)
         plan = self.plan
         components = [list(component) for component in plan.components]
         action_specs = plan.actions

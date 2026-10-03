@@ -109,6 +109,7 @@ class _RecordingHost:
         self._rng = np.random.default_rng(0)
         self.events: List[str] = []
         self.applied: List[str] = []
+        self.joint_writes: List[tuple] = []
         self.diagnostics: List[dict] = []
         # Cameras the host reports as rigidly mounted on an object; empty means
         # every camera is a fixed world pose.
@@ -237,6 +238,12 @@ class _RecordingHost:
         self.events.append(f"apply:{label}")
         self.applied.append(label)
         self.poses[label] = pose
+
+    def set_scene_joint_positions(self, joint_names, positions, env_mask) -> None:
+        self.events.append("joints")
+        self.joint_writes.append(
+            (list(joint_names), np.array(positions), np.array(env_mask))
+        )
 
     def evaluate_pose_constraints(self, candidate_poses, **kwargs):
         return PoseConstraintReport(valid=True)
@@ -550,3 +557,49 @@ def test_object_visibility_rejects_an_operator_that_follows_an_object() -> None:
 
     with pytest.raises(ValueError, match="mounted cameras"):
         executor.validate_configuration()
+
+
+def _with_joints(
+    config: ResolvedRandomizationConfig, joints: Dict[str, tuple]
+) -> ResolvedRandomizationConfig:
+    return ResolvedRandomizationConfig(
+        scope=ResolvedRandomizationScope(
+            entities=config.scope.entities,
+            cameras=config.scope.cameras,
+            joints=joints,
+            strategy=config.scope.strategy,
+        )
+    )
+
+
+def test_joints_are_drawn_in_range_before_any_pose() -> None:
+    host = _RecordingHost()
+    joints = {"door_hinge": (-2.0, -1.0), "drawer_slide": (0.1, 0.1)}
+
+    _reset(host, _with_joints(_config(RandomizationStrategy.RSA), joints))
+
+    # Articulation comes first, so every pose sample sees the final scene.
+    assert host.events[0] == "joints"
+    names, positions, _mask = host.joint_writes[0]
+    assert names == ["door_hinge", "drawer_slide"]
+    assert -2.0 <= positions[0, 0] <= -1.0
+    assert positions[0, 1] == pytest.approx(0.1)
+
+
+def test_joint_draws_follow_the_reset_mask() -> None:
+    class _TwoEnvHost(_RecordingHost):
+        @property
+        def batch_size(self) -> int:
+            return 2
+
+    host = _TwoEnvHost()
+    mask = np.asarray([False, True])
+    executor = RandomizationExecutor(
+        host, _with_joints(_scope({}), {"door_hinge": (-2.0, -1.0)})
+    )
+
+    executor.apply_randomization(mask)
+
+    _names, positions, written_mask = host.joint_writes[0]
+    np.testing.assert_array_equal(written_mask, mask)
+    assert -2.0 <= positions[1, 0] <= -1.0

@@ -67,7 +67,8 @@ During every `reset()` it:
 2. Homes the registered operators.
 3. Reapplies `task.initial_pose`, operator initial states, and
    `task.camera_initial_pose` in the same ownership order used during setup.
-4. Samples and applies operator context randomization.
+4. Writes `task.randomization.joints` draws into the named hinge/slide joints
+   (zero velocity), then samples and applies operator context randomization.
 5. Applies camera randomization — world poses for fixed cameras, mount-frame
    install offsets for object-mounted ones — then samples constrained object
    candidates against the final camera poses, and refreshes the viewer.

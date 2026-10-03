@@ -616,7 +616,7 @@ class OperatorRandomizationConfig(BaseModel):
 class RandomizationScopeConfig(BaseModel):
     """Container for global randomization defaults and the target maps.
 
-    This is the value of ``task.randomization``. It groups six orthogonal
+    This is the value of ``task.randomization``. It groups seven orthogonal
     concerns:
 
     * ``enabled`` — the master switch. It is checked before anything else, so
@@ -636,6 +636,8 @@ class RandomizationScopeConfig(BaseModel):
       explicit and override the scope defaults entirely.
     * ``cameras`` — the per-camera entries. They inherit ``distribution`` (how
       the pose stream is generated) but never ``constraints``.
+    * ``joints`` — the per-joint position ranges for passive scene joints.
+      They inherit neither default.
     """
 
     model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid")
@@ -643,8 +645,8 @@ class RandomizationScopeConfig(BaseModel):
     enabled: bool = True
     """Master switch for this scope's pose randomization.
 
-    ``False`` applies no randomization at all: every object, operator, and
-    camera keeps its reset / initial-pose value, and a waypoint's own
+    ``False`` applies no randomization at all: every object, operator,
+    camera, and joint keeps its reset / initial-pose value, and a waypoint's own
     ``randomization`` is skipped as well. The entries stay configured and are
     still validated, so a disabled scope cannot conceal an invalid one.
     """
@@ -703,6 +705,39 @@ class RandomizationScopeConfig(BaseModel):
               z: [0.4, 0.6]
     """
 
+    joints: Dict[str, Tuple[float, float]] = Field(default_factory=dict)
+    """Per-joint position randomization: a joint name mapped to ``[min, max]``.
+
+    Keys are logical names of passive 1-DOF scene joints (a door hinge, a
+    drawer slide) resolved by the selected backend; operator joints keep their
+    home state from ``initial_state``. Every reset draws one position per
+    environment uniformly from the inclusive range and writes it with zero
+    velocity, in the joint's own coordinates (radians for a hinge, metres for
+    a slide) -- the same values ``env.initial_joint_positions`` takes. The
+    range is absolute: it replaces the reset value rather than offsetting it.
+
+    Joints are set before any pose is sampled, so pose constraints see the
+    articulated scene. They own no distribution or constraint settings.
+
+    Example YAML::
+
+        randomization:
+          joints:
+            microwave_door_hinge: [-2.09, -1.01]
+    """
+
+    @field_validator("joints", mode="after")
+    @classmethod
+    def _validate_joint_ranges(
+        cls, value: Dict[str, Tuple[float, float]]
+    ) -> Dict[str, Tuple[float, float]]:
+        for name, (low, high) in value.items():
+            if low > high:
+                raise ValueError(
+                    f"joints[{name!r}] range must be [min, max]; got [{low}, {high}]"
+                )
+        return value
+
     @field_validator("cameras", mode="after")
     @classmethod
     def _validate_camera_entries(
@@ -749,6 +784,9 @@ class ResolvedRandomizationScope:
 
     cameras: Dict[str, RandomizationInput] = field(default_factory=dict)
     """Resolved per-camera entries with the scope distribution applied."""
+
+    joints: Dict[str, Tuple[float, float]] = field(default_factory=dict)
+    """Per-joint ``[min, max]`` position ranges, carried through unchanged."""
 
     strategy: RandomizationStrategy = RandomizationStrategy.RSA
     """Effective placement strategy for this scope."""
@@ -837,6 +875,7 @@ def resolve_randomization_scope(
     return ResolvedRandomizationScope(
         entities=resolved,
         cameras=cameras,
+        joints=dict(scope.joints),
         strategy=strategy,
         enabled=scope.enabled,
     )
@@ -869,8 +908,8 @@ class ResolvedRandomizationConfig:
 
     @property
     def is_empty(self) -> bool:
-        """True when nothing in the scope asks for pose randomization."""
-        return not (self.scope.entities or self.scope.cameras)
+        """True when nothing in the scope asks for randomization."""
+        return not (self.scope.entities or self.scope.cameras or self.scope.joints)
 
     @property
     def applies(self) -> bool:

@@ -1407,13 +1407,11 @@ class UnifiedMujocoEnv(MujocoBasis):
                 joint_name,
             )
             if joint_id < 0:
-                raise ValueError(
-                    f"Scene replay joint '{joint_name}' not found in model."
-                )
+                raise ValueError(f"Scene joint '{joint_name}' not found in model.")
             if int(self.model.jnt_type[joint_id]) not in scalar_joint_types:
                 raise ValueError(
-                    f"Scene replay joint '{joint_name}' must be a hinge or slide "
-                    "joint because its recording provides one scalar position."
+                    f"Scene joint '{joint_name}' must be a hinge or slide "
+                    "joint because it takes one scalar position."
                 )
             addresses.append(
                 (

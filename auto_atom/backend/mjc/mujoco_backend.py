@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Iterator, List, Optional, Set, Tuple, Union
@@ -1906,6 +1906,15 @@ class MujocoTaskBackend(SceneBackend):
             )
         else:
             raise ValueError(f"Unknown target part '{kind}' for '{owner}'.")
+
+    def set_scene_joint_positions(
+        self,
+        joint_names: Sequence[str],
+        positions: np.ndarray,
+        env_mask: np.ndarray,
+    ) -> None:
+        """Write named hinge/slide joints at rest into the masked envs."""
+        self.env.set_scene_joint_positions(joint_names, positions, env_mask=env_mask)
 
     def record_reset_diagnostics(
         self,

@@ -271,13 +271,14 @@ def test_data_replay_disables_object_randomization() -> None:
                         "large": {"x": [0.0, 1.0]},
                         "small": {"x": [0.0, 1.0]},
                     },
+                    "joints": {"door_hinge": [-1.0, 0.0]},
                 },
             },
         }
     )
 
     assert config.task.randomization.entities == {}
-    assert config.task.randomization.entities == {}
+    assert config.task.randomization.joints == {}
     # Replay drops the entries it must not sample; the master switch stays on so
     # camera randomization keeps working.
     assert config.task.randomization.enabled is True
@@ -319,6 +320,25 @@ def test_scope_applies_combines_the_master_switch_and_emptiness() -> None:
         ).applies
         is False
     )
+
+
+def test_joint_ranges_alone_make_a_scope_apply() -> None:
+    scope = RandomizationScopeConfig(joints={"door_hinge": [-2.0, -1.0]})
+
+    resolved = ResolvedRandomizationConfig.from_scope_config(scope)
+    assert resolved.scope.joints == {"door_hinge": (-2.0, -1.0)}
+    assert resolved.applies is True
+    assert (
+        ResolvedRandomizationConfig.from_scope_config(
+            RandomizationScopeConfig(enabled=False, joints={"door_hinge": [-2.0, -1.0]})
+        ).applies
+        is False
+    )
+
+
+def test_joint_range_must_be_ordered() -> None:
+    with pytest.raises(ValueError, match=r"joints\['door_hinge'\] range must be"):
+        RandomizationScopeConfig(joints={"door_hinge": [-1.0, -2.0]})
 
 
 def test_constraint_config_stays_hashable_with_listed_cameras() -> None:

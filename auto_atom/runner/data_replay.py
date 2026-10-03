@@ -416,17 +416,19 @@ class DataReplayConfig(BaseModel):
 class DataReplayTaskFileConfig(TaskFileConfig):
     """TaskFileConfig with an embedded :class:`DataReplayConfig`.
 
-    Object/operator randomization is automatically disabled for exact
-    trajectory reproduction.  Camera randomization is preserved.
+    Object/operator and scene-joint randomization is automatically disabled
+    for exact trajectory reproduction.  Camera randomization is preserved.
     """
 
     replay: DataReplayConfig = DataReplayConfig()
 
     @model_validator(mode="after")
     def _disable_object_randomization(self):
-        # Clear object/operator randomization for exact trajectory reproduction.
-        # Camera entries live under ``randomization.cameras`` and are preserved.
+        # Clear object/operator and joint randomization for exact trajectory
+        # reproduction. Camera entries live under ``randomization.cameras`` and
+        # are preserved.
         self.task.randomization.entities.clear()
+        self.task.randomization.joints.clear()
         return self
 
 
