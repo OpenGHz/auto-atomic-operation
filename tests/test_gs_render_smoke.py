@@ -51,3 +51,46 @@ def test_gs_render_captures_color_for_every_camera() -> None:
         assert image.shape == (1, 352, 640, 3), name
         # Rendered splats, not an empty frame.
         assert image.std() > 5.0, name
+
+
+@pytest.mark.parametrize("stamp_ns", [True, False])
+def test_gs_structured_image_stamps_use_sim_seconds(stamp_ns: bool) -> None:
+    # ``stamp_ns`` picks the unit of ``"t"`` only; headers always carry
+    # simulation seconds, as on the native env.
+    cfg = compose_task_config(
+        "cup_on_coaster",
+        [
+            "render=gs",
+            "env.batch_size=1",
+            "env.viewer=null",
+            "++env.structured=true",
+            f"++env.stamp_ns={str(stamp_ns).lower()}",
+        ],
+        ROOT / "aao_configs",
+    )
+    task_file = prepare_task_file(cfg)
+    backend = task_file.backend(task_file.task, task_file.task_operators)
+    try:
+        backend.setup(task_file.task)
+        backend.reset()
+        env = backend.get_env()
+        env.update()  # leave t=0, where a unit error would go unnoticed
+        observation = env.capture_observation()
+    finally:
+        backend.teardown()
+
+    images = {
+        key: entry
+        for key, entry in observation.items()
+        if isinstance(entry.get("data"), list)
+        and isinstance(entry["data"][0], dict)
+        and "encoding" in entry["data"][0]
+    }
+    assert images
+    for key, entry in images.items():
+        sim_time = float(entry["t"][0]) / (1e9 if stamp_ns else 1.0)
+        assert sim_time > 0.0, key
+        stamp = entry["data"][0]["header"]["stamp"]
+        assert stamp["sec"] + stamp["nanosec"] * 1e-9 == pytest.approx(
+            sim_time, abs=1e-6
+        ), key

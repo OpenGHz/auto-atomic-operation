@@ -207,11 +207,16 @@ def _sample_combinations(
 
 
 def create_image_data_batch(
-    image_batch, timestamps, frame_id: str = "", tobytes: bool = True
+    image_batch, times_sec, frame_id: str = "", tobytes: bool = True
 ):
+    """Build one image message per env; ``times_sec`` is simulation time in s.
+
+    Pass seconds regardless of ``stamp_ns``, which only selects the unit of
+    the observation's ``"t"`` field.
+    """
     return [
         create_image_data(image, time_sec, frame_id, tobytes)
-        for image, time_sec in zip(image_batch, timestamps / 1e9, strict=True)
+        for image, time_sec in zip(image_batch, times_sec, strict=True)
     ]
 
 
@@ -2516,6 +2521,7 @@ class BatchedGSUnifiedMujocoEnv(BatchedUnifiedMujocoEnv):
             return
 
         structured: bool = self.config.structured
+        sim_times = np.array([float(env.data.time) for env in self.envs])
         timestamps = np.array(
             [
                 int(env.data.time * 1e9)
@@ -2661,7 +2667,7 @@ class BatchedGSUnifiedMujocoEnv(BatchedUnifiedMujocoEnv):
                         "data": rgb
                         if not structured
                         else create_image_data_batch(
-                            rgb, timestamps, cam_name, tobytes=False
+                            rgb, sim_times, cam_name, tobytes=False
                         ),
                         "t": timestamps,
                     }
@@ -2673,7 +2679,7 @@ class BatchedGSUnifiedMujocoEnv(BatchedUnifiedMujocoEnv):
                         depth = depth.cpu().numpy()
                     depth = _apply_gs_clip_to_depth(depth, spec)
                     data = (
-                        create_image_data_batch(depth, timestamps, cam_name)
+                        create_image_data_batch(depth, sim_times, cam_name)
                         if structured
                         else depth
                     )
@@ -2707,7 +2713,7 @@ class BatchedGSUnifiedMujocoEnv(BatchedUnifiedMujocoEnv):
                     if cam_name in self.config.gs_mask_cameras:
                         data = (
                             create_image_data_batch(
-                                all_masks[:, cam_idx], timestamps, cam_name
+                                all_masks[:, cam_idx], sim_times, cam_name
                             )
                             if structured
                             else all_masks[:, cam_idx]
@@ -2719,7 +2725,7 @@ class BatchedGSUnifiedMujocoEnv(BatchedUnifiedMujocoEnv):
                     if cam_name in self.config.gs_heat_map_cameras:
                         data = (
                             create_image_data_batch(
-                                all_heat_maps[:, cam_idx], timestamps, cam_name
+                                all_heat_maps[:, cam_idx], sim_times, cam_name
                             )
                             if structured
                             else all_heat_maps[:, cam_idx]
@@ -3043,6 +3049,7 @@ class BatchedGSUnifiedMujocoEnv(BatchedUnifiedMujocoEnv):
         t0 = (
             int(env0.data.time * 1e9) if self.config.stamp_ns else float(env0.data.time)
         )
+        sim_times = np.full((N,), float(env0.data.time))
         timestamps = np.full((N,), t0)
 
         # body_pos/body_quat come from the single shared physics env.
@@ -3149,7 +3156,7 @@ class BatchedGSUnifiedMujocoEnv(BatchedUnifiedMujocoEnv):
                         "data": rgb
                         if not structured
                         else create_image_data_batch(
-                            rgb, timestamps, cam_name, tobytes=False
+                            rgb, sim_times, cam_name, tobytes=False
                         ),
                         "t": timestamps,
                     }
@@ -3159,7 +3166,7 @@ class BatchedGSUnifiedMujocoEnv(BatchedUnifiedMujocoEnv):
                         depth = depth.cpu().numpy()
                     depth = _apply_gs_clip_to_depth(depth, spec)
                     data = (
-                        create_image_data_batch(depth, timestamps, cam_name)
+                        create_image_data_batch(depth, sim_times, cam_name)
                         if structured
                         else depth
                     )
@@ -3189,7 +3196,7 @@ class BatchedGSUnifiedMujocoEnv(BatchedUnifiedMujocoEnv):
                     if cam_name in self.config.gs_mask_cameras:
                         data = (
                             create_image_data_batch(
-                                all_masks[:, cam_idx], timestamps, cam_name
+                                all_masks[:, cam_idx], sim_times, cam_name
                             )
                             if structured
                             else all_masks[:, cam_idx]
@@ -3201,7 +3208,7 @@ class BatchedGSUnifiedMujocoEnv(BatchedUnifiedMujocoEnv):
                     if cam_name in self.config.gs_heat_map_cameras:
                         data = (
                             create_image_data_batch(
-                                all_heat_maps[:, cam_idx], timestamps, cam_name
+                                all_heat_maps[:, cam_idx], sim_times, cam_name
                             )
                             if structured
                             else all_heat_maps[:, cam_idx]
