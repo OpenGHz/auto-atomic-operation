@@ -212,8 +212,12 @@ def test_randomization_presets_complete_headless(preset: str) -> None:
 
     runner = TaskRunner().from_config(prepare_task_file(config))
     try:
-        single_env = runner._context.backend.get_env().envs[0]  # type: ignore[union-attr]
+        backend = runner._context.backend
+        single_env = backend.get_env().envs[0]  # type: ignore[union-attr]
         model, data = single_env.model, single_env.data
+        # One scene camera in front plus the wrist camera, which rides the arm.
+        assert set(backend.camera_names()) == {"env1_cam", "eef_wrist_cam"}
+        assert backend.operator_camera_names() == {"eef_wrist_cam"}
         np.testing.assert_allclose(
             model.opt.gravity, [0.0, 0.0, 0.0 if zero_gravity else -9.81]
         )

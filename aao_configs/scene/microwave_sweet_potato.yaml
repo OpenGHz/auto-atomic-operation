@@ -3,9 +3,8 @@ scene_name: microwave_sweet_potato
 
 env:
   cameras:
+    # The only scene camera: in front, looking into the open cavity.  The
+    # embodiment adds its wrist camera.
     env1:
       name: env1_cam
-      is_static: true
-    env0:
-      name: env0_cam
       is_static: true

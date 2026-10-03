@@ -67,10 +67,7 @@ def test_robotless_host_loads_with_relative_paths() -> None:
     assert model.nu == 0
     assert model.nkey == 0
     assert model.nmesh == 119
-    assert {model.camera(i).name for i in range(model.ncam)} == {
-        "env0_cam",
-        "env1_cam",
-    }
+    assert {model.camera(i).name for i in range(model.ncam)} == {"env1_cam"}
 
     root = ET.parse(_SCENE).getroot()
     assert root.find("compiler").get("meshdir") == "../../../meshes"

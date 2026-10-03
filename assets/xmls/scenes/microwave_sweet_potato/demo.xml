@@ -40,9 +40,6 @@
     <!-- Front camera: looking from -Y into the open microwave. -->
     <camera name="env1_cam" pos="0.08 -0.80 0.52"
             xyaxes="0.998812 0.048723 0 -0.021341 0.437483 0.898974" fovy="50"/>
-    <!-- Side camera: looking from the front-right toward the counter. -->
-    <camera name="env0_cam" pos="0.85 -0.25 0.50"
-            xyaxes="0.316228 0.948683 0 -0.385743 0.128581 0.913602" fovy="50"/>
     <geom name="floor" type="plane" size="1.2 1.2 0.05" material="floor"/>
 
     <!-- Counter: half-height 0.03 on the floor, top surface at z=0.06. -->

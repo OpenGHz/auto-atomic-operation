@@ -27,8 +27,9 @@ assets/
 
 `demo.xml` uses `meshdir="../../../meshes"`; no path is absolute. It contains the
 counter, the fixed microwave, the free `sweet_potato`, the `microwave_target` placement
-frame, and the `env0_cam` / `env1_cam` observation cameras declared by
-`aao_configs/scene/microwave_sweet_potato.yaml`. The robot is injected as an ordered
+frame, and the front `env1_cam` observation camera declared by
+`aao_configs/scene/microwave_sweet_potato.yaml` (the embodiment adds its wrist
+camera). The robot is injected as an ordered
 MJCF layer (`assets/xmls/robots/umi_gripper_v3_mocap.xml`) by the `umi_v3_mocap`
 embodiment (formerly `basis_mocap_eef_umi_v3`).
 
