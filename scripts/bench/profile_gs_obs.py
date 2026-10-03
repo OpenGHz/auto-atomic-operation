@@ -46,10 +46,10 @@ def _parse_args(argv: list[str]) -> tuple[str, int, list[str]]:
         idx < len(args)
         and "=" not in args[idx]
         and not args[idx].startswith(("+", "~"))
+        and (Path.cwd() / "aao_configs" / "task" / f"{args[idx]}.yaml").exists()
     ):
-        if (Path.cwd() / "aao_configs" / "task" / f"{args[idx]}.yaml").exists():
-            task = args[idx]
-            idx += 1
+        task = args[idx]
+        idx += 1
     if idx < len(args) and args[idx].isdigit():
         iterations = int(args[idx])
         idx += 1

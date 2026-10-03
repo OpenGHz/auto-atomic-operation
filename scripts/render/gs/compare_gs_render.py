@@ -175,7 +175,7 @@ def main(cfg: DictConfig) -> None:
 
     # ── 5. Save figure ───────────────────────────────────────────────────────
     run_name = get_run_name()
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    timestamp = datetime.now().astimezone().strftime("%Y%m%d_%H%M%S")
     out_dir = Path("outputs")
     out_dir.mkdir(exist_ok=True)
     out_path = out_dir / f"compare_{run_name}_{timestamp}.png"

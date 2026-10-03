@@ -287,7 +287,7 @@ def main(cfg: DictConfig) -> None:
         return
 
     run_name = get_run_name()
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    timestamp = datetime.now().astimezone().strftime("%Y%m%d_%H%M%S")
     out_dir = Path("outputs")
     out_dir.mkdir(exist_ok=True)
     out_path = out_dir / f"compare_depth_{run_name}_{timestamp}.png"

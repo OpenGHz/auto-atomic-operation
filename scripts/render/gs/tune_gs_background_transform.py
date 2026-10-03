@@ -275,9 +275,7 @@ def _stack_rows(panels: list[np.ndarray], cols: int) -> np.ndarray:
                 panel = cv2.resize(
                     panel,
                     (
-                        max(
-                            1, int(round(panel.shape[1] * max_height / panel.shape[0]))
-                        ),
+                        max(1, round(panel.shape[1] * max_height / panel.shape[0])),
                         max_height,
                     ),
                     interpolation=cv2.INTER_AREA,

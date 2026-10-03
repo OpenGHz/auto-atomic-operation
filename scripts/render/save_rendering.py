@@ -303,7 +303,7 @@ def main(cfg: DictConfig) -> None:
     runner = TaskRunner().from_config(task_file)
     batch_size = int(getattr(env, "batch_size", 1))
     run_name = get_run_name()
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    timestamp = datetime.now().astimezone().strftime("%Y%m%d_%H%M%S")
     render_tag = "gs" if use_gs else "mj"
     out_dir = Path("outputs") / f"rendering_{render_tag}_{run_name}_{timestamp}"
     out_dir.mkdir(parents=True, exist_ok=True)

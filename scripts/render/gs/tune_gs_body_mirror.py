@@ -493,10 +493,7 @@ class DualRenderer:
         self._mj_opt = mujoco.MjvOption()
 
     def close(self) -> None:
-        try:
-            self.mj_renderer.close()
-        except Exception:
-            pass
+        self.mj_renderer.close()
 
     # -- camera arrays -----------------------------------------------------
 
@@ -942,8 +939,8 @@ class TunerWindow(QtWidgets.QWidget):
             print(st.yaml_snippet())
         try:
             self.dual.close()
-        except Exception:
-            pass
+        except Exception as exc:  # noqa: BLE001
+            print(f"dual.close() raised: {exc}")
         if self.backend is not None:
             try:
                 self.backend.teardown()

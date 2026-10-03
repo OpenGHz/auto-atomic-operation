@@ -157,7 +157,7 @@ def main() -> None:
 
     if src.is_file():
         # Single-file mode
-        if not src.suffix.lower() == ".ply":
+        if src.suffix.lower() != ".ply":
             parser.error(f"src file must be a .ply file, got: {src}")
         out_path = dst if dst.suffix.lower() == ".ply" else dst / src.name
         print(f"{'[DRY RUN] ' if args.dry_run else ''}Pre-rotating 1 file:")

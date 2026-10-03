@@ -86,14 +86,14 @@ def main() -> int:
     args = parse_args()
     repo_root = Path.cwd()
     output_root = repo_root / args.output_root
-    run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+    run_id = datetime.now().astimezone().strftime("%Y%m%d_%H%M%S")
     suite_dir = output_root / run_id
     suite_dir.mkdir(parents=True, exist_ok=True)
     run_name = resolve_run_name(repo_root, args.task, args.overrides)
 
     manifest = {
         "run_id": run_id,
-        "created_at": datetime.now().isoformat(timespec="seconds"),
+        "created_at": datetime.now().astimezone().isoformat(timespec="seconds"),
         "task": args.task,
         "overrides": args.overrides,
         "run_name": run_name,

@@ -289,7 +289,7 @@ def probe_physics(
         model = mjw.put_model(mjm)
         result.record("put_model", "ok")
         print("    put_model: ok")
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 — recorded in the probe report
         result.fail("put_model", exc)
         print(f"    put_model: FAILED — {type(exc).__name__}: {exc}")
         return None
@@ -299,7 +299,7 @@ def probe_physics(
         try:
             mjw.put_model(mjm, batch_sizes={name: nworld})
             batchable.append(name)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — recorded in the probe report
             result.notes.append(f"{name} not batchable: {type(exc).__name__}: {exc}")
     result.record("batchable", f"{len(batchable)}/{len(BATCHED_FIELDS)}")
     print(f"    batchable: {len(batchable)}/{len(BATCHED_FIELDS)} {batchable}")
@@ -309,7 +309,7 @@ def probe_physics(
             model = mjw.put_model(mjm, batch_sizes={f: nworld for f in batchable})
             result.record("put_model_batched", "ok")
             print(f"    put_model(batched, nworld={nworld}): ok")
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — recorded in the probe report
             result.fail("put_model_batched", exc)
             print(f"    put_model(batched): FAILED — {type(exc).__name__}: {exc}")
             return None
@@ -323,7 +323,7 @@ def probe_physics(
         data = mjw.put_data(mjm, host_data, **kwargs)
         result.record("put_data", "ok")
         print(f"    put_data: ok naconmax={data.naconmax} njmax={data.njmax}")
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 — recorded in the probe report
         result.fail("put_data", exc)
         print(f"    put_data: FAILED — {type(exc).__name__}: {exc}")
         return None
@@ -338,7 +338,7 @@ def probe_physics(
         result.record("step", "ok")
         result.record("contacts", f"nacon={nacon} per_world={per_world}")
         print(f"    step: ok nacon={nacon} per_world={per_world}")
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 — recorded in the probe report
         result.fail("step", exc)
         print(f"    step: FAILED — {type(exc).__name__}: {exc}")
         return None
@@ -357,7 +357,7 @@ def probe_physics(
             mjw.step(model, data)
             result.record("ctrl_write", "ok")
             print(f"    ctrl write + step: ok (nu={mjm.nu})")
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — recorded in the probe report
             result.fail("ctrl_write", exc)
             print(f"    ctrl write: FAILED — {type(exc).__name__}: {exc}")
 
@@ -366,7 +366,7 @@ def probe_physics(
         mjw.get_data_into(out, mjm, data, 0)
         result.record("get_data_into", f"ok ncon={out.ncon}")
         print(f"    get_data_into(world 0): ok ncon={out.ncon}")
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 — recorded in the probe report
         result.fail("get_data_into", exc)
         print(f"    get_data_into: FAILED — {type(exc).__name__}: {exc}")
 
@@ -420,7 +420,7 @@ def probe_renderer(
         mjw.render(model, data, context)
         result.record("render", "ok")
         print(f"    render: ok ({mjm.ncam} cameras)")
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 — recorded in the probe report
         result.fail("render", exc)
         print(f"    render: FAILED — {type(exc).__name__}: {exc}")
         return
@@ -446,7 +446,7 @@ def probe_renderer(
             )
             if coverage == 0.0:
                 result.notes.append(f"camera {name!r} rendered an empty scene")
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — recorded in the probe report
             result.fail(f"render[{name}]", exc)
             print(f"      {name!r}: FAILED — {type(exc).__name__}: {exc}")
 
@@ -525,7 +525,7 @@ def probe_models(
                     disable_multiccd,
                 )
             )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — recorded in the probe report
             traceback.print_exc()
             result = ProbeResult(mode=entry["mode"], model=entry["model"])
             result.fail("probe", exc)

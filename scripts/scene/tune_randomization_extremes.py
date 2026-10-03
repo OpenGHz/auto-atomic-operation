@@ -63,21 +63,23 @@ def _enable_high_dpi_awareness() -> None:
         return
     try:
         import ctypes
-    except Exception:
+    except ImportError:
         return
+    # Newest API first. Older Windows lacks the function (AttributeError) or
+    # the whole DLL (OSError), so fall through to the next one.
     try:
         if ctypes.windll.user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4)):
             return
-    except Exception:
+    except (AttributeError, OSError):
         pass
     try:
         ctypes.windll.shcore.SetProcessDpiAwareness(1)
         return
-    except Exception:
+    except (AttributeError, OSError):
         pass
     try:
         ctypes.windll.user32.SetProcessDPIAware()
-    except Exception:
+    except (AttributeError, OSError):
         pass
 
 
@@ -377,7 +379,7 @@ def _collect_cli_overrides(argv: list[str]) -> list[str]:
         if arg in {"--config-name", "--config-path"}:
             skip_next = True
             continue
-        if arg.startswith("--config-name=") or arg.startswith("--config-path="):
+        if arg.startswith(("--config-name=", "--config-path=")):
             continue
         if arg == "--multirun" or arg.startswith("hydra."):
             continue
