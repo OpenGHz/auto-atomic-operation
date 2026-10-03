@@ -2114,6 +2114,13 @@ class MujocoTaskBackend(SceneBackend):
             return set()
         return set(getattr(envs[0], "object_camera_names", frozenset()))
 
+    def operator_camera_names(self) -> Set[str]:
+        """Names of the cameras mounted on an operator (``role: operator``)."""
+        envs = getattr(self.env, "envs", ())
+        if not envs:
+            return set()
+        return set(getattr(envs[0], "operator_camera_names", frozenset()))
+
     def get_camera_mount_pose(self, cam_name: str) -> PoseState:
         """Read a camera's mount-frame pose across all envs.
 

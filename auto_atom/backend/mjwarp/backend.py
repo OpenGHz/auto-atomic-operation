@@ -516,6 +516,9 @@ class MjWarpObjectOnlyBackend(SceneBackend):
     def object_camera_names(self) -> frozenset[str]:
         return self.env.object_camera_names
 
+    def operator_camera_names(self) -> frozenset[str]:
+        return self.env.operator_camera_names
+
     def get_camera_pose(self, camera_name: str, env_index: int = 0) -> PoseState:
         return self.env.get_camera_pose(camera_name, env_index)
 

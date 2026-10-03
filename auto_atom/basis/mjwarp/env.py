@@ -730,6 +730,15 @@ class MjWarpObjectOnlyEnv:
             if getattr(spec, "role", "scene") == "object"
         )
 
+    @property
+    def operator_camera_names(self) -> frozenset[str]:
+        """Cameras mounted on an operator, which therefore ride it."""
+        return frozenset(
+            name
+            for name, spec in self._camera_specs.items()
+            if getattr(spec, "role", "scene") == "operator"
+        )
+
     def _visibility_witness_camera_names(self) -> Tuple[str, ...]:
         """Cameras eligible to witness an object for ``visible_in: all``.
 

@@ -616,6 +616,13 @@ class MujocoBasis:
         """Names of the cameras rigidly mounted on a scene object."""
         return frozenset(self._object_camera_names)
 
+    @property
+    def operator_camera_names(self) -> frozenset[str]:
+        """Names of the configured cameras with ``role: operator``."""
+        return frozenset(
+            name for name, spec in self._camera_specs.items() if spec.role == "operator"
+        )
+
     def _capture_camera_baselines(self) -> None:
         """Record the camera extrinsics ``reset()`` restores.
 

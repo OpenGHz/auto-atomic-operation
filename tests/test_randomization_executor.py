@@ -111,9 +111,10 @@ class _RecordingHost:
         self.applied: List[str] = []
         self.joint_writes: List[tuple] = []
         self.diagnostics: List[dict] = []
-        # Cameras the host reports as rigidly mounted on an object; empty means
-        # every camera is a fixed world pose.
+        # Cameras the host reports as rigidly mounted on an object or on an
+        # operator; empty means every camera is a fixed world pose.
         self.object_cameras: Set[str] = set()
+        self.operator_cameras: Set[str] = set()
         # Clip range of the reported camera model. The default is degenerate, so
         # every candidate box is provably outside the frustum; tests that need a
         # visible candidate widen it.
@@ -185,6 +186,9 @@ class _RecordingHost:
 
     def object_camera_names(self) -> Set[str]:
         return set(self.object_cameras)
+
+    def operator_camera_names(self) -> Set[str]:
+        return set(self.operator_cameras)
 
     def get_camera_mount_pose(self, camera_name: str) -> PoseState:
         return self.poses[CAMERA]
@@ -547,16 +551,33 @@ def test_object_cannot_reference_an_operator_that_follows_an_object() -> None:
         executor.validate_configuration()
 
 
-def test_object_visibility_rejects_an_operator_that_follows_an_object() -> None:
+def _plate_visible_while_eef_follows_cup() -> ResolvedRandomizationConfig:
     entities = dict(_eef_following_cup().scope.entities)
     entities[PLATE] = RandomizationSpec(
         proposal=PoseRandomRange(x=(0.0, 0.0)),
         constraints=_default_constraints(visible=True),
     )
-    executor = RandomizationExecutor(_RecordingHost(), _scope(entities))
+    return _scope(entities)
 
-    with pytest.raises(ValueError, match="mounted cameras"):
+
+def test_visibility_on_a_mounted_camera_rejects_a_deferred_operator() -> None:
+    host = _RecordingHost()
+    host.operator_cameras = {CAMERA}
+    executor = RandomizationExecutor(host, _plate_visible_while_eef_follows_cup())
+
+    with pytest.raises(
+        ValueError, match=r"operator-mounted camera\(s\) \['head_cam'\]"
+    ):
         executor.validate_configuration()
+
+
+def test_visibility_on_a_fixed_camera_allows_a_deferred_operator() -> None:
+    host = _RecordingHost()
+    host.operator_cameras = {"wrist_cam"}
+    executor = RandomizationExecutor(host, _plate_visible_while_eef_follows_cup())
+
+    # head_cam is fixed, so it is final before the deferred EEF is sampled.
+    executor.validate_configuration()
 
 
 def _with_joints(

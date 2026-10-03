@@ -252,6 +252,14 @@ class RandomizationHost(Protocol):
         """
         ...
 
+    def operator_camera_names(self) -> Container[str]:
+        """Names of the cameras mounted on an operator, such as a wrist camera.
+
+        Such a camera moves with its operator's home pose, so its view is only
+        final once that operator has been sampled.
+        """
+        ...
+
     def get_camera_mount_pose(self, camera_name: str) -> PoseState:
         """Read a camera's pose in its mount frame across all environments.
 
@@ -525,9 +533,10 @@ class RandomizationExecutor:
 
         An operator action that references an object is sampled after every
         object. An object that in turn references such an operator would need
-        it first, and object ``visible_in`` checks would see the operator's
-        mounted cameras before it moves, so both are rejected rather than
-        resolved against a stale pose.
+        it first, and an object ``visible_in`` check on an operator-mounted
+        camera would see that camera before its operator moves, so both are
+        rejected rather than resolved against a stale pose. Fixed cameras are
+        final before objects are sampled, so a check on them is unaffected.
         """
         plan = self.plan
         deferred = plan.operators_after_objects
@@ -544,13 +553,21 @@ class RandomizationExecutor:
                     "Operator entries that reference objects are sampled after "
                     "every object, so this chain cannot be ordered."
                 )
-            if action.randomization.constraints.visible_in is not None:
+            visible = action.randomization.constraints.visible_in
+            if visible is None:
+                continue
+            mounted = sorted(
+                set(self._visibility_camera_names(visible, 0))
+                & set(self._host.operator_camera_names())
+            )
+            if mounted:
                 raise ValueError(
-                    f"Randomization of object '{label}' declares visible_in, "
-                    f"but operator action(s) {sorted(deferred)} reference an "
-                    "object and are sampled after every object, so the "
-                    "visibility check would see their mounted cameras at the "
-                    "pre-randomization pose."
+                    f"Randomization of object '{label}' declares visible_in on "
+                    f"the operator-mounted camera(s) {mounted}, but operator "
+                    f"action(s) {sorted(deferred)} reference an object and are "
+                    "sampled after every object, so the visibility check would "
+                    "see those cameras at the pre-randomization pose. List only "
+                    "fixed cameras in visible_in.cameras."
                 )
 
     # ------------------------------------------------------------------

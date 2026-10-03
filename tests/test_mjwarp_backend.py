@@ -429,6 +429,18 @@ def physical_backend():
     built.teardown()
 
 
+def test_operator_cameras_are_the_operator_role_cameras(physical_backend, backend):
+    """The wrist camera rides the operator; object_only strips it entirely."""
+    configured = {
+        spec.name
+        for spec in physical_backend.env.config.cameras
+        if spec.role == "operator"
+    }
+    assert configured
+    assert physical_backend.operator_camera_names() == configured
+    assert backend.operator_camera_names() == frozenset()
+
+
 def test_grasp_queries_answer_per_world(physical_backend):
     """Every query returns one answer per world, which is what stages index."""
     got = physical_backend.is_object_grasped("arm", "object")

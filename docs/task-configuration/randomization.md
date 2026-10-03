@@ -622,9 +622,12 @@ the object it will grasp. Operator entries are normally sampled before objects
 object, directly or through another entry, is deferred until after every
 object. Two configurations have no consistent order with that deferral and are
 rejected with a `ValueError`: an object entry that references such an operator
-entry, and an object `visible_in` constraint while such an operator entry
-exists, because the check would see that operator's mounted cameras before they
-move.
+entry, and an object `visible_in` constraint whose cameras include an
+operator-mounted camera (`role: operator`, such as a wrist camera) while such
+an operator entry exists, because the check would see that camera before its
+operator moves. `cameras: all` includes operator-mounted cameras, so list the
+fixed cameras explicitly instead; fixed cameras are final before objects are
+sampled, so their checks are unaffected by the deferral.
 
 ### Following only the referenced position
 
