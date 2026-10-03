@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import mujoco
 import numpy as np
 import pytest
 
 from auto_atom.backend.mjc.mujoco_backend import (
+    BackendRebuildRequired,
     MujocoOperatorHandler,
+    MujocoResetConfig,
     MujocoTaskBackend,
 )
 from auto_atom.backend.mjc.mujoco_backend import MujocoObjectHandler
@@ -17,6 +20,8 @@ from auto_atom.config.env_config import CameraSpec, DataType, EnvConfig, Operato
 from auto_atom.basis.mjc.mujoco_basis import MujocoBasis
 from auto_atom.basis.mjc.mujoco_env import UnifiedMujocoEnv
 from auto_atom.config.pose import PoseOverrideConfig
+from auto_atom.config.randomization import pose_randomization_regions
+from auto_atom.config.task import AutoAtomConfig
 from auto_atom.utils.pose import PoseState
 from auto_atom.scene_composition import SceneConfig
 
@@ -584,3 +589,100 @@ def test_object_free_joint_is_resolved_from_the_model(tmp_path: Path) -> None:
         assert drawer.get_free_joint_id(physical.model) == -1
     finally:
         physical.close()
+
+
+_RECONFIGURE_SCENE = """
+<mujoco>
+  <worldbody>
+    <body name="vase" pos="0 0 0"><geom type="box" size="0.1 0.1 0.1"/></body>
+    <body name="cup" pos="1 0 0"><geom type="box" size="0.1 0.1 0.1"/></body>
+    <body name="plate" pos="2 0 0"><geom type="box" size="0.1 0.1 0.1"/></body>
+  </worldbody>
+</mujoco>
+"""
+
+
+class _ReconfigureEnv:
+    """The env surface ``reconfigure`` and ``setup`` touch, around a real model."""
+
+    batch_size = 1
+
+    def __init__(self) -> None:
+        self.envs = [
+            SimpleNamespace(model=mujoco.MjModel.from_xml_string(_RECONFIGURE_SCENE))
+        ]
+        self.resets = 0
+
+    def reset(self, env_mask=None) -> None:
+        self.resets += 1
+
+
+def _task(entities: dict, *, seed: int | None = None) -> AutoAtomConfig:
+    return AutoAtomConfig.model_validate(
+        {
+            "env_name": "scene",
+            "stages": [],
+            "seed": seed,
+            "randomization": {"entities": entities},
+        }
+    )
+
+
+def _reconfigurable_backend(task: AutoAtomConfig) -> MujocoTaskBackend:
+    reset_config = MujocoResetConfig.from_task(task, [])
+    return MujocoTaskBackend(
+        env=_ReconfigureEnv(),
+        operator_handlers={},
+        object_handlers={
+            name: _BatchObject(PoseState(position=[[float(index), 0.0, 0.0]]))
+            for index, name in enumerate(("vase", "cup"))
+        },
+        randomization=reset_config.randomization,
+        random_seed=reset_config.random_seed,
+    )
+
+
+def test_reconfigure_resets_like_a_rebuilt_backend() -> None:
+    backend = _reconfigurable_backend(
+        _task({"vase": {"x": [0.0, 0.1]}, "cup": {"x": [0.0, 0.1]}}, seed=1)
+    )
+    stale_executor = backend.randomization_executor
+    backend.rng.random()
+
+    backend.reconfigure(
+        _task({"vase": {"y": [0.2, 0.3]}, "cup": {"x": [0.0, 0.1]}}, seed=5), {}
+    )
+
+    executor = backend.randomization_executor
+    assert executor is not stale_executor
+    (vase_region,) = pose_randomization_regions(
+        executor.plan.actions["vase"].randomization
+    )
+    assert vase_region.axis_range("x") is None
+    assert vase_region.axis_range("y") == (0.2, 0.3)
+    assert backend.random_seed == 5
+    assert backend.rng.random() == np.random.default_rng(5).random()
+    assert backend.env.resets == 1
+    assert backend.baseline_pose("cup") is not None
+
+
+def test_reconfigure_requires_a_rebuild_for_a_new_handler() -> None:
+    backend = _reconfigurable_backend(
+        _task({"vase": {"x": [0.0, 0.1]}, "cup": {"x": [0.0, 0.1]}})
+    )
+    randomization = backend.randomization
+
+    with pytest.raises(BackendRebuildRequired, match="plate"):
+        backend.reconfigure(
+            _task(
+                {
+                    "vase": {"x": [0.0, 0.1]},
+                    "cup": {"x": [0.0, 0.1]},
+                    "plate": {"x": [0.0, 0.1]},
+                }
+            ),
+            {},
+        )
+
+    assert backend.randomization is randomization
+    assert backend.env.resets == 0

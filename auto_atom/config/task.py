@@ -269,6 +269,21 @@ def _phase_waypoint_count(stage: StageConfig, phase: TaskPhase) -> int:
     return 0
 
 
+def name_task_operators(
+    operators: Dict[str, OperatorConfig],
+) -> Dict[str, OperatorConfig]:
+    """Name each ``task_operators`` entry after its key, rejecting a mismatch."""
+    for key, op in operators.items():
+        if not op.name:
+            op.name = key
+        elif op.name != key:
+            raise ValueError(
+                f"task_operators key '{key}' does not match operator name '{op.name}'. "
+                "Either omit the name field or make it match the key."
+            )
+    return operators
+
+
 class TaskFileConfig(BaseModel):
     """Top-level YAML schema for a runnable task file."""
 
@@ -320,15 +335,7 @@ class TaskFileConfig(BaseModel):
     def _populate_operator_names(
         cls, value: Dict[str, OperatorConfig]
     ) -> Dict[str, OperatorConfig]:
-        for key, op in value.items():
-            if not op.name:
-                op.name = key
-            elif op.name != key:
-                raise ValueError(
-                    f"task_operators key '{key}' does not match operator name '{op.name}'. "
-                    "Either omit the name field or make it match the key."
-                )
-        return value
+        return name_task_operators(value)
 
     @model_validator(mode="after")
     def _validate_interval_selection(self) -> "TaskFileConfig":

@@ -1078,6 +1078,94 @@ class MujocoOperatorHandler(OperatorHandler):
         }
 
 
+@dataclass(frozen=True)
+class MujocoResetConfig:
+    """Everything a task config decides about a MuJoCo backend's resets.
+
+    :func:`build_mujoco_backend` constructs the backend from it and
+    :meth:`MujocoTaskBackend.reconfigure` swaps it in place, so a reconfigured
+    backend resets exactly like a freshly built one.
+    """
+
+    randomization: ResolvedRandomizationConfig
+    initial_poses: Dict[str, PoseOverrideConfig]
+    camera_initial_poses: Dict[str, PoseOverrideConfig]
+    operator_initial_states: Dict[str, OperatorInitialState]
+    random_seed: Optional[int]
+
+    @classmethod
+    def from_task(
+        cls,
+        config: AutoAtomConfig,
+        operator_configs: List[OperatorConfig],
+    ) -> "MujocoResetConfig":
+        return cls(
+            randomization=ResolvedRandomizationConfig.from_scope_config(
+                config.randomization
+            ),
+            initial_poses=dict(config.initial_pose),
+            camera_initial_poses=dict(config.camera_initial_pose),
+            operator_initial_states={
+                operator.name: operator.initial_state
+                for operator in operator_configs
+                if operator.initial_state is not None
+            },
+            random_seed=config.seed,
+        )
+
+
+def _object_handler_names(
+    config: AutoAtomConfig,
+    operator_names: Set[str],
+    model: mujoco.MjModel,
+) -> Set[str]:
+    """Objects a task needs handlers for.
+
+    Every stage object, plus each name that the randomization entries or
+    ``initial_pose`` mention (they may not appear in any stage but still need
+    handlers for pose get/set) and that is a body in ``model``.
+    """
+    object_names = {stage.object for stage in config.stages if stage.object}
+
+    def _body_exists(name: str) -> bool:
+        """Check if a body (or its _gs variant) exists in the MuJoCo model."""
+        if mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, name) >= 0:
+            return True
+        if mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, f"{name}_gs") >= 0:
+            return True
+        return False
+
+    _rand_candidate_names: set = set()
+    randomization_entities = config.randomization.entities
+    for rand_name in randomization_entities:
+        if rand_name not in operator_names:
+            _rand_candidate_names.add(rand_name)
+    for rand_range in randomization_entities.values():
+        refs: list = []
+        if isinstance(rand_range, OperatorRandomizationConfig):
+            if rand_range.base is not None:
+                refs.extend(declared_randomization_references(rand_range.base))
+            if rand_range.eef is not None:
+                refs.extend(declared_randomization_references(rand_range.eef))
+        else:
+            refs.extend(declared_randomization_references(rand_range))
+        for ref in refs:
+            if isinstance(ref, str) and not isinstance(ref, RandomizationReference):
+                if ref not in operator_names:
+                    _rand_candidate_names.add(ref)
+    for ip_name in config.initial_pose:
+        if ip_name not in operator_names:
+            _rand_candidate_names.add(ip_name)
+    for cand in _rand_candidate_names:
+        if _body_exists(cand):
+            object_names.add(cand)
+    return object_names
+
+
+class BackendRebuildRequired(RuntimeError):
+    """A task config needs elements this backend was not built with."""
+
+
 @dataclass
 class MujocoTaskBackend(SceneBackend):
     """MuJoCo scene backend.
@@ -1133,6 +1221,12 @@ class MujocoTaskBackend(SceneBackend):
     )
 
     def __post_init__(self) -> None:
+        self._seed_rng()
+        self._validate_initial_joint_position_ownership()
+        self._validate_camera_initial_pose_ownership()
+
+    def _seed_rng(self) -> None:
+        """Resolve ``random_seed`` and seed the backend RNG and camera noise."""
         logger = logging.getLogger(MujocoTaskBackend.__name__)
         requested_seed = self.random_seed
         self.random_seed = resolve_run_seed(requested_seed)
@@ -1151,8 +1245,6 @@ class MujocoTaskBackend(SceneBackend):
         set_noise_seed = getattr(self.env, "set_camera_noise_seed", None)
         if set_noise_seed is not None:
             set_noise_seed(self.random_seed)
-        self._validate_initial_joint_position_ownership()
-        self._validate_camera_initial_pose_ownership()
 
     def _validate_camera_initial_pose_ownership(self) -> None:
         """Reject ``camera_initial_pose`` entries on object-mounted cameras.
@@ -1357,6 +1449,73 @@ class MujocoTaskBackend(SceneBackend):
                 if name in self.object_handlers
             },
         )
+
+    def reconfigure(
+        self,
+        task: AutoAtomConfig,
+        operators: Mapping[str, OperatorConfig],
+    ) -> None:
+        """Swap in a task's reset configuration, as if the backend were rebuilt.
+
+        Randomization, initial poses, operator initial states, and the seed are
+        replaced; the randomization executor (with its coverage history and
+        streams), the reset counter, and the recorded baselines start over; and
+        the scene is set up again. That is the state :func:`build_mujoco_backend`
+        followed by :meth:`setup` produces for ``task``.
+
+        Only the reset configuration is reloaded: the scene model and the
+        handlers are kept, so a task that needs a different set of handlers
+        raises :class:`BackendRebuildRequired`, and the rest of a task config
+        (scene, control parameters, stages) needs a rebuild to take effect.
+        """
+        operator_names = set(operators)
+        object_names = _object_handler_names(
+            task, operator_names, self.env.envs[0].model
+        )
+        if operator_names != set(self.operator_handlers) or object_names != set(
+            self.object_handlers
+        ):
+            raise BackendRebuildRequired(
+                f"The task needs operators {sorted(operator_names)} and objects "
+                f"{sorted(object_names)}; this backend was built with "
+                f"{sorted(self.operator_handlers)} and {sorted(self.object_handlers)}."
+            )
+        reset_config = MujocoResetConfig.from_task(task, list(operators.values()))
+        previous = MujocoResetConfig(
+            randomization=self.randomization,
+            initial_poses=self.initial_poses,
+            camera_initial_poses=self.camera_initial_poses,
+            operator_initial_states=self.operator_initial_states,
+            random_seed=self.random_seed,
+        )
+
+        def assign(config: MujocoResetConfig) -> None:
+            self.randomization = config.randomization
+            self.initial_poses = config.initial_poses
+            self.camera_initial_poses = config.camera_initial_poses
+            self.operator_initial_states = config.operator_initial_states
+            self.random_seed = config.random_seed
+
+        assign(reset_config)
+        try:
+            self._validate_initial_joint_position_ownership()
+            self._validate_camera_initial_pose_ownership()
+        except Exception:
+            assign(previous)
+            raise
+        self._seed_rng()
+        self._reset_index = 0
+        self._last_reset_diagnostics.clear()
+        self._randomization_executor_instance = None
+        for recorded in (
+            self._default_object_poses,
+            self._default_operator_base_poses,
+            self._default_operator_eef_poses,
+            self._default_camera_poses,
+        ):
+            recorded.clear()
+        self.env.reset()
+        self.setup(task)
 
     def setup(self, config: AutoAtomConfig) -> None:
         for operator in self.operator_handlers.values():
@@ -2470,44 +2629,8 @@ def build_mujoco_backend(
             },
         )
 
-    object_names = {stage.object for stage in config.stages if stage.object}
-    # Also register objects mentioned in the randomization dict (they may not
-    # appear in any stage but still need handlers for pose get/set).
     model = env.envs[0].model
-
-    def _body_exists(name: str) -> bool:
-        """Check if a body (or its _gs variant) exists in the MuJoCo model."""
-        if mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, name) >= 0:
-            return True
-        if mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, f"{name}_gs") >= 0:
-            return True
-        return False
-
-    _rand_candidate_names: set = set()
-    randomization_entities = config.randomization.entities
-    for rand_name in randomization_entities:
-        if rand_name not in operator_handlers:
-            _rand_candidate_names.add(rand_name)
-    for rand_range in randomization_entities.values():
-        refs: list = []
-        if isinstance(rand_range, OperatorRandomizationConfig):
-            if rand_range.base is not None:
-                refs.extend(declared_randomization_references(rand_range.base))
-            if rand_range.eef is not None:
-                refs.extend(declared_randomization_references(rand_range.eef))
-        else:
-            refs.extend(declared_randomization_references(rand_range))
-        for ref in refs:
-            if isinstance(ref, str) and not isinstance(ref, RandomizationReference):
-                if ref not in operator_handlers:
-                    _rand_candidate_names.add(ref)
-    # Also register objects mentioned in initial_pose.
-    for ip_name in config.initial_pose:
-        if ip_name not in operator_handlers:
-            _rand_candidate_names.add(ip_name)
-    for cand in _rand_candidate_names:
-        if _body_exists(cand):
-            object_names.add(cand)
+    object_names = _object_handler_names(config, set(operator_handlers), model)
 
     object_handlers: Dict[str, MujocoObjectHandler] = {}
     for object_name in object_names:
@@ -2523,22 +2646,15 @@ def build_mujoco_backend(
             body_name=body_name,
         )
 
-    randomization_config = ResolvedRandomizationConfig.from_scope_config(
-        config.randomization
-    )
-
+    reset_config = MujocoResetConfig.from_task(config, operator_configs)
     backend = MujocoTaskBackend(
         env=env,
         operator_handlers=operator_handlers,
         object_handlers=object_handlers,
-        randomization=randomization_config,
-        initial_poses=dict(config.initial_pose),
-        camera_initial_poses=dict(config.camera_initial_pose),
-        operator_initial_states={
-            operator.name: operator.initial_state
-            for operator in operator_configs
-            if operator.initial_state is not None
-        },
-        random_seed=config.seed,
+        randomization=reset_config.randomization,
+        initial_poses=reset_config.initial_poses,
+        camera_initial_poses=reset_config.camera_initial_poses,
+        operator_initial_states=reset_config.operator_initial_states,
+        random_seed=reset_config.random_seed,
     )
     return backend

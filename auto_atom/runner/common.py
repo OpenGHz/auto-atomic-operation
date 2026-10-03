@@ -9,14 +9,19 @@ from enum import Enum
 from pathlib import Path
 from pprint import pprint
 from time import perf_counter
-from typing import Any, Callable, Dict, List, Optional, Sequence
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 from hydra.utils import instantiate
 from omegaconf import DictConfig, ListConfig, OmegaConf
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter
 
-from auto_atom.config.task import TaskFileConfig
+from auto_atom.config.task import (
+    AutoAtomConfig,
+    OperatorConfig,
+    TaskFileConfig,
+    name_task_operators,
+)
 from auto_atom.config_loader import describe_run
 from auto_atom.execution_config import prepare_task_config_for_instantiation
 from auto_atom.runtime import (
@@ -63,6 +68,31 @@ def prepare_task_file(
     if isinstance(raw, (DictConfig, ListConfig)):
         raw = OmegaConf.to_container(raw, resolve=True)
     return config_cls.model_validate(raw)
+
+
+def prepare_task_sections(
+    cfg: DictConfig,
+) -> Tuple[AutoAtomConfig, Dict[str, OperatorConfig]]:
+    """The ``task`` and ``task_operators`` that :func:`prepare_task_file` yields.
+
+    Instantiating the task file is what builds the environment, so this reads
+    the two sections without instantiating anything: the config goes through
+    the same preparation (``object_only`` stripping) and the sections through
+    the same field validation. Use it to re-read a task for a backend that
+    already exists (see ``MujocoTaskBackend.reconfigure``).
+    """
+    raw = OmegaConf.to_container(
+        prepare_task_config_for_instantiation(cfg), resolve=True
+    )
+    if not isinstance(raw, dict):
+        raise TypeError("Config root must be a mapping.")
+    task = AutoAtomConfig.model_validate(raw.get("task"))
+    operators = name_task_operators(
+        TypeAdapter(Dict[str, OperatorConfig]).validate_python(
+            raw.get("task_operators") or {}
+        )
+    )
+    return task, operators
 
 
 def run_example_rounds(
