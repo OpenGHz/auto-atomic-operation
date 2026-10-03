@@ -66,6 +66,9 @@ from auto_atom.utils.pose import (
     quaternion_to_rpy,
 )
 
+POSITION_AXES = ("x", "y", "z")
+ROTATION_AXES = ("roll", "pitch", "yaw")
+
 
 @dataclass(frozen=True)
 class RandomizationAction:
@@ -794,52 +797,31 @@ def select_randomization_region(
     return regions[max(0, min(sampled_index, len(regions) - 1))]
 
 
-def sample_pose_for_env(
+def draw_axis_values(
     rng: np.random.Generator,
-    *,
-    base_pose: PoseState,
     rand_range: PoseRandomRange,
-    env_index: int,
-    batch_size: int,
-    reference_poses: Optional[
-        Mapping[Union[RandomizationReference, str], PoseState]
-    ] = None,
+    *,
     distribution: Optional[RandomizationDistributionConfig] = None,
     sample_index: int = 0,
     reset_index: int = 0,
     poisson_stream: Optional[PoissonDiskCandidateStream] = None,
-) -> PoseState:
-    """Sample one environment's pose from an axis range.
-
-    Each axis either keeps its baseline (an unconfigured axis), receives an
-    absolute value (``absolute_world`` / ``absolute_base``) or is added to the
-    baseline (a relative or entity-name reference). The baseline per axis comes
-    from that axis's own reference, so a single region can mix frames.
+) -> Dict[str, float]:
+    """Draw one value for every configured axis of ``rand_range``.
 
     Random draws happen in a fixed order — one per configured position axis
     (x, y, z), then one per configured rotation axis (roll, pitch, yaw) — so the
     stream stays reproducible across resets and refactors. Non-IID generators
     substitute low-discrepancy values for the uniform draws instead of
-    consuming them.
+    consuming them. The values are in the axis's own frame; turning them into a
+    pose is :func:`pose_from_axis_values`.
     """
-    base_pose = base_pose.broadcast_to(batch_size)
-    pose_by_reference = {
-        reference: pose.broadcast_to(batch_size)
-        for reference, pose in (reference_poses or {}).items()
-    }
-
-    def _baseline(reference: Union[RandomizationReference, str]) -> PoseState:
-        return pose_by_reference.get(reference, base_pose)
-
     generator = getattr(distribution, "generator", RandomizationGeneratorKind.IID)
     is_poisson_generator = generator == RandomizationGeneratorKind.POISSON_DISK or (
         isinstance(generator, RandomizationGeneratorConfig)
     )
     candidate_count = int(getattr(distribution, "candidate_count", 1))
     poisson_position_axes = (
-        tuple(
-            axis for axis in ("x", "y", "z") if rand_range.axis_range(axis) is not None
-        )
+        tuple(axis for axis in POSITION_AXES if rand_range.axis_range(axis) is not None)
         if poisson_stream is not None
         else ()
     )
@@ -858,36 +840,94 @@ def sample_pose_for_env(
             seed=int(reset_index * 1_000_003 + sample_index),
         )
 
-    position = np.empty(3, dtype=np.float64)
-    for axis_index, axis_name in enumerate(("x", "y", "z")):
-        reference = rand_range.axis_reference(axis_name)
-        baseline = _baseline(reference)
-        value = float(baseline.position[env_index, axis_index])
+    values: Dict[str, float] = {}
+    for axis_index, axis_name in enumerate(POSITION_AXES):
         rng_pair = rand_range.axis_range(axis_name)
-        if rng_pair is not None:
-            if poisson_values is not None:
-                sampled = float(poisson_values[poisson_position_axes.index(axis_name)])
-            elif qmc_values is None:
-                sampled = float(rng.uniform(*rng_pair))
-            else:
-                sampled = float(
-                    rng_pair[0] + qmc_values[axis_index] * (rng_pair[1] - rng_pair[0])
-                )
-            if reference in (
-                RandomizationReference.ABSOLUTE_WORLD,
-                RandomizationReference.ABSOLUTE_BASE,
-            ):
-                value = sampled
-            else:
-                value += sampled
-        position[axis_index] = value
+        if rng_pair is None:
+            continue
+        if poisson_values is not None:
+            values[axis_name] = float(
+                poisson_values[poisson_position_axes.index(axis_name)]
+            )
+        elif qmc_values is None:
+            values[axis_name] = float(rng.uniform(*rng_pair))
+        else:
+            values[axis_name] = float(
+                rng_pair[0] + qmc_values[axis_index] * (rng_pair[1] - rng_pair[0])
+            )
+    for axis_index, axis_name in enumerate(ROTATION_AXES):
+        rng_pair = rand_range.axis_range(axis_name)
+        if rng_pair is None:
+            continue
+        if qmc_values is None:
+            values[axis_name] = float(rng.uniform(*rng_pair))
+        else:
+            values[axis_name] = float(
+                rng_pair[0]
+                + qmc_values[axis_index if is_poisson_generator else 3 + axis_index]
+                * (rng_pair[1] - rng_pair[0])
+            )
+    return values
 
-    rotation_axes = ("roll", "pitch", "yaw")
+
+def pose_from_axis_values(
+    base_pose: PoseState,
+    rand_range: PoseRandomRange,
+    axis_values: Mapping[str, float],
+    *,
+    env_index: int,
+    batch_size: int,
+    reference_poses: Optional[
+        Mapping[Union[RandomizationReference, str], PoseState]
+    ] = None,
+) -> PoseState:
+    """Compose one environment's pose from per-axis values.
+
+    Each axis either keeps its baseline (no value), receives an absolute value
+    (``absolute_world`` / ``absolute_base``) or is added to the baseline (a
+    relative or entity-name reference). The baseline per axis comes from that
+    axis's own reference, so a single region can mix frames. This is the only
+    place axis values become a pose, whether they were drawn
+    (:func:`draw_axis_values`) or chosen.
+    """
+    base_pose = base_pose.broadcast_to(batch_size)
+    pose_by_reference = {
+        reference: pose.broadcast_to(batch_size)
+        for reference, pose in (reference_poses or {}).items()
+    }
+
+    def _baseline(reference: Union[RandomizationReference, str]) -> PoseState:
+        return pose_by_reference.get(reference, base_pose)
+
+    def _apply(
+        reference: Union[RandomizationReference, str],
+        baseline_value: float,
+        axis_name: str,
+    ) -> float:
+        if axis_name not in axis_values:
+            return baseline_value
+        value = float(axis_values[axis_name])
+        if reference in (
+            RandomizationReference.ABSOLUTE_WORLD,
+            RandomizationReference.ABSOLUTE_BASE,
+        ):
+            return value
+        return baseline_value + value
+
+    position = np.empty(3, dtype=np.float64)
+    for axis_index, axis_name in enumerate(POSITION_AXES):
+        reference = rand_range.axis_reference(axis_name)
+        position[axis_index] = _apply(
+            reference,
+            float(_baseline(reference).position[env_index, axis_index]),
+            axis_name,
+        )
+
     rotation_references = tuple(
-        rand_range.axis_reference(axis_name) for axis_name in rotation_axes
+        rand_range.axis_reference(axis_name) for axis_name in ROTATION_AXES
     )
     if (
-        all(rand_range.axis_range(axis_name) is None for axis_name in rotation_axes)
+        all(axis_name not in axis_values for axis_name in ROTATION_AXES)
         and len(set(rotation_references)) == 1
     ):
         orientation = np.asarray(
@@ -897,31 +937,51 @@ def sample_pose_for_env(
         return PoseState(position=position, orientation=orientation)
 
     rotation = np.empty(3, dtype=np.float64)
-    for axis_index, axis_name in enumerate(rotation_axes):
+    for axis_index, axis_name in enumerate(ROTATION_AXES):
         reference = rand_range.axis_reference(axis_name)
-        baseline = _baseline(reference)
-        baseline_rpy = quaternion_to_rpy(baseline.orientation[env_index])
-        value = float(baseline_rpy[axis_index])
-        rng_pair = rand_range.axis_range(axis_name)
-        if rng_pair is not None:
-            if qmc_values is None:
-                sampled = float(rng.uniform(*rng_pair))
-            else:
-                sampled = float(
-                    rng_pair[0]
-                    + qmc_values[axis_index if is_poisson_generator else 3 + axis_index]
-                    * (rng_pair[1] - rng_pair[0])
-                )
-            if reference in (
-                RandomizationReference.ABSOLUTE_WORLD,
-                RandomizationReference.ABSOLUTE_BASE,
-            ):
-                value = sampled
-            else:
-                value += sampled
-        rotation[axis_index] = value
+        baseline_rpy = quaternion_to_rpy(_baseline(reference).orientation[env_index])
+        rotation[axis_index] = _apply(
+            reference, float(baseline_rpy[axis_index]), axis_name
+        )
     orientation = np.asarray(euler_to_quaternion(tuple(rotation)), dtype=np.float64)
     return PoseState(position=position, orientation=orientation)
+
+
+def sample_pose_for_env(
+    rng: np.random.Generator,
+    *,
+    base_pose: PoseState,
+    rand_range: PoseRandomRange,
+    env_index: int,
+    batch_size: int,
+    reference_poses: Optional[
+        Mapping[Union[RandomizationReference, str], PoseState]
+    ] = None,
+    distribution: Optional[RandomizationDistributionConfig] = None,
+    sample_index: int = 0,
+    reset_index: int = 0,
+    poisson_stream: Optional[PoissonDiskCandidateStream] = None,
+) -> PoseState:
+    """Sample one environment's pose from an axis range.
+
+    Draws every configured axis (:func:`draw_axis_values`) and composes the
+    pose from those values (:func:`pose_from_axis_values`).
+    """
+    return pose_from_axis_values(
+        base_pose,
+        rand_range,
+        draw_axis_values(
+            rng,
+            rand_range,
+            distribution=distribution,
+            sample_index=sample_index,
+            reset_index=reset_index,
+            poisson_stream=poisson_stream,
+        ),
+        env_index=env_index,
+        batch_size=batch_size,
+        reference_poses=reference_poses,
+    )
 
 
 def sample_pose_batch(
