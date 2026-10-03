@@ -56,74 +56,79 @@ def _parse_args(argv: list[str]) -> tuple[str, int, list[str]]:
     return task, iterations, args[idx:]
 
 
-task, iterations, overrides = _parse_args(sys.argv[1:])
+def main() -> None:
+    task, iterations, overrides = _parse_args(sys.argv[1:])
 
-# `++` sets a key whether or not a config (e.g. `+test=open_the_door`)
-# already defines it; user overrides listed later still win.
-bench_defaults = [
-    "render=gs",
-    "++env.viewer.disable=true",
-    "++env.to_numpy=false",
-    "++env.structured=false",
-]
-overrides = bench_defaults + overrides
+    # `++` sets a key whether or not a config (e.g. `+test=open_the_door`)
+    # already defines it; user overrides listed later still win.
+    bench_defaults = [
+        "render=gs",
+        "++env.viewer.disable=true",
+        "++env.to_numpy=false",
+        "++env.structured=false",
+    ]
+    overrides = bench_defaults + overrides
 
-print(f"[profile] task={task} iters={iterations} overrides={overrides}")
-cfg, run_name = compose_task_run(task, overrides)
-task_file = prepare_task_file(cfg)
-backend = task_file.backend(task_file.task, task_file.task_operators)
-backend.setup(task_file.task)
-backend.reset()
-env = backend.get_env()
-observation_env = require_env_capability(
-    env,
-    ObservationEnvProtocol,
-    feature="profile_gs_obs observation capture",
-    expected_batch_size=backend.batch_size,
-)
-simulation_env = require_env_capability(
-    env,
-    SimulationLoopEnvProtocol,
-    feature="profile_gs_obs simulation update",
-    expected_batch_size=backend.batch_size,
-)
+    print(f"[profile] task={task} iters={iterations} overrides={overrides}")
+    cfg, run_name = compose_task_run(task, overrides)
+    task_file = prepare_task_file(cfg)
+    backend = task_file.backend(task_file.task, task_file.task_operators)
+    backend.setup(task_file.task)
+    backend.reset()
+    env = backend.get_env()
+    observation_env = require_env_capability(
+        env,
+        ObservationEnvProtocol,
+        feature="profile_gs_obs observation capture",
+        expected_batch_size=backend.batch_size,
+    )
+    simulation_env = require_env_capability(
+        env,
+        SimulationLoopEnvProtocol,
+        feature="profile_gs_obs simulation update",
+        expected_batch_size=backend.batch_size,
+    )
 
-print(f"[profile] batch_size={backend.batch_size}")
+    print(f"[profile] batch_size={backend.batch_size}")
 
-# Warmup: trigger gsplat JIT, prime caches.
-for _ in range(2):
-    observation_env.capture_observation()
-    simulation_env.update()
-torch.cuda.synchronize()
+    # Warmup: trigger gsplat JIT, prime caches.
+    for _ in range(2):
+        observation_env.capture_observation()
+        simulation_env.update()
+    torch.cuda.synchronize()
 
-trace_dir = Path("outputs/bench/profiles") / f"{run_name}_b{backend.batch_size}"
-trace_dir.mkdir(parents=True, exist_ok=True)
+    trace_dir = Path("outputs/bench/profiles") / f"{run_name}_b{backend.batch_size}"
+    trace_dir.mkdir(parents=True, exist_ok=True)
 
-prof_schedule = schedule(wait=1, warmup=1, active=iterations, repeat=1)
+    prof_schedule = schedule(wait=1, warmup=1, active=iterations, repeat=1)
 
-with profile(
-    activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
-    schedule=prof_schedule,
-    on_trace_ready=tensorboard_trace_handler(str(trace_dir)),
-    record_shapes=False,
-    with_stack=False,
-    profile_memory=False,
-) as prof:
-    for _ in range(iterations + 2):  # +2 for wait + warmup
-        with torch.profiler.record_function("capture_observation"):
-            observation_env.capture_observation()
-        with torch.profiler.record_function("update"):
-            simulation_env.update()
-        prof.step()
+    with profile(
+        activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
+        schedule=prof_schedule,
+        on_trace_ready=tensorboard_trace_handler(str(trace_dir)),
+        record_shapes=False,
+        with_stack=False,
+        profile_memory=False,
+    ) as prof:
+        for _ in range(iterations + 2):  # +2 for wait + warmup
+            with torch.profiler.record_function("capture_observation"):
+                observation_env.capture_observation()
+            with torch.profiler.record_function("update"):
+                simulation_env.update()
+            prof.step()
 
-torch.cuda.synchronize()
+    torch.cuda.synchronize()
 
-print("\n=== top 20 by CUDA self time ===")
-print(prof.key_averages().table(sort_by="self_cuda_time_total", row_limit=20))
+    print("\n=== top 20 by CUDA self time ===")
+    print(prof.key_averages().table(sort_by="self_cuda_time_total", row_limit=20))
 
-print("\n=== top 20 by CPU self time ===")
-print(prof.key_averages().table(sort_by="self_cpu_time_total", row_limit=20))
+    print("\n=== top 20 by CPU self time ===")
+    print(prof.key_averages().table(sort_by="self_cpu_time_total", row_limit=20))
 
-print(f"\n[profile] traces written under {trace_dir.resolve()}")
+    print(f"\n[profile] traces written under {trace_dir.resolve()}")
 
-backend.teardown()
+    backend.teardown()
+
+
+if __name__ == "__main__":
+    main()

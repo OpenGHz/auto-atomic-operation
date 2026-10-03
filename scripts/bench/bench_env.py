@@ -74,57 +74,15 @@ def _parse_args(argv: list[str]) -> tuple[str, int, bool, list[str]]:
     return task, iterations, do_profile, overrides
 
 
-TASK, N, do_profile, overrides = _parse_args(sys.argv[1:])
-
-# Benchmark defaults: disable viewer, keep GS data on GPU. `++` sets a key
-# whether or not a config (e.g. `+test=open_the_door`) already defines it;
-# user overrides listed later still win. `to_numpy` only exists on the GS env.
-bench_defaults = [
-    "++env.viewer.disable=true",
-    "++env.structured=false",
-]
-if "render=gs" in overrides:
-    bench_defaults.append("++env.to_numpy=false")
-overrides = bench_defaults + overrides
-
-# Setup
-_log_progress(f"loading task={TASK} overrides={overrides or '[]'} iterations={N}")
-cfg, RUN_NAME = compose_task_run(TASK, overrides)
-task_file = prepare_task_file(cfg)
-_log_progress("building backend")
-backend = task_file.backend(task_file.task, task_file.task_operators)
-_log_progress("setting up backend")
-backend.setup(task_file.task)
-_log_progress("resetting environment")
-backend.reset()
-env = backend.get_env()
-observation_env = require_env_capability(
-    env,
-    ObservationEnvProtocol,
-    feature="bench_env observation capture",
-    expected_batch_size=backend.batch_size,
-)
-simulation_env = require_env_capability(
-    env,
-    SimulationLoopEnvProtocol,
-    feature="bench_env simulation update",
-    expected_batch_size=backend.batch_size,
-)
-
-print(f"run={RUN_NAME}  batch_size={backend.batch_size}  iterations={N}")
-
-# Warmup (exclude from stats)
-_log_progress("running warmup")
-observation_env.capture_observation()
-simulation_env.update()
-_log_progress("warmup complete")
-
-
-def bench_loop():
+def _bench_loop(
+    observation_env: ObservationEnvProtocol,
+    simulation_env: SimulationLoopEnvProtocol,
+    iterations: int,
+) -> tuple[list[float], list[float]]:
     obs_times = []
     upd_times = []
-    progress_every = max(1, min(10, N // 10 if N > 10 else 1))
-    for i in range(N):
+    progress_every = max(1, min(10, iterations // 10 if iterations > 10 else 1))
+    for i in range(iterations):
         t0 = time.perf_counter()
         observation_env.capture_observation()
         t1 = time.perf_counter()
@@ -132,73 +90,14 @@ def bench_loop():
         t2 = time.perf_counter()
         obs_times.append(t1 - t0)
         upd_times.append(t2 - t1)
-        if (i + 1) % progress_every == 0 or i + 1 == N:
-            _log_progress(f"benchmark progress: {i + 1}/{N}")
+        if (i + 1) % progress_every == 0 or i + 1 == iterations:
+            _log_progress(f"benchmark progress: {i + 1}/{iterations}")
     return obs_times, upd_times
-
-
-if do_profile:
-    import cProfile
-    import pstats
-
-    _log_progress("profiling benchmark loop")
-    profiler = cProfile.Profile()
-    profiler.enable()
-    obs_times, upd_times = bench_loop()
-    profiler.disable()
-    stats = pstats.Stats(profiler)
-    stats.sort_stats(pstats.SortKey.CUMULATIVE)
-    print("\n--- cProfile top 20 ---")
-    stats.print_stats(20)
-else:
-    _log_progress("running benchmark loop")
-    obs_times, upd_times = bench_loop()
-
-obs_arr = np.array(obs_times) * 1000
-upd_arr = np.array(upd_times) * 1000
-total = obs_arr + upd_arr
 
 
 def _mean_hz(arr_ms: np.ndarray) -> float:
     mean_ms = float(arr_ms.mean())
     return 1000.0 / mean_ms if mean_ms > 0 else float("inf")
-
-
-fmt = (
-    "{:<22s} mean={:>7.2f}ms  std={:>6.2f}ms  "
-    "min={:>7.2f}ms  max={:>7.2f}ms  freq={:>8.2f}Hz"
-)
-print()
-print(
-    fmt.format(
-        "capture_observation",
-        obs_arr.mean(),
-        obs_arr.std(),
-        obs_arr.min(),
-        obs_arr.max(),
-        _mean_hz(obs_arr),
-    )
-)
-print(
-    fmt.format(
-        "update",
-        upd_arr.mean(),
-        upd_arr.std(),
-        upd_arr.min(),
-        upd_arr.max(),
-        _mean_hz(upd_arr),
-    )
-)
-print(
-    fmt.format(
-        "total",
-        total.mean(),
-        total.std(),
-        total.min(),
-        total.max(),
-        _mean_hz(total),
-    )
-)
 
 
 def _stat_dict(arr_ms: np.ndarray) -> dict:
@@ -211,21 +110,110 @@ def _stat_dict(arr_ms: np.ndarray) -> dict:
     }
 
 
-bench_result = {
-    "run_name": RUN_NAME,
-    "task": TASK,
-    "batch_size": backend.batch_size,
-    "iterations": N,
-    "overrides": overrides,
-    "capture_observation": _stat_dict(obs_arr),
-    "update": _stat_dict(upd_arr),
-    "total": _stat_dict(total),
-}
+def main() -> None:
+    task, iterations, do_profile, overrides = _parse_args(sys.argv[1:])
 
-out_path = Path("outputs") / "bench" / f"{RUN_NAME}.json"
-out_path.parent.mkdir(parents=True, exist_ok=True)
-out_path.write_text(json.dumps(bench_result, indent=2, ensure_ascii=False) + "\n")
-print(f"\nBenchmark saved to {out_path.resolve()}")
+    # Benchmark defaults: disable viewer, keep GS data on GPU. `++` sets a key
+    # whether or not a config (e.g. `+test=open_the_door`) already defines it;
+    # user overrides listed later still win. `to_numpy` only exists on the GS env.
+    bench_defaults = [
+        "++env.viewer.disable=true",
+        "++env.structured=false",
+    ]
+    if "render=gs" in overrides:
+        bench_defaults.append("++env.to_numpy=false")
+    overrides = bench_defaults + overrides
 
-_log_progress("tearing down backend")
-backend.teardown()
+    # Setup
+    _log_progress(
+        f"loading task={task} overrides={overrides or '[]'} iterations={iterations}"
+    )
+    cfg, run_name = compose_task_run(task, overrides)
+    task_file = prepare_task_file(cfg)
+    _log_progress("building backend")
+    backend = task_file.backend(task_file.task, task_file.task_operators)
+    _log_progress("setting up backend")
+    backend.setup(task_file.task)
+    _log_progress("resetting environment")
+    backend.reset()
+    env = backend.get_env()
+    observation_env = require_env_capability(
+        env,
+        ObservationEnvProtocol,
+        feature="bench_env observation capture",
+        expected_batch_size=backend.batch_size,
+    )
+    simulation_env = require_env_capability(
+        env,
+        SimulationLoopEnvProtocol,
+        feature="bench_env simulation update",
+        expected_batch_size=backend.batch_size,
+    )
+
+    print(f"run={run_name}  batch_size={backend.batch_size}  iterations={iterations}")
+
+    # Warmup (exclude from stats)
+    _log_progress("running warmup")
+    observation_env.capture_observation()
+    simulation_env.update()
+    _log_progress("warmup complete")
+
+    if do_profile:
+        import cProfile
+        import pstats
+
+        _log_progress("profiling benchmark loop")
+        profiler = cProfile.Profile()
+        profiler.enable()
+        obs_times, upd_times = _bench_loop(observation_env, simulation_env, iterations)
+        profiler.disable()
+        stats = pstats.Stats(profiler)
+        stats.sort_stats(pstats.SortKey.CUMULATIVE)
+        print("\n--- cProfile top 20 ---")
+        stats.print_stats(20)
+    else:
+        _log_progress("running benchmark loop")
+        obs_times, upd_times = _bench_loop(observation_env, simulation_env, iterations)
+
+    obs_arr = np.array(obs_times) * 1000
+    upd_arr = np.array(upd_times) * 1000
+    total = obs_arr + upd_arr
+
+    fmt = (
+        "{:<22s} mean={:>7.2f}ms  std={:>6.2f}ms  "
+        "min={:>7.2f}ms  max={:>7.2f}ms  freq={:>8.2f}Hz"
+    )
+    print()
+    for label, arr in (
+        ("capture_observation", obs_arr),
+        ("update", upd_arr),
+        ("total", total),
+    ):
+        print(
+            fmt.format(
+                label, arr.mean(), arr.std(), arr.min(), arr.max(), _mean_hz(arr)
+            )
+        )
+
+    bench_result = {
+        "run_name": run_name,
+        "task": task,
+        "batch_size": backend.batch_size,
+        "iterations": iterations,
+        "overrides": overrides,
+        "capture_observation": _stat_dict(obs_arr),
+        "update": _stat_dict(upd_arr),
+        "total": _stat_dict(total),
+    }
+
+    out_path = Path("outputs") / "bench" / f"{run_name}.json"
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(json.dumps(bench_result, indent=2, ensure_ascii=False) + "\n")
+    print(f"\nBenchmark saved to {out_path.resolve()}")
+
+    _log_progress("tearing down backend")
+    backend.teardown()
+
+
+if __name__ == "__main__":
+    main()
