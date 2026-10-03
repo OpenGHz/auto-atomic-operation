@@ -1,7 +1,7 @@
 [lint]
 # Pin the rule set: newer ruff releases widen the default selection, which
 # would otherwise change what `ruff check` enforces with each upgrade.
-select = ["E4", "E7", "E9", "F", "I"]
+select = ["E4", "E7", "E9", "F", "I", "B"]
 ignore = ["F841", "F401"]
 exclude = [
     "auto_atom/utils/transformations.py",

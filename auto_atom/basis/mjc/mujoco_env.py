@@ -580,7 +580,7 @@ class UnifiedMujocoEnv(MujocoBasis):
         except KeyError:
             raise ValueError(
                 f"Operator '{op_name}' not registered. Call register_operator first."
-            )
+            ) from None
 
     def _subtree_body_ids(self, root_body_id: int) -> frozenset[int]:
         """Return the body ID subtree rooted at ``root_body_id`` (inclusive).

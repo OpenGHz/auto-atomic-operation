@@ -219,7 +219,7 @@ class MujocoBasis:
         self._camera_parent_frame: dict[str, tuple[str, int, str]] = {}
         # _camera_frame_site_ids: cam_name -> site_id when same-named site exists
         self._camera_frame_site_ids: dict[str, int] = {}
-        for name, cam_id in self._camera_ids.items():
+        for name in self._camera_ids:
             site_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_SITE, name)
             if site_id >= 0:
                 self._camera_frame_site_ids[name] = site_id

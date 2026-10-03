@@ -639,7 +639,7 @@ class PolicyEvaluator:
         context = self._require_context()
         object_names: List[str] = []
         operation_names: List[str] = []
-        for env_index, state in enumerate(self._env_states):
+        for state in self._env_states:
             active = state.active
             if state.done or active is None:
                 object_names.append("")
@@ -660,7 +660,7 @@ class PolicyEvaluator:
         details: List[Dict[str, Any]] = []
         phase: List[Optional[str]] = []
         phase_step: List[int] = []
-        for env_index, state in enumerate(self._env_states):
+        for state in self._env_states:
             active = state.active
             if active is not None:
                 stage_index.append(active.plan.stage_index)

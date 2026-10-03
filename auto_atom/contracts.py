@@ -397,7 +397,7 @@ def require_env_capability(
 
     narrowed = cast(_EnvCapabilityT, env)
     try:
-        environment_batch_size = getattr(narrowed, "batch_size")
+        environment_batch_size = getattr(narrowed, "batch_size")  # noqa: B009 — TypeVar has no static batch_size
     except Exception as exc:
         raise RuntimeError(
             f"{feature} requires a readable environment batch_size; "
@@ -534,7 +534,7 @@ def _validate_environment_protocol_signatures(
                     f"{type(env).__name__}.{member_name}="
                     f"{actual_member!r}."
                 )
-            callable_implementation = getattr(actual_member, "__call__", None)
+            callable_implementation = getattr(actual_member, "__call__", None)  # noqa: B004 — fetch, not test
             if any(
                 inspect.iscoroutinefunction(candidate)
                 or inspect.isasyncgenfunction(candidate)
@@ -755,7 +755,7 @@ class SceneBackend(ABC):
             f"Backend does not support joint angle lookup (requested '{name}')."
         )
 
-    def set_interest_objects_and_operations(
+    def set_interest_objects_and_operations(  # noqa: B027 — optional no-op hook
         self,
         object_names: List[str],
         operation_names: List[str],

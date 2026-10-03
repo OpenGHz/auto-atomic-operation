@@ -178,7 +178,7 @@ def main() -> None:
         print(f"Stages: {[s.name for s in task_file.task.stages]}")
 
         step = -1
-        for step in range(max_updates):
+        for step in range(max_updates):  # noqa: B007 — read after the loop
             obs = evaluator.get_observation()
             action = policy.act(obs, update=update, evaluator=evaluator)
             update = evaluator.update(action)

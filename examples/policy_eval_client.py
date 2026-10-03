@@ -176,7 +176,7 @@ def main() -> None:
         print(f"Stages: {[p['stage_name'] for p in plans] if plans else '(unknown)'}")
 
         step = -1
-        for step in range(max_updates):
+        for step in range(max_updates):  # noqa: B007 — read after the loop
             obs = evaluator.get_observation()
             action = policy.act(obs, update)
             update = evaluator.update(action)
