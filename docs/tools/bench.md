@@ -4,8 +4,8 @@
 
 ## 脚本位置
 
-- 执行基准：`tests/run_bench_suite.py`
-- 绘图与分析：`tests/plot_bench_results.py`
+- 执行基准：`scripts/bench/run_bench_suite.py`
+- 绘图与分析：`scripts/bench/plot_bench_results.py`
 
 这两个脚本已经覆盖以下三类测试：
 
@@ -17,10 +17,10 @@
 
 ## 使用方式
 
-在仓库根目录执行。当前项目推荐使用 `/home/ghz/.mini_conda3/envs/airbot_play_data/bin/python`；`tests/run_bench_suite.py` 默认也会用这个解释器启动子进程，可通过 `--python` 覆盖。
+在仓库根目录执行。当前项目推荐使用 `/home/ghz/.mini_conda3/envs/airbot_play_data/bin/python`；`scripts/bench/run_bench_suite.py` 默认也会用这个解释器启动子进程，可通过 `--python` 覆盖。
 
 ```bash
-/home/ghz/.mini_conda3/envs/airbot_play_data/bin/python tests/run_bench_suite.py
+/home/ghz/.mini_conda3/envs/airbot_play_data/bin/python scripts/bench/run_bench_suite.py
 ```
 
 脚本会严格串行执行所有 benchmark，不会并发跑多个命令，以避免资源竞争影响测试稳定性。
@@ -31,7 +31,7 @@
 基准执行完成后，再生成图表和分析：
 
 ```bash
-/home/ghz/.mini_conda3/envs/airbot_play_data/bin/python tests/plot_bench_results.py
+/home/ghz/.mini_conda3/envs/airbot_play_data/bin/python scripts/bench/plot_bench_results.py
 ```
 
 默认情况下，第二个脚本会读取 `outputs/bench_suite/` 下最新的一次测试结果。
@@ -39,7 +39,7 @@
 如果要指定某次结果目录，可以执行：
 
 ```bash
-/home/ghz/.mini_conda3/envs/airbot_play_data/bin/python tests/plot_bench_results.py outputs/bench_suite/<run_id>
+/home/ghz/.mini_conda3/envs/airbot_play_data/bin/python scripts/bench/plot_bench_results.py outputs/bench_suite/<run_id>
 ```
 
 ## 输出内容
@@ -60,7 +60,7 @@
 执行脚本支持常见参数：
 
 ```bash
-/home/ghz/.mini_conda3/envs/airbot_play_data/bin/python tests/run_bench_suite.py \
+/home/ghz/.mini_conda3/envs/airbot_play_data/bin/python scripts/bench/run_bench_suite.py \
   --task cup_on_coaster \
   --batch-sizes 1 2 4 8 \
   --iterations 10 \

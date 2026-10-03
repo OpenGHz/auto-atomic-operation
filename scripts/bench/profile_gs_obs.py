@@ -1,12 +1,12 @@
 """torch.profiler around capture_observation for back_gs perf analysis.
 
 Usage:
-    python examples/profile_gs_obs.py [task] [iterations] [hydra overrides...]
+    python scripts/bench/profile_gs_obs.py [task] [iterations] [hydra overrides...]
 
 Examples:
-    python examples/profile_gs_obs.py
-    python examples/profile_gs_obs.py open_door_back 16 env.batch_size=4
-    python examples/profile_gs_obs.py press_blue_button 8 embodiment=p7_g2p
+    python scripts/bench/profile_gs_obs.py
+    python scripts/bench/profile_gs_obs.py open_door_back 16 env.batch_size=4
+    python scripts/bench/profile_gs_obs.py press_blue_button 8 embodiment=p7_g2p
 
 Defaults: task=open_door_back, iterations=8 (after warmup). ``render=gs`` is
 always applied (a later ``render=...`` override wins).

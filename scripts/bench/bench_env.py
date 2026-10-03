@@ -1,17 +1,17 @@
 """Minimal benchmark: capture_observation + update timing.
 
 Usage:
-    python examples/bench_env.py [task] [iterations] [--profile] [hydra overrides...]
+    python scripts/bench/bench_env.py [task] [iterations] [--profile] [hydra overrides...]
 
 ``task`` is an option of the ``task`` config group. Without it the benchmark
 runs ``task=cup_on_coaster render=gs``; with it, pass ``render=gs`` /
 ``embodiment=...`` as overrides when needed.
 
 Examples:
-    python examples/bench_env.py press_three_buttons render=gs
-    python examples/bench_env.py press_three_buttons 50 render=gs env.batch_size=4
-    python examples/bench_env.py env.batch_size=10
-    python examples/bench_env.py cup_on_coaster 20 --profile render=gs
+    python scripts/bench/bench_env.py press_three_buttons render=gs
+    python scripts/bench/bench_env.py press_three_buttons 50 render=gs env.batch_size=4
+    python scripts/bench/bench_env.py env.batch_size=10
+    python scripts/bench/bench_env.py cup_on_coaster 20 --profile render=gs
 
 Results are saved to ``outputs/bench/<run_name>.json`` where ``<run_name>`` is
 ``<task>__<embodiment>[__<render>]``.

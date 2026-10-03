@@ -11,13 +11,13 @@
 export MUJOCO_GL=egl
 
 # 基本测试 (默认关闭 viewer, to_numpy=false)；指定 task 时需显式传 render=gs
-python examples/bench_env.py open_door_back 30 render=gs +test=open_the_door
+python scripts/bench/bench_env.py open_door_back 30 render=gs +test=open_the_door
 
 # 指定 batch_size
-python examples/bench_env.py open_door_back 30 render=gs +test=open_the_door env.batch_size=4
+python scripts/bench/bench_env.py open_door_back 30 render=gs +test=open_the_door env.batch_size=4
 
 # 带 cProfile 输出
-python examples/bench_env.py open_door_back 10 --profile render=gs +test=open_the_door env.batch_size=2
+python scripts/bench/bench_env.py open_door_back 10 --profile render=gs +test=open_the_door env.batch_size=2
 ```
 
 > 注：`+test=open_the_door` 会显式设置 `env.to_numpy=true / structured=false`。bench_env.py 以 `++` 注入默认值（`++env.to_numpy=false` 仅在 `render=gs` 时注入），因此可以和该覆盖组合，且 bench 的 `to_numpy=false`"GPU 直留"路径生效；命令行之后再写的覆盖仍然优先。
@@ -27,7 +27,7 @@ python examples/bench_env.py open_door_back 10 --profile render=gs +test=open_th
 ## Benchmark (`open_door_airbot_play_back_gs +test=open_the_door`, 2026-05-04)
 
 > 测试硬件：NVIDIA GeForce RTX 5090（32 GB），驱动 590.48.01 / CUDA 13.1
-> 测试命令（现等价写法）：`python examples/bench_env.py open_door_back N render=gs +test=open_the_door env.batch_size=B`
+> 测试命令（现等价写法）：`python scripts/bench/bench_env.py open_door_back N render=gs +test=open_the_door env.batch_size=B`
 > bench 默认注入 `++env.viewer.disable=true ++env.to_numpy=false ++env.structured=false`；warmup 不计入统计；测量 `capture_observation` 与 `update` 的纯环境时间。
 
 ### 当前配置快照（带 `+test=open_the_door` 覆盖）
@@ -114,7 +114,7 @@ capture_observation()
 
 CPU 侧 self time 第一名是 `cudaStreamSynchronize`（**118.1 ms / 400 calls，62.7 %**），说明 Python/CPU 仍有大量时间在等 GPU 完成。CUDA total 145.5 ms / CPU total 188.3 ms，10 iter 平均 14.5 ms / iter，与 wall-clock 的 15.81 ms / iter 数量级吻合。
 
-完整 trace 落在 `outputs/bench/profiles/open_door_airbot_play_back_gs_b2/`；脚本：`examples/profile_gs_obs.py`。
+完整 trace 落在 `outputs/bench/profiles/open_door_airbot_play_back_gs_b2/`；脚本：`scripts/bench/profile_gs_obs.py`。
 
 ### 结论
 
@@ -129,14 +129,14 @@ CPU 侧 self time 第一名是 `cudaStreamSynchronize`（**118.1 ms / 400 calls�
 ```bash
 # 端到端 wall-clock（4 个 batch_size 串跑）
 for b in 1 2 4 8; do
-  python examples/bench_env.py open_door_back 30 render=gs +test=open_the_door env.batch_size=$b
+  python scripts/bench/bench_env.py open_door_back 30 render=gs +test=open_the_door env.batch_size=$b
 done
 
 # torch.profiler trace（含 chrome://tracing 用的 JSON）；profile_gs_obs.py 总是追加 render=gs
-python examples/profile_gs_obs.py open_door_back 10 +test=open_the_door env.batch_size=2
+python scripts/bench/profile_gs_obs.py open_door_back 10 +test=open_the_door env.batch_size=2
 ```
 
-`examples/profile_gs_obs.py` 内置 `wait=1, warmup=1, active=N` 的 schedule（见
+`scripts/bench/profile_gs_obs.py` 内置 `wait=1, warmup=1, active=N` 的 schedule（见
 [torch.profiler.schedule](https://pytorch.org/docs/stable/profiler.html#torch.profiler.schedule)），
 排除 gsplat CUDA JIT 与首帧填缓存对均值的污染；trace 落到
 `outputs/bench/profiles/<run_name>_b<batch>/` 下（`<run_name>` 形如 `open_door_back__airbot_play_g2p__gs`），可 tensorboard 或 chrome://tracing 直接打开。
@@ -226,7 +226,7 @@ mask 循环中每个 object 都调用 `batch_update_gaussians(body_pos, body_qua
 ## Benchmark 结果 (cup_on_coaster_gs, 2026-04-10)
 
 > 测试环境: cup_on_coaster_gs (2 mask objects, 3 cameras 1280x720, color+depth+heat_map)
-> 测试工具: `tests/run_bench_suite.py` + `tests/plot_bench_results.py`
+> 测试工具: `scripts/bench/run_bench_suite.py` + `scripts/bench/plot_bench_results.py`
 > 注意事项: task-level 第一步作为 warmup 不纳入计时，避免 CUDA JIT 编译影响结果
 
 重跑此 benchmark 时，当前 runner 会关闭逐步 `TaskUpdate` 输出，并只累计非
@@ -457,7 +457,7 @@ Config validator 会强制要求：
 
 ### Benchmark (open_door_airbot_play_gs, 2026-04-20)
 
-> 同一硬件 / 同一任务，仅切换 `share_physics`；bench 命令：`python examples/bench_env.py env.batch_size=X [+env.gaussian_render.share_physics=true]`
+> 同一硬件 / 同一任务，仅切换 `share_physics`；bench 命令：`python scripts/bench/bench_env.py env.batch_size=X [+env.gaussian_render.share_physics=true]`
 > `open_door_airbot_play_gs` 的背景是 14 张 `bg*.ply`（每张 ~1.17 M 点），相机为静态。
 > shared 路径复用 `_bg_cache`，每种 unique 背景首帧渲染后缓存 `(N, Ncam, H, W, C)` 张量，后续帧直接索引。
 

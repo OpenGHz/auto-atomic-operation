@@ -1,4 +1,4 @@
-"""Run benchmark scenarios from docs/skills/bench.md sequentially.
+"""Run benchmark scenarios from docs/tools/bench.md sequentially.
 
 This script intentionally runs one command at a time to avoid resource
 contention that could skew performance measurements.
@@ -61,7 +61,7 @@ def parse_args() -> argparse.Namespace:
         "--iterations",
         type=int,
         default=DEFAULT_ITERATIONS,
-        help="Iterations passed to examples/bench_env.py.",
+        help="Iterations passed to scripts/bench/bench_env.py.",
     )
     parser.add_argument(
         "--max-updates",
@@ -159,7 +159,7 @@ def main() -> int:
 
 
 def resolve_run_name(repo_root: Path, task: str, overrides: list[str]) -> str:
-    """Return the run name ``examples/bench_env.py`` names its output after."""
+    """Return the run name ``scripts/bench/bench_env.py`` names its output after."""
     _, run_name = compose_task_run(task, overrides, repo_root / "aao_configs")
     return run_name
 
@@ -258,7 +258,7 @@ def run_env_benchmark(
 
     command = [
         python_exe,
-        "examples/bench_env.py",
+        "scripts/bench/bench_env.py",
         task,
         str(iterations),
         *overrides,
