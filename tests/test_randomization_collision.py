@@ -35,10 +35,16 @@ from auto_atom.config.randomization import (
     RandomizationSelectorKind,
     RandomizationStrategy,
     RandomizationSpec,
+    pose_randomization_regions,
 )
 from auto_atom.config.reference import RandomizationReference
 from auto_atom.config.task import AutoAtomConfig
 from auto_atom.randomization import RandomizationFailureError
+from auto_atom.randomization_executor import (
+    FixedRandomization,
+    FixedSample,
+    RandomizationExecutor,
+)
 from auto_atom.utils.pose import PoseState
 
 
@@ -1873,3 +1879,237 @@ def test_visible_in_intersecting_region_skips_deterministic_short_circuit(
         np.asarray([True], dtype=bool)
     )
     assert backend.get_reset_diagnostics(0) == {}
+
+
+# ---------------------------------------------------------------------------
+#  Fixed samples: chosen values through the runtime's own reset
+# ---------------------------------------------------------------------------
+
+
+def _pose(*position: float) -> PoseState:
+    return PoseState(position=np.asarray([position], dtype=np.float64))
+
+
+def _fixed_sample_backend(
+    *,
+    joints: Optional[Dict[str, tuple[float, float]]] = None,
+    env: object = None,
+) -> MujocoTaskBackend:
+    """Every composition path the tuning tool relies on, in one scene.
+
+    ``flower`` carries ``vase``'s delta on x and is absolute on y, ``cup``
+    follows an operator base, ``arm.eef`` references an object (so it runs in
+    the deferred phase, from the recorded EEF snapshot), and ``arm2.eef`` has an
+    ``absolute_base`` region next to a relative one.
+    """
+    object_handlers = {
+        "vase": DummyObjectHandler(name="vase", pose=_pose(0.0, 0.0, 0.0)),
+        "flower": DummyObjectHandler(name="flower", pose=_pose(0.1, 0.0, 0.0)),
+        "cup": DummyObjectHandler(name="cup", pose=_pose(1.0, 0.5, 0.0)),
+    }
+    operator_handlers = {
+        "arm": DummyOperatorHandler(
+            operator_name="arm",
+            base_pose=_pose(1.0, 0.0, 0.0),
+            eef_pose=_pose(1.2, 0.0, 0.3),
+        ),
+        "arm2": DummyOperatorHandler(
+            operator_name="arm2",
+            base_pose=_pose(-1.0, 0.0, 0.0),
+            eef_pose=_pose(-0.8, 0.0, 0.3),
+        ),
+    }
+    entities = {
+        "arm": OperatorRandomizationConfig(
+            base=PoseRandomRange(x=(-0.1, 0.1), yaw=(-0.3, 0.3), collision_radius=0.0),
+            eef=PoseRandomRange(
+                reference="vase", x=(-0.05, 0.05), collision_radius=0.0
+            ),
+        ),
+        "arm2": OperatorRandomizationConfig(
+            eef=PoseRandomizationConfig(
+                regions=[
+                    PoseRandomRange(z=(0.0, 0.1), collision_radius=0.0),
+                    PoseRandomRange(
+                        reference=RandomizationReference.ABSOLUTE_BASE,
+                        x=(0.2, 0.4),
+                        y=(-0.1, 0.1),
+                        z=(0.2, 0.3),
+                        collision_radius=0.0,
+                    ),
+                ]
+            )
+        ),
+        "vase": PoseRandomRange(
+            x=(-0.2, 0.2), y=(-0.2, 0.2), yaw=(-1.0, 1.0), collision_radius=0.0
+        ),
+        "flower": PoseRandomRange.model_validate(
+            {
+                "reference": "vase",
+                "follow": "position",
+                "x": [0.0, 0.05],
+                "y": {"range": [0.3, 0.4], "reference": "absolute_world"},
+                "collision_radius": 0.0,
+            }
+        ),
+        "cup": PoseRandomRange(
+            reference="arm.base", y=(-0.1, 0.1), collision_radius=0.0
+        ),
+    }
+    backend = MujocoTaskBackend(
+        env=env if env is not None else DummyEnv(batch_size=1),
+        operator_handlers=operator_handlers,
+        object_handlers=object_handlers,
+        randomization=ResolvedRandomizationConfig(
+            scope=ResolvedRandomizationScope(
+                entities=entities,
+                joints=dict(joints or {}),
+                strategy=RandomizationStrategy.RSA,
+            )
+        ),
+    )
+    backend._default_object_poses = {
+        name: handler.get_pose() for name, handler in object_handlers.items()
+    }
+    backend._default_operator_base_poses = {
+        name: handler.get_base_pose() for name, handler in operator_handlers.items()
+    }
+    backend._default_operator_eef_poses = {
+        name: handler.get_end_effector_pose()
+        for name, handler in operator_handlers.items()
+    }
+    return backend
+
+
+def _labels(backend: MujocoTaskBackend) -> list[str]:
+    return sorted(backend.randomization_executor.plan.actions)
+
+
+def test_fixed_samples_reproduce_a_drawn_reset(monkeypatch) -> None:
+    """A reset replayed from its own draws lands every element on the same pose.
+
+    This is the tuning tool's contract: chosen values go through exactly the
+    runtime's stage order, working poses, references, and writes.
+    """
+    drawn: Dict[str, FixedSample] = {}
+    compose = RandomizationExecutor._compose_target_for_env
+
+    def recording_compose(self, action_spec, env_index, working, region, values):
+        regions = pose_randomization_regions(action_spec.randomization)
+        drawn[action_spec.label] = FixedSample(regions.index(region), dict(values))
+        return compose(self, action_spec, env_index, working, region, values)
+
+    mask = np.asarray([True], dtype=bool)
+    drawing = _fixed_sample_backend()
+    drawing._rng = np.random.default_rng(7)
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            RandomizationExecutor, "_compose_target_for_env", recording_compose
+        )
+        drawing.randomization_executor.apply_randomization(mask)
+
+    replaying = _fixed_sample_backend()
+    replaying._rng = SequenceRNG([])  # any draw would fail
+    with replaying.randomization_executor.fixed_samples(
+        FixedRandomization(poses=drawn)
+    ):
+        replaying.randomization_executor.apply_randomization(mask)
+
+    assert sorted(drawn) == _labels(drawing)
+    for label in drawn:
+        expected = drawing.live_pose(label)
+        actual = replaying.live_pose(label)
+        np.testing.assert_allclose(actual.position, expected.position, atol=1e-12)
+        np.testing.assert_allclose(
+            actual.orientation, expected.orientation, atol=1e-12
+        )
+    # The draws were real, so the replay had something to reproduce.
+    assert not np.allclose(drawing.live_pose("vase").position, 0.0)
+
+
+def _complete_samples(backend: MujocoTaskBackend) -> Dict[str, FixedSample]:
+    """Region 0 of every action at its range midpoints."""
+    samples = {}
+    for label, action in backend.randomization_executor.plan.actions.items():
+        region = pose_randomization_regions(action.randomization)[0]
+        samples[label] = FixedSample(
+            0,
+            {
+                axis: float(sum(region.axis_range(axis))) / 2.0
+                for axis in ("x", "y", "z", "roll", "pitch", "yaw")
+                if region.axis_range(axis) is not None
+            },
+        )
+    return samples
+
+
+@pytest.mark.parametrize(
+    ("edit", "message"),
+    [
+        (lambda s: s.pop("cup"), "exactly the plan's actions"),
+        (lambda s: s.update(cup=FixedSample(0, {})), "exactly its configured axes"),
+        (
+            lambda s: s.update(cup=FixedSample(0, {"y": 0.0, "z": 0.0})),
+            "exactly its configured axes",
+        ),
+        (lambda s: s.update(cup=FixedSample(0, {"y": 0.5})), "outside its range"),
+        (lambda s: s.update(cup=FixedSample(1, {"y": 0.0})), "selects region 1"),
+    ],
+)
+def test_fixed_samples_reject_values_the_runtime_cannot_draw(edit, message) -> None:
+    backend = _fixed_sample_backend()
+    samples = _complete_samples(backend)
+    edit(samples)
+    before = backend.live_pose("vase")
+
+    with backend.randomization_executor.fixed_samples(
+        FixedRandomization(poses=samples)
+    ):
+        with pytest.raises(ValueError, match=message):
+            backend.randomization_executor.apply_randomization(
+                np.asarray([True], dtype=bool)
+            )
+
+    # Validation runs before anything is written.
+    np.testing.assert_allclose(backend.live_pose("vase").position, before.position)
+
+
+@dataclass
+class _JointRecordingEnv(DummyEnv):
+    writes: Optional[list] = None
+
+    def set_scene_joint_positions(self, joint_names, positions, env_mask) -> None:
+        self.writes = (list(joint_names), np.asarray(positions).copy())
+
+
+def test_fixed_joint_values_replace_the_draws() -> None:
+    env = _JointRecordingEnv()
+    backend = _fixed_sample_backend(joints={"hinge": (-1.0, 0.0)}, env=env)
+    backend._rng = SequenceRNG([])
+
+    with backend.randomization_executor.fixed_samples(
+        FixedRandomization(poses=_complete_samples(backend), joints={"hinge": -0.25})
+    ):
+        backend.randomization_executor.apply_randomization(
+            np.asarray([True], dtype=bool)
+        )
+
+    assert env.writes is not None
+    assert env.writes[0] == ["hinge"]
+    np.testing.assert_allclose(env.writes[1], [[-0.25]])
+
+
+def test_suspended_reset_draws_and_writes_nothing() -> None:
+    env = _JointRecordingEnv()
+    backend = _fixed_sample_backend(joints={"hinge": (-1.0, 0.0)}, env=env)
+    backend._rng = SequenceRNG([])
+    before = {label: backend.live_pose(label) for label in _labels(backend)}
+
+    with backend.randomization_executor.suspended():
+        backend.randomization_executor.apply_randomization(
+            np.asarray([True], dtype=bool)
+        )
+
+    assert env.writes is None
+    for label, pose in before.items():
+        np.testing.assert_allclose(backend.live_pose(label).position, pose.position)

@@ -21,11 +21,13 @@ same baselines.
 from __future__ import annotations
 
 import logging
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import (
     Any,
     Container,
     Dict,
+    Iterator,
     List,
     Mapping,
     Optional,
@@ -56,10 +58,13 @@ from auto_atom.config.randomization import (
     ResolvedRandomizationConfig,
     ResolvedRandomizationScope,
     canonical_randomization_spec,
+    pose_randomization_regions,
 )
 from auto_atom.config.reference import RandomizationReference
 from auto_atom.contracts import PoseConstraintReport
 from auto_atom.randomization import (
+    POSITION_AXES,
+    ROTATION_AXES,
     CollisionParticipant,
     PoissonDiskCandidateStream,
     RandomizationAction,
@@ -69,16 +74,17 @@ from auto_atom.randomization import (
     compile_randomization_plan,
     copy_randomization_ancestors,
     distribution_uses_space_filling_history,
+    draw_axis_values,
     find_collision_participant,
     find_visibility_infeasibility,
     history_clearance,
     maximin_select,
     parse_entity_reference,
+    pose_from_axis_values,
     reference_ancestors,
     resolve_collision_ancestors,
     resolve_collision_radius,
     sample_pose_batch,
-    sample_pose_for_env,
     select_randomization_region,
     validate_randomization_configuration,
 )
@@ -108,6 +114,60 @@ class PendingRandomizationAction:
     references: Tuple[Any, ...] = ()
     ancestors: RandomizationAncestors = field(default_factory=set)
     constraints: Optional[RandomizationConstraintConfig] = None
+
+
+@dataclass(frozen=True)
+class FixedSample:
+    """One action's chosen region and axis values, in place of a draw.
+
+    A reset normally draws a region and one value per configured axis; a fixed
+    sample supplies them instead and everything downstream — baselines,
+    references, operator base following, writes — is the same code. The values
+    must name exactly the region's configured axes, each inside its range, so a
+    fixed sample is always one the runtime could have drawn.
+    """
+
+    region_index: int
+    axis_values: Mapping[str, float]
+
+    def region(self, label: str, spec: RandomizationInput) -> PoseRandomRange:
+        """The selected region of ``spec``, once these values are drawable from it."""
+        regions = pose_randomization_regions(spec)
+        if not 0 <= self.region_index < len(regions):
+            raise ValueError(
+                f"Fixed sample for '{label}' selects region {self.region_index}, "
+                f"but it has {len(regions)} region(s)."
+            )
+        region = regions[self.region_index]
+        configured = [
+            axis
+            for axis in (*POSITION_AXES, *ROTATION_AXES)
+            if region.axis_range(axis) is not None
+        ]
+        if sorted(self.axis_values) != sorted(configured):
+            raise ValueError(
+                f"Fixed sample for '{label}' region {self.region_index} must give "
+                f"exactly its configured axes {configured}, got "
+                f"{sorted(self.axis_values)}."
+            )
+        for axis, value in self.axis_values.items():
+            low, high = sorted(region.axis_range(axis))
+            if not low <= float(value) <= high:
+                raise ValueError(
+                    f"Fixed sample for '{label}' sets {axis}={value}, outside its "
+                    f"range [{low}, {high}]."
+                )
+        return region
+
+
+@dataclass(frozen=True)
+class FixedRandomization:
+    """A whole reset's worth of chosen values: every action and every joint."""
+
+    poses: Mapping[str, FixedSample]
+    """One sample per plan action label."""
+    joints: Mapping[str, float] = field(default_factory=dict)
+    """One position per configured joint."""
 
 
 @runtime_checkable
@@ -289,6 +349,10 @@ class RandomizationExecutor:
         # entries are dropped every reset (their geometry follows the reset's
         # configuration) — see ``begin_reset``.
         self._auto_radius_cache: Dict[Tuple[Any, ...], float] = {}
+        # Value source for the next resets: draw (``None``), apply chosen
+        # values, or apply nothing. See ``fixed_samples`` / ``suspended``.
+        self._fixed: Optional[FixedRandomization] = None
+        self._suspended = False
 
     @property
     def history(self) -> Dict[Tuple[str, ...], List[np.ndarray]]:
@@ -376,6 +440,64 @@ class RandomizationExecutor:
             if key[0] == "object"
         }
         self.validate_configuration()
+
+    @contextmanager
+    def fixed_samples(self, fixed: FixedRandomization) -> Iterator[None]:
+        """Make resets inside the block apply ``fixed`` instead of drawing.
+
+        Only the value source changes: the same reset runs, in the same stage
+        order, through the same composition and writes. With nothing to
+        decide there is no rejection loop, no constraint evaluation, no history,
+        and no camera randomization (cameras keep their reset pose).
+        """
+        previous = self._fixed
+        self._fixed = fixed
+        try:
+            yield
+        finally:
+            self._fixed = previous
+
+    @contextmanager
+    def suspended(self) -> Iterator[None]:
+        """Make resets inside the block apply no randomization at all.
+
+        The configuration is still validated, so the reset baseline this
+        leaves is the one every randomized reset starts from.
+        """
+        previous = self._suspended
+        self._suspended = True
+        try:
+            yield
+        finally:
+            self._suspended = previous
+
+    def _validate_fixed_randomization(
+        self,
+        fixed: FixedRandomization,
+        plan: RandomizationPlan,
+    ) -> None:
+        """Require one drawable value for everything a reset would draw."""
+        expected = set(self.samplable_actions(plan))
+        if set(fixed.poses) != expected:
+            raise ValueError(
+                "Fixed randomization must sample exactly the plan's actions "
+                f"{sorted(expected)}, got {sorted(fixed.poses)}."
+            )
+        for label, sample in fixed.poses.items():
+            sample.region(label, plan.actions[label].randomization)
+        joints = self.scope.joints
+        if set(fixed.joints) != set(joints):
+            raise ValueError(
+                f"Fixed randomization must set exactly the joints {sorted(joints)}, "
+                f"got {sorted(fixed.joints)}."
+            )
+        for name, value in fixed.joints.items():
+            low, high = sorted(joints[name])
+            if not low <= float(value) <= high:
+                raise ValueError(
+                    f"Fixed joint '{name}'={value} is outside its range "
+                    f"[{low}, {high}]."
+                )
 
     def validate_configuration(self) -> None:
         """Validate target-specific rules for every configured region.
@@ -572,31 +694,24 @@ class RandomizationExecutor:
             self._poisson_streams[key] = stream
         return stream
 
-    def _sample_pose_for_env(
+    def _pose_from_axis_values(
         self,
         base_pose: PoseState,
         rand_range: PoseRandomRange,
-        env_index: int,
+        axis_values: Mapping[str, float],
         *,
         reference_poses: Optional[
             Mapping[Union[RandomizationReference, str], PoseState]
         ] = None,
-        distribution: Any = None,
-        sample_index: int = 0,
-        poisson_stream: Optional[PoissonDiskCandidateStream] = None,
     ) -> PoseState:
-        """Sample one environment's pose from one region."""
-        return sample_pose_for_env(
-            self._host.rng,
-            base_pose=base_pose,
-            rand_range=rand_range,
-            env_index=env_index,
+        """Compose one environment's pose (``base_pose`` already selected)."""
+        return pose_from_axis_values(
+            base_pose,
+            rand_range,
+            axis_values,
+            env_index=0,
             batch_size=self._host.batch_size,
             reference_poses=reference_poses,
-            distribution=distribution,
-            sample_index=sample_index,
-            reset_index=self._host.reset_index,
-            poisson_stream=poisson_stream,
         )
 
     def _resolve_reference_base_pose_for_env(
@@ -709,6 +824,25 @@ class RandomizationExecutor:
             current_base_world,
         )
 
+    def samplable_actions(
+        self,
+        plan: Optional[RandomizationPlan] = None,
+    ) -> Dict[str, RandomizationAction]:
+        """The plan's actions a reset samples: those whose element the host has."""
+        plan = self.plan if plan is None else plan
+        return {
+            label: action
+            for label, action in plan.actions.items()
+            if self._is_samplable(action)
+        }
+
+    def _is_samplable(self, action_spec: RandomizationAction) -> bool:
+        """Whether the host has the element this action would move."""
+        return action_spec.kind != "unknown" and (
+            action_spec.kind == "object"
+            or action_spec.owner in self._host.operator_names
+        )
+
     def _sample_target_for_env(
         self,
         action_spec: RandomizationAction,
@@ -717,16 +851,12 @@ class RandomizationExecutor:
         *,
         candidate_index: int = 0,
     ) -> tuple[Dict[str, PoseState], List[PendingRandomizationAction]]:
-        """Sample one action's pose for one environment."""
-        label = action_spec.label
-        owner = action_spec.owner
-        if action_spec.kind == "unknown" or (
-            action_spec.kind != "object" and owner not in self._host.operator_names
-        ):
+        """Draw one action's region and axis values for one environment."""
+        if not self._is_samplable(action_spec):
             self._logger.warning(
                 "Randomization key '%s' does not match any object or operator "
                 "handler — skipping.",
-                owner,
+                action_spec.owner,
             )
             return {}, []
 
@@ -742,6 +872,37 @@ class RandomizationExecutor:
             distribution,
             working_poses,
         )
+        axis_values = draw_axis_values(
+            self._host.rng,
+            selected_range,
+            distribution=distribution,
+            sample_index=candidate_index,
+            reset_index=self._host.reset_index,
+            poisson_stream=poisson_stream,
+        )
+        return self._compose_target_for_env(
+            action_spec,
+            env_index,
+            working_poses,
+            selected_range,
+            axis_values,
+        )
+
+    def _compose_target_for_env(
+        self,
+        action_spec: RandomizationAction,
+        env_index: int,
+        working_poses: Dict[str, PoseState],
+        selected_range: PoseRandomRange,
+        axis_values: Mapping[str, float],
+    ) -> tuple[Dict[str, PoseState], List[PendingRandomizationAction]]:
+        """Turn one action's region and axis values into its pose.
+
+        Drawn and fixed values both go through here, so the baseline, the
+        references, and the operator-frame rules exist exactly once.
+        """
+        label = action_spec.label
+        owner = action_spec.owner
         if action_spec.kind == "object":
             if RandomizationReference.ABSOLUTE_BASE in selected_range.references():
                 raise ValueError(
@@ -750,19 +911,16 @@ class RandomizationExecutor:
                     "base frame."
                 )
             default_pose = self._baseline_or_live(label).select(env_index)
-            sampled = self._sample_pose_for_env(
+            sampled = self._pose_from_axis_values(
                 default_pose,
                 selected_range,
-                0,
+                axis_values,
                 reference_poses=self._resolve_reference_poses_for_env(
                     selected_range,
                     working_poses,
                     default_pose,
                     env_index,
                 ),
-                distribution=distribution,
-                sample_index=candidate_index,
-                poisson_stream=poisson_stream,
             )
             return {label: sampled}, [
                 self._pending_action(
@@ -781,30 +939,25 @@ class RandomizationExecutor:
                     "'absolute_base' — the base IS the frame."
                 )
             default_pose = self._baseline_or_live(label).select(env_index)
-            sampled = self._sample_pose_for_env(
+            sampled = self._pose_from_axis_values(
                 default_pose,
                 selected_range,
-                0,
+                axis_values,
                 reference_poses=self._resolve_reference_poses_for_env(
                     selected_range,
                     working_poses,
                     default_pose,
                     env_index,
                 ),
-                distribution=distribution,
-                sample_index=candidate_index,
-                poisson_stream=poisson_stream,
             )
         elif action_spec.kind == "operator_eef":
-            sampled = self._sample_operator_eef_pose_for_env(
+            sampled = self._compose_operator_eef_pose_for_env(
                 label,
                 owner,
                 selected_range,
                 env_index,
                 working_poses,
-                distribution=distribution,
-                sample_index=candidate_index,
-                poisson_stream=poisson_stream,
+                axis_values,
             )
         else:
             raise ValueError(f"Unknown randomization action kind: {action_spec.kind}")
@@ -846,19 +999,16 @@ class RandomizationExecutor:
             constraints=action_spec.randomization.constraints,
         )
 
-    def _sample_operator_eef_pose_for_env(
+    def _compose_operator_eef_pose_for_env(
         self,
         label: str,
         owner: str,
         rand_range: PoseRandomRange,
         env_index: int,
         sampled_poses: Dict[str, PoseState],
-        *,
-        distribution: Any = None,
-        sample_index: int = 0,
-        poisson_stream: Optional[PoissonDiskCandidateStream] = None,
+        axis_values: Mapping[str, float],
     ) -> PoseState:
-        """Sample one operator's EEF pose for one environment."""
+        """Compose one operator's EEF pose for one environment."""
         following_base_default, base_world = self._operator_default_eef_following_base(
             label,
             owner,
@@ -867,19 +1017,16 @@ class RandomizationExecutor:
         )
         references = rand_range.references()
         if references == (RandomizationReference.ABSOLUTE_BASE,):
-            # The range is expressed in the base frame, so sample there and lift
+            # The range is expressed in the base frame, so compose there and lift
             # the result back into the world frame.
             default_in_base = compose_pose(
                 inverse_pose(base_world),
                 following_base_default,
             )
-            sampled_in_base = self._sample_pose_for_env(
+            sampled_in_base = self._pose_from_axis_values(
                 default_in_base,
                 rand_range,
-                0,
-                distribution=distribution,
-                sample_index=sample_index,
-                poisson_stream=poisson_stream,
+                axis_values,
             )
             return compose_pose(base_world, sampled_in_base)
 
@@ -896,14 +1043,11 @@ class RandomizationExecutor:
                     env_index,
                     follow=rand_range.follow,
                 )
-        return self._sample_pose_for_env(
+        return self._pose_from_axis_values(
             following_base_default,
             rand_range,
-            0,
+            axis_values,
             reference_poses=reference_poses,
-            distribution=distribution,
-            sample_index=sample_index,
-            poisson_stream=poisson_stream,
         )
 
     # ------------------------------------------------------------------
@@ -1759,8 +1903,15 @@ class RandomizationExecutor:
         )
         self._host.set_camera_mount_pose(camera_name, sampled, env_mask)
 
-    def apply_joint_randomization(self, env_mask: np.ndarray) -> None:
-        """Draw every configured joint position for the masked environments."""
+    def apply_joint_randomization(
+        self,
+        env_mask: np.ndarray,
+        values: Optional[Mapping[str, float]] = None,
+    ) -> None:
+        """Draw every configured joint position for the masked environments.
+
+        ``values`` (one per joint) replaces the draws for a fixed reset.
+        """
         joints = self.scope.joints
         if not joints:
             return
@@ -1768,18 +1919,56 @@ class RandomizationExecutor:
         rng = self._host.rng
         for env_index in np.flatnonzero(env_mask):
             positions[env_index] = [
-                rng.uniform(low, high) for low, high in joints.values()
+                rng.uniform(low, high) if values is None else values[name]
+                for name, (low, high) in joints.items()
             ]
         self._host.set_scene_joint_positions(list(joints), positions, env_mask)
 
+    def _component_stages(
+        self,
+        plan: RandomizationPlan,
+    ) -> Tuple[List[List[str]], List[List[str]], List[List[str]]]:
+        """The plan's components split into the three phases a reset applies.
+
+        Operators form the context for mounted cameras and object references,
+        so they come first; objects follow; operator actions that reference an
+        object are deferred until after every object. Each phase keeps the
+        plan's component order and each component its label order.
+        """
+        deferred_operators = plan.operators_after_objects
+
+        def phase(belongs: Any) -> List[List[str]]:
+            selected = [
+                [label for label in component if belongs(plan.actions[label])]
+                for component in plan.components
+            ]
+            return [component for component in selected if component]
+
+        return (
+            phase(
+                lambda action: (
+                    action.kind != "object" and action.label not in deferred_operators
+                )
+            ),
+            phase(lambda action: action.kind == "object"),
+            phase(lambda action: action.label in deferred_operators),
+        )
+
     def apply_randomization(self, env_mask: np.ndarray) -> None:
         self.begin_reset()
+        if self._suspended:
+            return
+        plan = self.plan
+        fixed = self._fixed
+        if fixed is not None:
+            self._validate_fixed_randomization(fixed, plan)
         # Articulation first: an object's support geometry and the cameras'
         # view of it are evaluated against the scene as these joints leave it.
-        self.apply_joint_randomization(env_mask)
-        plan = self.plan
-        components = [list(component) for component in plan.components]
-        action_specs = plan.actions
+        self.apply_joint_randomization(
+            env_mask,
+            None if fixed is None else fixed.joints,
+        )
+        leading_operators, objects, trailing_operators = self._component_stages(plan)
         hard_sphere_groups = {
             frozenset(group.members): (group_name, group)
             for group_name, group in plan.groups.items()
@@ -1805,64 +1994,81 @@ class RandomizationExecutor:
                     )
                 )
 
-        # Operators form the context for mounted cameras and object references.
-        # Sampling them first makes the camera state final before visibility
-        # constraints are evaluated for objects. Operator actions that
-        # reference an object are deferred until after every object.
-        deferred_operators = plan.operators_after_objects
-        operator_labels = {
-            label
-            for label, action in action_specs.items()
-            if action.kind != "object" and label not in deferred_operators
-        }
-
-        def apply_operator_components(labels: Set[str]) -> None:
+        def apply_components(
+            components: List[List[str]],
+            *,
+            object_phase: bool = False,
+        ) -> None:
             for component in components:
-                operator_component = [label for label in component if label in labels]
-                if not operator_component:
-                    continue
                 component_poses, component_actions = self.sample_component(
-                    operator_component,
+                    component,
                     env_mask,
                     sampled_poses,
                     collision_participants,
+                    hard_sphere_rsa_group=(
+                        hard_sphere_groups.get(frozenset(component))
+                        if object_phase
+                        else None
+                    ),
+                    use_rsa=(
+                        object_phase
+                        and plan.strategy == RandomizationStrategy.RSA
+                        and len(component) > 1
+                    ),
+                    fixed=None if fixed is None else fixed.poses,
                 )
                 apply_actions(component_actions)
                 sampled_poses.update(component_poses)
 
-        apply_operator_components(operator_labels)
+        # Sampling operators first makes the camera state final before
+        # visibility constraints are evaluated for objects.
+        apply_components(leading_operators)
 
-        self.apply_camera_randomization(env_mask)
+        if fixed is None:
+            self.apply_camera_randomization(env_mask)
 
-        # A ``visible_in`` object region whose whole position box is outside a
-        # required camera frustum is deterministically infeasible — fail fast
-        # with a diagnostic instead of exhausting the attempt loop.
-        self.run_visibility_preflight(env_mask)
+            # A ``visible_in`` object region whose whole position box is outside
+            # a required camera frustum is deterministically infeasible — fail
+            # fast with a diagnostic instead of exhausting the attempt loop.
+            self.run_visibility_preflight(env_mask)
 
         # Object components retain reference-connected and separated joint
         # sampling, but now see the already-final operator/camera context.
-        for component in components:
-            object_component = [
-                label for label in component if action_specs[label].kind == "object"
-            ]
-            if not object_component:
-                continue
-            hard_sphere_group = hard_sphere_groups.get(frozenset(object_component))
-            component_poses, component_actions = self.sample_component(
-                object_component,
-                env_mask,
-                sampled_poses,
-                collision_participants,
-                hard_sphere_rsa_group=hard_sphere_group,
-                use_rsa=(
-                    plan.strategy == RandomizationStrategy.RSA
-                    and len(object_component) > 1
-                ),
-            )
-            apply_actions(component_actions)
-            sampled_poses.update(component_poses)
+        apply_components(objects, object_phase=True)
 
-        apply_operator_components(set(deferred_operators))
+        apply_components(trailing_operators)
+
+    def _fixed_component_for_env(
+        self,
+        component: List[str],
+        env_index: int,
+        accepted_sampled_poses: Dict[str, PoseState],
+        samples: Mapping[str, FixedSample],
+    ) -> tuple[Dict[str, PoseState], List[PendingRandomizationAction]]:
+        """Compose one component from chosen values in a single pass."""
+        action_specs = self.plan.actions
+        working_poses = {
+            name: pose.select(env_index)
+            for name, pose in accepted_sampled_poses.items()
+        }
+        env_sampled_poses: Dict[str, PoseState] = {}
+        env_actions: List[PendingRandomizationAction] = []
+        for label in component:
+            action_spec = action_specs[label]
+            if not self._is_samplable(action_spec):
+                continue
+            sample = samples[label]
+            sampled_poses, actions = self._compose_target_for_env(
+                action_spec,
+                env_index,
+                working_poses,
+                sample.region(label, action_spec.randomization),
+                sample.axis_values,
+            )
+            working_poses.update(sampled_poses)
+            env_sampled_poses.update(sampled_poses)
+            env_actions.extend(actions)
+        return env_sampled_poses, env_actions
 
     def sample_component(
         self,
@@ -1872,6 +2078,7 @@ class RandomizationExecutor:
         accepted_participants: List[CollisionParticipant],
         hard_sphere_rsa_group: tuple[str, RandomizationGroupConfig] | None = None,
         use_rsa: bool = False,
+        fixed: Optional[Mapping[str, FixedSample]] = None,
     ) -> tuple[Dict[str, PoseState], List[PendingRandomizationAction]]:
         key_buffers = {name: self._template_pose(name) for name in component}
         action_buffers: Dict[str, PendingRandomizationAction] = {}
@@ -1880,7 +2087,15 @@ class RandomizationExecutor:
         for env_index, enabled in enumerate(env_mask):
             if not enabled:
                 continue
-            if not use_rsa and hard_sphere_rsa_group is None:
+            if fixed is not None:
+                env_sampled_poses, env_actions = self._fixed_component_for_env(
+                    component,
+                    env_index,
+                    accepted_sampled_poses,
+                    fixed,
+                )
+                failure = None
+            elif not use_rsa and hard_sphere_rsa_group is None:
                 env_sampled_poses, env_actions, failure = self.sample_component_for_env(
                     component,
                     env_index,
