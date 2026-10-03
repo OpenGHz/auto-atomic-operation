@@ -1,10 +1,14 @@
 """Interactively inspect task randomization extreme cases.
 
-Loads a task config via Hydra, extracts ``task.randomization`` plus the
-initial pose/state values that define its defaults, opens the MuJoCo viewer,
-and provides a small tkinter panel for switching between extreme
-randomization cases. This helps verify whether configured ranges push objects
-or operators outside a reasonable workspace.
+Loads a task config via Hydra, opens the MuJoCo viewer, and provides a small
+tkinter panel for switching between extreme randomization cases. This helps
+verify whether configured ranges push objects or operators outside a
+reasonable workspace.
+
+The tool only chooses values (each range's min, max, or midpoint). Every case
+is applied by the backend's own reset with those values in place of the draws,
+so the scene is exactly what the runtime produces for them; "Random Sample" is
+a plain runtime reset.
 
 Usage::
 
@@ -13,7 +17,9 @@ Usage::
     python scripts/scene/tune_randomization_extremes.py task=open_door embodiment=p7_xf9600
 
 Reloads re-compose ``aao_configs/config.yaml`` with the same command-line
-overrides (including ``task=`` / ``embodiment=``).
+overrides (including ``task=`` / ``embodiment=``). "Reload Randomization"
+reconfigures the live backend and falls back to a full reload when the new
+config needs different handlers.
 """
 
 from __future__ import annotations
@@ -23,39 +29,34 @@ import sys
 import tkinter as tk
 import tkinter.font as tkfont
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from tkinter import ttk
 
 import hydra
-import numpy as np
 from hydra.core.global_hydra import GlobalHydra
-from omegaconf import DictConfig, OmegaConf
+from omegaconf import DictConfig
 
-from auto_atom.backend.mjc.mujoco_backend import MujocoTaskBackend
-from auto_atom.config.pose import PoseOverrideConfig
-from auto_atom.config.randomization import (
-    OperatorRandomizationConfig,
-    PoseRandomizationSpec,
-    PoseRandomRange,
-    ResolvedRandomizationConfig,
-    pose_randomization_regions,
+from auto_atom.backend.mjc.mujoco_backend import (
+    BackendRebuildRequired,
+    MujocoTaskBackend,
 )
-from auto_atom.config.reference import PoseReference, RandomizationReference
-from auto_atom.config.task import AutoAtomConfig, OperatorConfig, OperatorInitialState
+from auto_atom.config.randomization import PoseRandomRange, pose_randomization_regions
+from auto_atom.config.reference import RandomizationReference
 from auto_atom.config_loader import compose_task_config
-from auto_atom.runner.common import get_config_dir, get_run_name, prepare_task_file
-from auto_atom.runtime import TaskRunner
-from auto_atom.utils.pose import (
-    PoseState,
-    compose_pose,
-    euler_to_quaternion,
-    inverse_pose,
-    quaternion_to_rpy,
+from auto_atom.randomization import POSITION_AXES, ROTATION_AXES
+from auto_atom.randomization_executor import (
+    FixedRandomization,
+    FixedSample,
+    RandomizationExecutor,
 )
-
-AXES = ("x", "y", "z", "roll", "pitch", "yaw")
-POSITION_AXES = ("x", "y", "z")
-ROTATION_AXES = ("roll", "pitch", "yaw")
+from auto_atom.runner.common import (
+    get_config_dir,
+    get_run_name,
+    prepare_task_file,
+    prepare_task_sections,
+)
+from auto_atom.runtime import TaskRunner
+from auto_atom.utils.pose import quaternion_to_rpy
 
 
 def _enable_high_dpi_awareness() -> None:
@@ -198,175 +199,62 @@ def _configure_tk_dpi_and_fonts(root: tk.Tk) -> None:
     style.configure("TLabelFrame.Label", font="TkDefaultFont")
 
 
-@dataclass(frozen=True)
-class ReloadedTuningConfig:
-    randomization: ResolvedRandomizationConfig
-    initial_poses: dict[str, PoseOverrideConfig]
-    operator_initial_states: dict[str, OperatorInitialState]
+AXES = (*POSITION_AXES, *ROTATION_AXES)
+DEFAULT_COLLISION_RADIUS = PoseRandomRange.model_fields["collision_radius"].default
 
 
 def _fmt(values, precision: int = 6) -> str:
     return ", ".join(f"{float(v):.{precision}f}" for v in values)
 
 
-def _axis_range(rand_range: PoseRandomRange, axis: str) -> tuple[float, float]:
-    raw = rand_range.axis_range(axis)
-    if raw is None:
-        return (0.0, 0.0)
-    if isinstance(raw, (list, tuple)) and len(raw) == 2:
-        lo = 0.0 if raw[0] is None else float(raw[0])
-        hi = 0.0 if raw[1] is None else float(raw[1])
-        return (lo, hi)
-    try:
-        value = float(raw)
-    except (TypeError, ValueError):
-        return (0.0, 0.0)
-    return (value, value)
-
-
-def _region_label(target: RandomizationTarget, region_index: int) -> str:
-    """Format a target label, disambiguating multi-region entries."""
-    if len(target.regions) == 1:
-        return target.label
-    return f"{target.label} [region {region_index}]"
-
-
-def _active_region_axes(rand_range: PoseRandomRange) -> tuple[str, ...]:
-    """Return every explicitly configured axis, including fixed zero ranges.
-
-    ``None`` means "leave the baseline unchanged", while an explicit
-    ``[0, 0]`` in an absolute reference means "set this axis to zero".  Those
-    cases must remain distinguishable in generated extreme and random cases.
-    """
-    return tuple(axis for axis in AXES if getattr(rand_range, axis, None) is not None)
-
-
-def _sample_region_index(
-    rng: np.random.Generator,
-    region_count: int,
-) -> int:
-    """Sample an equiprobable region index, with a small test-double fallback."""
-    if region_count <= 0:
-        raise ValueError("Randomization region lists must not be empty")
-    if region_count == 1:
-        return 0
-    integers = getattr(rng, "integers", None)
-    if callable(integers):
-        return int(integers(0, region_count))
-    sampled = int(float(rng.uniform(0.0, float(region_count))))
-    return max(0, min(sampled, region_count - 1))
-
-
-def _with_offsets(
-    base_pose: PoseState,
-    offsets: dict[str, float],
-    rand_range: PoseRandomRange,
-    reference_poses: dict[RandomizationReference | str, PoseState] | None = None,
-) -> PoseState:
-    pose = base_pose.broadcast_to(base_pose.batch_size)
-    pose_by_reference = {
-        reference: reference_pose.broadcast_to(pose.batch_size)
-        for reference, reference_pose in (reference_poses or {}).items()
-    }
-
-    def _baseline(reference: RandomizationReference | str) -> PoseState:
-        return pose_by_reference.get(reference, pose)
-
-    position = np.empty_like(pose.position)
-    orientation = np.empty_like(pose.orientation)
-    for env_index in range(pose.batch_size):
-        for axis_index, axis in enumerate(POSITION_AXES):
-            reference = rand_range.axis_reference(axis)
-            value = float(_baseline(reference).position[env_index, axis_index])
-            if axis in offsets and reference in (
-                RandomizationReference.ABSOLUTE_WORLD,
-                RandomizationReference.ABSOLUTE_BASE,
-            ):
-                value = float(offsets[axis])
-            elif axis in offsets:
-                value += float(offsets[axis])
-            position[env_index, axis_index] = value
-        rotation_references = tuple(
-            rand_range.axis_reference(axis) for axis in ROTATION_AXES
-        )
-        if (
-            not any(axis in offsets for axis in ROTATION_AXES)
-            and len(set(rotation_references)) == 1
-        ):
-            orientation[env_index] = _baseline(rotation_references[0]).orientation[
-                env_index
-            ]
-            continue
-        rotation = []
-        for axis_index, axis in enumerate(ROTATION_AXES):
-            reference = rand_range.axis_reference(axis)
-            baseline_rpy = quaternion_to_rpy(
-                _baseline(reference).orientation[env_index]
-            )
-            value = float(baseline_rpy[axis_index])
-            if axis in offsets and reference in (
-                RandomizationReference.ABSOLUTE_WORLD,
-                RandomizationReference.ABSOLUTE_BASE,
-            ):
-                value = float(offsets[axis])
-            elif axis in offsets:
-                value += float(offsets[axis])
-            rotation.append(value)
-        orientation[env_index] = euler_to_quaternion(tuple(rotation))
-    return PoseState(position=position, orientation=orientation)
-
-
-def _parse_tuning_config(cfg: DictConfig) -> ReloadedTuningConfig:
-    raw = OmegaConf.to_container(cfg, resolve=True)
-    if not isinstance(raw, dict):
-        raise TypeError("Config root must be a mapping.")
-    task_raw = raw.get("task")
-    if not isinstance(task_raw, dict):
-        raise TypeError("Config task must be a mapping.")
-    task_cfg = AutoAtomConfig.model_validate(task_raw)
-
-    operator_initial_states: dict[str, OperatorInitialState] = {}
-    operators_raw = raw.get("task_operators") or {}
-    if not isinstance(operators_raw, dict):
-        raise TypeError("Config task_operators must be a mapping.")
-    for name, op_raw in operators_raw.items():
-        if not isinstance(op_raw, dict):
-            continue
-        op_cfg = OperatorConfig.model_validate({**op_raw, "name": name})
-        if op_cfg.initial_state is not None:
-            operator_initial_states[name] = op_cfg.initial_state
-
-    return ReloadedTuningConfig(
-        randomization=ResolvedRandomizationConfig.from_scope_config(
-            task_cfg.randomization
-        ),
-        initial_poses=dict(task_cfg.initial_pose),
-        operator_initial_states=operator_initial_states,
+def _reference_label(reference: RandomizationReference | str) -> str:
+    return (
+        reference.value if isinstance(reference, RandomizationReference) else reference
     )
 
 
-@dataclass(frozen=True)
-class RandomizationTarget:
-    key: str
-    label: str
-    rand_range: PoseRandomizationSpec
-    get_default_pose: Callable[[], PoseState]
-    apply_pose: Callable[[PoseState], None]
-    get_current_pose: Callable[[], PoseState]
-    get_base_pose: Callable[[], PoseState] | None = None
+def _configured_axes(region: PoseRandomRange) -> tuple[str, ...]:
+    """Every axis a reset draws for ``region``, including fixed ``[0, 0]`` ranges.
 
-    @property
-    def regions(self) -> tuple[PoseRandomRange, ...]:
-        """Return the candidate regions for this physical target."""
-        return pose_randomization_regions(self.rand_range)
+    An unset axis keeps its baseline, while an explicit ``[0, 0]`` in an
+    absolute reference sets that axis to zero, so the two stay distinct.
+    """
+    return tuple(axis for axis in AXES if region.axis_range(axis) is not None)
+
+
+def _midpoint(bounds: tuple[float, float]) -> float:
+    return 0.5 * (float(bounds[0]) + float(bounds[1]))
+
+
+def _region_values(
+    region: PoseRandomRange,
+    pick: Callable[[tuple[float, float]], float],
+) -> dict[str, float]:
+    """One value per configured axis of ``region``, chosen by ``pick``."""
+    return {
+        axis: float(pick(region.axis_range(axis))) for axis in _configured_axes(region)
+    }
+
+
+def _region_label(
+    label: str,
+    regions: tuple[PoseRandomRange, ...],
+    region_index: int,
+) -> str:
+    """Format a target label, disambiguating multi-region entries."""
+    if len(regions) == 1:
+        return label
+    return f"{label} [region {region_index}]"
 
 
 @dataclass(frozen=True)
 class ExtremeCase:
+    """One scene to inspect: a runtime reset with chosen values, or its baseline."""
+
     name: str
     description: str
-    offsets_by_target: dict[str, dict[str, float]]
-    region_indices_by_target: dict[str, int] = field(default_factory=dict)
+    fixed: FixedRandomization | None
+    """The values the reset applies; ``None`` suspends randomization instead."""
 
 
 def _collect_cli_overrides(argv: list[str]) -> list[str]:
@@ -392,24 +280,28 @@ def _collect_cli_overrides(argv: list[str]) -> list[str]:
 
 
 class RandomizationInspector:
+    """Tk panel that shows a task's randomization at chosen values.
+
+    The inspector only chooses values. Every case is applied by the backend's
+    own ``reset()``, with the executor's value source switched to the case's
+    :class:`FixedRandomization` (or suspended for the baseline), so what it
+    shows is exactly what the runtime produces for those values.
+    """
+
     def __init__(
         self,
         root: tk.Tk,
         backend: MujocoTaskBackend,
-        operator_initial_states: dict[str, OperatorInitialState] | None = None,
         reload_randomization_callback: Callable[[], None] | None = None,
         full_reload_callback: Callable[[], None] | None = None,
     ):
         self.root = root
         self.backend = backend
         self.env = backend.get_env()
-        self.operator_initial_states = dict(operator_initial_states or {})
         self.reload_randomization_callback = reload_randomization_callback
         self.full_reload_callback = full_reload_callback
-        self.targets = self._collect_targets()
         self.cases = self._build_cases()
         self.case_index = 0
-        self.rng = np.random.default_rng()
 
         root.title("Tune Randomization Extremes")
         root.geometry("760x720")
@@ -484,13 +376,23 @@ class RandomizationInspector:
 
         self.reset_default()
 
-    def reload_randomization(
-        self,
-        tuning_config: ReloadedTuningConfig,
-        preferred_case_name: str | None = None,
-    ) -> None:
-        self._apply_reloaded_defaults(tuning_config)
-        self.targets = self._collect_targets()
+    @property
+    def executor(self) -> RandomizationExecutor:
+        """Read on every use: a reconfigured backend has a new executor."""
+        return self.backend.randomization_executor
+
+    def _targets(self) -> dict[str, tuple[PoseRandomRange, ...]]:
+        """Each action a reset samples, with its candidate regions."""
+        return {
+            label: pose_randomization_regions(action.randomization)
+            for label, action in self.executor.samplable_actions().items()
+        }
+
+    def _joints(self) -> dict[str, tuple[float, float]]:
+        return dict(self.executor.scope.joints)
+
+    def reload_randomization(self, preferred_case_name: str | None = None) -> None:
+        """Rebuild the cases for the backend's current configuration."""
         self.cases = self._build_cases()
         self.summary_text.config(state="normal")
         self.summary_text.delete("1.0", "end")
@@ -503,330 +405,168 @@ class RandomizationInspector:
                 if case.name == preferred_case_name:
                     self.case_index = index
                     break
-        self.case_var.set(self.cases[self.case_index].name)
-        self.desc_var.set(self.cases[self.case_index].description)
         self.apply_selected_case()
 
-    def _apply_reloaded_defaults(self, tuning_config: ReloadedTuningConfig) -> None:
-        self.backend.randomization = tuning_config.randomization
-        self.backend.initial_poses = dict(tuning_config.initial_poses)
-        self.operator_initial_states = dict(tuning_config.operator_initial_states)
-        self.backend.operator_initial_states = dict(self.operator_initial_states)
-
-        self.backend.get_env().reset()
-        for operator in self.backend.operator_handlers.values():
-            operator.home()
-        if self.backend.initial_poses:
-            self.backend._apply_initial_poses()  # type: ignore[attr-defined]
-        self.backend.apply_operator_initial_states(home=True)
-        if self.backend.camera_initial_poses:
-            self.backend._apply_camera_initial_poses()  # type: ignore[attr-defined]
-
-        self.backend._default_object_poses.clear()  # type: ignore[attr-defined]
-        self.backend._default_operator_base_poses.clear()  # type: ignore[attr-defined]
-        self.backend._default_operator_eef_poses.clear()  # type: ignore[attr-defined]
-        self.backend._default_camera_poses.clear()  # type: ignore[attr-defined]
-        self.backend._record_default_poses()  # type: ignore[attr-defined]
-        self.backend.get_env().refresh_viewer()
-
-    def _collect_targets(self) -> list[RandomizationTarget]:
-        self.backend.randomization_executor.validate_configuration()
-        targets: list[RandomizationTarget] = []
-        for name, rand in self.backend.randomization.scope.entities.items():
-            if name in self.backend.object_handlers:
-                if isinstance(rand, OperatorRandomizationConfig):
-                    continue
-                handler = self.backend.object_handlers[name]
-                targets.append(
-                    RandomizationTarget(
-                        key=f"object:{name}",
-                        label=f"object {name}",
-                        rand_range=rand,
-                        get_default_pose=lambda n=name, h=handler: (
-                            self.backend._default_object_poses.get(  # type: ignore[attr-defined]
-                                n, h.get_pose()
-                            )
-                        ),
-                        apply_pose=lambda pose, h=handler: h.set_pose(pose),
-                        get_current_pose=lambda h=handler: h.get_pose(),
-                        get_base_pose=None,
-                    )
-                )
-                continue
-
-            if name not in self.backend.operator_handlers:
-                continue
-
-            handler = self.backend.operator_handlers[name]
-            if isinstance(rand, OperatorRandomizationConfig):
-                if rand.base is not None:
-                    targets.append(
-                        RandomizationTarget(
-                            key=f"operator-base:{name}",
-                            label=f"operator {name} base",
-                            rand_range=rand.base,
-                            get_default_pose=lambda n=name, h=handler: (
-                                self.backend._default_operator_base_poses.get(  # type: ignore[attr-defined]
-                                    n, h.get_base_pose()
-                                )
-                            ),
-                            apply_pose=lambda pose, h=handler: h.set_pose(pose),
-                            get_current_pose=lambda h=handler: h.get_base_pose(),
-                            get_base_pose=None,
-                        )
-                    )
-                if rand.eef is not None:
-                    targets.append(
-                        RandomizationTarget(
-                            key=f"operator-eef:{name}",
-                            label=f"operator {name} eef",
-                            rand_range=rand.eef,
-                            get_default_pose=self._make_eef_default_getter(
-                                name, handler
-                            ),
-                            apply_pose=lambda pose, h=handler: (
-                                h.set_home_end_effector_pose(pose)
-                            ),
-                            get_current_pose=lambda h=handler: (
-                                h.get_end_effector_pose()
-                            ),
-                            get_base_pose=lambda h=handler: h.get_base_pose(),
-                        )
-                    )
-            else:
-                targets.append(
-                    RandomizationTarget(
-                        key=f"operator-eef:{name}",
-                        label=f"operator {name} eef",
-                        rand_range=rand,
-                        get_default_pose=self._make_eef_default_getter(name, handler),
-                        apply_pose=lambda pose, h=handler: h.set_home_end_effector_pose(
-                            pose
-                        ),
-                        get_current_pose=lambda h=handler: h.get_end_effector_pose(),
-                        get_base_pose=lambda h=handler: h.get_base_pose(),
-                    )
-                )
-        existing_keys = {target.key for target in targets}
-        zero_range = PoseRandomRange()
-        for name, initial_state in self.operator_initial_states.items():
-            handler = self.backend.operator_handlers.get(name)
-            if handler is None:
-                continue
-            if (
-                initial_state.base_pose is not None
-                and f"operator-base:{name}" not in existing_keys
-            ):
-                targets.append(
-                    RandomizationTarget(
-                        key=f"operator-base:{name}",
-                        label=f"operator {name} base",
-                        rand_range=zero_range,
-                        get_default_pose=lambda n=name, h=handler: (
-                            self.backend._default_operator_base_poses.get(  # type: ignore[attr-defined]
-                                n, h.get_base_pose()
-                            )
-                        ),
-                        apply_pose=lambda pose, h=handler: h.set_pose(pose),
-                        get_current_pose=lambda h=handler: h.get_base_pose(),
-                        get_base_pose=None,
-                    )
-                )
-                existing_keys.add(f"operator-base:{name}")
-            if (
-                initial_state.eef_pose is not None or initial_state.eef is not None
-            ) and f"operator-eef:{name}" not in existing_keys:
-                targets.append(
-                    RandomizationTarget(
-                        key=f"operator-eef:{name}",
-                        label=f"operator {name} eef",
-                        rand_range=zero_range,
-                        get_default_pose=self._make_eef_default_getter(name, handler),
-                        apply_pose=lambda pose, h=handler: h.set_home_end_effector_pose(
-                            pose
-                        ),
-                        get_current_pose=lambda h=handler: h.get_end_effector_pose(),
-                        get_base_pose=lambda h=handler: h.get_base_pose(),
-                    )
-                )
-                existing_keys.add(f"operator-eef:{name}")
-        return targets
-
-    def _make_eef_default_getter(
-        self,
-        name: str,
-        handler,
-    ) -> Callable[[], PoseState]:
-        """Return a closure that yields the operator's default EEF pose
-        re-anchored to the operator's **current** base, by delegating to
-        the executor's ``_operator_default_eef_following_base`` so the runtime
-        sampler and this tool agree on the same semantics.
-        """
-        backend = self.backend
-        executor = backend.randomization_executor
-
-        def _getter() -> PoseState:
-            poses = []
-            for env_index in range(backend.batch_size):
-                follow_default, _ = executor._operator_default_eef_following_base(
-                    f"{name}.eef", name, env_index, sampled_poses=None
-                )
-                poses.append(follow_default)
-            return PoseState(
-                position=np.stack([np.asarray(p.position[0]) for p in poses], axis=0),
-                orientation=np.stack(
-                    [np.asarray(p.orientation[0]) for p in poses], axis=0
-                ),
-            )
-
-        return _getter
-
     def _build_cases(self) -> list[ExtremeCase]:
-        cases: list[ExtremeCase] = [
+        """Cases that each push one thing to an extreme.
+
+        Whatever a case does not push sits at its range midpoint (first region
+        for multi-region targets), so every case is a sample the runtime could
+        draw — the baseline itself is the separate ``default`` case.
+        """
+        targets = self._targets()
+        joints = self._joints()
+
+        def fixed(
+            poses: dict[str, FixedSample] | None = None,
+            joint_values: dict[str, float] | None = None,
+        ) -> FixedRandomization:
+            samples = {
+                label: FixedSample(0, _region_values(regions[0], _midpoint))
+                for label, regions in targets.items()
+            }
+            samples.update(poses or {})
+            values = {name: _midpoint(bounds) for name, bounds in joints.items()}
+            values.update(joint_values or {})
+            return FixedRandomization(poses=samples, joints=values)
+
+        cases = [
             ExtremeCase(
                 name="default",
-                description="No randomization offset. Restore every randomized target to its default pose.",
-                offsets_by_target={},
+                description=(
+                    "The reset baseline: the runtime reset with randomization "
+                    "suspended."
+                ),
+                fixed=None,
             )
         ]
-
-        non_zero_targets = [
-            target
-            for target in self.targets
-            if any(_active_region_axes(region) for region in target.regions)
-        ]
-        if non_zero_targets:
-            selected_regions = {target.key: 0 for target in non_zero_targets}
-            all_min = {
-                target.key: {
-                    axis: _axis_range(target.regions[0], axis)[0]
-                    for axis in _active_region_axes(target.regions[0])
-                }
-                for target in non_zero_targets
-            }
-            all_max = {
-                target.key: {
-                    axis: _axis_range(target.regions[0], axis)[1]
-                    for axis in _active_region_axes(target.regions[0])
-                }
-                for target in non_zero_targets
-            }
-            cases.append(
-                ExtremeCase(
-                    name="all-min",
-                    description="Apply every randomized axis at its minimum value at the same time.",
-                    offsets_by_target=all_min,
-                    region_indices_by_target=selected_regions,
-                )
+        if not targets and not joints:
+            return cases
+        cases.append(
+            ExtremeCase(
+                name="center",
+                description=(
+                    "Every randomized axis and joint at its range midpoint "
+                    "(first region of multi-region targets)."
+                ),
+                fixed=fixed(),
             )
+        )
+        for bound_name, pick in (("min", min), ("max", max)):
             cases.append(
                 ExtremeCase(
-                    name="all-max",
-                    description="Apply every randomized axis at its maximum value at the same time.",
-                    offsets_by_target=all_max,
-                    region_indices_by_target=selected_regions.copy(),
+                    name=f"all-{bound_name}",
+                    description=(
+                        f"Every randomized axis and joint at its {bound_name}imum "
+                        "at the same time (first region of multi-region targets)."
+                    ),
+                    fixed=fixed(
+                        {
+                            label: FixedSample(0, _region_values(regions[0], pick))
+                            for label, regions in targets.items()
+                        },
+                        {name: float(pick(bounds)) for name, bounds in joints.items()},
+                    ),
                 )
             )
 
-        for target in self.targets:
-            for region_index, rand_range in enumerate(target.regions):
-                active_axes = _active_region_axes(rand_range)
-                region_name = _region_label(target, region_index)
-                region_selection = {target.key: region_index}
+        for label, regions in targets.items():
+            for region_index, region in enumerate(regions):
+                region_name = _region_label(label, regions, region_index)
+                if len(regions) > 1:
+                    for bound_name, pick in (("min", min), ("max", max)):
+                        cases.append(
+                            ExtremeCase(
+                                name=f"{region_name} all-{bound_name}",
+                                description=(
+                                    f"All {region_name} axes at their "
+                                    f"{bound_name}imum; everything else at its "
+                                    "midpoint."
+                                ),
+                                fixed=fixed(
+                                    {
+                                        label: FixedSample(
+                                            region_index,
+                                            _region_values(region, pick),
+                                        )
+                                    }
+                                ),
+                            )
+                        )
+                for axis in _configured_axes(region):
+                    for bound_name, pick in (("min", min), ("max", max)):
+                        value = float(pick(region.axis_range(axis)))
+                        values = _region_values(region, _midpoint)
+                        values[axis] = value
+                        cases.append(
+                            ExtremeCase(
+                                name=f"{region_name} {axis}={bound_name}",
+                                description=(
+                                    f"{region_name} {axis} at its {bound_name}imum "
+                                    f"{value:.6f}; everything else at its midpoint."
+                                ),
+                                fixed=fixed({label: FixedSample(region_index, values)}),
+                            )
+                        )
 
-                if len(target.regions) > 1:
-                    region_min = {
-                        axis: _axis_range(rand_range, axis)[0] for axis in active_axes
-                    }
-                    region_max = {
-                        axis: _axis_range(rand_range, axis)[1] for axis in active_axes
-                    }
-                    cases.append(
-                        ExtremeCase(
-                            name=f"{region_name} all-min",
-                            description=(
-                                f"Apply all {region_name} axes at their minimum "
-                                "values; all other targets stay at default."
-                            ),
-                            offsets_by_target={target.key: region_min},
-                            region_indices_by_target=region_selection,
-                        )
+        for name, bounds in joints.items():
+            for bound_name, pick in (("min", min), ("max", max)):
+                value = float(pick(bounds))
+                cases.append(
+                    ExtremeCase(
+                        name=f"joint {name}={bound_name}",
+                        description=(
+                            f"Joint {name} at its {bound_name}imum {value:.6f}; "
+                            "everything else at its midpoint."
+                        ),
+                        fixed=fixed(joint_values={name: value}),
                     )
-                    cases.append(
-                        ExtremeCase(
-                            name=f"{region_name} all-max",
-                            description=(
-                                f"Apply all {region_name} axes at their maximum "
-                                "values; all other targets stay at default."
-                            ),
-                            offsets_by_target={target.key: region_max},
-                            region_indices_by_target=region_selection.copy(),
-                        )
-                    )
-
-                for axis in active_axes:
-                    axis_min, axis_max = _axis_range(rand_range, axis)
-                    cases.append(
-                        ExtremeCase(
-                            name=f"{region_name} {axis}=min",
-                            description=(
-                                f"Only {region_name} uses {axis} minimum "
-                                f"{axis_min:.6f}; all other axes stay at default."
-                            ),
-                            offsets_by_target={target.key: {axis: float(axis_min)}},
-                            region_indices_by_target=region_selection,
-                        )
-                    )
-                    cases.append(
-                        ExtremeCase(
-                            name=f"{region_name} {axis}=max",
-                            description=(
-                                f"Only {region_name} uses {axis} maximum "
-                                f"{axis_max:.6f}; all other axes stay at default."
-                            ),
-                            offsets_by_target={target.key: {axis: float(axis_max)}},
-                            region_indices_by_target=region_selection.copy(),
-                        )
-                    )
-
+                )
         return cases
 
     def _summary_text(self) -> str:
-        if not self.targets:
+        targets = self._targets()
+        joints = self._joints()
+        if not targets and not joints:
             return "No supported task.randomization entries found in this config."
         lines = []
-        for target in self.targets:
-            for region_index, rand_range in enumerate(target.regions):
-                reference = rand_range.reference
-                reference_label = (
-                    reference.value
-                    if isinstance(reference, RandomizationReference)
-                    else reference
-                )
-                parts = [f"reference={reference_label}"]
-                for axis in _active_region_axes(rand_range):
-                    lo, hi = _axis_range(rand_range, axis)
-                    axis_reference = rand_range.axis_reference(axis)
-                    if axis_reference == reference:
-                        parts.append(f"{axis}=[{lo:.6f}, {hi:.6f}]")
-                    else:
-                        axis_reference_label = (
-                            axis_reference.value
-                            if isinstance(axis_reference, RandomizationReference)
-                            else axis_reference
-                        )
-                        parts.append(
-                            f"{axis}=[{lo:.6f}, {hi:.6f}]@{axis_reference_label}"
-                        )
-                if rand_range.collision_radius != 0.05:
+        for label, regions in targets.items():
+            for region_index, region in enumerate(regions):
+                parts = [f"reference={_reference_label(region.reference)}"]
+                for axis in _configured_axes(region):
+                    lo, hi = region.axis_range(axis)
+                    axis_reference = region.axis_reference(axis)
+                    suffix = (
+                        ""
+                        if axis_reference == region.reference
+                        else f"@{_reference_label(axis_reference)}"
+                    )
+                    parts.append(f"{axis}=[{lo:.6f}, {hi:.6f}]{suffix}")
+                if region.collision_radius != DEFAULT_COLLISION_RADIUS:
                     parts.append(
-                        f"collision_radius={float(rand_range.collision_radius):.6f}"
+                        f"collision_radius={float(region.collision_radius):.6f}"
                     )
                 lines.append(
-                    f"{_region_label(target, region_index)}: "
-                    + (", ".join(parts) or "all zero")
+                    f"{_region_label(label, regions, region_index)}: "
+                    + ", ".join(parts)
                 )
+        for name, (low, high) in joints.items():
+            lines.append(f"joint {name}: [{low:.6f}, {high:.6f}]")
         return "\n".join(lines)
+
+    def _displayed_labels(self) -> list[str]:
+        """Randomized targets, plus operator parts an initial state places."""
+        labels = list(self._targets())
+        for name, initial_state in self.backend.operator_initial_states.items():
+            if name not in self.backend.operator_handlers:
+                continue
+            if initial_state.base_pose is not None and f"{name}.base" not in labels:
+                labels.append(f"{name}.base")
+            if (
+                initial_state.eef_pose is not None or initial_state.eef is not None
+            ) and f"{name}.eef" not in labels:
+                labels.append(f"{name}.eef")
+        return labels
 
     def _set_state_text(self, text: str) -> None:
         self.state_text.config(state="normal")
@@ -840,124 +580,49 @@ class RandomizationInspector:
             lines.append(f"case: {case.name}")
             lines.append(case.description)
         lines.append("")
-        for target in self.targets:
-            pose = target.get_current_pose().select(0)
+        fixed = case.fixed if case is not None else None
+        targets = self._targets()
+        for label in self._displayed_labels():
+            pose = self.backend.live_pose(label).select(0)
             roll, pitch, yaw = quaternion_to_rpy(pose.orientation[0])
-            lines.append(target.label)
-            if case is not None and target.key in case.region_indices_by_target:
-                region_index = case.region_indices_by_target[target.key]
-                if 0 <= region_index < len(target.regions):
-                    lines.append(f"  selected_region: {region_index}")
+            sample = fixed.poses.get(label) if fixed is not None else None
+            lines.append(label)
+            if sample is not None and len(targets.get(label, ())) > 1:
+                lines.append(f"  region: {sample.region_index}")
             lines.append(f"  position: [{_fmt(pose.position[0])}]")
             lines.append(f"  quat(xyzw): [{_fmt(pose.orientation[0])}]")
             lines.append(f"  rpy: [{_fmt((roll, pitch, yaw))}]")
-            if target.key.startswith("operator-"):
-                _, _, operator_name = target.key.partition(":")
-                handler = self.backend.operator_handlers.get(operator_name)
-                if handler is not None:
-                    eef_ctrl = float(handler._home_ctrl[0, handler.eef_ctrl_index])
-                    lines.append(f"  eef_ctrl: {eef_ctrl:.6f}")
-            if case is not None and target.key in case.offsets_by_target:
-                offsets = case.offsets_by_target[target.key]
+            owner, _, part = label.partition(".")
+            handler = self.backend.operator_handlers.get(owner) if part else None
+            if handler is not None:
+                eef_ctrl = float(handler._home_ctrl[0, handler.eef_ctrl_index])
+                lines.append(f"  eef_ctrl: {eef_ctrl:.6f}")
+            if sample is not None and sample.axis_values:
                 lines.append(
-                    "  offsets: "
+                    "  values: "
                     + ", ".join(
-                        f"{axis}={value:.6f}" for axis, value in offsets.items()
+                        f"{axis}={value:.6f}"
+                        for axis, value in sample.axis_values.items()
                     )
                 )
             lines.append("")
+        if fixed is not None and fixed.joints:
+            lines.append(
+                "joints: "
+                + ", ".join(
+                    f"{name}={value:.6f}" for name, value in fixed.joints.items()
+                )
+            )
         self._set_state_text("\n".join(lines).rstrip() + "\n")
 
-    @staticmethod
-    def _sampled_pose_key(target: RandomizationTarget) -> str | None:
-        prefix, _, name = target.key.partition(":")
-        if prefix == "object":
-            return name
-        if prefix == "operator-base":
-            return f"{name}.base"
-        if prefix == "operator-eef":
-            return f"{name}.eef"
-        return None
-
-    def _sorted_targets_for_apply(self) -> list[RandomizationTarget]:
-        """Order targets so entity-name-referenced entries resolve after their
-        referents (delta-carry depends on the referenced pose being sampled)."""
-        action_order = self.backend.randomization_executor.plan.order
-        order_index = {name: idx for idx, name in enumerate(action_order)}
-
-        def sort_key(target: RandomizationTarget) -> tuple:
-            action_key = self._sampled_pose_key(target)
-            attr_priority = 0 if target.key.startswith("operator-base:") else 1
-            return (
-                order_index.get(action_key, len(order_index)),
-                attr_priority,
-            )
-
-        return sorted(self.targets, key=sort_key)
-
     def _apply_case(self, case: ExtremeCase) -> None:
-        # Reset every target to its default in the same dependency order we
-        # later use to apply offsets (base before eef, etc.). For
-        # operator-eef targets the "default" is computed against the
-        # operator's *current* base via ``_make_eef_default_getter``, so
-        # the base must already have been reset to its own default before
-        # the eef default is queried — otherwise the eef would re-anchor
-        # to whatever base happened to be left over from the previous
-        # case and we'd see the very bug this ordering is meant to avoid.
-        sorted_targets = self._sorted_targets_for_apply()
-        for target in sorted_targets:
-            target.apply_pose(target.get_default_pose())
-        sampled_poses: dict[str, PoseState] = {}
-        for target in self._sorted_targets_for_apply():
-            offsets = case.offsets_by_target.get(target.key) or {}
-            region_index = case.region_indices_by_target.get(target.key, 0)
-            if not 0 <= region_index < len(target.regions):
-                raise ValueError(
-                    f"Case '{case.name}' selects invalid region {region_index} "
-                    f"for target '{target.key}' (expected 0..{len(target.regions) - 1})"
-                )
-            rand_range = target.regions[region_index]
-            references = rand_range.references()
-            if (
-                references == (RandomizationReference.ABSOLUTE_BASE,)
-                and target.get_base_pose is not None
-            ):
-                base_world = target.get_base_pose()
-                default_in_base = compose_pose(
-                    inverse_pose(base_world),
-                    target.get_default_pose(),
-                )
-                sampled_in_base = _with_offsets(
-                    default_in_base,
-                    offsets,
-                    rand_range,
-                )
-                sampled_pose = compose_pose(base_world, sampled_in_base)
-            else:
-                default_pose = target.get_default_pose()
-                reference_poses = {
-                    reference: (
-                        default_pose
-                        if isinstance(reference, RandomizationReference)
-                        else self.backend._resolve_reference_base_pose(
-                            reference,
-                            sampled_poses,
-                            default_pose,
-                        )
-                    )
-                    for reference in references
-                }
-                sampled_pose = _with_offsets(
-                    default_pose,
-                    offsets,
-                    rand_range,
-                    reference_poses,
-                )
-            target.apply_pose(sampled_pose)
-            sample_key = self._sampled_pose_key(target)
-            if sample_key is not None:
-                sampled_poses[sample_key] = sampled_pose
-        self.env.refresh_viewer()
+        executor = self.executor
+        with (
+            executor.suspended()
+            if case.fixed is None
+            else executor.fixed_samples(case.fixed)
+        ):
+            self.backend.reset()
         self.case_var.set(case.name)
         self.desc_var.set(case.description)
         self._refresh_state_text("Applied extreme case.", case)
@@ -987,28 +652,16 @@ class RandomizationInspector:
         self._apply_case(self.cases[0])
 
     def apply_random_sample(self) -> None:
-        offsets_by_target: dict[str, dict[str, float]] = {}
-        region_indices_by_target: dict[str, int] = {}
-        for target in self.targets:
-            region_index = _sample_region_index(self.rng, len(target.regions))
-            region_indices_by_target[target.key] = region_index
-            rand_range = target.regions[region_index]
-            offsets = {}
-            for axis in _active_region_axes(rand_range):
-                low, high = _axis_range(rand_range, axis)
-                offsets[axis] = float(self.rng.uniform(low, high))
-            if offsets:
-                offsets_by_target[target.key] = offsets
-        case = ExtremeCase(
-            name="random-sample",
-            description=(
-                "A fresh random sample drawn uniformly from one selected "
-                "region per target and each configured range."
-            ),
-            offsets_by_target=offsets_by_target,
-            region_indices_by_target=region_indices_by_target,
+        """One plain runtime reset: its own draws, rejection, and constraints."""
+        self.backend.reset()
+        description = (
+            "One runtime reset: the backend's own draws, collision rejection, "
+            "and constraints."
         )
-        self._apply_case(case)
+        self.case_var.set("random-sample")
+        self.desc_var.set(description)
+        self._refresh_state_text(f"Applied a runtime reset. {description}")
+        print("[randomization_case] random-sample")
 
 
 class RandomizationInspectorApp:
@@ -1034,12 +687,8 @@ class RandomizationInspectorApp:
             overrides=self.overrides, config_dir=get_config_dir()
         )
 
-    def _extract_tuning_config(self, cfg: DictConfig) -> ReloadedTuningConfig:
-        return _parse_tuning_config(cfg)
-
     def _start_backend(self) -> None:
-        cfg = self.initial_cfg
-        task_file = prepare_task_file(cfg)
+        task_file = prepare_task_file(self.initial_cfg)
         runner = TaskRunner().from_config(task_file)
         backend = runner._context.backend
         if not isinstance(backend, MujocoTaskBackend):
@@ -1049,15 +698,11 @@ class RandomizationInspectorApp:
         # force the joint-limit-proximity warning on regardless of the env's
         # default (which is off, since it's noise during normal demos).
         backend.get_env().set_joint_limit_warning_enabled(True)
-        backend.reset()
-        backend.get_env().refresh_viewer()
-        tuning_config = self._extract_tuning_config(cfg)
         self.runner = runner
         self.backend = backend
         self.inspector = RandomizationInspector(
             self.root,
             backend,
-            operator_initial_states=tuning_config.operator_initial_states,
             reload_randomization_callback=self.reload_randomization,
             full_reload_callback=self.full_reload,
         )
@@ -1069,32 +714,30 @@ class RandomizationInspectorApp:
             return
         preferred_case_name = self.inspector.case_var.get()
         cfg = self._load_cfg()
-        tuning_config = self._extract_tuning_config(cfg)
-        self.inspector.reload_randomization(
-            tuning_config,
-            preferred_case_name=preferred_case_name,
-        )
+        task, operators = prepare_task_sections(cfg)
+        try:
+            self.backend.reconfigure(task, operators)
+        except BackendRebuildRequired as exc:
+            print(f"[reload_randomization] {exc} Falling back to a full reload.")
+            self._rebuild(cfg, preferred_case_name)
+            return
+        self.inspector.reload_randomization(preferred_case_name=preferred_case_name)
 
     def full_reload(self) -> None:
         print(f"[full_reload] run={self.run_name}")
         preferred_case_name = (
             self.inspector.case_var.get() if self.inspector is not None else None
         )
-        cfg = self._load_cfg()
+        self._rebuild(self._load_cfg(), preferred_case_name)
+
+    def _rebuild(self, cfg: DictConfig, preferred_case_name: str | None) -> None:
         self.initial_cfg = cfg
-        if self.runner is not None:
-            self.runner.close()
-            self.runner = None
-            self.backend = None
-            self.inspector = None
+        self.close()
         for child in self.root.winfo_children():
             child.destroy()
         self._start_backend()
-        if self.inspector is not None:
-            self.inspector.reload_randomization(
-                self._extract_tuning_config(cfg),
-                preferred_case_name=preferred_case_name,
-            )
+        if self.inspector is not None and preferred_case_name is not None:
+            self.inspector.reload_randomization(preferred_case_name=preferred_case_name)
 
     def close(self) -> None:
         if self.runner is not None:
