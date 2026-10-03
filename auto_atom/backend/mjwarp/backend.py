@@ -779,6 +779,7 @@ def _build_operator_handlers(
         eef_overrides: Dict[str, Any] = {
             "timeout_steps": int(control.get("timeout_steps", 100)),
             "settle_steps": int(grasp.get("settle_steps", 5)),
+            "pre_release_settle_steps": int(grasp.get("pre_release_settle_steps", 0)),
             "release_settle_steps": int(grasp.get("release_settle_steps", 0)),
             "lateral_threshold": float(grasp.get("lateral_threshold", 0.0)),
             "grasp_axis": int(grasp.get("grasp_axis", 2)),

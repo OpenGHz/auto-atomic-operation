@@ -274,7 +274,14 @@ when `require_grasp` is true.
 
 ### 6.3 Opening
 **Condition**: `actual_qpos <= eef_open_value + eef_tolerance` after the
-configured release-settle updates.
+configured pre-release and release-settle updates.
+
+With `pre_release_settle_steps > 0` the gripper keeps its previous command for
+that many updates before it opens, while the arm holds its last target. A pose
+waypoint completes within tolerance while the arm is still moving, so the hold
+lets a carried object come to rest first. This matters when nothing stops a
+released object, e.g. with `env.gravity: [0, 0, 0]`. The release-settle
+updates are counted after the hold.
 
 Gripper has opened to within tolerance of fully open, or reached the minimum open threshold (0.05).
 
@@ -284,6 +291,7 @@ Gripper has opened to within tolerance of fully open, or reached the minimum ope
 |-----------|----------|---------|-------------|
 | `eef` | `MujocoToleranceConfig` | `0.03` | Gripper position tolerance |
 | `settle_steps` | `MujocoGraspConfig` | `5` | Control updates to wait before grasp check |
+| `pre_release_settle_steps` | `MujocoGraspConfig` | `0` | Control updates to hold the arm still before opening |
 | `release_settle_steps` | `MujocoGraspConfig` | `0` | Control updates to wait after opening before completion |
 
 `require_grasp` belongs to the individual `eef` primitive rather than the
@@ -329,6 +337,7 @@ task_operators:
         lateral_threshold: 0.0      # meters (0 = disabled, >0 to enable check)
         grasp_axis: 2               # 0=X, 1=Y, 2=Z (grasp direction)
         settle_steps: 5             # control updates before grasp check
+        pre_release_settle_steps: 0 # control updates held still before opening
         release_settle_steps: 0     # control updates after opening
       timeout_steps: 100            # max steps per action
 ```
@@ -341,6 +350,7 @@ task_operators:
 | `control.grasp.lateral_threshold` | 0.0 | m | Max lateral distance for valid grasp (0=disabled) |
 | `control.grasp.grasp_axis` | 2 | - | Grasp direction axis (0=X, 1=Y, 2=Z) |
 | `control.grasp.settle_steps` | 5 | updates | Min control updates before checking grasp |
+| `control.grasp.pre_release_settle_steps` | 0 | updates | Control updates the arm holds still before the gripper opens |
 | `control.grasp.release_settle_steps` | 0 | updates | Min control updates after opening before completion |
 | `control.timeout_steps` | 100 | steps | Max steps per action before timeout |
 | `control.ik_unreachable_threshold` | 30 | streak | Consecutive IK failures inside `move_to_pose` after which the stage fails fast with `failure_category: ik_unreachable` instead of waiting for `timeout_steps` |

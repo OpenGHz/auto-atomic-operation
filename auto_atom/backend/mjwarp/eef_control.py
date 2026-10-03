@@ -44,6 +44,7 @@ class MjWarpEefControl:
     eef_tolerance: float = 0.03
     timeout_steps: int = 100
     settle_steps: int = 5
+    pre_release_settle_steps: int = 0
     release_settle_steps: int = 0
     lateral_threshold: float = 0.0
     grasp_axis: int = 2
@@ -180,9 +181,17 @@ class MjWarpEefControl:
                 f"Operator '{self.operator.name}' has no eef_actuators, so its "
                 "gripper cannot be commanded."
             )
-        self.state.set_ctrl(
-            eef_ids, np.full(eef_ids.size, command, dtype=np.float64), world_mask=mask
-        )
+        # Opening first holds the arm for the pre-release window, leaving the
+        # gripper command untouched so a carried object can come to rest.
+        write_mask = mask.copy()
+        if not close:
+            write_mask &= self._steps >= self.pre_release_settle_steps
+        if write_mask.any():
+            self.state.set_ctrl(
+                eef_ids,
+                np.full(eef_ids.size, command, dtype=np.float64),
+                world_mask=write_mask,
+            )
         self.state.step(self.n_substeps, world_mask=mask)
         self._steps[worlds] += 1
 
@@ -335,7 +344,7 @@ class MjWarpEefControl:
            noticeably off the open position also counts. Without this rung a
            successful grasp on a stiff object reads as a timeout.
         4. Opening accepts on returning to the open position, after the
-           configured release settling.
+           configured pre-release hold and release settling.
 
         Rungs 2 and 3 inherit a **sign assumption** from the native ladder that
         is worth stating because nothing enforces it: closing must *increase*
@@ -363,7 +372,7 @@ class MjWarpEefControl:
                 return True, "eef_reached"
         elif not close:
             if (
-                steps >= self.release_settle_steps
+                steps >= self.pre_release_settle_steps + self.release_settle_steps
                 and actual <= self.eef_open_value + self.eef_tolerance
             ):
                 return True, "eef_reached"

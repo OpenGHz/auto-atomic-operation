@@ -75,6 +75,12 @@ class MujocoGraspConfig(BaseModel):
     lateral_threshold: float = 0.0
     grasp_axis: int = 2
     settle_steps: int = 5
+    pre_release_settle_steps: int = 0
+    """Control updates to hold the arm at its last target before opening.
+
+    The arm reaches a waypoint within tolerance while still moving; holding it
+    lets a carried object come to rest, so opening does not fling an object
+    that nothing else stops (e.g. without gravity)."""
     release_settle_steps: int = 0
     """Control updates to wait after opening before the arm retreats."""
 
@@ -674,7 +680,11 @@ class MujocoOperatorHandler(OperatorHandler):
                 self._last_eef_key[env_index] = command_key
                 self._eef_steps[env_index] = 0
             ctrl = np.asarray(single_env.data.ctrl, dtype=np.float64).copy()
-            ctrl[self.eef_ctrl_index] = target_value
+            pre_release = (
+                0 if eef.close else self.control.grasp.pre_release_settle_steps
+            )
+            if self._eef_steps[env_index] >= pre_release:
+                ctrl[self.eef_ctrl_index] = target_value
             self.env.step(
                 np.vstack(
                     [
@@ -742,7 +752,7 @@ class MujocoOperatorHandler(OperatorHandler):
             elif (
                 not eef.close
                 and self._eef_steps[env_index]
-                >= self.control.grasp.release_settle_steps
+                >= pre_release + self.control.grasp.release_settle_steps
                 and actual <= (self.eef_open_value + self.control.tolerance.eef)
             ):
                 reached = True

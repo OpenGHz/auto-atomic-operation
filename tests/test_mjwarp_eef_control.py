@@ -177,6 +177,29 @@ def test_opening_waits_for_release_settling(control):
     assert result.details[0]["steps"] >= 8
 
 
+def test_opening_holds_the_grip_for_the_pre_release_window(control):
+    """The hold keeps the close command; release settling is counted after it."""
+    state = control.state
+    actuator = control.operator.eef_actuator_ids[0]
+    state.set_ctrl(np.asarray([actuator]), np.asarray([0.05]))
+    control.pre_release_settle_steps = 3
+    control.release_settle_steps = 2
+
+    commands = []
+    reached_at = None
+    for update in range(1, 40):
+        with state.deferred_step():
+            result = control.control(close=False)
+        commands.append(float(state.get_ctrl()[0][actuator]))
+        if result.signals[0] == ControlSignal.REACHED:
+            reached_at = update
+            break
+
+    assert commands[:3] == [pytest.approx(0.05)] * 3
+    assert commands[3] == pytest.approx(0.0)
+    assert reached_at is not None and reached_at >= 5
+
+
 def test_timeout_is_reported_when_nothing_completes(control):
     """A command that never completes times out rather than running forever."""
     state = control.state
