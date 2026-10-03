@@ -6,6 +6,7 @@ from pathlib import Path
 
 import mujoco
 import numpy as np
+import pytest
 
 from auto_atom.config_loader import compose_task_config
 from auto_atom.runner.common import prepare_task_file
@@ -190,5 +191,61 @@ def test_microwave_sweet_potato_umi_v3_completes_headless() -> None:
         long_axis = data.xmat[potato_body].reshape(3, 3)[:, 0]
         target_axis = data.site_xmat[target_site].reshape(3, 3)[:, 0]
         assert float(long_axis @ target_axis) > np.cos(0.2)
+    finally:
+        runner.close()
+
+
+@pytest.mark.parametrize("preset", ["gravity", "zero_gravity"])
+def test_randomization_presets_complete_headless(preset: str) -> None:
+    """Each preset samples a wide scene and still finishes the task."""
+    ComponentRegistry.clear()
+    config = compose_task_config(
+        "microwave_sweet_potato",
+        [
+            "env.viewer=null",
+            "task.seed=3",
+            f"randomization=microwave_sweet_potato/{preset}",
+        ],
+        config_dir=_ROOT / "aao_configs",
+    )
+    zero_gravity = preset == "zero_gravity"
+
+    runner = TaskRunner().from_config(prepare_task_file(config))
+    try:
+        single_env = runner._context.backend.get_env().envs[0]  # type: ignore[union-attr]
+        model, data = single_env.model, single_env.data
+        np.testing.assert_allclose(
+            model.opt.gravity, [0.0, 0.0, 0.0 if zero_gravity else -9.81]
+        )
+        microwave = _id(model, mujoco.mjtObj.mjOBJ_BODY, "microwave")
+        potato = _id(model, mujoco.mjtObj.mjOBJ_BODY, "sweet_potato")
+        target = _id(model, mujoco.mjtObj.mjOBJ_SITE, "microwave_target_site")
+        eef = _id(model, mujoco.mjtObj.mjOBJ_SITE, "eef_pose")
+        microwave_starts = []
+        for _ in range(2):
+            update = runner.reset()
+            microwave_starts.append(data.xpos[microwave].copy())
+            # Without gravity the tuber floats well clear of the counter top
+            # (z = 0.06); with it, the tuber rests there in its settled pose.
+            potato_height = float(data.xpos[potato][2])
+            if zero_gravity:
+                assert potato_height > 0.15
+            else:
+                assert potato_height == pytest.approx(0.0821, abs=1e-3)
+            # The home pose follows the tuber, so the gripper starts above it
+            # however far the tuber moved, and upright.
+            assert float(data.site_xpos[eef][2]) > potato_height + 0.05
+            assert float(data.site_xmat[eef].reshape(3, 3)[2, 2]) > 0.5
+            updates_used = 0
+            while not bool(np.all(update.done)) and updates_used < _MAX_UPDATES:
+                update = runner.update()
+                updates_used += 1
+            assert update.success.tolist() == [True], update.details
+            assert (
+                float(np.linalg.norm(data.xpos[potato] - data.site_xpos[target]))
+                < 0.025
+            )
+        # The microwave itself is randomized on the counter.
+        assert float(np.linalg.norm(microwave_starts[0] - microwave_starts[1])) > 1e-3
     finally:
         runner.close()

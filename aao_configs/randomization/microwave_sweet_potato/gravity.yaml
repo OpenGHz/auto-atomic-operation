@@ -1,0 +1,47 @@
+# @package _global_
+#
+# Wide but physically consistent reset randomization for
+# task=microwave_sweet_potato with gravity:
+#
+#     aao-demo task=microwave_sweet_potato randomization=microwave_sweet_potato/gravity
+#
+# The tuber is placed relative to the microwave, so it always rests in front
+# of the open cavity.  The gripper's home pose and the grasp frame are placed
+# relative to the tuber, so the gripper always starts above and behind it.
+# The placement pose inside the cavity stays fixed.
+defaults:
+  - /randomization/microwave_sweet_potato/_microwave
+  - _self_
+
+microwave_sweet_potato:
+  # Pick in the static grasp frame randomized below.
+  grasp_site: sweet_potato_grasp_frame
+
+task:
+  randomization:
+    entities:
+      arm:
+        eef:
+          reference: sweet_potato
+          x: [-0.12, 0.12]
+          y: [-0.08, 0.10]
+          z: [-0.05, 0.15]
+          roll: [-0.25, 0.25]
+          pitch: [-0.25, 0.25]
+          yaw: [-0.4, 0.4]
+          collision_radius: 0.15
+      # Slid and turned on the counter in front of the cavity; turning about
+      # the vertical keeps the settled resting pose.
+      sweet_potato:
+        reference: microwave
+        x: [-0.20, 0.04]
+        y: [0.01, 0.05]
+        yaw: [-0.52, 0.52]
+        collision_radius: 0.085
+      # The grasp frame follows the tuber, then tilts nose-down about the jaw
+      # axis (its x) through the jaw contact, so the whole approach pivots
+      # about the contact.
+      sweet_potato_grasp_frame:
+        reference: sweet_potato
+        roll: [-0.349, 0.0]
+        collision_radius: 0.0

@@ -1,0 +1,13 @@
+# @package _global_
+#
+# Microwave placement shared by the microwave_sweet_potato presets: it moves
+# and turns on the counter, and its feet stay on the counter for every sample.
+task:
+  randomization:
+    entities:
+      microwave:
+        x: [-0.10, 0.04]
+        y: [-0.03, 0.0]
+        yaw: [-0.26, 0.26]
+        # The tuber is placed relative to the cabinet, not against it.
+        collision_radius: 0.0

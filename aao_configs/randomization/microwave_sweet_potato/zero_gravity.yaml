@@ -1,0 +1,71 @@
+# @package _global_
+#
+# Zero-gravity reset randomization for task=microwave_sweet_potato:
+#
+#     aao-demo task=microwave_sweet_potato randomization=microwave_sweet_potato/zero_gravity
+#
+# The tuber floats in front of the open cavity in a random attitude.  The
+# pick fixes only the gripper's approach axis along the tuber's long axis and
+# approaches along that axis, so it does not depend on the tuber's spin, and
+# the jaws close at the gripper's own (randomized) roll.  The placement pose
+# inside the cavity stays fixed.
+defaults:
+  - /randomization/microwave_sweet_potato/_microwave
+  - _self_
+
+env:
+  gravity: [0.0, 0.0, 0.0]
+
+microwave_sweet_potato:
+  pick_orientation: approach_axis
+  # Line up on the long axis behind the tuber and close with the EEF on it.
+  approach_height: 0.0
+  grasp_height: 0.0
+  # Close up to 2 cm further back toward the blunt end.
+  grasp_randomization:
+    y: [-0.02, 0.0]
+  # Level the jaws before insertion (the cavity fits only about 10 deg of
+  # jaw roll); only the tuber's long axis is placed, so it spins freely.
+  place_orientation: axis
+  # Release clear of the dish: a spun tuber reaches lower than the settled one.
+  release_height: 0.015
+
+task_operators:
+  arm:
+    control:
+      grasp:
+        # A released tuber keeps its velocity, so hold the arm 0.5 s at the
+        # release pose first; nothing settles after opening.
+        pre_release_settle_steps: 15
+        release_settle_steps: 0
+
+task:
+  randomization:
+    entities:
+      # Home pose follows the tuber's position only: it always starts above
+      # and behind the tuber, without orbiting its long axis or copying its
+      # spin.
+      arm:
+        eef:
+          reference: sweet_potato
+          follow: position
+          x: [-0.12, 0.12]
+          y: [-0.08, 0.10]
+          z: [-0.05, 0.15]
+          # Jaw roll about the approach axis, kept through the grasp and
+          # levelled before insertion.
+          roll: [-0.785, 0.785]
+          pitch: [-0.25, 0.25]
+          yaw: [-0.4, 0.4]
+          collision_radius: 0.15
+      # Floats 10-22 cm above its resting height in front of the cavity, with
+      # any spin about its long axis plus a random heading and elevation.
+      sweet_potato:
+        reference: microwave
+        x: [-0.20, 0.04]
+        y: [0.01, 0.05]
+        z: [0.10, 0.22]
+        roll: [-3.14159, 3.14159]
+        pitch: [-0.35, 0.35]
+        yaw: [-0.52, 0.52]
+        collision_radius: 0.085

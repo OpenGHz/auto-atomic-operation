@@ -138,7 +138,74 @@ the jaws close along world X.
 
 The home freejoint pose keeps the gripper level behind the counter. The default
 randomization jitters the home EEF pose (±5 cm x, ±4 cm y, -2/+4 cm z) and the tuber
-position (±3 cm in x and y).
+position (±3 cm in x and y). The [randomization presets](#randomization-presets)
+cover much wider ranges.
+
+### Randomization presets
+
+```bash
+aao-demo task=microwave_sweet_potato randomization=microwave_sweet_potato/gravity
+aao-demo task=microwave_sweet_potato randomization=microwave_sweet_potato/zero_gravity
+```
+
+Both presets move the microwave on the counter (x -10/+4 cm, y -3/0 cm, yaw ±15°;
+the feet stay on the counter for every yaw) and place the tuber relative to it
+(`reference: microwave`, x -20/+4 cm, y +1/+5 cm, heading ±30°), so the tuber is
+always in front of the open cavity and clear of the door. Both use only the existing
+entity and per-waypoint randomization.
+
+`gravity` leaves the tuber resting on the counter; turning about the vertical keeps
+its settled resting pose. The gripper's home pose is placed relative to the tuber
+(`reference: sweet_potato`), so it always starts above and behind it, and then
+jittered by x ±12 cm, y -8/+10 cm, z -5/+15 cm and ±0.25/±0.25/±0.4 rad. The grasp
+tilts nose-down by 0–20° about the jaw axis, pivoting about the jaw contact. To get
+that pivot, the pick is written in `sweet_potato_grasp_frame`, which is randomized
+relative to the tuber with a roll offset (`reference: sweet_potato`,
+`roll: [-0.349, 0]`).
+
+- A jaw roll (tilt about the approach axis) does not fit here: the open jaws pass
+  the resting tuber only 3 mm above the counter, and by the gripper geometry a 10°
+  roll lowers the open lower finger by about 9 mm, into the counter.
+- Fixing only the jaw axis (`axis_alignment`, as in `rack_plate`) and taking the
+  pitch from the home pose also tilts the grasp. But the waypoints then do not turn
+  with the tilt: at 15–20° the pads close about 4.5 mm higher on the tuber, and 8 of
+  11 episodes tilted 15° or more dropped it in transit. With the rigid pivot, 2 of
+  25 did.
+- Beyond about 20° the pads bite a slanted section and the hanging tuber slides out;
+  4 of 46 episodes tilted 20–30° dropped it. A tilt of 45° still inserts physically,
+  but beyond about 30° the gripper body rises into the cavity lip; the render-only
+  meshes clip the hulls by 7 mm at 35° and 28 mm at 45°.
+
+`zero_gravity` sets `env.gravity: [0, 0, 0]`. The tuber floats 10–22 cm above its
+rest height with a random heading (±30°), long-axis elevation (±20°) and spin about
+its long axis (±180°). The pick fixes only the gripper's approach axis along the
+tuber's long axis (`pick_orientation: approach_axis`) and lines up and closes on that
+axis, so it does not depend on the tuber's spin. The jaws close at the gripper's own
+roll, which comes from its home pose (±45°). The home pose follows only the tuber's
+position (`reference: sweet_potato`, `follow: position`), so it always starts
+7–26 cm above and behind it. With the default `follow: pose` it would orbit the
+tuber's long axis with the spin: over 40 resets 15 started below the tuber and 19
+upside down. A floating tuber is pushed by the closing jaws instead of resting on the
+counter, which changes several settings:
+
+- The EEF closes on the long axis instead of 9.3 mm above it, and up to 2 cm further
+  back toward the blunt end (per-waypoint randomization of the closing position).
+  Pads closing above the widest line, or on the tapered rear (the section narrows
+  from 42 mm to 26 mm between 5 and 7 cm behind the centre), squeeze the free tuber
+  forward out of the grip. With up to 3 cm back, 3 of 29 episodes lost the tuber
+  from grasps 4.5–5.7 cm behind its centre.
+- The cavity fits only about 10° of jaw roll. At 10–20° the linkage render meshes
+  clip the cavity floor and ceiling by up to 6 mm, and from 20° the collision hulls
+  touch. The place stage therefore levels the jaws in front of the cavity, which
+  spins the held tuber about its long axis.
+- The tuber's spin is random, so the place goal constrains only its long axis
+  (`place_orientation: axis`). Without gravity the roll does not sag.
+- A released tuber keeps its velocity; one traced release glided off the target at
+  about 5 cm/s. The arm holds still for 15 updates before opening
+  (`grasp.pre_release_settle_steps`): without the hold 9 of 20 episodes succeeded,
+  and step clamping the final approach instead reached 16 of 20.
+  The tuber is released 15 mm above the rest pose, clear of the dish, and the
+  post-release settle is skipped.
 
 ### UMI mocap weld
 
@@ -171,8 +238,14 @@ gripper mesh (including render-only meshes) and the microwave hulls. The visual
 scans sit about 2 mm inside the hulls, so hull clearance also bounds visual clipping. It also
 requires a final error of at most 0.025 m after one more second of free settling.
 The recorded run completes in 127 control updates with a 5.1 mm settled error, and
-the minimum gripper–microwave clearance is 5.4 mm. In a 40-episode sweep of the default
-randomization (batch 1, four seeds) the task succeeded 40/40.
+the minimum gripper–microwave clearance is 5.4 mm. Each preset also runs two seeded
+episodes headless and checks that the gripper starts above the tuber. In 40-episode
+sweeps (batch 1, four seeds), the default randomization and `zero_gravity` succeeded
+40/40 and `gravity` 39/40. The `gravity` failure dropped the tuber during insertion
+after a 19° grasp. No episode showed gripper–microwave or gripper–counter contact;
+the minimum render-mesh clearances were 5.7 mm (`gravity`) and 0.0 mm
+(`zero_gravity`, one episode grazing the cavity lip with a render-only linkage
+mesh).
 
 ## Provenance and integrity
 

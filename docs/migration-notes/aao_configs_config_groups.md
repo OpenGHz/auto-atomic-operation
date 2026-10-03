@@ -53,6 +53,7 @@ and command-line overrides win over everything:
 | `render` | `mujoco`, `gs` | `mujoco` | Renderer |
 | `render_assets/{embodiment,scene,task}` | `<render>/<name>.yaml` | auto, optional | Per-renderer asset bindings (GS PLYs) |
 | `adapt` | `<task>/<embodiment>.yaml` | auto, optional | Task × embodiment tuning |
+| `randomization` | `<task>/<preset>` | none | Opt-in reset-randomization preset for one task |
 | `backend` | `cpu`, `warp` | `cpu` | Physics backend |
 | `platform` | `egl` | none | Headless-rendering environment variables |
 

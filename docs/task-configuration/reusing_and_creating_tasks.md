@@ -38,16 +38,22 @@ overrides win over everything:
 | 8 | `render` | `render/` | `mujoco` (native) or `gs` (Gaussian splatting) |
 | 9 | `render_assets/*` | `render_assets/{embodiment,scene,task}/<render>/` | Per-renderer asset bindings, auto-selected (optional) |
 | 10 | `adapt` | `adapt/<task>/<embodiment>.yaml` | Task × embodiment tuning, auto-selected (optional) |
-| 11 | `backend` | `backend/` | `cpu` or `warp` |
-| 12 | `platform` | `platform/` | `egl` headless-rendering environment variables (unset by default) |
+| 11 | `randomization` | `randomization/<task>/<preset>.yaml` | Named reset-randomization preset for one task, opt-in (unset by default) |
+| 12 | `backend` | `backend/` | `cpu` or `warp` |
+| 13 | `platform` | `platform/` | `egl` headless-rendering environment variables (unset by default) |
 
 Rules that follow from this layout:
 
 - A task selects its scene and default robot inside its own `defaults` list
   with `override /scene: <scene>` and `override /embodiment: <robot>`;
   `embodiment=...` on the command line still takes priority.
-- `render`, `backend`, and `platform` compose after the task, so they are
-  user-level choices a task cannot override.
+- `render`, `randomization`, `backend`, and `platform` compose after the
+  task, so they are user-level choices a task cannot override.
+- `randomization=<task>/<preset>` selects a preset written for that task, e.g.
+  `randomization=microwave_sweet_potato/zero_gravity`. A preset retunes the
+  task's `task.randomization`, its named parameters, and any physics it
+  needs (`env.gravity`); it is not a specialization slot, so it must be named
+  explicitly.
 - `adapt` and `render_assets/*` are **specialization slots**: Hydra picks
   `adapt/${task}/${embodiment}.yaml` and
   `render_assets/<axis>/${render}/<name>.yaml` from the final group choices and
@@ -117,7 +123,7 @@ one that already ships.
 | The request changes… | Fundamental? | What to do |
 |---|---|---|
 | A waypoint height / grasp offset / approach pose | No | Edit in place (task, or its `adapt` file for one robot), or CLI override |
-| Randomization range, tolerance, seed, rounds, batch size | No | Edit in place, or CLI override |
+| Randomization range, tolerance, seed, rounds, batch size | No | Edit in place, or CLI override; a reusable alternative randomization goes in `randomization/<task>/<preset>.yaml` |
 | Camera / viewer framing, camera resolution or modalities | No | Edit in place, or CLI override (`observation.camera.*`, `camera_layout=...`) |
 | Renderer, GS background, backend, platform | No | `render=gs`, `render_assets/background=<name>`, `backend=warp`, `platform=egl` |
 | An existing task on another **existing** robot | No new task | `embodiment=<name>`; add `adapt/<task>/<embodiment>.yaml` only if it needs tuning |
@@ -349,6 +355,9 @@ env:
 - `adapt/<task>/<embodiment>.yaml` and
   `render_assets/<axis>/<render>/<name>.yaml` must match option names
   exactly: the slots are optional, so a misspelt file is silently ignored.
+- A randomization preset lives under its task's name and is named by what it
+  varies: `randomization/microwave_sweet_potato/gravity.yaml`,
+  `.../zero_gravity.yaml`.
 - **`_`-prefixed files and directories are shared fragments**
   (`embodiment/_p7.yaml`, `task/_press_button.yaml`, `adapt/_open_door/`,
   `render_assets/embodiment/gs/_airbot_play.yaml`). They are included through

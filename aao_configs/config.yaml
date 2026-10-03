@@ -12,6 +12,9 @@
 #   adapt/<task>/<embodiment>         task x embodiment tuning (waypoints, base pose)
 #   render_assets/<axis>/<render>/... per-renderer assets (e.g. GS PLY bindings)
 #
+# `randomization=<task>/<preset>` opts into a named reset-randomization preset
+# for that task (e.g. microwave_sweet_potato/zero_gravity); none by default.
+#
 # Files and directories whose name starts with `_` are shared fragments that
 # other options include through their defaults lists; never select them directly.
 defaults:
@@ -28,6 +31,7 @@ defaults:
   - optional render_assets/scene: ${render}/${scene}
   - optional render_assets/task: ${render}/${task}
   - optional adapt: ${task}/${embodiment}
+  - randomization: null
   - backend: cpu
   - platform: null
 
