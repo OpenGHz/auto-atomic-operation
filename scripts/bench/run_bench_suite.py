@@ -18,7 +18,6 @@ from typing import Any
 
 from auto_atom.config_loader import compose_task_run
 
-
 DEFAULT_PYTHON = "/home/ghz/.mini_conda3/envs/airbot_play_data/bin/python"
 DEFAULT_BATCH_SIZES = [1, 2, 4, 8]
 DEFAULT_TASK = "cup_on_coaster"

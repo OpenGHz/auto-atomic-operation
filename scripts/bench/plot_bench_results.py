@@ -9,7 +9,6 @@ from typing import Any
 
 import matplotlib.pyplot as plt
 
-
 TASK_UPDATE_ONLY = "task_update_only"
 TASK_UPDATE_WITH_OBS = "task_update_with_obs"
 ENV_UPDATE_WITH_OBS = "env_update_with_obs"

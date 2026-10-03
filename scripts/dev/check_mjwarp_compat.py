@@ -54,9 +54,10 @@ import json
 import subprocess
 import sys
 import traceback
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any
 
 DEFAULT_TASK = "rack_plate"
 DEFAULT_OUT_DIR = Path("outputs/mjwarp-compat")
@@ -660,7 +661,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return run_probe_subprocess(args.probe_python, out_dir, args)
 
     try:
-        import mujoco_warp  # noqa: F401
+        import mujoco_warp
     except ImportError:
         raise SystemExit(
             "mujoco_warp is not installed in this interpreter. Install it here, "

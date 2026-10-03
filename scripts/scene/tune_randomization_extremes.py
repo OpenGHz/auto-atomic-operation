@@ -22,9 +22,9 @@ import os
 import sys
 import tkinter as tk
 import tkinter.font as tkfont
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from tkinter import ttk
-from typing import Callable, Dict, List, Optional
 
 import hydra
 import numpy as np
@@ -81,7 +81,7 @@ def _enable_high_dpi_awareness() -> None:
         pass
 
 
-def _env_float(name: str) -> Optional[float]:
+def _env_float(name: str) -> float | None:
     raw_value = os.environ.get(name)
     if raw_value is None or raw_value == "":
         return None
@@ -107,7 +107,7 @@ def _clamped(value: float, minimum: float, maximum: float) -> float:
     return min(max(value, minimum), maximum)
 
 
-def _detected_tk_scaling(root: tk.Tk) -> Optional[float]:
+def _detected_tk_scaling(root: tk.Tk) -> float | None:
     dpi_values = []
     try:
         width_mm = float(root.winfo_screenmmwidth())
@@ -199,8 +199,8 @@ def _configure_tk_dpi_and_fonts(root: tk.Tk) -> None:
 @dataclass(frozen=True)
 class ReloadedTuningConfig:
     randomization: ResolvedRandomizationConfig
-    initial_poses: Dict[str, PoseOverrideConfig]
-    operator_initial_states: Dict[str, OperatorInitialState]
+    initial_poses: dict[str, PoseOverrideConfig]
+    operator_initial_states: dict[str, OperatorInitialState]
 
 
 def _fmt(values, precision: int = 6) -> str:
@@ -257,9 +257,9 @@ def _sample_region_index(
 
 def _with_offsets(
     base_pose: PoseState,
-    offsets: Dict[str, float],
+    offsets: dict[str, float],
     rand_range: PoseRandomRange,
-    reference_poses: Optional[Dict[RandomizationReference | str, PoseState]] = None,
+    reference_poses: dict[RandomizationReference | str, PoseState] | None = None,
 ) -> PoseState:
     pose = base_pose.broadcast_to(base_pose.batch_size)
     pose_by_reference = {
@@ -323,7 +323,7 @@ def _parse_tuning_config(cfg: DictConfig) -> ReloadedTuningConfig:
         raise TypeError("Config task must be a mapping.")
     task_cfg = AutoAtomConfig.model_validate(task_raw)
 
-    operator_initial_states: Dict[str, OperatorInitialState] = {}
+    operator_initial_states: dict[str, OperatorInitialState] = {}
     operators_raw = raw.get("task_operators") or {}
     if not isinstance(operators_raw, dict):
         raise TypeError("Config task_operators must be a mapping.")
@@ -351,7 +351,7 @@ class RandomizationTarget:
     get_default_pose: Callable[[], PoseState]
     apply_pose: Callable[[PoseState], None]
     get_current_pose: Callable[[], PoseState]
-    get_base_pose: Optional[Callable[[], PoseState]] = None
+    get_base_pose: Callable[[], PoseState] | None = None
 
     @property
     def regions(self) -> tuple[PoseRandomRange, ...]:
@@ -363,12 +363,12 @@ class RandomizationTarget:
 class ExtremeCase:
     name: str
     description: str
-    offsets_by_target: Dict[str, Dict[str, float]]
-    region_indices_by_target: Dict[str, int] = field(default_factory=dict)
+    offsets_by_target: dict[str, dict[str, float]]
+    region_indices_by_target: dict[str, int] = field(default_factory=dict)
 
 
-def _collect_cli_overrides(argv: List[str]) -> List[str]:
-    overrides: List[str] = []
+def _collect_cli_overrides(argv: list[str]) -> list[str]:
+    overrides: list[str] = []
     skip_next = False
     for index, arg in enumerate(argv):
         if skip_next:
@@ -394,9 +394,9 @@ class RandomizationInspector:
         self,
         root: tk.Tk,
         backend: MujocoTaskBackend,
-        operator_initial_states: Optional[Dict[str, OperatorInitialState]] = None,
-        reload_randomization_callback: Optional[Callable[[], None]] = None,
-        full_reload_callback: Optional[Callable[[], None]] = None,
+        operator_initial_states: dict[str, OperatorInitialState] | None = None,
+        reload_randomization_callback: Callable[[], None] | None = None,
+        full_reload_callback: Callable[[], None] | None = None,
     ):
         self.root = root
         self.backend = backend
@@ -485,7 +485,7 @@ class RandomizationInspector:
     def reload_randomization(
         self,
         tuning_config: ReloadedTuningConfig,
-        preferred_case_name: Optional[str] = None,
+        preferred_case_name: str | None = None,
     ) -> None:
         self._apply_reloaded_defaults(tuning_config)
         self.targets = self._collect_targets()
@@ -527,9 +527,9 @@ class RandomizationInspector:
         self.backend._record_default_poses()  # type: ignore[attr-defined]
         self.backend.get_env().refresh_viewer()
 
-    def _collect_targets(self) -> List[RandomizationTarget]:
+    def _collect_targets(self) -> list[RandomizationTarget]:
         self.backend.randomization_executor.validate_configuration()
-        targets: List[RandomizationTarget] = []
+        targets: list[RandomizationTarget] = []
         for name, rand in self.backend.randomization.scope.entities.items():
             if name in self.backend.object_handlers:
                 if isinstance(rand, OperatorRandomizationConfig):
@@ -540,9 +540,10 @@ class RandomizationInspector:
                         key=f"object:{name}",
                         label=f"object {name}",
                         rand_range=rand,
-                        get_default_pose=lambda n=name,
-                        h=handler: self.backend._default_object_poses.get(  # type: ignore[attr-defined]
-                            n, h.get_pose()
+                        get_default_pose=lambda n=name, h=handler: (
+                            self.backend._default_object_poses.get(  # type: ignore[attr-defined]
+                                n, h.get_pose()
+                            )
                         ),
                         apply_pose=lambda pose, h=handler: h.set_pose(pose),
                         get_current_pose=lambda h=handler: h.get_pose(),
@@ -562,9 +563,10 @@ class RandomizationInspector:
                             key=f"operator-base:{name}",
                             label=f"operator {name} base",
                             rand_range=rand.base,
-                            get_default_pose=lambda n=name,
-                            h=handler: self.backend._default_operator_base_poses.get(  # type: ignore[attr-defined]
-                                n, h.get_base_pose()
+                            get_default_pose=lambda n=name, h=handler: (
+                                self.backend._default_operator_base_poses.get(  # type: ignore[attr-defined]
+                                    n, h.get_base_pose()
+                                )
                             ),
                             apply_pose=lambda pose, h=handler: h.set_pose(pose),
                             get_current_pose=lambda h=handler: h.get_base_pose(),
@@ -580,9 +582,12 @@ class RandomizationInspector:
                             get_default_pose=self._make_eef_default_getter(
                                 name, handler
                             ),
-                            apply_pose=lambda pose,
-                            h=handler: h.set_home_end_effector_pose(pose),
-                            get_current_pose=lambda h=handler: h.get_end_effector_pose(),
+                            apply_pose=lambda pose, h=handler: (
+                                h.set_home_end_effector_pose(pose)
+                            ),
+                            get_current_pose=lambda h=handler: (
+                                h.get_end_effector_pose()
+                            ),
                             get_base_pose=lambda h=handler: h.get_base_pose(),
                         )
                     )
@@ -615,9 +620,10 @@ class RandomizationInspector:
                         key=f"operator-base:{name}",
                         label=f"operator {name} base",
                         rand_range=zero_range,
-                        get_default_pose=lambda n=name,
-                        h=handler: self.backend._default_operator_base_poses.get(  # type: ignore[attr-defined]
-                            n, h.get_base_pose()
+                        get_default_pose=lambda n=name, h=handler: (
+                            self.backend._default_operator_base_poses.get(  # type: ignore[attr-defined]
+                                n, h.get_base_pose()
+                            )
                         ),
                         apply_pose=lambda pose, h=handler: h.set_pose(pose),
                         get_current_pose=lambda h=handler: h.get_base_pose(),
@@ -673,8 +679,8 @@ class RandomizationInspector:
 
         return _getter
 
-    def _build_cases(self) -> List[ExtremeCase]:
-        cases: List[ExtremeCase] = [
+    def _build_cases(self) -> list[ExtremeCase]:
+        cases: list[ExtremeCase] = [
             ExtremeCase(
                 name="default",
                 description="No randomization offset. Restore every randomized target to its default pose.",
@@ -826,9 +832,7 @@ class RandomizationInspector:
         self.state_text.insert("1.0", text)
         self.state_text.config(state="disabled")
 
-    def _refresh_state_text(
-        self, title: str, case: Optional[ExtremeCase] = None
-    ) -> None:
+    def _refresh_state_text(self, title: str, case: ExtremeCase | None = None) -> None:
         lines = [title]
         if case is not None:
             lines.append(f"case: {case.name}")
@@ -863,7 +867,7 @@ class RandomizationInspector:
         self._set_state_text("\n".join(lines).rstrip() + "\n")
 
     @staticmethod
-    def _sampled_pose_key(target: RandomizationTarget) -> Optional[str]:
+    def _sampled_pose_key(target: RandomizationTarget) -> str | None:
         prefix, _, name = target.key.partition(":")
         if prefix == "object":
             return name
@@ -873,7 +877,7 @@ class RandomizationInspector:
             return f"{name}.eef"
         return None
 
-    def _sorted_targets_for_apply(self) -> List[RandomizationTarget]:
+    def _sorted_targets_for_apply(self) -> list[RandomizationTarget]:
         """Order targets so entity-name-referenced entries resolve after their
         referents (delta-carry depends on the referenced pose being sampled)."""
         action_order = self.backend.randomization_executor.plan.order
@@ -901,7 +905,7 @@ class RandomizationInspector:
         sorted_targets = self._sorted_targets_for_apply()
         for target in sorted_targets:
             target.apply_pose(target.get_default_pose())
-        sampled_poses: Dict[str, PoseState] = {}
+        sampled_poses: dict[str, PoseState] = {}
         for target in self._sorted_targets_for_apply():
             offsets = case.offsets_by_target.get(target.key) or {}
             region_index = case.region_indices_by_target.get(target.key, 0)
@@ -981,8 +985,8 @@ class RandomizationInspector:
         self._apply_case(self.cases[0])
 
     def apply_random_sample(self) -> None:
-        offsets_by_target: Dict[str, Dict[str, float]] = {}
-        region_indices_by_target: Dict[str, int] = {}
+        offsets_by_target: dict[str, dict[str, float]] = {}
+        region_indices_by_target: dict[str, int] = {}
         for target in self.targets:
             region_index = _sample_region_index(self.rng, len(target.regions))
             region_indices_by_target[target.key] = region_index
@@ -1011,15 +1015,15 @@ class RandomizationInspectorApp:
         root: tk.Tk,
         initial_cfg: DictConfig,
         run_name: str,
-        overrides: List[str],
+        overrides: list[str],
     ):
         self.root = root
         self.initial_cfg = initial_cfg
         self.run_name = run_name
         self.overrides = overrides
-        self.runner: Optional[TaskRunner] = None
-        self.backend: Optional[MujocoTaskBackend] = None
-        self.inspector: Optional[RandomizationInspector] = None
+        self.runner: TaskRunner | None = None
+        self.backend: MujocoTaskBackend | None = None
+        self.inspector: RandomizationInspector | None = None
 
     def _load_cfg(self) -> DictConfig:
         GlobalHydra.instance().clear()

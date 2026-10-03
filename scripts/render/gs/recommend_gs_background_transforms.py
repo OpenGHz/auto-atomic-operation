@@ -116,8 +116,8 @@ def estimate_background_offset(
         plane_center_median=_round_tuple(plane_center_median),
         plane_center_mean=_round_tuple(plane_center_mean),
         recommended_offset=_round_tuple(recommended_offset),
-        band_points=int(len(band)),
-        used_points=int(len(used)),
+        band_points=len(band),
+        used_points=len(used),
         bin_width=round(bin_width, 6),
     )
 

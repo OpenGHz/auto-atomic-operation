@@ -17,7 +17,7 @@ The policy feeds back the recorded EEF poses + gripper values through
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 import numpy as np
 
@@ -75,7 +75,7 @@ def load_demo(path: Path) -> dict:
 
 
 def action_applier(
-    context: ExecutionContext, action: Any, env_mask: Optional[np.ndarray] = None
+    context: ExecutionContext, action: Any, env_mask: np.ndarray | None = None
 ) -> None:
     """Apply one batched pose-and-gripper policy action to the environment."""
     if action is not None:

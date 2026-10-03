@@ -27,7 +27,6 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
-from typing import List, Tuple
 
 import hydra
 import mujoco
@@ -127,7 +126,7 @@ def _require_gs_render() -> None:
 
 
 def _save_comparison(
-    rows: List[Tuple[str, np.ndarray, np.ndarray, np.ndarray]],
+    rows: list[tuple[str, np.ndarray, np.ndarray, np.ndarray]],
     run_name: str,
     out_path: Path,
     show: bool,
@@ -194,7 +193,7 @@ def main(cfg: DictConfig) -> None:
         )
 
     runner = TaskRunner().from_config(task_file)
-    rows: List[Tuple[str, np.ndarray, np.ndarray, np.ndarray]] = []
+    rows: list[tuple[str, np.ndarray, np.ndarray, np.ndarray]] = []
     try:
         runner.reset()
 

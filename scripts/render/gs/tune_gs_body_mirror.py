@@ -364,7 +364,7 @@ class OrbitCamera:
         data,
         cam_name: str,
         focus_xyz: np.ndarray | None = None,
-    ) -> "OrbitCamera":
+    ) -> OrbitCamera:
         """Initialise orbit from a named camera.
 
         When ``focus_xyz`` is given (e.g. the world position of the body the
@@ -757,14 +757,14 @@ class TunerWindow(QtWidgets.QWidget):
 
     # -- mouse -------------------------------------------------------------
 
-    def mousePressEvent(self, event: QtGui.QMouseEvent) -> None:  # noqa: N802
+    def mousePressEvent(self, event: QtGui.QMouseEvent) -> None:
         self._mouse_button = event.button()
         self._mouse_last = event.position().toPoint()
 
-    def mouseReleaseEvent(self, event: QtGui.QMouseEvent) -> None:  # noqa: N802
+    def mouseReleaseEvent(self, event: QtGui.QMouseEvent) -> None:
         self._mouse_button = None
 
-    def mouseMoveEvent(self, event: QtGui.QMouseEvent) -> None:  # noqa: N802
+    def mouseMoveEvent(self, event: QtGui.QMouseEvent) -> None:
         if self._mouse_button is None:
             return
         cur = event.position().toPoint()
@@ -779,7 +779,7 @@ class TunerWindow(QtWidgets.QWidget):
             self.orbit.pan(dx, dy)
         self._render_and_show()
 
-    def wheelEvent(self, event: QtGui.QWheelEvent) -> None:  # noqa: N802
+    def wheelEvent(self, event: QtGui.QWheelEvent) -> None:
         steps = event.angleDelta().y() / 120.0
         self.orbit.zoom(0.9**steps)
         self._render_and_show()
@@ -795,7 +795,7 @@ class TunerWindow(QtWidgets.QWidget):
             print("  " + line)
         print("================================\n")
 
-    def keyPressEvent(self, event: QtGui.QKeyEvent) -> None:  # noqa: N802
+    def keyPressEvent(self, event: QtGui.QKeyEvent) -> None:
         key = event.key()
         mods = event.modifiers()
         shift = bool(mods & QtCore.Qt.ShiftModifier)
@@ -936,7 +936,7 @@ class TunerWindow(QtWidgets.QWidget):
 
     # -- teardown ----------------------------------------------------------
 
-    def closeEvent(self, event: QtGui.QCloseEvent) -> None:  # noqa: N802
+    def closeEvent(self, event: QtGui.QCloseEvent) -> None:
         print("\nFinal body_mirrors:")
         for st in self.states:
             print(st.yaml_snippet())
