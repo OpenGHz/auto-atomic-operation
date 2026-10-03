@@ -464,7 +464,7 @@ from auto_atom.ipc import serve_policy_evaluator
 
 ### Complete Example
 
-See [examples/policy_eval_server.py](../examples/policy_eval_server.py) and [examples/policy_eval_client.py](../examples/policy_eval_client.py) for a working example that replays a recorded demo through the remote evaluator.
+See [examples/policy_eval_server.py](../../examples/policy_eval_server.py) and [examples/policy_eval_client.py](../../examples/policy_eval_client.py) for a working example that replays a recorded demo through the remote evaluator.
 
 ```bash
 # Terminal 1
