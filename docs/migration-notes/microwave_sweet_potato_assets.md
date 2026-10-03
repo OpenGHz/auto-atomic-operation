@@ -91,6 +91,12 @@ cavity opening spans local x ∈ [-0.172, 0.094] and z ∈ [-0.055, 0.071].
 - The scan is not stable "local +Z up"; the authored pose is its simulated rest pose
   (about 31° of roll about the long axis), with the long axis pointing at the
   microwave (+Y). It drifts by less than 0.5 mm over one second.
+- `sweet_potato_grasp_site` marks the jaw contact on the 45 mm section 40 mm behind
+  the centre. Its orientation is world-aligned in the rest pose (+Y along the long
+  axis toward the microwave, +Z up), so grasp waypoints written in it follow the
+  tuber's pose. The static, geometry-less body `sweet_potato_grasp_frame` starts on
+  the same pose. Sites cannot be randomized, so a randomization preset moves this
+  body instead to turn the grasp about the jaw contact.
 - `microwave_target` is a child body of `microwave` at local
   `(-0.030, 0.0856, -0.0165)`, yaw +90°: the settled sweet-potato origin after a gentle
   release, with local +X along the rest long axis. Its render-only
@@ -110,20 +116,29 @@ grasp throughout. EEF +X (approach) points along world +Y into the cavity, and
 the jaws close along world X.
 
 1. `pick_sweet_potato`: approach from behind and above, drop to grasp height, and slide
-   the open jaws around the blunt end. The EEF targets `(-3.4, -15.9, +9.3)` mm from
-   the tuber origin. This puts the pads on the 45 mm section 40 mm behind the
-   centre: the contact band lies 4–16 mm below the jaw mid-plane, and the pads close
-   about 24 mm behind `eef_pose`.
-2. `place_sweet_potato_in_microwave`: held-object goals in the target frame. The tuber
-   lines up 0.24 m in front of the target, slides in 22 mm above its rest height to
-   clear the dish rim, then lowers to 6 mm above it. Each goal keeps the tuber long
-   axis on target +X (`axis_alignment`) with roll free. After release and a 30-update
-   settle, the jaws back straight out.
+   the open jaws around the blunt end. The waypoints are written in
+   `microwave_sweet_potato.grasp_site` (`sweet_potato_grasp_site` by default); the
+   EEF targets 24.1 mm ahead of and 9.3 mm above it. This puts the pads on the
+   45 mm section 40 mm behind the centre: the contact band lies 4–16 mm below the
+   jaw mid-plane, and the pads close about 24 mm behind `eef_pose`. Named parameters
+   select the orientation goal (`pick_orientation`), the approach and grasp heights,
+   and an optional per-waypoint randomization of the closing position.
+2. `place_sweet_potato_in_microwave`: 0.36 m in front of the target, the gripper first
+   turns its jaw axis horizontal and square to the cavity axis, keeping any grasp
+   tilt. Held-object goals in the target frame then line the tuber up 0.30 m in front
+   of the target, slide it in 22 mm above its rest height to clear the dish rim, and
+   lower it to `microwave_sweet_potato.release_height` (6 mm) above the rest pose. By
+   default every goal fixes the full settled orientation
+   (`place_orientation: settled`): the long axis on target +X with the
+   tuber's ~31° resting roll. An `axis_alignment` goal with free roll let the
+   compliant weld's roll sag accumulate under the tuber's weight; in a traced
+   failure the tuber was released about 16° off its resting roll and tipped over on
+   the dish. After release and a
+   30-update settle, the jaws back straight out.
 
-The home freejoint pose keeps the gripper level behind the counter. Randomization
-jitters the home EEF pose (±5 cm x, ±4 cm y, -2/+4 cm z) and the tuber position
-(±3 cm in x and y). Heading and roll are not randomized because the grasp is
-world-aligned.
+The home freejoint pose keeps the gripper level behind the counter. The default
+randomization jitters the home EEF pose (±5 cm x, ±4 cm y, -2/+4 cm z) and the tuber
+position (±3 cm in x and y).
 
 ### UMI mocap weld
 
@@ -155,9 +170,9 @@ while carried, no finger–microwave contact, and positive clearance between eve
 gripper mesh (including render-only meshes) and the microwave hulls. The visual
 scans sit about 2 mm inside the hulls, so hull clearance also bounds visual clipping. It also
 requires a final error of at most 0.025 m after one more second of free settling.
-The recorded run completes in 120 control updates with a 5.7 mm settled error, and
-the minimum gripper–microwave clearance is 5.4 mm. Seeds 1–3 with
-`env.batch_size=8` succeeded 24/24.
+The recorded run completes in 127 control updates with a 5.1 mm settled error, and
+the minimum gripper–microwave clearance is 5.4 mm. In a 40-episode sweep of the default
+randomization (batch 1, four seeds) the task succeeded 40/40.
 
 ## Provenance and integrity
 

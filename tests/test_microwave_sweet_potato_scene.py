@@ -199,6 +199,30 @@ def test_sweet_potato_and_target_contract() -> None:
     assert model.geom_conaffinity[pad] == 0
 
 
+def test_grasp_frames_are_world_aligned_on_the_jaw_section() -> None:
+    model = mujoco.MjModel.from_xml_path(str(_SCENE))
+    data = mujoco.MjData(model)
+    mujoco.mj_forward(model, data)
+    potato = _id(model, mujoco.mjtObj.mjOBJ_BODY, "sweet_potato")
+    grasp = _id(model, mujoco.mjtObj.mjOBJ_SITE, "sweet_potato_grasp_site")
+    assert int(model.site_bodyid[grasp]) == potato
+    # In the settled pose the grasp site is world-aligned, 40 mm behind the
+    # tuber centre along its long axis (world +Y) at the centre height.
+    np.testing.assert_allclose(
+        data.site_xmat[grasp].reshape(3, 3), np.eye(3), atol=1e-6
+    )
+    np.testing.assert_allclose(
+        data.site_xpos[grasp] - data.xpos[potato], [-0.0034, -0.04, 0.0], atol=1e-6
+    )
+    # The static grasp frame starts on that site and has no physical presence.
+    frame = _id(model, mujoco.mjtObj.mjOBJ_BODY, "sweet_potato_grasp_frame")
+    assert int(model.body_parentid[frame]) == 0
+    assert int(model.body_jntnum[frame]) == 0
+    assert int(model.body_geomnum[frame]) == 0
+    np.testing.assert_allclose(data.xpos[frame], data.site_xpos[grasp], atol=1e-6)
+    np.testing.assert_allclose(data.xmat[frame].reshape(3, 3), np.eye(3), atol=1e-6)
+
+
 def test_authored_sweet_potato_pose_is_at_rest() -> None:
     model = mujoco.MjModel.from_xml_path(str(_SCENE))
     model.opt.timestep = 1.0 / 1200.0

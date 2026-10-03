@@ -6,6 +6,56 @@ defaults:
 
 task_name: microwave_sweet_potato_umi_v3
 
+# Named parameters that randomization/microwave_sweet_potato/* presets retune
+# instead of restating the stages.
+microwave_sweet_potato:
+  # Frame the pick waypoints are written in.  sweet_potato_grasp_site sits on
+  # the tuber; a preset can switch to the static sweet_potato_grasp_frame and
+  # randomize that frame relative to the tuber.
+  grasp_site: sweet_potato_grasp_site
+  # Pick orientation goal, written in grasp_site: a key of the map below.
+  pick_orientation: level
+  pick_orientation_goals:
+    # EEF +X (approach) along the long axis and the jaws level.
+    level:
+      kind: fixed
+      quaternion_xyzw: [0.0, 0.0, 0.70710678, 0.70710678]
+    # Only the approach axis (EEF +X) is fixed, along the long axis; the jaws
+    # keep the gripper's own roll about it.
+    approach_axis:
+      kind: axis_alignment
+      controlled_axis: [1.0, 0.0, 0.0]
+      target_axis:
+        vector: [0.0, 1.0, 0.0]
+        reference: object
+      direction: same
+  # EEF height (m) above the grasp site while lining up behind the tuber and
+  # when the jaws close.
+  approach_height: 0.06
+  grasp_height: 0.0093
+  # Optional per-waypoint randomization of the closing position, or null.
+  grasp_randomization: null
+  # Height (m) above the settled pose on the dish where the jaws open.
+  release_height: 0.006
+  # Held-tuber orientation goal inside the cavity: a key of the map below.
+  place_orientation: settled
+  place_orientation_goals:
+    # The settled counter pose turned into the cavity (long axis along the
+    # target +X with its ~31 deg resting roll), so the tuber is released at
+    # rest.  Under gravity a roll-free goal lets the compliant weld's roll sag
+    # accumulate until the released tuber tips over on the dish.
+    settled:
+      kind: fixed
+      quaternion_xyzw: [-0.26991, 0.00545, 0.00579, 0.962853]
+    # Only the long axis points into the cavity; roll about it stays free.
+    axis:
+      kind: axis_alignment
+      controlled_axis: [1.0, 0.0, 0.0]
+      target_axis:
+        vector: [1.0, 0.0, 0.0]
+        reference: object
+      direction: same
+
 env:
   batch_size: 1
   # The gripper starts level behind the sweet potato: its +X approach axis
@@ -54,8 +104,8 @@ task:
           y: [-0.04, 0.04]
           z: [-0.02, 0.04]
           collision_radius: 0.15
-      # Slide the tuber on the counter; its resting roll and heading stay at
-      # the authored settled pose because the grasp is world-aligned.
+      # Slide the tuber on the counter.  The presets under
+      # randomization/microwave_sweet_potato/ widen this considerably.
       sweet_potato:
         x: [-0.03, 0.03]
         y: [-0.03, 0.03]
@@ -63,26 +113,29 @@ task:
   stages:
     - name: pick_sweet_potato
       object: sweet_potato
-      site: sweet_potato_site
+      # Jaw contact on the 45 mm section 40 mm behind the tuber centre.  It is
+      # world-aligned in the settled pose (+Y = long axis toward the
+      # microwave, +Z up), so the waypoints follow the tuber's pose.
+      site: ${microwave_sweet_potato.grasp_site}
       operation: pick
       operator: arm
       param:
         pre_move:
-          # Offsets are world-axis offsets from the tuber origin.  The jaw
-          # contact band sits 4-16 mm below the gripper mid-plane and the pads
-          # meet a 45 mm section 24 mm behind eef_pose, so the EEF targets
-          # (-3.4, -15.9, +9.3) mm to grip the section 40 mm behind the
-          # centre (the blunt end) at its widest height.
-          - position: [-0.0034, -0.16, 0.06]
-            # xyzw: +90 deg about world Z; EEF +X (approach) = world +Y.
-            orientation: [0.0, 0.0, 0.70710678, 0.70710678]
-            reference: object_world
+          # The jaw contact band sits 4-16 mm below the gripper mid-plane and
+          # the pads meet the section about 24 mm behind eef_pose, so the EEF
+          # closes 24.1 mm ahead of and grasp_height above the grasp site.
+          - position: [0.0, -0.12, "${microwave_sweet_potato.approach_height}"]
+            orientation_goal: ${microwave_sweet_potato.pick_orientation_goals.${microwave_sweet_potato.pick_orientation}}
+            reference: object
           # Drop to grasp height behind the tuber, then slide the open jaws
           # (100 mm gap) forward around it.
-          - position: [-0.0034, -0.16, 0.0093]
-            reference: object_world
-          - position: [-0.0034, -0.0159, 0.0093]
-            reference: object_world
+          - position: [0.0, -0.12, "${microwave_sweet_potato.grasp_height}"]
+            orientation_goal: ${microwave_sweet_potato.pick_orientation_goals.${microwave_sweet_potato.pick_orientation}}
+            reference: object
+          - position: [0.0, 0.0241, "${microwave_sweet_potato.grasp_height}"]
+            orientation_goal: ${microwave_sweet_potato.pick_orientation_goals.${microwave_sweet_potato.pick_orientation}}
+            reference: object
+            randomization: ${microwave_sweet_potato.grasp_randomization}
         eef:
           close: true
         post_move:
@@ -97,24 +150,32 @@ task:
       operator: arm
       param:
         pre_move:
-          # All goals move the held tuber, expressed in the turntable target
-          # frame (local +X points at the back wall).  The long axis is kept
-          # pointing into the cavity; roll about it stays free.
-          # 1) Line up 0.24 m in front of the target, 22 mm above its resting
+          # 0) Square the gripper up 0.36 m in front of the cavity: turn its jaw
+          #    axis (EEF +Y) horizontal and square to the cavity axis, keeping
+          #    any tilt about that axis.  The cavity fits only about 10 deg of
+          #    jaw roll, and the tuber's long axis then lies in the vertical
+          #    plane of the cavity axis.
+          - position: [-0.36, 0.0, 0.04]
+            orientation_goal:
+              kind: axis_alignment
+              controlled_axis: [0.0, 1.0, 0.0]
+              target_axis:
+                vector: [0.0, 1.0, 0.0]
+                reference: object
+              direction: same
+            reference: object
+            static: true
+          # The remaining goals move the held tuber, expressed in the
+          # turntable target frame (local +X points at the back wall).
+          # 1) Line up 0.30 m in front of the target, 22 mm above its resting
           #    height so the tuber clears the turntable's raised rim.
           - controlled_frame:
               kind: held_object
               frame: sweet_potato_site
-            position: [-0.24, 0.0, 0.022]
+            position: [-0.30, 0.0, 0.022]
+            orientation_goal: ${microwave_sweet_potato.place_orientation_goals.${microwave_sweet_potato.place_orientation}}
             reference: object
             static: true
-            orientation_goal:
-              kind: axis_alignment
-              controlled_axis: [1.0, 0.0, 0.0]
-              target_axis:
-                vector: [1.0, 0.0, 0.0]
-                reference: object
-              direction: same
             tolerance:
               position: 0.02
               orientation: 0.15
@@ -123,32 +184,20 @@ task:
               kind: held_object
               frame: sweet_potato_site
             position: [0.0, 0.0, 0.022]
+            orientation_goal: ${microwave_sweet_potato.place_orientation_goals.${microwave_sweet_potato.place_orientation}}
             reference: object
             static: true
-            orientation_goal:
-              kind: axis_alignment
-              controlled_axis: [1.0, 0.0, 0.0]
-              target_axis:
-                vector: [1.0, 0.0, 0.0]
-                reference: object
-              direction: same
             tolerance:
               position: 0.02
               orientation: 0.15
-          # 3) Lower to 6 mm above the settled pose and release there.
+          # 3) Lower to just above the settled pose and release there.
           - controlled_frame:
               kind: held_object
               frame: sweet_potato_site
-            position: [0.0, 0.0, 0.006]
+            position: [0.0, 0.0, "${microwave_sweet_potato.release_height}"]
+            orientation_goal: ${microwave_sweet_potato.place_orientation_goals.${microwave_sweet_potato.place_orientation}}
             reference: object
             static: true
-            orientation_goal:
-              kind: axis_alignment
-              controlled_axis: [1.0, 0.0, 0.0]
-              target_axis:
-                vector: [1.0, 0.0, 0.0]
-                reference: object
-              direction: same
             tolerance:
               position: 0.02
               orientation: 0.15

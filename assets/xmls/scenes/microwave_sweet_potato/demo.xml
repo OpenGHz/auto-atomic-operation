@@ -88,10 +88,29 @@
           quat="0.676745777 -0.194708893 -0.187001594 0.684933577">
       <freejoint name="sweet_potato_joint"/>
       <site name="sweet_potato_site" pos="0 0 0" size="0.004" rgba="1 0.6 0.2 0"/>
+      <!-- Grasp frame on the 45 mm section 40 mm behind the centre, where the
+           jaw pads close.  Its orientation is world-aligned in the settled
+           pose above (+Y runs along the long axis, away from the blunt end),
+           so pick waypoints expressed in it follow the tuber's attitude and
+           grasp-frame randomization pivots about the jaw contact. -->
+      <site name="sweet_potato_grasp_site" pos="-0.039967 0.003468 0.001473"
+            quat="0.67674578 0.19470889 0.18700159 -0.68493358"
+            size="0.004" rgba="1 0.6 0.2 0"/>
       <geom name="sweet_potato_visual" type="mesh" mesh="sweet_potato_mesh"
             material="sweet_potato_skin" mass="0" contype="0" conaffinity="0"/>
       <geom name="sweet_potato_collision" type="mesh" mesh="sweet_potato_mesh"
             mass="0.2" condim="4" rgba="0 0 0 0"/>
+    </body>
+
+    <!--
+      Static, geometry-less copy of sweet_potato_grasp_site in the settled
+      pose.  Sites cannot be randomized, so a randomization preset moves this
+      body instead: placed relative to the tuber (`reference: sweet_potato`)
+      and tilted about its x (the jaw axis), it turns a pick written in it
+      about the jaw contact.
+    -->
+    <body name="sweet_potato_grasp_frame" pos="0.1966 -0.21 0.0821373">
+      <site name="sweet_potato_grasp_frame_site" size="0.004" rgba="1 0.6 0.2 0"/>
     </body>
   </worldbody>
 
