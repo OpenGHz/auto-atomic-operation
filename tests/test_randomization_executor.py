@@ -161,7 +161,13 @@ class _RecordingHost:
     def live_pose(self, label: str) -> PoseState:
         if label not in self.poses:
             raise KeyError(label)
-        return self.poses[label]
+        # A backend reads live poses from simulator state, so every read is a
+        # fresh object; the executor fills such reads in place as sample
+        # buffers, which must not alias the recorded baselines.
+        pose = self.poses[label]
+        return PoseState(
+            position=pose.position.copy(), orientation=pose.orientation.copy()
+        )
 
     def baseline_pose(self, label: str) -> Optional[PoseState]:
         return self._baselines.get(label)
@@ -448,3 +454,56 @@ def test_reset_is_reproducible_across_identical_hosts() -> None:
     assert first.applied == second.applied
     for label in (CUP, PLATE, CAMERA):
         assert np.allclose(first.poses[label].position, second.poses[label].position)
+
+
+def _scope(entities: Dict[str, object]) -> ResolvedRandomizationConfig:
+    return ResolvedRandomizationConfig(
+        scope=ResolvedRandomizationScope(
+            entities=entities,
+            cameras={},
+            strategy=RandomizationStrategy.RSA,
+        )
+    )
+
+
+def _eef_following_cup(**eef: object) -> ResolvedRandomizationConfig:
+    return _scope(
+        {
+            ARM: OperatorRandomizationConfig(
+                eef=PoseRandomRange(reference=CUP, collision_radius=0.0, **eef)
+            ),
+            CUP: PoseRandomRange(**{"x": (1.0, 1.0), "collision_radius": 0.0}),
+        }
+    )
+
+
+def test_operator_referencing_an_object_is_sampled_after_it() -> None:
+    """An EEF that follows an object sees that object's sample, not its default."""
+    host = _RecordingHost()
+
+    _reset(host, _eef_following_cup())
+
+    assert host.applied.index(CUP) < host.applied.index(f"{ARM}.eef")
+    # The cup moved +1 m, and the EEF was carried by the same displacement.
+    np.testing.assert_allclose(host.poses[f"{ARM}.eef"].position[0], [1.0, 0.0, 0.0])
+
+
+def test_object_cannot_reference_an_operator_that_follows_an_object() -> None:
+    entities = dict(_eef_following_cup().scope.entities)
+    entities[PLATE] = PoseRandomRange(reference=f"{ARM}.eef", collision_radius=0.0)
+    executor = RandomizationExecutor(_RecordingHost(), _scope(entities))
+
+    with pytest.raises(ValueError, match="cannot be ordered"):
+        executor.validate_configuration()
+
+
+def test_object_visibility_rejects_an_operator_that_follows_an_object() -> None:
+    entities = dict(_eef_following_cup().scope.entities)
+    entities[PLATE] = RandomizationSpec(
+        proposal=PoseRandomRange(x=(0.0, 0.0)),
+        constraints=_default_constraints(visible=True),
+    )
+    executor = RandomizationExecutor(_RecordingHost(), _scope(entities))
+
+    with pytest.raises(ValueError, match="mounted cameras"):
+        executor.validate_configuration()

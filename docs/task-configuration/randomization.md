@@ -614,6 +614,16 @@ stays inside the vase's opening regardless of where the vase is placed.
 The entries are automatically topologically sorted — `vase` is processed before
 `flower`. Circular references (A → B → A) raise a ``ValueError``.
 
+An operator entry may reference an object too, e.g. a home EEF pose that follows
+the object it will grasp. Operator entries are normally sampled before objects
+(they frame mounted cameras and object references), so one that references an
+object, directly or through another entry, is deferred until after every
+object. Two configurations have no consistent order with that deferral and are
+rejected with a `ValueError`: an object entry that references such an operator
+entry, and an object `visible_in` constraint while such an operator entry
+exists, because the check would see that operator's mounted cameras before they
+move.
+
 Operator-attribute reference example (objects drift with the arm's base):
 
 ```yaml
@@ -818,7 +828,9 @@ fails.
 
 RSA supports reference-connected object components, visibility and separation
 checks through the same shared constraint machinery. Operator actions remain
-the context for object sampling and are resolved before camera-aware checks.
+the context for object sampling and are resolved before camera-aware checks,
+except operator actions that reference an object, which are resolved after
+every object (see [Reference modes](#reference-modes)).
 The component topology is an internal compiler result; declaration order does
 not define the spatial order.
 

@@ -381,6 +381,40 @@ class RandomizationExecutor:
                 name,
             )
         self._validate_visibility_camera_ownership()
+        self._validate_operators_after_objects()
+
+    def _validate_operators_after_objects(self) -> None:
+        """Reject orderings that operator-to-object references cannot satisfy.
+
+        An operator action that references an object is sampled after every
+        object. An object that in turn references such an operator would need
+        it first, and object ``visible_in`` checks would see the operator's
+        mounted cameras before it moves, so both are rejected rather than
+        resolved against a stale pose.
+        """
+        plan = self.plan
+        deferred = plan.operators_after_objects
+        if not deferred:
+            return
+        for label, action in plan.actions.items():
+            if action.kind != "object":
+                continue
+            blocked = sorted(plan.dependency_closure(label) & deferred)
+            if blocked:
+                raise ValueError(
+                    f"Randomization of object '{label}' references operator "
+                    f"action(s) {blocked}, which themselves reference an object. "
+                    "Operator entries that reference objects are sampled after "
+                    "every object, so this chain cannot be ordered."
+                )
+            if action.randomization.constraints.visible_in is not None:
+                raise ValueError(
+                    f"Randomization of object '{label}' declares visible_in, "
+                    f"but operator action(s) {sorted(deferred)} reference an "
+                    "object and are sampled after every object, so the "
+                    "visibility check would see their mounted cameras at the "
+                    "pre-randomization pose."
+                )
 
     # ------------------------------------------------------------------
     #  Pose sampling: regions, references, and generators
@@ -1731,24 +1765,30 @@ class RandomizationExecutor:
 
         # Operators form the context for mounted cameras and object references.
         # Sampling them first makes the camera state final before visibility
-        # constraints are evaluated for objects.
+        # constraints are evaluated for objects. Operator actions that
+        # reference an object are deferred until after every object.
+        deferred_operators = plan.operators_after_objects
         operator_labels = {
-            label for label, action in action_specs.items() if action.kind != "object"
+            label
+            for label, action in action_specs.items()
+            if action.kind != "object" and label not in deferred_operators
         }
-        for component in components:
-            operator_component = [
-                label for label in component if label in operator_labels
-            ]
-            if not operator_component:
-                continue
-            component_poses, component_actions = self.sample_component(
-                operator_component,
-                env_mask,
-                sampled_poses,
-                collision_participants,
-            )
-            apply_actions(component_actions)
-            sampled_poses.update(component_poses)
+
+        def apply_operator_components(labels: Set[str]) -> None:
+            for component in components:
+                operator_component = [label for label in component if label in labels]
+                if not operator_component:
+                    continue
+                component_poses, component_actions = self.sample_component(
+                    operator_component,
+                    env_mask,
+                    sampled_poses,
+                    collision_participants,
+                )
+                apply_actions(component_actions)
+                sampled_poses.update(component_poses)
+
+        apply_operator_components(operator_labels)
 
         self.apply_camera_randomization(env_mask)
 
@@ -1779,6 +1819,8 @@ class RandomizationExecutor:
             )
             apply_actions(component_actions)
             sampled_poses.update(component_poses)
+
+        apply_operator_components(set(deferred_operators))
 
     def sample_component(
         self,

@@ -96,6 +96,37 @@ class RandomizationPlan:
     strategy: RandomizationStrategy = RandomizationStrategy.RSA
     """Effective placement strategy this plan was compiled for."""
 
+    def dependency_closure(self, label: str) -> frozenset[str]:
+        """Every action ``label`` references, directly or transitively."""
+        closure: Set[str] = set()
+        stack = list(self.dependencies.get(label, ()))
+        while stack:
+            dependency = stack.pop()
+            if dependency in closure:
+                continue
+            closure.add(dependency)
+            stack.extend(self.dependencies.get(dependency, ()))
+        return frozenset(closure)
+
+    @property
+    def operators_after_objects(self) -> frozenset[str]:
+        """Operator actions that reference an object, directly or transitively.
+
+        Operators are normally sampled before objects, because they are the
+        frame mounted cameras and object references see. An operator action
+        that references an object can only be sampled once that object is, so
+        it is deferred until after every object.
+        """
+        return frozenset(
+            label
+            for label, action in self.actions.items()
+            if action.kind != "object"
+            and any(
+                self.actions[dependency].kind == "object"
+                for dependency in self.dependency_closure(label)
+            )
+        )
+
 
 class RandomizationFailureError(RuntimeError):
     """Raised when a constrained randomization cannot produce a candidate."""
