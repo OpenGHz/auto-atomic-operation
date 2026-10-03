@@ -27,13 +27,13 @@ than the project:
 Examples::
 
     # One shot, project env for export and a probe venv for the MJWarp half.
-    python scripts/check_mjwarp_compat.py --probe-python /tmp/mjw/venv/bin/python
+    python scripts/dev/check_mjwarp_compat.py --probe-python /tmp/mjw/venv/bin/python
 
     # Stages separately.
-    python scripts/check_mjwarp_compat.py export --task rack_plate
-    python scripts/check_mjwarp_compat.py export --task open_door \\
+    python scripts/dev/check_mjwarp_compat.py export --task rack_plate
+    python scripts/dev/check_mjwarp_compat.py export --task open_door \\
         --override embodiment=p7_v3_umi_v3
-    /tmp/mjw/venv/bin/python scripts/check_mjwarp_compat.py probe outputs/mjwarp-compat
+    /tmp/mjw/venv/bin/python scripts/dev/check_mjwarp_compat.py probe outputs/mjwarp-compat
 
 A ``.mjb`` is tied to the MuJoCo version that wrote it, so the manifest records
 that version and ``probe`` refuses a mismatch rather than failing obscurely.

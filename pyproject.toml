@@ -55,6 +55,7 @@ exclude = [
   "third_party*",
   "tests*",
   "examples*",
+  "scripts*",
   "docs*",
   "dist*",
   "aao_configs*",
@@ -86,7 +87,7 @@ trimesh = "*"
 pillow = "*"
 
 [tool.pixi.tasks]
-test = "python scripts/run_tests_safe.py"
+test = "python scripts/dev/run_tests_safe.py"
 
 # Gaussian-splatting environment: `pixi run -e gs ...`.
 # gsplat only publishes prebuilt CUDA wheels for CPython 3.10 and torch <= 2.4;

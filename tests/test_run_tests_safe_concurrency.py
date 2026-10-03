@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from scripts import run_tests_safe as runner
+from scripts.dev import run_tests_safe as runner
 
 
 def _batches(count: int) -> list[runner._Batch]:

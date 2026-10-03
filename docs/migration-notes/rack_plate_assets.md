@@ -82,7 +82,7 @@ release while the plate seats in the slot.
 The focused end-to-end check is:
 
 ```bash
-/home/ghz/.mini_conda3/envs/airbot_play_data/bin/python scripts/run_tests_safe.py \
+/home/ghz/.mini_conda3/envs/airbot_play_data/bin/python scripts/dev/run_tests_safe.py \
   --test-targets tests/test_rack_plate_p7_v4_umi_v3.py --max-concurrency=1
 ```
 

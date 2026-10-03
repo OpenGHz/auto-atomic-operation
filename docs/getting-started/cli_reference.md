@@ -4,7 +4,7 @@ The package provides four console entry points. `aao-demo` and `aao-eval` are
 powered by [Hydra](https://hydra.cc), `aao-unidoor-sweep` orchestrates bounded
 Hydra multiruns, and `aao-info` introspects the task configs.
 
-## `scripts/run_tests_safe.py`
+## `scripts/dev/run_tests_safe.py`
 
 Use the repository test runner when running more than a small focused test. It
 executes test files in isolated, resource-bounded subprocesses. Up to
@@ -42,30 +42,30 @@ PYTHON=/home/ghz/.mini_conda3/envs/airbot_play_data/bin/python
 
 # All pytest-discoverable files, one bounded batch per file (the default).
 # Up to four batches may overlap when the resource plan permits it.
-$PYTHON scripts/run_tests_safe.py
+$PYTHON scripts/dev/run_tests_safe.py
 
 # A focused run with up to four bounded batches; quote a space-separated list
 # or use commas. The CPU set makes four slots available when resources allow.
-$PYTHON scripts/run_tests_safe.py \
+$PYTHON scripts/dev/run_tests_safe.py \
   --test-targets='tests/test_stage_execution.py tests/test_demo_eval_parity.py' \
   --batch-size=1 \
   --max-concurrency=4 \
   --cpu-set=0-3
 
 # Force strict serial execution for simulator/GPU-sensitive tests
-$PYTHON scripts/run_tests_safe.py \
+$PYTHON scripts/dev/run_tests_safe.py \
   --test-targets='tests/test_stage_execution.py tests/test_demo_eval_parity.py' \
   --max-concurrency=1
 
 # Inspect resolved targets and commands without starting pytest
-$PYTHON scripts/run_tests_safe.py \
+$PYTHON scripts/dev/run_tests_safe.py \
   --test-targets='tests/test_stage_execution.py tests/test_demo_eval_parity.py' \
   --max-concurrency=4 \
   --cpu-set=0-3 \
   --dry-run
 
 # Stop after the first failed/timeout batch and choose explicit fallback mode
-$PYTHON scripts/run_tests_safe.py \
+$PYTHON scripts/dev/run_tests_safe.py \
   --no-continue-on-failure --launcher=prlimit
 ```
 

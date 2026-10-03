@@ -494,7 +494,7 @@ flowchart LR
 每轮按仓库约定用资源受限 runner 做定向验证：
 
 ```bash
-/home/ghz/.mini_conda3/envs/airbot_play_data/bin/python scripts/run_tests_safe.py \
+/home/ghz/.mini_conda3/envs/airbot_play_data/bin/python scripts/dev/run_tests_safe.py \
   --test-targets "tests/test_stream_<x>.py" --max-concurrency=1
 ```
 

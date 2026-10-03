@@ -11,7 +11,7 @@
 > `pyproject.toml` 提供 `mjwarp` extra；`mujoco_warp` 仍按可选依赖惰性导入。
 > 轮次与状态见第 5 节。
 >
-> 本文结论均来自 `scripts/check_mjwarp_compat.py` 的实测与一次 `object_only`
+> 本文结论均来自 `scripts/dev/check_mjwarp_compat.py` 的实测与一次 `object_only`
 > 真实运行的方法级 tracing，而非阅读推断。复现方式见文末。
 
 ## 1. 结论先行
@@ -944,7 +944,7 @@ KeyError: 'ccd_kernel_builder__locals__ccd_kernel_..._smem_bytes'
 
 ### 7.1 受限 runner 的内存上限不够加载 CUDA 模块
 
-`scripts/run_tests_safe.py` 默认 `--memory-max-mb 6144`。在该上限下
+`scripts/dev/run_tests_safe.py` 默认 `--memory-max-mb 6144`。在该上限下
 `tests/test_mjwarp_state.py` 有 3 项失败，报的正是上面那个 CCD kernel
 `KeyError`——**但这不是工具链偏移，而是 cgroup 上限**：同一批测试直接用
 `python -m pytest` 跑 12 项全通过（2 s），提高上限后用同一个受限 runner 也
@@ -954,7 +954,7 @@ CUDA 模块加载很吃宿主内存，触到 cgroup 硬上限时 warp 报出的�
 失败难以区分。**涉及 MJWarp 的测试必须提高上限**：
 
 ```bash
-python scripts/run_tests_safe.py --test-targets tests/test_mjwarp_state.py \
+python scripts/dev/run_tests_safe.py --test-targets tests/test_mjwarp_state.py \
     --max-concurrency=1 --memory-high-mb 10240 --memory-max-mb 14336
 ```
 
@@ -964,14 +964,14 @@ python scripts/run_tests_safe.py --test-targets tests/test_mjwarp_state.py \
 
 ```bash
 # 1) 项目环境：走真实 Hydra + 场景组合路径导出各执行模式的模型
-python scripts/check_mjwarp_compat.py export --task rack_plate
+python scripts/dev/check_mjwarp_compat.py export --task rack_plate
 
 # 2) 装有 mujoco_warp 的环境：加载 .mjb + manifest 逐项检查
-/path/to/mjwarp-venv/bin/python scripts/check_mjwarp_compat.py probe \
+/path/to/mjwarp-venv/bin/python scripts/dev/check_mjwarp_compat.py probe \
     outputs/mjwarp-compat --njmax 512
 
 # 或一次跑完（export 在当前环境，probe 交给 --probe-python）
-python scripts/check_mjwarp_compat.py --probe-python /path/to/mjwarp-venv/bin/python \
+python scripts/dev/check_mjwarp_compat.py --probe-python /path/to/mjwarp-venv/bin/python \
     --njmax 512
 ```
 

@@ -9,10 +9,10 @@ written below ``outputs/test-runs`` (which is ignored by git).
 
 Examples::
 
-    python scripts/run_tests_safe.py
-    python scripts/run_tests_safe.py --test-targets tests/test_execution_timeline.py
-    python scripts/run_tests_safe.py --batch-mode all --pytest-args='-q -k replay'
-    python scripts/run_tests_safe.py --exclude "*mujoco*" --dry-run
+    python scripts/dev/run_tests_safe.py
+    python scripts/dev/run_tests_safe.py --test-targets tests/test_execution_timeline.py
+    python scripts/dev/run_tests_safe.py --batch-mode all --pytest-args='-q -k replay'
+    python scripts/dev/run_tests_safe.py --exclude "*mujoco*" --dry-run
 
 The script is intentionally Linux-oriented.  ``systemd-run`` is the preferred
 launcher because its memory limit is an RSS/cgroup limit.  ``prlimit`` is an
@@ -56,7 +56,7 @@ from typing_extensions import Self
 
 
 def _default_repo_root() -> Path:
-    return Path(__file__).resolve().parents[1]
+    return Path(__file__).resolve().parents[2]
 
 
 def _default_python_executable() -> Path:

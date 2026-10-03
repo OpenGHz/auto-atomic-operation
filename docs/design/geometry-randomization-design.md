@@ -289,7 +289,7 @@ Data Replay 必须选择并记录一种明确语义：
 - 执行资源受限的定向测试，例如：
 
   ```bash
-  /home/ghz/.mini_conda3/envs/airbot_play_data/bin/python scripts/run_tests_safe.py \
+  /home/ghz/.mini_conda3/envs/airbot_play_data/bin/python scripts/dev/run_tests_safe.py \
     --test-targets tests/test_geometry_randomization.py \
     --max-concurrency=1
   ```

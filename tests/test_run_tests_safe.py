@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from scripts.run_tests_safe import (
+from scripts.dev.run_tests_safe import (
     SafeTestConfig,
     _Batch,
     _build_command,
