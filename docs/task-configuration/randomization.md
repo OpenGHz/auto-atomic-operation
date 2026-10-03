@@ -556,7 +556,7 @@ interpreted:
 | `relative` (default) | Sampled values are **added** to the entity's default pose (the existing behavior). |
 | `absolute_world`  | Sampled values are **absolute world-frame** coordinates (metres) / Euler angles (rad). |
 | `absolute_base`   | Sampled values are absolute coordinates in the **operator's base frame**, then transformed to world before being applied. **Only valid for the nested operator `eef:` sub-entry.** |
-| `<entity_name>`   | **Entity-reference mode.** The referenced entity is randomized first (dependency ordering via topological sort). Then a **delta-carry** is applied: `delta = ref_sampled * ref_default⁻¹` is computed and applied to this entity's default pose, preserving the original spatial relationship. After carrying, the per-axis ranges are applied as additive offsets (like `relative` mode). For an **object** name the referenced pose is the object pose; for an **operator** name (plain, no suffix) the referenced pose is the operator's **base** — equivalent to `<operator>.base` below. |
+| `<entity_name>`   | **Entity-reference mode.** The referenced entity is randomized first (dependency ordering via topological sort). Then a **delta-carry** is applied: `delta = ref_sampled * ref_default⁻¹` is computed and applied to this entity's default pose, preserving the original spatial relationship; `follow: position` carries only the translation of `delta`. After carrying, the per-axis ranges are applied as additive offsets (like `relative` mode). For an **object** name the referenced pose is the object pose; for an **operator** name (plain, no suffix) the referenced pose is the operator's **base** — equivalent to `<operator>.base` below. |
 | `<operator>.base` / `<operator>.eef` | **Operator-attribute reference.** Same delta-carry semantics as an entity name, but anchored to the operator's **base** (`get_base_pose()`) or **home end-effector** (`get_end_effector_pose()`) pose. Only `.base` / `.eef` are recognized, and only for operator names. A plain operator name (e.g. `arm`) is equivalent to `arm.base`. |
 
 Examples:
@@ -623,6 +623,38 @@ rejected with a `ValueError`: an object entry that references such an operator
 entry, and an object `visible_in` constraint while such an operator entry
 exists, because the check would see that operator's mounted cameras before they
 move.
+
+### Following only the referenced position
+
+By default an entity or operator-attribute reference carries the full rigid
+displacement (`follow: pose`): the offset to the referenced entity rotates with
+it, and so does this entry's orientation. `follow: position` carries only the
+translation `ref_sampled.position - ref_default.position`. The entry then keeps
+its world-frame offset from the referenced entity and its own orientation,
+however that entity is rotated:
+
+```yaml
+task:
+  randomization:
+    entities:
+      sweet_potato:              # floats with any spin about its long axis
+        reference: microwave
+        z: [0.10, 0.22]
+        roll: [-3.14159, 3.14159]
+      arm:
+        eef:
+          reference: sweet_potato
+          follow: position       # stay above and behind it, gripper upright
+          z: [-0.05, 0.15]
+          roll: [-0.785, 0.785]  # about the EEF's own default orientation
+```
+
+With `follow: pose` the EEF in this example would orbit the tuber's long axis
+with its spin, ending up below it and upside down for about half the samples.
+Leaving only the rotation axes `relative` (per-axis references, below) keeps the
+EEF's orientation, but its position offset still orbits. `follow` applies to
+every entity or operator-attribute reference of the entry. A range that uses
+only the built-in modes rejects `follow: position` instead of ignoring it.
 
 Operator-attribute reference example (objects drift with the arm's base):
 

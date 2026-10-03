@@ -488,6 +488,49 @@ def test_operator_referencing_an_object_is_sampled_after_it() -> None:
     np.testing.assert_allclose(host.poses[f"{ARM}.eef"].position[0], [1.0, 0.0, 0.0])
 
 
+def _rotated_cup_entities(follow: str) -> ResolvedRandomizationConfig:
+    quarter_turn = (float(np.pi / 2), float(np.pi / 2))
+    return _scope(
+        {
+            ARM: OperatorRandomizationConfig(
+                eef=PoseRandomRange(reference=CUP, follow=follow, collision_radius=0.0)
+            ),
+            CUP: PoseRandomRange(yaw=quarter_turn, collision_radius=0.0),
+        }
+    )
+
+
+def test_pose_follow_rotates_the_offset_and_the_orientation() -> None:
+    host = _RecordingHost()
+
+    _reset(host, _rotated_cup_entities("pose"))
+
+    # The EEF starts 5 m behind the cup; a quarter turn of the cup about its
+    # own origin swings that offset to its side and turns the EEF with it.
+    eef = host.poses[f"{ARM}.eef"]
+    np.testing.assert_allclose(eef.position[0], [5.0, -5.0, 0.0], atol=1e-9)
+    np.testing.assert_allclose(
+        np.abs(eef.orientation[0]), [0.0, 0.0, np.sqrt(0.5), np.sqrt(0.5)], atol=1e-9
+    )
+
+
+def test_position_follow_keeps_the_world_offset_and_own_orientation() -> None:
+    host = _RecordingHost()
+
+    _reset(host, _rotated_cup_entities("position"))
+
+    # The cup only turned in place, so a translation-only follow leaves the
+    # EEF where it was, with its own orientation.
+    eef = host.poses[f"{ARM}.eef"]
+    np.testing.assert_allclose(eef.position[0], [0.0, 0.0, 0.0], atol=1e-9)
+    np.testing.assert_allclose(eef.orientation[0], [0.0, 0.0, 0.0, 1.0], atol=1e-9)
+
+
+def test_position_follow_requires_an_entity_reference() -> None:
+    with pytest.raises(ValueError, match="follow='position' requires"):
+        PoseRandomRange(follow="position", z=(0.0, 0.1))
+
+
 def test_object_cannot_reference_an_operator_that_follows_an_object() -> None:
     entities = dict(_eef_following_cup().scope.entities)
     entities[PLATE] = PoseRandomRange(reference=f"{ARM}.eef", collision_radius=0.0)

@@ -590,6 +590,7 @@ class RandomizationExecutor:
         sampled_poses: Dict[str, PoseState],
         default_pose: PoseState,
         env_index: int,
+        follow: str = "pose",
     ) -> PoseState:
         """Resolve one reference to the baseline pose the sampler adds its delta to.
 
@@ -597,7 +598,9 @@ class RandomizationExecutor:
         entity-name reference the delta-carry algorithm is applied:
         ``delta = ref_sampled * ref_default⁻¹``, then ``delta * default_pose``,
         so the target moves with the referenced entity while preserving their
-        original spatial relationship.
+        original spatial relationship. With ``follow='position'`` only the
+        translation of ``delta`` is carried, so the target keeps its own
+        orientation and its world-frame offset from the referenced entity.
         """
         if isinstance(reference, RandomizationReference):
             return default_pose
@@ -623,6 +626,12 @@ class RandomizationExecutor:
             ref_sampled = sampled_poses.get(bare)
         if ref_sampled is None:
             return default_pose  # entity not randomized → no delta
+        if follow == "position":
+            return PoseState(
+                position=default_pose.position[0]
+                + (ref_sampled.position[0] - ref_default.position[0]),
+                orientation=default_pose.orientation[0],
+            )
         delta = compose_pose(ref_sampled, inverse_pose(ref_default))
         return compose_pose(delta, default_pose)
 
@@ -640,6 +649,7 @@ class RandomizationExecutor:
                 sampled_poses,
                 default_pose,
                 env_index,
+                follow=rand_range.follow,
             )
             for reference in rand_range.references()
         }
@@ -869,6 +879,7 @@ class RandomizationExecutor:
                     sampled_poses,
                     snapshot_default,
                     env_index,
+                    follow=rand_range.follow,
                 )
         return self._sample_pose_for_env(
             following_base_default,

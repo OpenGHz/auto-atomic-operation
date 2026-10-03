@@ -12,6 +12,7 @@ from pydantic import (
     NonNegativeInt,
     PositiveInt,
     field_validator,
+    model_validator,
 )
 
 from auto_atom.config.reference import RandomizationReference
@@ -74,6 +75,12 @@ class PoseRandomRange(BaseModel, frozen=True):
       **end-effector** pose. Only ``.base`` / ``.eef`` suffixes are
       recognized, and only for operator names.
 
+    ``follow`` selects how much of the referenced displacement an entity or
+    operator-attribute reference carries: the full rigid ``delta`` (``pose``,
+    the default) or only its translation (``position``). With ``position``
+    this entry keeps its own orientation and its world-frame offset from the
+    referenced entity, however that entity is rotated.
+
     A ``None`` value on an axis (the default) means "do not randomize
     this axis" — it keeps its value from the default pose (in the
     relevant frame) in all modes. Axes are independent, so absolute-mode
@@ -98,6 +105,15 @@ class PoseRandomRange(BaseModel, frozen=True):
             reference: absolute_world
             x: [0.10, 0.45]
             y: [-0.15, 0.15]
+
+        # Position-only follow: start above a spinning object without
+        # orbiting it or copying its rotation
+        randomization:
+          arm:
+            eef:
+              reference: tuber
+              follow: position
+              z: [0.0, 0.1]
 
         # Entity reference: carry flower with vase1, then jitter ±5mm
         randomization:
@@ -144,6 +160,18 @@ class PoseRandomRange(BaseModel, frozen=True):
     entry to track the referenced pose's displacement (delta-carry) and
     then apply the per-axis ranges as relative offsets on top. A plain
     operator name is equivalent to ``"<operator>.base"``."""
+    follow: Literal["pose", "position"] = "pose"
+    """How an entity or operator-attribute reference carries this entry.
+
+    * ``pose`` (default): apply the referenced entity's full rigid
+      displacement ``delta = sampled * default⁻¹``. The offset to the
+      reference rotates with it, and so does this entry's orientation.
+    * ``position``: apply only the translation ``sampled.position -
+      default.position``. The world-frame offset to the reference and this
+      entry's own orientation are kept, however the reference is rotated.
+
+    Only meaningful with an entity or operator-attribute reference; a range
+    without one rejects ``position`` instead of silently ignoring it."""
     collision_radius: float = 0.05
     """Bounding radius used for pairwise collision rejection (metres).
 
@@ -181,6 +209,18 @@ class PoseRandomRange(BaseModel, frozen=True):
             except ValueError:
                 return v  # entity name — validated at sample time
         return v
+
+    @model_validator(mode="after")
+    def _validate_follow(self) -> "PoseRandomRange":
+        if self.follow == "position" and all(
+            isinstance(reference, RandomizationReference)
+            for reference in self.references()
+        ):
+            raise ValueError(
+                "follow='position' requires an entity or operator-attribute "
+                "reference; this range only uses built-in reference modes"
+            )
+        return self
 
     def axis_range(self, axis: str) -> Optional[Tuple[float, float]]:
         """Return one axis's concrete sampling range."""
