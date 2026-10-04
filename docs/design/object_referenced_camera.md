@@ -238,7 +238,7 @@ object 相机与其它相机共用同一配置面 —— `task.randomization.cam
 
 - `_record_default_object_camera_offsets[cam]`：记录挂载并解析 `calibration.extrinsics` 之后的局部基线
   `(cam_pos, cam_quat)`，作为随机化锚点；
-- `_apply_object_camera_randomization`：以局部基线为中心，按 `canonical_randomization_spec(entry)` 的
+- `_apply_mounted_camera_randomization`（物体相机与 `role: operator` 的腕部相机共用）：以局部基线为中心，按 `canonical_randomization_spec(entry)` 的
   `distribution` 采样偏移，并直接写回 `cam_pos` / `cam_quat`
   （注意 `PoseState.orientation` 为 xyzw，`cam_quat` 为 wxyz，需要顺序转换）。
 

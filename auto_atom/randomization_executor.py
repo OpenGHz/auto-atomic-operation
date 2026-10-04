@@ -1831,10 +1831,13 @@ class RandomizationExecutor:
         """Sample and apply pose randomization for the configured cameras.
 
         A fixed camera is a world pose, sampled against its recorded reset
-        baseline.  A camera mounted on an object (``role: object``) is instead a
+        baseline.  A camera mounted on an object (``role: object``) or on an
+        operator (``role: operator``, such as a wrist camera) is instead a
         rigid install offset in the mount frame, so its randomization samples
         that offset: expressing it in world terms would make the sample fight
-        the mount, and the object's own motion must not be baked into it.
+        the mount, and the mount's own motion -- the object's pose, or an
+        operator home pose randomized before cameras -- must not be baked into
+        it.
 
         Cameras own no collision, separation, or dependency semantics:
         ``absolute_base`` and entity-name references are rejected for every
@@ -1844,7 +1847,9 @@ class RandomizationExecutor:
             # A scene without camera entries never needs the mount capabilities,
             # so camera-free hosts stay valid randomization hosts.
             return
-        object_cameras = self._host.object_camera_names()
+        mounted_cameras = set(self._host.object_camera_names()) | set(
+            self._host.operator_camera_names()
+        )
         for camera_name, randomization in self.camera_randomization.items():
             canonical = canonical_randomization_spec(randomization)
             rand_range = select_randomization_region(
@@ -1852,8 +1857,8 @@ class RandomizationExecutor:
                 canonical,
             )
             self._reject_camera_dependency_references(camera_name, rand_range)
-            if camera_name in object_cameras:
-                self._apply_object_camera_randomization(
+            if camera_name in mounted_cameras:
+                self._apply_mounted_camera_randomization(
                     camera_name,
                     canonical,
                     rand_range,
@@ -1879,14 +1884,14 @@ class RandomizationExecutor:
             )
             self._host.set_camera_pose(camera_name, sampled, env_mask)
 
-    def _apply_object_camera_randomization(
+    def _apply_mounted_camera_randomization(
         self,
         camera_name: str,
         canonical: RandomizationSpec,
         rand_range: PoseRandomRange,
         env_mask: np.ndarray,
     ) -> None:
-        """Randomize an object-mounted camera's install offset.
+        """Randomize an object- or operator-mounted camera's install offset.
 
         The offset lives in the mount frame, so only ``relative`` is defined:
         absolute world coordinates (or another entity's frame) would describe a
@@ -1903,8 +1908,8 @@ class RandomizationExecutor:
         )
         if world_modes:
             raise ValueError(
-                f"Camera '{camera_name}' is mounted on an object, so its "
-                f"randomization samples the install offset in the mount frame; "
+                f"Camera '{camera_name}' is mounted on an object or operator, so "
+                f"its randomization samples the install offset in the mount frame; "
                 f"reference mode(s) {world_modes} are not defined for it. Use "
                 "the default 'relative' reference."
             )

@@ -350,6 +350,22 @@ def test_object_mounted_camera_samples_the_mount_frame() -> None:
     assert "camera" not in host.events
 
 
+def test_operator_mounted_camera_samples_the_mount_frame() -> None:
+    """A wrist camera's world pose follows its operator's randomized home.
+
+    Sampling it as a world pose would bake that motion into the install
+    offset, so an operator-mounted camera samples the offset as well.
+    """
+    host = _RecordingHost()
+    host.operator_cameras.add(CAMERA)
+    executor = RandomizationExecutor(host, _config(RandomizationStrategy.RSA))
+
+    executor.apply_camera_randomization(np.asarray([True], dtype=bool))
+
+    assert "camera_mount" in host.events
+    assert "camera" not in host.events
+
+
 def test_object_mounted_camera_rejects_world_frame_references() -> None:
     host = _RecordingHost()
     host.object_cameras.add(CAMERA)

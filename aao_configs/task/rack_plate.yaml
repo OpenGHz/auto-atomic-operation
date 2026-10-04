@@ -88,10 +88,9 @@ task:
         roll: [-0.02, 0.02]
         pitch: [-0.02, 0.02]
         yaw: [-0.02, 0.02]
-      # Wrist camera: the sampled world pose is stored as a parent-local
-      # extrinsic, so this varies the camera's mounting offset on the wrist.
-      # It is dropped together with the operator under `execution.mode:
-      # object_only`.
+      # Wrist camera: `role: operator` cameras sample their mounting offset on
+      # the wrist, in the camera's mount frame.  It is dropped together with
+      # the operator under `execution.mode: object_only`.
       eef_wrist_cam:
         roll: [-0.015, 0.015]
         pitch: [-0.015, 0.015]

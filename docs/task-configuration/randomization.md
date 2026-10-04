@@ -1027,12 +1027,20 @@ no operator base frame and do not participate in entity dependency ordering.
   exists, otherwise that resolved override.
 - Cameras do **not** participate in `collision_radius` rejection — they have no
   physical presence.
-- An **object-mounted** camera (`env.cameras[].role: object`) randomizes its
-  **install offset** in the mount frame instead of a world pose: sampled values
-  are additive offsets from the camera's baseline mount pose, so the
-  camera-object relative pose is what varies across resets while the object's
-  own motion never leaks into the sample. Only `relative` is defined for such a
-  camera; `absolute_world` is rejected.
+- An **object-mounted** camera (`env.cameras[].role: object`) or an
+  **operator-mounted** one (`role: operator`, such as a wrist camera)
+  randomizes its **install offset** in the mount frame instead of a world pose:
+  sampled values are additive offsets from the camera's baseline mount pose, so
+  the camera-mount relative pose is what varies across resets while the mount's
+  own motion never leaks into the sample. For a wrist camera that includes the
+  operator's randomized home pose, whichever order it is sampled in. Only
+  `relative` is defined for such a camera; `absolute_world` is rejected.
+- Rotation offsets are added to the base pose's roll/pitch/yaw (world frame for
+  a fixed camera, mount frame for a mounted one), so what each axis does
+  depends on that orientation. For a camera frame close to its mount frame,
+  roll tilts, pitch pans and yaw turns the image; for a fixed camera looking
+  down at the scene, roll tilts about the image's horizontal axis and yaw pans
+  about the vertical.
 - `visible_in` never uses an object-mounted camera — it rides the object it
   would have to witness. Naming one explicitly is an error, and `cameras: all`
   excludes them.
