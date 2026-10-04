@@ -157,6 +157,21 @@ to a random angle between 90° (square to the front) and the 152° stop, through
 `task.randomization.joints` (`microwave_door_hinge: [-2.0943, -1.0123]`; the hinge
 reads 0.5585 rad closed and opens toward negative values).
 
+Both presets also randomize the cameras (`_cameras.yaml`). The front `env1_cam`
+only turns about its fixed position: roll ±0.08 rad tilts the view, yaw
+±0.15 rad mostly pans and pitch ±0.10 rad mostly turns the image in its plane
+(the offsets add to its world roll/pitch/yaw). At every combination of these
+extremes and of the microwave placement, the whole cabinet front, the cavity
+target and the resting tuber's region stay at least 12 px inside the 640×352
+frame; tilt is the tight axis, leaving the frame beyond about +6°/-9° alone. The
+wrist camera's mounting offset moves in its own frame by x ±3 mm, y -1/+5 mm,
+z -5/+2 mm (right, up, back) and ±5° about each axis. The lens sits just above
+and in front of the gripper housing: moving it 3 mm down brings it within 1 cm
+of the housing, 6 mm back hides the fingers behind it, and 6 mm sideways halves
+one finger in the image. At all 64 corners of the chosen range both fingers keep
+at least 53% of their default image area. A wrist camera samples this offset
+directly, so the gripper's randomized home pose does not leak into it.
+
 Below about 85° the door's free edge swings in front of the cavity. In door sweeps
 at fixed angles (20 episodes per angle and preset), `gravity` succeeded 1/20 at
 44°, 10/20 at 55° and 16/20 at 66°, and `zero_gravity` 2/20, 12/20 and 16/20; the
@@ -277,7 +292,10 @@ dropped the tuber while sliding it in after grasps tilted 15–16°, the occasio
 slip of a tilted grasp described above. No episode showed gripper or tuber contact
 with the door, or gripper contact with the cabinet or counter; the minimum
 render-mesh clearances to the microwave hulls were 5.6 mm (`gravity`) and 0.6 mm
-(`zero_gravity`).
+(`zero_gravity`). With the cameras randomized as well, two more seeds (40 episodes
+per preset) succeeded 40/40 for both presets without such contact, and the tuber
+mesh started at least 58 px (`gravity`) and 49 px (`zero_gravity`) inside the
+rotated front image.
 
 ## Provenance and integrity
 

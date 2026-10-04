@@ -11,6 +11,7 @@
 # The placement pose inside the cavity stays fixed.
 defaults:
   - /randomization/microwave_sweet_potato/_microwave
+  - /randomization/microwave_sweet_potato/_cameras
   - _self_
 
 microwave_sweet_potato:

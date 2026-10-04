@@ -233,11 +233,24 @@ def test_randomization_presets_complete_headless(preset: str) -> None:
                 _id(model, mujoco.mjtObj.mjOBJ_JOINT, "microwave_door_hinge")
             ]
         )
+        wrist = _id(model, mujoco.mjtObj.mjOBJ_CAMERA, "eef_wrist_cam")
+        mujoco.mj_forward(model, data)
+        front_position = data.cam_xpos[front].copy()
+        wrist_mount = model.cam_pos[wrist].copy()
         microwave_starts = []
         door_angles = []
+        front_axes = []
+        wrist_mounts = []
         for _ in range(2):
             update = runner.reset()
             microwave_starts.append(data.xpos[microwave].copy())
+            # The front camera only turns about its fixed position; the wrist
+            # camera's mounting offset moves by millimetres in its own frame.
+            np.testing.assert_allclose(data.cam_xpos[front], front_position, atol=1e-9)
+            front_axes.append(data.cam_xmat[front].reshape(3, 3)[:, 2].copy())
+            wrist_mounts.append(model.cam_pos[wrist] - wrist_mount)
+            assert np.all(wrist_mounts[-1] >= np.array([-0.003, -0.001, -0.005]) - 1e-9)
+            assert np.all(wrist_mounts[-1] <= np.array([0.003, 0.005, 0.002]) + 1e-9)
             # The door opens between square to the front and its stop.
             door_angles.append(float(data.qpos[door]))
             assert -2.0943 <= door_angles[-1] <= -1.0123
@@ -275,5 +288,7 @@ def test_randomization_presets_complete_headless(preset: str) -> None:
         # The microwave itself is randomized on the counter, door included.
         assert float(np.linalg.norm(microwave_starts[0] - microwave_starts[1])) > 1e-3
         assert abs(door_angles[0] - door_angles[1]) > 1e-3
+        assert float(np.linalg.norm(front_axes[0] - front_axes[1])) > 1e-3
+        assert float(np.linalg.norm(wrist_mounts[0] - wrist_mounts[1])) > 1e-4
     finally:
         runner.close()

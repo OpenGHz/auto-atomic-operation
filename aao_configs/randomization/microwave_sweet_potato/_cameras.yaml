@@ -1,0 +1,29 @@
+# @package _global_
+#
+# Camera randomization shared by the microwave_sweet_potato presets.
+task:
+  randomization:
+    cameras:
+      # Front scene camera: orientation only, about its fixed position.  The
+      # offsets are added to its world roll/pitch/yaw: roll tilts the view up
+      # and down, yaw mostly pans and pitch mostly turns the image in its
+      # plane.  With all three at their extremes the whole cabinet front, the
+      # cavity target and the resting tuber's region stay at least 12 px
+      # inside the 640x352 frame for every microwave placement.
+      env1_cam:
+        roll: [-0.08, 0.08]
+        pitch: [-0.10, 0.10]
+        yaw: [-0.15, 0.15]
+      # Wrist camera: its mounting offset on the gripper, in the camera's own
+      # frame (x right, y up, z back; roll tilts, pitch pans, yaw turns the
+      # image).  The housing sits just below and behind the lens, so the
+      # position range is a few millimetres; at every corner of it both
+      # fingers keep at least half their default image area and the lens
+      # stays clear of the housing.
+      eef_wrist_cam:
+        x: [-0.003, 0.003]
+        y: [-0.001, 0.005]
+        z: [-0.005, 0.002]
+        roll: [-0.087, 0.087]
+        pitch: [-0.087, 0.087]
+        yaw: [-0.087, 0.087]
