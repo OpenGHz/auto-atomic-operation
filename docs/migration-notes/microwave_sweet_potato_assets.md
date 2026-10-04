@@ -224,10 +224,35 @@ tuber and is sampled after it, so the wrist camera's view is not final when the
 tuber is checked, and the executor rejects a check on an operator-mounted camera
 in that order.
 
-The pick fixes only the gripper's approach axis along the
-tuber's long axis (`pick_orientation: approach_axis`) and lines up and closes on that
-axis, so it does not depend on the tuber's spin. The jaws close at the gripper's own
-roll, which comes from its home pose (±45°). The home pose follows only the tuber's
+The pick is written in `sweet_potato_grasp_frame` with the gripper's whole
+orientation fixed in it (`pick_orientation: level`), and two chained frames carry
+the grasp's attitude relative to the tuber:
+
+- `sweet_potato_grasp_roll_frame` follows the tuber's full pose, then its roll (the
+  turn about its own x, the long axis) is set to an absolute ±45°
+  (`reference: absolute_world` on that axis). The jaws therefore close within 45°
+  of level whatever the tuber's spin, and because the spin is uniform the jaw roll
+  relative to the tuber covers the full circle.
+- `sweet_potato_grasp_frame` follows the roll frame and tilts 0–20° nose-down about
+  its own x, now the jaw axis (`roll: [-0.349, 0]`), through the jaw contact. The
+  approach axis leaves the tuber's long axis by up to 20°, in a direction around the
+  long axis that is uniform relative to the tuber.
+
+A roll offset is the only rotation offset that turns about a frame's own axis (yaw
+turns about world z, pitch about neither), hence two frames rather than one. The
+tilt's direction relative to the gripper matters inside the cavity, where the
+levelled tuber leaves the gripper pitched by the tilt. In a sweep with symmetric
+tilts about the tuber's lateral axis, nose-up pitch clipped the top linkage render
+meshes into the cavity ceiling from about 7° (by up to 27 mm), while nose-down
+pitch kept at least 19 mm to -19° and clipped only beyond -30°, as under gravity.
+Fixing the jaw roll relative to the tuber instead (frame-fixed pick with a uniform
+relative roll) made the gripper arrive at any world roll; squaring it before the
+cavity then took up to 180° at about 9 rad/s, and 13 of 150 episodes lost the
+tuber. With the absolute jaw roll, tilts of 0–20° succeeded 89/89 without
+clipping, and tilts of 20–35° lost 4 of 61 tubers while being turned into the
+cavity and clipped render meshes from 30°.
+
+The home pose follows only the tuber's
 position (`reference: sweet_potato`, `follow: position`), so it always starts
 10–20 cm above and 35–44 cm behind it, jittered by x ±6 cm and ±0.12/±0.2 rad of
 pitch/yaw. With the default `follow: pose` it would orbit the
@@ -288,7 +313,9 @@ The recorded run completes in 127 control updates with a 5.1 mm settled error, a
 the minimum gripper–microwave clearance is 5.4 mm. Each preset also runs two seeded
 episodes headless and checks the camera set (`env1_cam` and the wrist camera), that
 the gripper starts above the tuber, that a floating tuber's centre is inside the
-front image, and the door range. In sweeps of the current presets (batch 1, 20
+front image, the door range, and (`zero_gravity`) that the pick frame sits on the
+jaw contact tilted at most 20° with the jaws within 45° of level. In sweeps of the
+presets before the zero-gravity grasp tilt (batch 1, 20
 episodes per seed), the default randomization succeeded 20/20, and over four seeds
 `zero_gravity` succeeded 80/80 and `gravity` 77/80. The three `gravity` failures
 dropped the tuber while sliding it in after grasps tilted 15–16°, the occasional
@@ -298,7 +325,12 @@ render-mesh clearances to the microwave hulls were 5.6 mm (`gravity`) and 0.6 mm
 (`zero_gravity`). With the cameras randomized as well, two more seeds (40 episodes
 per preset) succeeded 40/40 for both presets without such contact, and the tuber
 mesh started at least 58 px (`gravity`) and 49 px (`zero_gravity`) inside the
-rotated front image.
+rotated front image. With the zero-gravity grasp tilt and jaw roll added,
+`zero_gravity` succeeded 159/160 over eight seeds (20 episodes each); the one
+failure lost a 19° grasp while the tuber was turned into the cavity. No episode
+touched the door or the cabinet, and the closest render mesh stayed 3.1 mm from the
+microwave hulls: the in-cavity pitch is now always nose-down. `gravity` is
+unchanged, with per-episode results identical to before on the same seeds.
 
 ## Provenance and integrity
 

@@ -5,11 +5,11 @@
 #     aao-demo task=microwave_sweet_potato randomization=microwave_sweet_potato/zero_gravity
 #
 # The tuber floats in front of the open cavity in a random attitude,
-# wherever the front camera sees it, not only over the counter.  The
-# pick fixes only the gripper's approach axis along the tuber's long axis and
-# approaches along that axis, so it does not depend on the tuber's spin, and
-# the jaws close at the gripper's own (randomized) roll.  The placement pose
-# inside the cavity stays fixed.
+# wherever the front camera sees it, not only over the counter.  The grasp
+# is randomized relative to the tuber: the jaws close at any roll about its
+# long axis (within 45 deg of level in the world), tilted 0-20 deg off that
+# axis, and up to 2 cm further back.  The placement pose inside the cavity
+# stays fixed.
 defaults:
   - /randomization/microwave_sweet_potato/_microwave
   - /randomization/microwave_sweet_potato/_cameras
@@ -19,7 +19,10 @@ env:
   gravity: [0.0, 0.0, 0.0]
 
 microwave_sweet_potato:
-  pick_orientation: approach_axis
+  # Pick in the static grasp frame randomized below, with the gripper's whole
+  # orientation fixed in it: the frame carries the jaw roll and the tilt.
+  grasp_site: sweet_potato_grasp_frame
+  pick_orientation: level
   # Line up on the long axis behind the tuber and close with the EEF on it.
   approach_height: 0.0
   grasp_height: 0.0
@@ -54,8 +57,8 @@ task:
           x: [-0.06, 0.06]
           y: [-0.04, 0.05]
           z: [-0.02, 0.08]
-          # Jaw roll about the approach axis, kept through the grasp and
-          # levelled before insertion.
+          # Start roll about the approach axis; the grasp frames below set
+          # the roll the jaws close at.
           roll: [-0.785, 0.785]
           pitch: [-0.12, 0.12]
           yaw: [-0.2, 0.2]
@@ -81,3 +84,24 @@ task:
             cameras: [env1_cam]
             geometry: bounding_sphere
             margin_px: 8
+      # Jaw roll: the roll frame follows the tuber's full pose, then its roll
+      # -- the turn about its own x, the tuber's long axis -- is set to an
+      # absolute value, so the jaws close within 45 deg of level whatever
+      # the tuber's spin.  The spin is uniform, so the jaw roll relative to
+      # the tuber still covers the full circle.
+      sweet_potato_grasp_roll_frame:
+        reference: sweet_potato
+        roll:
+          range: [-0.785, 0.785]
+          reference: absolute_world
+        collision_radius: 0.0
+      # Tilt relative to the tuber: the grasp frame follows the roll frame and
+      # tilts 0-20 deg nose-down about its own x, which is now the jaw axis,
+      # through the jaw contact.  Nose-down keeps the gripper clear of the
+      # cavity ceiling once the tuber is levelled for insertion (nose-up
+      # clips it from about 7 deg); beyond about 20 deg the grasp slips while
+      # the tuber is turned into the cavity.
+      sweet_potato_grasp_frame:
+        reference: sweet_potato_grasp_roll_frame
+        roll: [-0.349, 0.0]
+        collision_radius: 0.0

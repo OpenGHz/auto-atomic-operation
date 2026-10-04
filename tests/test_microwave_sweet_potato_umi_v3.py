@@ -234,6 +234,8 @@ def test_randomization_presets_complete_headless(preset: str) -> None:
             ]
         )
         wrist = _id(model, mujoco.mjtObj.mjOBJ_CAMERA, "eef_wrist_cam")
+        grasp_site = _id(model, mujoco.mjtObj.mjOBJ_SITE, "sweet_potato_grasp_site")
+        grasp_frame = _id(model, mujoco.mjtObj.mjOBJ_BODY, "sweet_potato_grasp_frame")
         mujoco.mj_forward(model, data)
         front_position = data.cam_xpos[front].copy()
         wrist_mount = model.cam_pos[wrist].copy()
@@ -270,6 +272,18 @@ def test_randomization_presets_complete_headless(preset: str) -> None:
                 assert abs(camera_point[0]) / depth < (
                     half_fovy * front_spec.width / front_spec.height
                 )
+                # The pick frame sits on the jaw contact, tilted 0-20 deg off
+                # the long axis about a jaw axis square to it, with the jaws
+                # within 45 deg of level.
+                frame = data.xmat[grasp_frame].reshape(3, 3)
+                on_tuber = data.site_xmat[grasp_site].reshape(3, 3)
+                np.testing.assert_allclose(
+                    data.xpos[grasp_frame], data.site_xpos[grasp_site], atol=1e-6
+                )
+                assert abs(float(frame[:, 0] @ on_tuber[:, 1])) < 1e-6
+                tilt = np.degrees(np.arccos(float(frame[:, 1] @ on_tuber[:, 1])))
+                assert tilt <= 20.0 + 1e-6
+                assert abs(np.degrees(np.arcsin(float(frame[2, 0])))) <= 45.0 + 1e-6
             else:
                 assert potato_height == pytest.approx(0.0821, abs=1e-3)
             # The home pose follows the tuber, so the gripper starts above it
