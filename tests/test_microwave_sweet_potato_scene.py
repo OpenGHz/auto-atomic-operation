@@ -218,6 +218,17 @@ def test_grasp_frames_are_world_aligned_on_the_jaw_section() -> None:
     assert int(model.body_geomnum[frame]) == 0
     np.testing.assert_allclose(data.xpos[frame], data.site_xpos[grasp], atol=1e-6)
     np.testing.assert_allclose(data.xmat[frame].reshape(3, 3), np.eye(3), atol=1e-6)
+    # The roll frame sits on the same point with its x along the long axis.
+    roll_frame = _id(model, mujoco.mjtObj.mjOBJ_BODY, "sweet_potato_grasp_roll_frame")
+    assert int(model.body_parentid[roll_frame]) == 0
+    assert int(model.body_jntnum[roll_frame]) == 0
+    assert int(model.body_geomnum[roll_frame]) == 0
+    np.testing.assert_allclose(data.xpos[roll_frame], data.site_xpos[grasp], atol=1e-6)
+    np.testing.assert_allclose(
+        data.xmat[roll_frame].reshape(3, 3)[:, 0],
+        data.site_xmat[grasp].reshape(3, 3)[:, 1],
+        atol=1e-6,
+    )
 
 
 def test_authored_sweet_potato_pose_is_at_rest() -> None:

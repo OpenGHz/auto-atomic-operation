@@ -97,7 +97,10 @@ cavity opening spans local x ∈ [-0.172, 0.094] and z ∈ [-0.055, 0.071].
   axis toward the microwave, +Z up), so grasp waypoints written in it follow the
   tuber's pose. The static, geometry-less body `sweet_potato_grasp_frame` starts on
   the same pose. Sites cannot be randomized, so a randomization preset moves this
-  body instead to turn the grasp about the jaw contact.
+  body instead to turn the grasp about the jaw contact. A second such body,
+  `sweet_potato_grasp_roll_frame`, sits on the same point turned 90° about +Z, so
+  its x is the long axis; `zero_gravity` turns the jaws about the long axis with
+  it (see below).
 - `microwave_target` is a child body of `microwave` at local
   `(-0.030, 0.0856, -0.0165)`, yaw +90°: the settled sweet-potato origin after a gentle
   release, with local +X along the rest long axis. Its render-only

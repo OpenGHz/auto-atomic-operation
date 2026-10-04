@@ -109,6 +109,16 @@
     <body name="sweet_potato_grasp_frame" pos="0.1966 -0.21 0.0821373">
       <site name="sweet_potato_grasp_frame_site" size="0.004" rgba="1 0.6 0.2 0"/>
     </body>
+    <!--
+      The same point turned so that its x is the tuber's long axis.  A roll
+      offset turns about a body's own x, so a preset that places this body
+      relative to the tuber and the grasp frame relative to this body first
+      turns the jaws about the long axis, then tilts them about the jaw axis.
+    -->
+    <body name="sweet_potato_grasp_roll_frame" pos="0.1966 -0.21 0.0821373"
+          quat="0.707106781 0 0 0.707106781">
+      <site name="sweet_potato_grasp_roll_frame_site" size="0.004" rgba="1 0.6 0.2 0"/>
+    </body>
   </worldbody>
 
   <!-- The cabinet and door hulls overlap around the modeled hinge seam. -->
