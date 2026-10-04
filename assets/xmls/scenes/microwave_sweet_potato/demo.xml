@@ -58,14 +58,16 @@
       <!--
         Placement frame on the dished turntable, a child of the microwave so
         it moves with any future cabinet randomization.  The origin is the
-        settled sweet-potato origin after a gentle release (dish centre is at
-        about local (-0.035, 0.08)); local +X points at the back wall, which
+        settled sweet-potato origin after a gentle release about 3 cm in front
+        of the dish centre (local (-0.035, 0.08)), so the tuber's front end
+        sits just inside the opening; local +X points at the back wall, which
         is the tuber long axis at rest.  Roll about that axis is not encoded:
         the resting roll depends on the scan's asymmetric cross-section.
       -->
-      <body name="microwave_target" pos="-0.030 0.0856 -0.0165" quat="0.707106781 0 0 0.707106781">
-        <!-- Render-only marker on the dish surface (local z -0.0385). -->
-        <geom name="microwave_target_pad" type="box" pos="0 0 -0.0215"
+      <body name="microwave_target" pos="-0.0288 0.0536 -0.0173" quat="0.707106781 0 0 0.707106781">
+        <!-- Render-only marker on the dish's raised glass, 2.5 cm behind the
+             target where the visual surface is flat (local z -0.0405). -->
+        <geom name="microwave_target_pad" type="box" pos="0.025 0 -0.0232"
               size="0.012 0.012 0.0005" material="target"
               contype="0" conaffinity="0"/>
         <site name="microwave_target_site" pos="0 0 0" size="0.006"

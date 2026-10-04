@@ -46,7 +46,7 @@ microwave_sweet_potato:
     # accumulate until the released tuber tips over on the dish.
     settled:
       kind: fixed
-      quaternion_xyzw: [-0.26991, 0.00545, 0.00579, 0.962853]
+      quaternion_xyzw: [-0.26070, -0.02019, -0.00087, 0.96521]
     # Only the long axis points into the cavity; roll about it stays free.
     axis:
       kind: axis_alignment

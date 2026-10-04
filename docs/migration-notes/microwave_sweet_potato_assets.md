@@ -102,9 +102,13 @@ cavity opening spans local x ∈ [-0.172, 0.094] and z ∈ [-0.055, 0.071].
   its x is the long axis; `zero_gravity` turns the jaws about the long axis with
   it (see below).
 - `microwave_target` is a child body of `microwave` at local
-  `(-0.030, 0.0856, -0.0165)`, yaw +90°: the settled sweet-potato origin after a gentle
-  release, with local +X along the rest long axis. Its render-only
-  `microwave_target_pad` gives the mask renderer a geom.
+  `(-0.0288, 0.0536, -0.0173)`, yaw +90°: the settled sweet-potato origin after a
+  gentle release, with local +X along the rest long axis. It sits about 3 cm in front
+  of the dish centre, so the tuber's front end rests about 2 mm behind the cabinet's
+  front face (local y -0.034). Centred on the dish, its front end sat 4 cm deeper.
+  With the door closed the tuber still clears it by 12 mm (4.5 mm at 4 cm out); the
+  settled pose repeats within 1 mm. Its render-only `microwave_target_pad` gives the
+  mask renderer a geom; it lies 2.5 cm behind the target, on the dish's flat glass.
 
 ## UMI v3 task
 
@@ -309,8 +313,8 @@ while carried, no finger–microwave contact, and positive clearance between eve
 gripper mesh (including render-only meshes) and the microwave hulls. The visual
 scans sit about 2 mm inside the hulls, so hull clearance also bounds visual clipping. It also
 requires a final error of at most 0.025 m after one more second of free settling.
-The recorded run completes in 127 control updates with a 5.1 mm settled error, and
-the minimum gripper–microwave clearance is 5.4 mm. Each preset also runs two seeded
+The recorded run completes in 125 control updates with a 5.2 mm settled error, and
+the minimum gripper–microwave clearance is 15.7 mm. Each preset also runs two seeded
 episodes headless and checks the camera set (`env1_cam` and the wrist camera), that
 the gripper starts above the tuber, that a floating tuber's centre is inside the
 front image, the door range, and (`zero_gravity`) that the pick frame sits on the
@@ -331,6 +335,13 @@ failure lost a 19° grasp while the tuber was turned into the cavity. No episode
 touched the door or the cabinet, and the closest render mesh stayed 3.1 mm from the
 microwave hulls: the in-cavity pitch is now always nose-down. `gravity` is
 unchanged, with per-episode results identical to before on the same seeds.
+With the target moved 3 cm out of the cavity, the default randomization,
+`gravity` and `zero_gravity` each succeeded 40/40 over two seeds, without door or
+cabinet contact. Settled errors stayed at most 5.9 mm under gravity; without
+gravity the per-episode placement errors were unchanged, and the closest gripper
+mesh stayed 15.6 mm (default), 16.2 mm (`gravity`) and 9.5 mm (`zero_gravity`) from
+the microwave hulls. The target site stays at least 101 px inside the randomized
+front image.
 
 ## Provenance and integrity
 
