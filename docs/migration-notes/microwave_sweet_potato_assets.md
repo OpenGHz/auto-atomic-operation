@@ -31,7 +31,7 @@ frame, and the front `env1_cam` observation camera declared by
 `aao_configs/scene/microwave_sweet_potato.yaml` (the embodiment adds its wrist
 camera). The robot is injected as an ordered
 MJCF layer (`assets/xmls/robots/umi_gripper_v3_mocap.xml`) by the `umi_v3_mocap`
-embodiment (formerly `basis_mocap_eef_umi_v3`).
+embodiment.
 
 There are no Gaussian assets for this scene and no host actuators or keyframes.
 
@@ -44,8 +44,7 @@ remain source references only; maintain the AAO copies. The source `microwave.xm
 its `convex/*.xml` include fragments are not migrated; their structure is rewritten into
 the two AAO includes with `microwave_`-prefixed names and classes.
 
-The two visual OBJs arrived after the first migration pass, which had rendered the
-hulls directly. They now follow the source split:
+The visual OBJs and the hulls follow the source split:
 
 - `microwave_body_visual` and `microwave_door_visual` use the source visual class:
   render-only (`contype="0" conaffinity="0"`), massless, group 0.
@@ -105,7 +104,7 @@ cavity opening spans local x ∈ [-0.172, 0.094] and z ∈ [-0.055, 0.071].
   `(-0.0288, 0.0536, -0.0173)`, yaw +90°: the settled sweet-potato origin after a
   gentle release, with local +X along the rest long axis. It sits about 3 cm in front
   of the dish centre, so the tuber's front end rests about 2 mm behind the cabinet's
-  front face (local y -0.034). Centred on the dish, its front end sat 4 cm deeper.
+  front face (local y -0.034); centred on the dish, its front end would sit 4 cm deeper.
   With the door closed the tuber still clears it by 12 mm (4.5 mm at 4 cm out); the
   settled pose repeats within 1 mm. Its render-only `microwave_target_pad` gives the
   mask renderer a geom; it lies 2.5 cm behind the target, on the dish's flat glass.
@@ -119,9 +118,11 @@ aao-demo task=microwave_sweet_potato    # default embodiment: umi_v3_mocap
 
 The jaw plane of `umi_gripper_v3` is 56 mm thick and opens to 100 mm. Only the two
 finger meshes collide with the scene. A top-down grasp followed by a 90° roll would
-stand the jaws vertically in a 100 mm cavity, so the task uses one horizontal
-grasp throughout. EEF +X (approach) points along world +Y into the cavity, and
-the jaws close along world X.
+stand the jaws vertically in a 100 mm cavity, so the default configuration and
+`gravity` use one horizontal grasp throughout: EEF +X (approach) points along world
++Y into the cavity, and the jaws close along world X. `zero_gravity` grasps at any
+jaw roll and places upright jaws only with a raised path and a partial opening
+(see [Randomization presets](#randomization-presets)).
 
 1. `pick_sweet_potato`: approach from behind and above, drop to grasp height, and slide
    the open jaws around the blunt end. The waypoints are written in
@@ -184,14 +185,17 @@ at least 53% of their default image area. A wrist camera samples this offset
 directly, so the gripper's randomized home pose does not leak into it.
 
 Below about 85° the door's free edge swings in front of the cavity. In door sweeps
-at fixed angles (20 episodes per angle and preset), `gravity` succeeded 1/20 at
-44°, 10/20 at 55° and 16/20 at 66°, and `zero_gravity` 2/20, 12/20 and 16/20; the
-failures had the gripper or the carried tuber hitting the door and pushing it. At
-78–84° a finger still brushed the door in single episodes and pushed it by up to
-0.17 rad; one of 40 `gravity` episodes at 80° failed that way. At 88°, over 40
-episodes per preset, nothing touched the door and the closest gripper mesh stayed
-17.7 mm from its hulls. The two `gravity` failures at 88° fail the same way at 80°
-and 84° without touching the door.
+at fixed angles (20 episodes per angle and preset):
+
+- `gravity` succeeded 1/20 at 44°, 10/20 at 55° and 16/20 at 66°; the failures had
+  the gripper or the carried tuber hitting the door and pushing it. At 78–84° a
+  finger still brushed the door in single episodes and pushed it by up to
+  0.17 rad; one of 40 episodes at 80° failed that way.
+- `zero_gravity` succeeded 0/20, 0/20 and 18/20. Its place goal checks clearance,
+  so 39 of the 42 failures stopped at planning: no place orientation kept 10 mm
+  from the cabinet and door. In the other three the gripper pushed the door, by up
+  to 0.32 rad.
+- At 88° nothing touched the door in 40 episodes per preset.
 
 `gravity` slides the tuber on the counter (x -20/+4 cm, y +1/+5 cm, heading ±30°);
 turning about the vertical keeps its settled resting pose. The gripper's home pose
@@ -240,9 +244,9 @@ the grasp's attitude relative to the tuber:
   turn about its own x, the long axis) is set to an absolute ±90°
   (`reference: absolute_world` on that axis). The jaws therefore close at any angle
   from level to upright whatever the tuber's spin, and because the spin is uniform
-  the jaw roll relative to the tuber covers the full circle. The range was ±45°
-  while the place goal could only use level jaws; with both postures available, a
-  grasp is never more than 15° from the nearer one.
+  the jaw roll relative to the tuber covers the full circle. The jaws are never
+  upside down, and with both place postures a grasp is never more than 15° from
+  the nearer one.
 - `sweet_potato_grasp_frame` follows the roll frame and tilts 0–20° nose-down about
   its own x, now the jaw axis (`roll: [-0.349, 0]`), through the jaw contact. The
   approach axis leaves the tuber's long axis by up to 20°, in a direction around the
@@ -251,21 +255,18 @@ the grasp's attitude relative to the tuber:
 A roll offset is the only rotation offset that turns about a frame's own axis (yaw
 turns about world z, pitch about neither), hence two frames rather than one. The
 tilt's direction relative to the gripper matters inside the cavity, where the
-levelled tuber leaves the gripper pitched by the tilt. In a sweep with symmetric
-tilts about the tuber's lateral axis, nose-up pitch clipped the top linkage render
-meshes into the cavity ceiling from about 7° (by up to 27 mm), while nose-down
-pitch kept at least 19 mm to -19° and clipped only beyond -30°, as under gravity.
-Fixing the jaw roll relative to the tuber instead (frame-fixed pick with a uniform
-relative roll) made the gripper arrive at any world roll; squaring it before the
-cavity then took up to 180° at about 9 rad/s, and 13 of 150 episodes lost the
-tuber. With the absolute jaw roll, tilts of 0–20° succeeded 89/89 without
-clipping, and tilts of 20–35° lost 4 of 61 tubers while being turned into the
-cavity and clipped render meshes from 30°.
+levelled tuber leaves side-by-side jaws pitched by the tilt (upright jaws turn
+sideways instead). In a sweep with symmetric tilts about the tuber's lateral axis,
+nose-up pitch clipped the top linkage render meshes into the cavity ceiling from
+about 7° (by up to 27 mm), while nose-down pitch kept at least 19 mm to -19° and
+clipped only beyond -30°, as under gravity. Tilts of 20–35° lost 3 of 60 tubers,
+all while sliding into the cavity.
 
 The home pose follows only the tuber's
 position (`reference: sweet_potato`, `follow: position`), so it always starts
-10–20 cm above and 20–29 cm behind it, jittered by x ±6 cm and ±0.12/±0.2 rad of
-pitch/yaw. With the default `follow: pose` it would orbit the
+10–20 cm above and 20–29 cm behind it, jittered by x ±6 cm, ±0.785 rad of roll
+about the approach axis and ±0.12/±0.2 rad of pitch/yaw. With the default
+`follow: pose` it would orbit the
 tuber's long axis with the spin: over 40 resets 15 started below the tuber and 19
 upside down. A floating tuber is pushed by the closing jaws instead of resting on the
 counter, which changes several settings:
@@ -274,8 +275,8 @@ counter, which changes several settings:
   back toward the blunt end (per-waypoint randomization of the closing position).
   Pads closing above the widest line, or on the tapered rear (the section narrows
   from 42 mm to 26 mm between 5 and 7 cm behind the centre), squeeze the free tuber
-  forward out of the grip. With up to 3 cm back, 3 of 29 episodes lost the tuber
-  from grasps 4.5–5.7 cm behind its centre.
+  forward out of the grip. With the grasp 2–3 cm back, 20 of 60 episodes failed,
+  14 of them losing the tuber from the grip in transport or on the way in.
 - The place goal fixes only what the task needs: the tuber's long axis level
   (`place_orientation: nearest`, a `nearest_feasible` goal), at any heading and
   spin. The jaws must be either side by side or one above the other (jaw axis
@@ -284,60 +285,48 @@ counter, which changes several settings:
   the cabinet and door along the slide-in, the release and the retreat.
   - It is solved once, 0.36 m in front of the cavity, and kept for the rest of
     the stage.
-  - Before, the place goal also turned the long axis onto the cavity axis and
-    squared the jaws up.
+  - The margin covers the gripper's lag behind its command, several
+    millimetres: with a 3 mm planning margin, fingers brushed the cabinet while
+    opening and backing out.
+  - Over the 120 validation episodes the place stage turned the tuber by a
+    median of 22° (at most 66°).
   - See the [design](../design/nearest-feasible-place-orientation.md) for the
     probe behind these settings.
-- Over 120 episodes (six seeds) the place stage turned the tuber by a median of
-  14° (at most 35°), against 37° (at most 67°) when it squared everything up.
-  Success was 119/120 for both, and the one failure was the same episode: a 15.5°
-  tilted grasp slipped 15 mm during the place. No episode touched the door or
-  cabinet. The closest approach over the place stage was 3.9 mm, against 7.4 mm
-  before; a 3 mm planning margin let fingers brush the cabinet while opening and
-  backing out, because the gripper lags its command by several millimetres.
 - The upright posture needs more room than the 126 mm cavity gives freely, so it
   has its own height and release opening.
   - The jaws span 145 mm along their axis fully open, so upright jaws open only to
     claw 0.008 (60 mm between the pads, against 43 mm across the held tuber),
     spanning 105 mm (`one_above_other_release`).
   - The place waypoints run 30 mm higher (`one_above_other_lift`).
-  - Even then the 10 mm margin leaves about 1 mm of play, so the posture fits only
-    about a third of the grasps; otherwise the nearest level orientation is used.
+  - Even then the 10 mm margin leaves about 1 mm of play, so the posture often
+    does not fit, and the nearest level orientation is used instead; 11 of the
+    120 validation episodes placed upright.
   - Lifts of 0–15 mm never fit, and opening to 0.009 (5 mm per side) let the
     fingers drag the tuber out on the way back.
-- The placement check measures against the chosen posture's release pose, so its
-  25 mm tolerance is unchanged. What grows is the distance to the nominal target:
-  level jaws leave the tuber 5–20 mm above it, upright jaws 42–48 mm.
-- With both postures (three runs of 120 episodes on six seeds each): 354/360
-  succeeded and the upright posture was chosen 42 times, 41 of them successfully.
-  - The median place rotation rose from 13° (±45° grasp roll, upright chosen once
-    in 120) to 19–25°, and the maximum from 38° to 70–74°. A grasp near upright
-    that does not fit turns back to level jaws.
-  - All 6 failures were grasp failures, not posture choices: 5 tubers squeezed out
-    between the fingers, in transport or during the release hold (4 traced, the
-    fifth matches the transport case), and 1 pick timed out.
-  - `gravity` and the default configuration behave identically per episode.
-- A released tuber keeps its velocity; one traced release glided off the target at
-  about 5 cm/s. The arm holds still for 15 updates before opening
-  (`grasp.pre_release_settle_steps`): without the hold 9 of 20 episodes succeeded,
-  and step clamping the final approach instead reached 16 of 20.
-  The tuber is released 15 mm above the rest pose, clear of the dish, and the
-  post-release settle is skipped.
+- The placement check measures against the chosen posture's release pose with
+  the same 25 mm tolerance. What varies is the distance to the nominal target:
+  over the 120 validation episodes, level jaws left the tuber 10–19 mm above it,
+  upright jaws 42–46 mm.
+- A released tuber keeps its velocity, so the arm holds still for 15 updates
+  before opening (`grasp.pre_release_settle_steps`). Without the hold none of 20
+  episodes placed the tuber: in traced ones it was still moving at about 14 cm/s
+  and 56 mm off the release pose when checked, against 0.2 cm/s and 14 mm with
+  the hold. The tuber is released 15 mm above the rest pose, clear of the dish,
+  and the post-release settle is skipped.
 
 ### UMI mocap weld
 
-`umi_gripper_v3_mocap.xml` previously used a weld time constant of `0.3 s`. Only
+`umi_gripper_v3_mocap.xml` welds `umi_interface` to the mocap body with
+`solref="0.10 1"`, the value `xf9600_mocap.xml` uses for the dishwasher task. Only
 `umi_interface` is gravity-compensated, so the gripper links and payload hang on that
-weld. With the 0.2 kg tuber held about 4 cm ahead of the pads, the EEF pitched about
-4 cm off its command and the post-grasp lift timed out. The weld now uses
-`solref="0.10 1"`, the value `xf9600_mocap.xml` adopted for the dishwasher task.
-`pick_and_place_umi_v3` (now `task=pick_and_place embodiment=umi_v3_mocap`) still
-succeeds 2/2 with the change.
+weld. With a 0.3 s time constant and the 0.2 kg tuber held about 4 cm ahead of the
+pads, the EEF pitched about 4 cm off its command and the post-grasp lift timed out.
+`task=pick_and_place embodiment=umi_v3_mocap` succeeds 2/2 on this weld.
 
 Cartesian step clamping (`cartesian_max_linear_step`) is intentionally not used.
 Each clamped command is re-based on the measured EEF, so any steady weld sag
-compounds on long lateral moves. With a 1.5 cm step, the first prototype sank
-from the commanded 9 cm grasp height into the counter edge.
+compounds on long lateral moves. With a 1.5 cm step, the default task lost the
+tuber right after the grasp in both of two episodes.
 
 ### Validation
 
@@ -358,14 +347,17 @@ The recorded run completes in 127 control updates with a 4.8 mm settled error, a
 the minimum gripper–microwave clearance is 15.6 mm. Each preset also runs two seeded
 episodes headless and checks the camera set (`env1_cam` and the wrist camera), that
 the gripper starts above the tuber, that a floating tuber's centre is inside the
-front image, the door range, and (`zero_gravity`) that the pick frame sits on the
-jaw contact tilted at most 20° and that the tuber floats within 25 mm of the
-chosen posture's release pose.
+front image, the door range, (`gravity`) that the tuber settles within 25 mm of
+the target, and (`zero_gravity`) that the pick frame sits on the jaw contact tilted
+at most 20°, that the planned place path keeps 10 mm from the microwave, and that
+the tuber floats within 25 mm of the chosen posture's release pose.
 
 In sweeps of 20 episodes per seed (batch 1), the default randomization succeeded
-60/60 and `gravity` 57/60 over three seeds, and `zero_gravity` 120/120 over six
-seeds, 11 of them with upright jaws. The three `gravity` failures dropped the tuber
-on the way into the cavity. No episode touched the door, and the gripper never
+60/60 and `gravity` 57/60 over seeds 201–203, and `zero_gravity` 120/120 over seeds
+201–206, 11 of them with upright jaws. The three `gravity` failures dropped the tuber
+on the way into the cavity; the
+[randomization summary](../task-tuning/microwave_sweet_potato_randomization.md#验证)
+lists the commands that replay them. No episode touched the door, and the gripper never
 touched the cabinet or counter; the closest gripper mesh stayed 15.6 mm (default),
 15.9 mm (`gravity`) and 3.5 mm (`zero_gravity`) from the microwave hulls. The
 target site stays at least 103 px inside the randomized front image.
