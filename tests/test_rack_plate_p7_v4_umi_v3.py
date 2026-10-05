@@ -10,7 +10,6 @@ import numpy as np
 
 from auto_atom.config.reference import PoseReference
 from auto_atom.config_loader import compose_task_config
-from auto_atom.randomization import RandomizationFailureError
 from auto_atom.runner.common import prepare_task_file
 from auto_atom.runtime import ComponentRegistry, TaskRunner
 
@@ -499,36 +498,28 @@ def test_randomization_moves_the_scenery_not_the_slot_centre() -> None:
     plate_pixels: list[tuple[float, float]] = []
     target_offsets: list[np.ndarray] = []
     rack_positions: list[np.ndarray] = []
-    # Twelve scenes: the plate's view spread needs a few more than six to be
-    # reliable (six resets miss 60 px of vertical spread about 15% of the
-    # time). A reset can exhaust its rack/plate separation attempts (about 4%
-    # of resets), which is not what this test is about, so such a reset is
-    # retried.
-    for seed in range(1, 13):
-        ComponentRegistry.clear()
-        config = compose_task_config(
-            "rack_plate",
-            [
-                "env.viewer=null",
-                "execution.mode=object_only",
-                f"task.seed={seed}",
-            ],
-            config_dir=_ROOT / "aao_configs",
-        )
-        runner = TaskRunner().from_config(prepare_task_file(config))
-        try:
-            env = runner.get_env().envs[0]
-            model, data = env.model, env.data
-            for attempt in range(3):
-                try:
-                    runner.reset()
-                    break
-                except RandomizationFailureError:
-                    if attempt == 2:
-                        raise
+    # Every reset draws from its own stream, so the resets of one run are
+    # independent scenes. 24 of them miss 60 px of vertical spread with a
+    # probability of about 1e-4; 12 would miss it about 2% of the time.
+    ComponentRegistry.clear()
+    config = compose_task_config(
+        "rack_plate",
+        [
+            "env.viewer=null",
+            "execution.mode=object_only",
+            "task.seed=3",
+        ],
+        config_dir=_ROOT / "aao_configs",
+    )
+    runner = TaskRunner().from_config(prepare_task_file(config))
+    try:
+        env = runner.get_env().envs[0]
+        model, data = env.model, env.data
+        rack = _id(model, mujoco.mjtObj.mjOBJ_BODY, "rack")
+        target = _id(model, mujoco.mjtObj.mjOBJ_SITE, "rack_target_site")
+        for _ in range(24):
+            runner.reset()
             mujoco.mj_forward(model, data)
-            rack = _id(model, mujoco.mjtObj.mjOBJ_BODY, "rack")
-            target = _id(model, mujoco.mjtObj.mjOBJ_SITE, "rack_target_site")
             rack_rotation = np.asarray(data.xmat[rack]).reshape(3, 3)
             target_offsets.append(
                 rack_rotation.T @ (np.asarray(data.site_xpos[target]) - data.xpos[rack])
@@ -537,9 +528,9 @@ def test_randomization_moves_the_scenery_not_the_slot_centre() -> None:
             plate_pixels.append(
                 _pixel_of_body(model, data, "rack_camera_front", "object")
             )
-        finally:
-            runner.close()
-            ComponentRegistry.clear()
+    finally:
+        runner.close()
+        ComponentRegistry.clear()
 
     # The rack really is sampled, and the slot centre stays welded to it.
     rack_positions = np.asarray(rack_positions)

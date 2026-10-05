@@ -28,6 +28,12 @@ env:
 task:
   seed: 7
   randomization:
+    # The plate's box below spans the whole camera view, while the rack and
+    # the stand move only a few centimetres.  Sequential placement (rsa) keeps
+    # an early plate fixed, so a plate drawn onto the rack's or stand's spot
+    # leaves them no feasible pose; joint rejection redraws all three until
+    # the whole layout is feasible.
+    strategy: joint_rejection
     entities:
       # The base config ships a wide home-EEF range.  This task is placed to
       # reach both the source stand (x=-0.40) and the rack (x=-0.126), so the
