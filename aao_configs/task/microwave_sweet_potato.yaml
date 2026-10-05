@@ -55,6 +55,74 @@ microwave_sweet_potato:
         vector: [1.0, 0.0, 0.0]
         reference: object
       direction: same
+    # The long axis level at any heading, with the jaws either side by side
+    # (jaw axis within 30 deg of level) or one above the other (within 30
+    # deg of vertical): whichever is nearest to how the tuber arrives and
+    # keeps the gripper and tuber 10 mm clear of the cabinet and door along
+    # the whole insertion, the release and the retreat.  Solved once at the
+    # first place waypoint and kept for the rest.
+    nearest:
+      kind: nearest_feasible
+      reference: object
+      primary_axis:
+        axis: [1.0, 0.0, 0.0]
+        elevation: [[0.0, 0.0]]
+      postures:
+        - name: side_by_side
+          constraints:
+            - frame: eef
+              axis: [0.0, 1.0, 0.0]
+              elevation: [[-0.524, 0.524]]
+        # Upright jaws reach about 5 cm above and below the tuber, so this
+        # posture slides in and releases higher in the 126 mm cavity, and
+        # opens only partly: fully open, the fingers span 145 mm.
+        - name: one_above_other
+          constraints:
+            - frame: eef
+              axis: [0.0, 1.0, 0.0]
+              elevation: [[1.047, 1.5708], [-1.5708, -1.047]]
+          offset: [0.0, 0.0, "${microwave_sweet_potato.one_above_other_lift}"]
+          release_joint_positions: ["${microwave_sweet_potato.one_above_other_release}"]
+      clearance:
+        bodies: [microwave, microwave_door]
+        margin: 0.010
+        release_open: true
+  # Extra height (m) of every place waypoint when the nearest goal picks the
+  # one_above_other posture, and its release opening (claw joint command;
+  # 0 is fully open, 0.0165 closed).
+  one_above_other_lift: 0.03
+  one_above_other_release: 0.008
+  # First place waypoint, 0.36 m in front of the target: a key of the map
+  # below.
+  place_entry: square_up
+  place_entries:
+    # Turn the jaw axis (EEF +Y) horizontal and square to the cavity axis,
+    # keeping any tilt about that axis.  The tuber's long axis then lies in
+    # the vertical plane of the cavity axis.
+    square_up:
+      position: [-0.36, 0.0, 0.04]
+      orientation_goal:
+        kind: axis_alignment
+        controlled_axis: [0.0, 1.0, 0.0]
+        target_axis:
+          vector: [0.0, 1.0, 0.0]
+          reference: object
+        direction: same
+      reference: object
+      static: true
+    # Move the held tuber there with the place orientation goal itself, so a
+    # nearest_feasible goal is solved here, well clear of the cabinet.
+    held:
+      controlled_frame:
+        kind: held_object
+        frame: sweet_potato_site
+      position: [-0.36, 0.0, 0.04]
+      orientation_goal: ${microwave_sweet_potato.place_orientation_goals.${microwave_sweet_potato.place_orientation}}
+      reference: object
+      static: true
+      tolerance:
+        position: 0.02
+        orientation: 0.15
 
 env:
   batch_size: 1
@@ -152,21 +220,8 @@ task:
       operator: arm
       param:
         pre_move:
-          # 0) Square the gripper up 0.36 m in front of the cavity: turn its jaw
-          #    axis (EEF +Y) horizontal and square to the cavity axis, keeping
-          #    any tilt about that axis.  The cavity fits only about 10 deg of
-          #    jaw roll, and the tuber's long axis then lies in the vertical
-          #    plane of the cavity axis.
-          - position: [-0.36, 0.0, 0.04]
-            orientation_goal:
-              kind: axis_alignment
-              controlled_axis: [0.0, 1.0, 0.0]
-              target_axis:
-                vector: [0.0, 1.0, 0.0]
-                reference: object
-              direction: same
-            reference: object
-            static: true
+          # 0) Get ready 0.36 m in front of the cavity (place_entry above).
+          - ${microwave_sweet_potato.place_entries.${microwave_sweet_potato.place_entry}}
           # The remaining goals move the held tuber, expressed in the
           # turntable target frame (local +X points at the back wall).
           # 1) Line up 0.30 m in front of the target, 22 mm above its resting

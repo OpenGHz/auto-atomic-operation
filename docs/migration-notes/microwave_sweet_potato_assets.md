@@ -133,7 +133,8 @@ the jaws close along world X.
    and an optional per-waypoint randomization of the closing position.
 2. `place_sweet_potato_in_microwave`: 0.36 m in front of the target, the gripper first
    turns its jaw axis horizontal and square to the cavity axis, keeping any grasp
-   tilt. Held-object goals in the target frame then line the tuber up 0.30 m in front
+   tilt (`place_entry: square_up`; `zero_gravity` instead moves the held tuber there
+   with its place goal, `place_entry: held`). Held-object goals in the target frame then line the tuber up 0.30 m in front
    of the target, slide it in 22 mm above its rest height to clear the dish rim, and
    lower it to `microwave_sweet_potato.release_height` (6 mm) above the rest pose. By
    default every goal fixes the full settled orientation
@@ -233,10 +234,12 @@ orientation fixed in it (`pick_orientation: level`), and two chained frames carr
 the grasp's attitude relative to the tuber:
 
 - `sweet_potato_grasp_roll_frame` follows the tuber's full pose, then its roll (the
-  turn about its own x, the long axis) is set to an absolute ±45°
-  (`reference: absolute_world` on that axis). The jaws therefore close within 45°
-  of level whatever the tuber's spin, and because the spin is uniform the jaw roll
-  relative to the tuber covers the full circle.
+  turn about its own x, the long axis) is set to an absolute ±90°
+  (`reference: absolute_world` on that axis). The jaws therefore close at any angle
+  from level to upright whatever the tuber's spin, and because the spin is uniform
+  the jaw roll relative to the tuber covers the full circle. The range was ±45°
+  while the place goal could only use level jaws; with both postures available, a
+  grasp is never more than 15° from the nearer one.
 - `sweet_potato_grasp_frame` follows the roll frame and tilts 0–20° nose-down about
   its own x, now the jaw axis (`roll: [-0.349, 0]`), through the jaw contact. The
   approach axis leaves the tuber's long axis by up to 20°, in a direction around the
@@ -270,12 +273,47 @@ counter, which changes several settings:
   from 42 mm to 26 mm between 5 and 7 cm behind the centre), squeeze the free tuber
   forward out of the grip. With up to 3 cm back, 3 of 29 episodes lost the tuber
   from grasps 4.5–5.7 cm behind its centre.
-- The cavity fits only about 10° of jaw roll. At 10–20° the linkage render meshes
-  clip the cavity floor and ceiling by up to 6 mm, and from 20° the collision hulls
-  touch. The place stage therefore levels the jaws in front of the cavity, which
-  spins the held tuber about its long axis.
-- The tuber's spin is random, so the place goal constrains only its long axis
-  (`place_orientation: axis`). Without gravity the roll does not sag.
+- The place goal fixes only what the task needs: the tuber's long axis level
+  (`place_orientation: nearest`, a `nearest_feasible` goal), at any heading and
+  spin. The jaws must be either side by side or one above the other (jaw axis
+  within 30° of level or of vertical). Among those orientations the one nearest
+  to how the tuber arrives wins, provided the gripper and tuber keep 10 mm from
+  the cabinet and door along the slide-in, the release and the retreat.
+  - It is solved once, 0.36 m in front of the cavity, and kept for the rest of
+    the stage.
+  - Before, the place goal also turned the long axis onto the cavity axis and
+    squared the jaws up.
+  - See the [design](../design/nearest-feasible-place-orientation.md) for the
+    probe behind these settings.
+- Over 120 episodes (six seeds) the place stage turned the tuber by a median of
+  14° (at most 35°), against 37° (at most 67°) when it squared everything up.
+  Success was 119/120 for both, and the one failure was the same episode: a 15.5°
+  tilted grasp slipped 15 mm during the place. No episode touched the door or
+  cabinet. The closest approach over the place stage was 3.9 mm, against 7.4 mm
+  before; a 3 mm planning margin let fingers brush the cabinet while opening and
+  backing out, because the gripper lags its command by several millimetres.
+- The upright posture needs more room than the 126 mm cavity gives freely, so it
+  has its own height and release opening.
+  - The jaws span 145 mm along their axis fully open, so upright jaws open only to
+    claw 0.008 (60 mm between the pads, against 43 mm across the held tuber),
+    spanning 105 mm (`one_above_other_release`).
+  - The place waypoints run 30 mm higher (`one_above_other_lift`).
+  - Even then the 10 mm margin leaves about 1 mm of play, so the posture fits only
+    about a third of the grasps; otherwise the nearest level orientation is used.
+  - Lifts of 0–15 mm never fit, and opening to 0.009 (5 mm per side) let the
+    fingers drag the tuber out on the way back.
+- The placement check measures against the chosen posture's release pose, so its
+  25 mm tolerance is unchanged. What grows is the distance to the nominal target:
+  level jaws leave the tuber 5–20 mm above it, upright jaws 42–48 mm.
+- With both postures (three runs of 120 episodes on six seeds each): 354/360
+  succeeded and the upright posture was chosen 42 times, 41 of them successfully.
+  - The median place rotation rose from 13° (±45° grasp roll, upright chosen once
+    in 120) to 19–25°, and the maximum from 38° to 70–74°. A grasp near upright
+    that does not fit turns back to level jaws.
+  - All 6 failures were grasp failures, not posture choices: 5 tubers squeezed out
+    between the fingers, in transport or during the release hold (4 traced, the
+    fifth matches the transport case), and 1 pick timed out.
+  - `gravity` and the default configuration behave identically per episode.
 - A released tuber keeps its velocity; one traced release glided off the target at
   about 5 cm/s. The arm holds still for 15 updates before opening
   (`grasp.pre_release_settle_steps`): without the hold 9 of 20 episodes succeeded,
@@ -318,7 +356,8 @@ the minimum gripper–microwave clearance is 15.7 mm. Each preset also runs two 
 episodes headless and checks the camera set (`env1_cam` and the wrist camera), that
 the gripper starts above the tuber, that a floating tuber's centre is inside the
 front image, the door range, and (`zero_gravity`) that the pick frame sits on the
-jaw contact tilted at most 20° with the jaws within 45° of level. In sweeps of the
+jaw contact tilted at most 20° and that the tuber floats within 25 mm of the
+chosen posture's release pose. In sweeps of the
 presets before the zero-gravity grasp tilt (batch 1, 20
 episodes per seed), the default randomization succeeded 20/20, and over four seeds
 `zero_gravity` succeeded 80/80 and `gravity` 77/80. The three `gravity` failures

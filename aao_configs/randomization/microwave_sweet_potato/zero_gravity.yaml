@@ -7,9 +7,9 @@
 # The tuber floats in front of the open cavity in a random attitude,
 # wherever the front camera sees it, not only over the counter.  The grasp
 # is randomized relative to the tuber: the jaws close at any roll about its
-# long axis (within 45 deg of level in the world), tilted 0-20 deg off that
-# axis, and up to 2 cm further back.  The placement pose inside the cavity
-# stays fixed.
+# long axis (from level to upright in the world), tilted 0-20 deg off that
+# axis, and up to 2 cm further back.  The tuber is placed with its long axis
+# level, side by side or one above the other, whichever fits nearest.
 defaults:
   - /randomization/microwave_sweet_potato/_microwave
   - /randomization/microwave_sweet_potato/_cameras
@@ -29,9 +29,10 @@ microwave_sweet_potato:
   # Close up to 2 cm further back toward the blunt end.
   grasp_randomization:
     y: [-0.02, 0.0]
-  # Level the jaws before insertion (the cavity fits only about 10 deg of
-  # jaw roll); only the tuber's long axis is placed, so it spins freely.
-  place_orientation: axis
+  # Place with the long axis level at the heading and jaw posture nearest to
+  # how the tuber arrives, checked for clearance along the insertion.
+  place_orientation: nearest
+  place_entry: held
   # Release clear of the dish: a spun tuber reaches lower than the settled one.
   release_height: 0.015
 
@@ -86,13 +87,15 @@ task:
             margin_px: 8
       # Jaw roll: the roll frame follows the tuber's full pose, then its roll
       # -- the turn about its own x, the tuber's long axis -- is set to an
-      # absolute value, so the jaws close within 45 deg of level whatever
-      # the tuber's spin.  The spin is uniform, so the jaw roll relative to
-      # the tuber still covers the full circle.
+      # absolute value, so the jaws close at any angle from level to
+      # upright whatever the tuber's spin.  The place goal then turns them at
+      # most about 15 deg to the nearer of its two postures when that one
+      # fits.  The spin is uniform, so the jaw roll relative to the tuber
+      # covers the full circle.
       sweet_potato_grasp_roll_frame:
         reference: sweet_potato
         roll:
-          range: [-0.785, 0.785]
+          range: [-1.5708, 1.5708]
           reference: absolute_world
         collision_radius: 0.0
       # Tilt relative to the tuber: the grasp frame follows the roll frame and

@@ -8,6 +8,7 @@ import mujoco
 import numpy as np
 import pytest
 
+from auto_atom.config.motion import EefControlConfig
 from auto_atom.config_loader import compose_task_config
 from auto_atom.runner.common import prepare_task_file
 from auto_atom.runtime import ComponentRegistry, TaskRunner
@@ -195,6 +196,40 @@ def test_microwave_sweet_potato_umi_v3_completes_headless() -> None:
         runner.close()
 
 
+def test_opened_gripper_geometry_follows_the_commanded_opening() -> None:
+    """Clearance checks measure the gripper settled at the release opening."""
+    ComponentRegistry.clear()
+    config = compose_task_config(
+        "microwave_sweet_potato",
+        ["env.viewer=null", "task.seed=3"],
+        config_dir=_ROOT / "aao_configs",
+    )
+    runner = TaskRunner().from_config(prepare_task_file(config))
+    try:
+        backend = runner._context.backend
+        operator = backend.get_operator_handler("arm")
+        runner.reset()
+        data = backend.get_env().envs[0].data
+        qpos_before = data.qpos.copy()
+
+        def jaw_span(command: EefControlConfig) -> float:
+            template = backend._opened_eef_template(0, operator, command)
+            jaw = template.positions[:, 1]
+            return float(jaw.max() - jaw.min())
+
+        full = jaw_span(EefControlConfig(close=False))
+        partial = jaw_span(EefControlConfig(close=False, joint_positions=[0.008]))
+
+        # Geom centres along the jaw axis: wide open versus partly open.
+        assert full > partial + 0.02
+        assert backend._opened_eef_template(
+            0, operator, EefControlConfig(close=False)
+        ) is backend._opened_eef_template(0, operator, EefControlConfig(close=False))
+        np.testing.assert_array_equal(data.qpos, qpos_before)
+    finally:
+        runner.close()
+
+
 @pytest.mark.parametrize("preset", ["gravity", "zero_gravity"])
 def test_randomization_presets_complete_headless(preset: str) -> None:
     """Each preset samples a wide scene and still finishes the task."""
@@ -273,8 +308,7 @@ def test_randomization_presets_complete_headless(preset: str) -> None:
                     half_fovy * front_spec.width / front_spec.height
                 )
                 # The pick frame sits on the jaw contact, tilted 0-20 deg off
-                # the long axis about a jaw axis square to it, with the jaws
-                # within 45 deg of level.
+                # the long axis about a jaw axis square to it.
                 frame = data.xmat[grasp_frame].reshape(3, 3)
                 on_tuber = data.site_xmat[grasp_site].reshape(3, 3)
                 np.testing.assert_allclose(
@@ -283,7 +317,6 @@ def test_randomization_presets_complete_headless(preset: str) -> None:
                 assert abs(float(frame[:, 0] @ on_tuber[:, 1])) < 1e-6
                 tilt = np.degrees(np.arccos(float(frame[:, 1] @ on_tuber[:, 1])))
                 assert tilt <= 20.0 + 1e-6
-                assert abs(np.degrees(np.arcsin(float(frame[2, 0])))) <= 45.0 + 1e-6
             else:
                 assert potato_height == pytest.approx(0.0821, abs=1e-3)
             # The home pose follows the tuber, so the gripper starts above it
@@ -291,14 +324,52 @@ def test_randomization_presets_complete_headless(preset: str) -> None:
             assert float(data.site_xpos[eef][2]) > potato_height + 0.05
             assert float(data.site_xmat[eef].reshape(3, 3)[2, 2]) > 0.5
             updates_used = 0
+            place_solution = None
             while not bool(np.all(update.done)) and updates_used < _MAX_UPDATES:
                 update = runner.update()
                 updates_used += 1
+                active = runner._env_states[0].active
+                if place_solution is None and active is not None:
+                    groups = {
+                        id(action.orientation_group): action.orientation_group
+                        for action in active.actions
+                        if action.orientation_group is not None
+                    }
+                    place_solution = next(
+                        (g for g in groups.values() if g.solution is not None), None
+                    )
             assert update.success.tolist() == [True], update.details
-            assert (
-                float(np.linalg.norm(data.xpos[potato] - data.site_xpos[target]))
-                < 0.025
-            )
+            if not zero_gravity:
+                assert (
+                    float(np.linalg.norm(data.xpos[potato] - data.site_xpos[target]))
+                    < 0.025
+                )
+            else:
+                # The place orientation was solved once, nearest first, with
+                # the planned path keeping the configured 10 mm clearance. The
+                # tuber floats where the chosen posture released it: an
+                # upright posture slides in and releases 3 cm higher.
+                assert place_solution is not None
+                assert place_solution.details["clearance_m"] >= 0.010
+                posture = place_solution.details["posture"]
+                assert posture in {"side_by_side", "one_above_other"}
+                lift = float(np.linalg.norm(place_solution.solution.position[0]))
+                assert lift == pytest.approx(
+                    0.03 if posture == "one_above_other" else 0.0, abs=1e-9
+                )
+                assert place_solution.release_joint_positions == (
+                    (0.008,) if posture == "one_above_other" else None
+                )
+                release_goal = place_solution.members[-1].resolved_motion_goal
+                assert (
+                    float(
+                        np.linalg.norm(
+                            data.xpos[potato]
+                            - release_goal.controlled_world_pose.position[0]
+                        )
+                    )
+                    < 0.025
+                )
         # The microwave itself is randomized on the counter, door included.
         assert float(np.linalg.norm(microwave_starts[0] - microwave_starts[1])) > 1e-3
         assert abs(door_angles[0] - door_angles[1]) > 1e-3
