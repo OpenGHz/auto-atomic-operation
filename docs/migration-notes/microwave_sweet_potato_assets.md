@@ -157,6 +157,9 @@ aao-demo task=microwave_sweet_potato randomization=microwave_sweet_potato/gravit
 aao-demo task=microwave_sweet_potato randomization=microwave_sweet_potato/zero_gravity
 ```
 
+[Microwave Sweet Potato Randomization](../task-tuning/microwave_sweet_potato_randomization.md)
+lists every randomized item of the task and both presets in one place.
+
 Both presets move the microwave on the counter (x -10/+4 cm, y -3/0 cm, yaw ±15°;
 the feet stay on the counter for every yaw) and place the tuber relative to it
 (`reference: microwave`), so the tuber is always in front of the open cavity and
@@ -261,7 +264,7 @@ cavity and clipped render meshes from 30°.
 
 The home pose follows only the tuber's
 position (`reference: sweet_potato`, `follow: position`), so it always starts
-10–20 cm above and 35–44 cm behind it, jittered by x ±6 cm and ±0.12/±0.2 rad of
+10–20 cm above and 20–29 cm behind it, jittered by x ±6 cm and ±0.12/±0.2 rad of
 pitch/yaw. With the default `follow: pose` it would orbit the
 tuber's long axis with the spin: over 40 resets 15 started below the tuber and 19
 upside down. A floating tuber is pushed by the closing jaws instead of resting on the
