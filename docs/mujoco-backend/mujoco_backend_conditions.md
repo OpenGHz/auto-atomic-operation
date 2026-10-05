@@ -273,8 +273,14 @@ then accepts measurable motion away from fully open. This fallback is disabled
 when `require_grasp` is true.
 
 ### 6.3 Opening
-**Condition**: `actual_qpos <= eef_open_value + eef_tolerance` after the
-configured pre-release and release-settle updates.
+**Condition**: `actual_qpos <= target_ctrl + eef_tolerance` after the
+configured pre-release and release-settle updates, and after at least one
+update that commanded the opening. `target_ctrl` is `eef_open_value`, unless
+the primitive's `joint_positions` names a partial opening.
+
+The last requirement matters for a partial opening: jaws closed on an object
+can already sit within tolerance of it, and the hold would otherwise end the
+primitive before the opening was ever commanded.
 
 With `pre_release_settle_steps > 0` the gripper keeps its previous command for
 that many updates before it opens, while the arm holds its last target. A pose

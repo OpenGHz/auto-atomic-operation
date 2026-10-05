@@ -751,9 +751,17 @@ class MujocoOperatorHandler(OperatorHandler):
                 event = "eef_reached"
             elif (
                 not eef.close
+                # Settled, and commanded at least once: a gripper already
+                # within tolerance of a partial opening must still be told to
+                # open before the hold counts as done.
                 and self._eef_steps[env_index]
-                >= pre_release + self.control.grasp.release_settle_steps
-                and actual <= (self.eef_open_value + self.control.tolerance.eef)
+                >= max(
+                    pre_release + self.control.grasp.release_settle_steps,
+                    pre_release + 1,
+                )
+                # The commanded opening: the open value unless joint_positions
+                # names a partial one.
+                and actual <= (target_value + self.control.tolerance.eef)
             ):
                 reached = True
                 event = "eef_reached"

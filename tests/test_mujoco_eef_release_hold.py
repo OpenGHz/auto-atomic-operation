@@ -96,3 +96,45 @@ def test_closing_ignores_the_pre_release_window() -> None:
 
     assert env.commands == [_CLOSED]
     assert result.signals[0] == ControlSignal.REACHED
+
+
+def test_a_partial_opening_completes_at_its_commanded_value() -> None:
+    """``joint_positions`` names how far to open; reaching it is enough."""
+    env = _InstantGripperEnv()
+    handler = _handler(env)
+    partial = EefControlConfig(close=False, joint_positions=[0.3])
+
+    result = handler.control_eef(partial, target=None)
+
+    assert env.commands == [0.3]
+    assert result.signals[0] == ControlSignal.REACHED
+
+
+class _BlockedGripperEnv(_InstantGripperEnv):
+    """The jaws close only as far as the held object lets them."""
+
+    def __init__(self, blocked_at: float) -> None:
+        super().__init__()
+        self.blocked_at = blocked_at
+
+    def step(self, ctrl: np.ndarray, env_mask: np.ndarray) -> None:
+        super().step(ctrl, env_mask)
+        data = self.envs[0].data
+        data.qpos[0] = min(data.ctrl[0], self.blocked_at)
+
+
+def test_a_hold_without_settling_still_commands_the_opening() -> None:
+    """Completion may not fire on the last hold update, before any command."""
+    # Closed on the object, the jaws already sit within tolerance of the
+    # partial opening below.
+    env = _BlockedGripperEnv(blocked_at=0.31)
+    handler = _handler(env, pre_release_settle_steps=3)
+    partial = EefControlConfig(close=False, joint_positions=[0.3])
+
+    for update in range(1, 10):  # noqa: B007 — read after the loop
+        result = handler.control_eef(partial, target=None)
+        if result.signals[0] == ControlSignal.REACHED:
+            break
+
+    assert update == 4
+    assert env.commands == [_CLOSED] * 3 + [0.3]

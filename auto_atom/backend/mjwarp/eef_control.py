@@ -343,7 +343,8 @@ class MjWarpEefControl:
            angle, so after enough settling time a finger that has moved
            noticeably off the open position also counts. Without this rung a
            successful grasp on a stiff object reads as a timeout.
-        4. Opening accepts on returning to the open position, after the
+        4. Opening accepts on reaching the commanded opening (the open
+           position unless ``joint_positions`` names a partial one), after the
            configured pre-release hold and release settling.
 
         Rungs 2 and 3 inherit a **sign assumption** from the native ladder that
@@ -371,10 +372,13 @@ class MjWarpEefControl:
             ):
                 return True, "eef_reached"
         elif not close:
-            if (
-                steps >= self.pre_release_settle_steps + self.release_settle_steps
-                and actual <= self.eef_open_value + self.eef_tolerance
-            ):
+            # Settled, and commanded at least once: a gripper already within
+            # tolerance of a partial opening must still be told to open.
+            settled = max(
+                self.pre_release_settle_steps + self.release_settle_steps,
+                self.pre_release_settle_steps + 1,
+            )
+            if steps >= settled and actual <= command + self.eef_tolerance:
                 return True, "eef_reached"
 
         return False, "eef_moving"

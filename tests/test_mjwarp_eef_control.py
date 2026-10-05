@@ -200,6 +200,48 @@ def test_opening_holds_the_grip_for_the_pre_release_window(control):
     assert reached_at is not None and reached_at >= 5
 
 
+def test_a_partial_opening_completes_at_its_commanded_value(control):
+    """``joint_positions`` names how far to open; the open end is not required."""
+    state = control.state
+    actuator = control.operator.eef_actuator_ids[0]
+    state.set_ctrl(np.asarray([actuator]), np.asarray([control.eef_close_value]))
+    partial = 0.5 * (control.eef_open_value + control.eef_close_value)
+
+    result = None
+    for _ in range(40):
+        with state.deferred_step():
+            result = control.control(close=False, joint_positions=[partial])
+        if result.signals[0] == ControlSignal.REACHED:
+            break
+
+    assert result.signals[0] == ControlSignal.REACHED
+    assert float(state.get_ctrl()[0][actuator]) == pytest.approx(partial)
+
+
+def test_a_hold_without_settling_still_commands_the_opening(control):
+    """Completion may not fire on the last hold update, before any command."""
+    state = control.state
+    actuator = control.operator.eef_actuator_ids[0]
+    # The hold keeps the current command, so the jaws stay at the open end,
+    # already within tolerance of this opening.
+    state.set_ctrl(np.asarray([actuator]), np.asarray([control.eef_open_value]))
+    control.pre_release_settle_steps = 3
+    control.release_settle_steps = 0
+    partial = control.eef_open_value + 0.5 * control.eef_tolerance
+
+    commands = []
+    for update in range(1, 10):  # noqa: B007 — read after the loop
+        with state.deferred_step():
+            result = control.control(close=False, joint_positions=[partial])
+        commands.append(float(state.get_ctrl()[0][actuator]))
+        if result.signals[0] == ControlSignal.REACHED:
+            break
+
+    assert update == 4
+    assert commands[:3] == [pytest.approx(control.eef_open_value)] * 3
+    assert commands[3] == pytest.approx(partial)
+
+
 def test_timeout_is_reported_when_nothing_completes(control):
     """A command that never completes times out rather than running forever."""
     state = control.state
