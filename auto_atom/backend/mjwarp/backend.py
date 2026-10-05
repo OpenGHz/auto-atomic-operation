@@ -23,6 +23,7 @@ import numpy as np
 
 from auto_atom.backend.mjwarp.handlers import MjWarpObjectHandler
 from auto_atom.basis.mjwarp.env import MjWarpObjectOnlyEnv
+from auto_atom.config.operations import Operation
 from auto_atom.config.randomization import (
     OperatorRandomizationConfig,
     ResolvedRandomizationConfig,
@@ -231,7 +232,9 @@ class MjWarpObjectOnlyBackend(SceneBackend):
         except KeyError:
             raise KeyError(_OPERATOR_UNSUPPORTED.format(name=operator_name)) from None
 
-        queries = MjWarpGraspQueries(self.env.state, operator)
+        queries = MjWarpGraspQueries(
+            self.env.state, operator, attachments=self.env.grasp_attachments
+        )
         self._grasp_query_cache[operator_name] = queries
         return queries
 
@@ -255,7 +258,9 @@ class MjWarpObjectOnlyBackend(SceneBackend):
         handler = self.object_handlers.get(object_name)
         if handler is None:
             return np.zeros(self.batch_size, dtype=bool)
-        return self._grasp_queries(operator_name).is_object_grasped(handler.body_name)
+        return self._grasp_queries(operator_name).is_object_grasped(
+            handler.body_name, object_name
+        )
 
     def is_operator_grasping(self, operator_name: str) -> np.ndarray:
         return self._grasp_queries(operator_name).is_operator_grasping(
@@ -692,6 +697,8 @@ def build_mjwarp_object_only_backend(
         name: MjWarpObjectHandler(name=name, state=env.state, body_name=name)
         for name in sorted(_collect_object_names(config, body_exists))
     }
+    operator_handlers = _build_operator_handlers(env, operator_configs)
+    _validate_grasp_attachments(config, env, operator_handlers, object_handlers)
     return MjWarpObjectOnlyBackend(
         config,
         env,
@@ -699,13 +706,79 @@ def build_mjwarp_object_only_backend(
         randomization=ResolvedRandomizationConfig.from_scope_config(
             config.randomization
         ),
-        operator_handlers=_build_operator_handlers(env, operator_configs),
+        operator_handlers=operator_handlers,
         operator_initial_states={
             name: operator_config.initial_state
             for name, operator_config in operator_configs.items()
             if getattr(operator_config, "initial_state", None) is not None
         },
     )
+
+
+# Operations whose EEF closes on the stage object, so a grasp attachment may
+# hold that object.
+_CLOSING_OPERATIONS = frozenset({Operation.PICK, Operation.PULL, Operation.GRASP})
+
+
+def _validate_grasp_attachments(
+    config: AutoAtomConfig,
+    env: MjWarpObjectOnlyEnv,
+    operator_handlers: Mapping[str, Any],
+    object_handlers: Mapping[str, MjWarpObjectHandler],
+) -> None:
+    """Check that every attaching operator has the welds its stages need.
+
+    As native: each weld must sit on the body of the operator's EEF site, and
+    every stage object the operator closes on needs one. Each weld must also
+    hold the body the object handler drives -- a scene with a ``<name>_gs``
+    body welds that one, which only the native GS env resolves objects to.
+    Each is a config error that would otherwise surface only at the first
+    grasp, or as a weld holding the wrong body.
+    """
+    import mujoco
+
+    model = env.host_model
+
+    def body_name(body: int) -> str:
+        return str(mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_BODY, body))
+
+    for name, handler in operator_handlers.items():
+        eef = handler.eef
+        if eef is None or not eef.attach:
+            continue
+        welds = eef.attachments.weld_bodies(name)
+        site = handler.operator.eef_site_name
+        gripper = int(model.site_bodyid[env.state.site_id(site)])
+        for object_name, (body, target) in welds.items():
+            if body != gripper:
+                raise ValueError(
+                    f"The grasp attachment weld of operator '{name}' for "
+                    f"'{object_name}' is on body '{body_name(body)}', but its EEF "
+                    f"site '{site}' is on body '{body_name(gripper)}'. Set "
+                    "env.operators.<name>.pose_site to the EEF site."
+                )
+            object_handler = object_handlers.get(object_name)
+            if object_handler is not None and body_name(target) != (
+                object_handler.body_name
+            ):
+                raise ValueError(
+                    f"The grasp attachment weld of operator '{name}' for "
+                    f"'{object_name}' holds body '{body_name(target)}', but the "
+                    f"MJWarp backend drives body '{object_handler.body_name}'."
+                )
+        for stage in config.stages:
+            if stage.operation not in _CLOSING_OPERATIONS or not stage.object:
+                continue
+            stage_operator = stage.operator or (
+                name if len(operator_handlers) == 1 else ""
+            )
+            if stage_operator == name and stage.object not in welds:
+                raise ValueError(
+                    f"Operator '{name}' sets grasp.attach, but the scene has no "
+                    f"grasp attachment weld for '{stage.object}'. Task config "
+                    "preparation declares them in env.grasp_attachments; an env "
+                    "built without it must list them there."
+                )
 
 
 def _build_operator_handlers(
@@ -792,11 +865,7 @@ def _build_operator_handlers(
             n_substeps=env.n_substeps,
         )
 
-        if grasp.get("attach"):
-            raise NotImplementedError(
-                f"Operator '{name}' sets control.grasp.attach, which the MJWarp "
-                "backend does not support yet; use the native MuJoCo backend."
-            )
+        attach = bool(grasp.get("attach", False))
         eef_overrides: Dict[str, Any] = {
             "timeout_steps": int(control.get("timeout_steps", 100)),
             "settle_steps": int(grasp.get("settle_steps", 5)),
@@ -805,6 +874,8 @@ def _build_operator_handlers(
             "lateral_threshold": float(grasp.get("lateral_threshold", 0.0)),
             "grasp_axis": int(grasp.get("grasp_axis", 2)),
             "n_substeps": env.n_substeps,
+            "attach": attach,
+            "attachments": env.grasp_attachments if attach else None,
         }
         if "eef" in tolerance:
             # An explicit tolerance wins over the ctrlrange-derived one.

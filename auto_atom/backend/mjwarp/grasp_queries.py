@@ -15,7 +15,7 @@ the same array.
 
 from __future__ import annotations
 
-from typing import Dict, Mapping, Optional
+from typing import TYPE_CHECKING, Dict, Mapping, Optional
 
 import numpy as np
 
@@ -26,6 +26,9 @@ from auto_atom.backend.mjwarp.operator_state import (
 )
 from auto_atom.basis.mjwarp.state import MjWarpSceneState
 
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from auto_atom.basis.mjwarp.attachments import MjWarpGraspAttachments
+
 
 class MjWarpGraspQueries:
     """Grasp/contact questions answered across every world.
@@ -33,6 +36,10 @@ class MjWarpGraspQueries:
     Topology that cannot change during a run -- the operator's body subtree and
     its finger-geom classification -- is resolved once here rather than per
     query, since a post-condition check runs on every control tick.
+
+    With ``attachments``, an object this operator holds by its grasp weld
+    counts as grasped whatever its contacts show, as it does for the gripper
+    controller.
     """
 
     def __init__(
@@ -42,9 +49,11 @@ class MjWarpGraspQueries:
         *,
         lateral_threshold: float = 0.0,
         grasp_axis: int = 2,
+        attachments: Optional["MjWarpGraspAttachments"] = None,
     ) -> None:
         self.state = state
         self.operator = operator
+        self.attachments = attachments
         self.lateral_threshold = lateral_threshold
         self.grasp_axis = grasp_axis
         self._operator_bodies = state.operator_body_ids(operator.root_body_name)
@@ -59,13 +68,17 @@ class MjWarpGraspQueries:
             self._target_bodies[body_name] = cached
         return cached
 
-    def is_object_grasped(self, body_name: str) -> np.ndarray:
+    def is_object_grasped(
+        self, body_name: str, object_name: Optional[str] = None
+    ) -> np.ndarray:
         """``(nworld,)`` bool: both fingers on the target and it sits centred.
 
         Same two-part verdict the gripper controller uses, so a stage
         post-condition and the controller that satisfied it cannot disagree.
+        ``object_name`` is the target's logical name, which grasp attachments
+        are keyed on; it defaults to the body name.
         """
-        result = np.zeros(self.state.nworld, dtype=bool)
+        result = self._attached(object_name or body_name)
         target_bodies = self._bodies_for(body_name)
         if not target_bodies:
             return result
@@ -75,6 +88,8 @@ class MjWarpGraspQueries:
             self.state, self.operator
         )
         for world in range(self.state.nworld):
+            if result[world]:
+                continue
             left, right = self.state.finger_contacts_with_target(
                 world, target_bodies, self._finger_sides
             )
@@ -97,8 +112,8 @@ class MjWarpGraspQueries:
         two differ and contacts are keyed on the body.
         """
         result = np.zeros(self.state.nworld, dtype=bool)
-        for body_name in body_names.values():
-            result |= self.is_object_grasped(body_name)
+        for name, body_name in body_names.items():
+            result |= self.is_object_grasped(body_name, name)
         return result
 
     def grasped_object_name(
@@ -117,9 +132,20 @@ class MjWarpGraspQueries:
                 f"world_index must be in [0, {self.state.nworld}); got {world_index}."
             )
         for name, body_name in body_names.items():
-            if bool(self.is_object_grasped(body_name)[world_index]):
+            if bool(self.is_object_grasped(body_name, name)[world_index]):
                 return name
         return None
+
+    def _attached(self, object_name: str) -> np.ndarray:
+        """``(nworld,)`` bool: worlds holding ``object_name`` by its weld."""
+        result = np.zeros(self.state.nworld, dtype=bool)
+        if self.attachments is not None:
+            for world in range(self.state.nworld):
+                result[world] = (
+                    self.attachments.attached_object(self.operator.name, world)
+                    == object_name
+                )
+        return result
 
     def is_operator_contacting(self, body_name: str) -> np.ndarray:
         """``(nworld,)`` bool: any operator geom touches the target at all.

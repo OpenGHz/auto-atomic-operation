@@ -552,10 +552,37 @@ def assembled():
     backend.teardown()
 
 
-def test_grasp_attachment_is_refused_rather_than_ignored():
-    """The welds are compiled in, but MJWarp cannot activate them yet."""
-    with pytest.raises(NotImplementedError, match="grasp.attach"):
-        _build_via_builder(overrides=("+task_operators.arm.control.grasp.attach=true",))
+_ATTACH = "+task_operators.arm.control.grasp.attach=true"
+
+
+def test_grasp_attachment_reaches_the_gripper_control():
+    """attach=true welds the picked object, per world, through the env."""
+    backend, _ = _build_via_builder(overrides=(_ATTACH,))
+    try:
+        eef = backend.get_operator_handler("arm").eef
+        attachments = backend.env.grasp_attachments
+
+        assert eef.attach
+        assert eef.attachments is attachments
+        assert set(attachments.weld_bodies("arm")) == {"object"}
+        # One weld pose per world.
+        assert backend.env.state.model.eq_data.shape[0] == backend.batch_size
+        assert not backend.is_object_grasped("arm", "object").any()
+    finally:
+        backend.teardown()
+
+
+def test_grasp_attachment_off_the_eef_body_is_rejected():
+    weld = "+env.grasp_attachments=[{operator:arm,object:object,frame:rack_target}]"
+    with pytest.raises(ValueError, match="is on body 'rack_target'"):
+        _build_via_builder(overrides=(_ATTACH, weld))
+
+
+def test_without_attach_the_env_carries_no_welds(assembled):
+    backend, _ = assembled
+
+    assert backend.env.grasp_attachments is None
+    assert not backend.get_operator_handler("arm").eef.attach
 
 
 def test_builder_assembles_an_operator_handler(assembled):

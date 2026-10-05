@@ -23,6 +23,7 @@ from auto_atom.backend.mjwarp.operator_state import (
     MjWarpOperatorState,
     get_eef_pose_in_world,
 )
+from auto_atom.basis.mjwarp.attachments import MjWarpGraspAttachments
 from auto_atom.basis.mjwarp.state import MjWarpSceneState
 from auto_atom.execution_model import ControlResult, ControlSignal
 
@@ -34,6 +35,10 @@ class MjWarpEefControl:
     ``eef_open_value`` / ``eef_close_value`` are the actuator commands for the
     two ends of travel, and ``grasp_axis`` is the axis the fingers close along
     (so the lateral check measures the other two).
+
+    With ``attach``, a confirmed grasp welds the target to the gripper through
+    ``attachments`` and opening releases it, as native ``grasp.attach`` does;
+    while welded the target counts as grasped whatever its contacts show.
     """
 
     state: MjWarpSceneState
@@ -49,11 +54,18 @@ class MjWarpEefControl:
     lateral_threshold: float = 0.0
     grasp_axis: int = 2
     n_substeps: int = 1
+    attach: bool = False
+    attachments: Optional[MjWarpGraspAttachments] = None
 
     _steps: np.ndarray = field(init=False, repr=False)
     _last_command_key: List[Optional[str]] = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
+        if self.attach and self.attachments is None:
+            raise ValueError(
+                f"Operator '{self.operator.name}' sets grasp.attach, but the env "
+                "has no grasp attachment welds."
+            )
         nworld = self.state.nworld
         self._steps = np.zeros(nworld, dtype=np.int64)
         self._last_command_key = [None] * nworld
@@ -125,6 +137,7 @@ class MjWarpEefControl:
         require_grasp: bool = False,
         joint_positions: Any = None,
         target_body_name: Optional[str] = None,
+        target_object_name: Optional[str] = None,
         world_mask: Optional[np.ndarray] = None,
     ) -> ControlResult:
         """Advance the gripper one control tick for the selected worlds.
@@ -135,7 +148,8 @@ class MjWarpEefControl:
         ``target_body_name`` is the grasp target. It is required for
         ``require_grasp``: without a target there is nothing to confirm a grasp
         against, which native reports as a config error rather than a failed
-        grasp, and so does this.
+        grasp, and so does this. ``target_object_name`` is its logical name,
+        which grasp attachments are keyed on; it defaults to the body name.
         """
         nworld = self.state.nworld
         mask = self._normalize_mask(world_mask)
@@ -192,6 +206,9 @@ class MjWarpEefControl:
                 np.full(eef_ids.size, command, dtype=np.float64),
                 world_mask=write_mask,
             )
+            if not close and self.attach:
+                # Opening releases the weld before the jaws part.
+                self.attachments.release(self.operator.name, write_mask)
         self.state.step(self.n_substeps, world_mask=mask)
         self._steps[worlds] += 1
 
@@ -202,6 +219,7 @@ class MjWarpEefControl:
             command=command,
             target_ids=target_ids,
             target_body_name=target_body_name,
+            target_object_name=target_object_name or target_body_name,
             finger_sides=finger_sides,
             signals=signals,
             details=details,
@@ -217,11 +235,14 @@ class MjWarpEefControl:
         command: float,
         target_ids: Optional[frozenset],
         target_body_name: Optional[str],
+        target_object_name: Optional[str],
         finger_sides: Dict[int, str],
         signals: np.ndarray,
         details: List[Dict[str, Any]],
     ) -> None:
         """Decide REACHED / RUNNING / TIMED_OUT per world after the step."""
+        attaching = self.attach and close and bool(target_object_name)
+        to_attach = np.zeros(self.state.nworld, dtype=bool)
         qpos_indices = self.operator.eef_qpos_indices
         actual_all = (
             self.state.get_joint_positions(qpos_indices)
@@ -244,14 +265,31 @@ class MjWarpEefControl:
 
             grasp: Optional[Dict[str, Any]] = None
             if close and target_ids is not None:
-                grasp = self._grasp_verdict(
-                    world,
-                    target_ids,
-                    finger_sides,
-                    object_positions[world] if object_positions is not None else None,
-                    eef_positions[world],
-                    eef_orientations[world],
-                )
+                if (
+                    attaching
+                    and self.attachments.attached_object(self.operator.name, world)
+                    == target_object_name
+                ):
+                    # A welded object is held whatever its contacts show.
+                    grasp = {
+                        "left_contact": True,
+                        "right_contact": True,
+                        "lateral_ok": True,
+                        "attached": True,
+                    }
+                else:
+                    grasp = self._grasp_verdict(
+                        world,
+                        target_ids,
+                        finger_sides,
+                        (
+                            object_positions[world]
+                            if object_positions is not None
+                            else None
+                        ),
+                        eef_positions[world],
+                        eef_orientations[world],
+                    )
 
             reached, event = self._completion(
                 close=close,
@@ -281,6 +319,9 @@ class MjWarpEefControl:
                 details[world]["grasp_check"] = grasp
 
             if reached:
+                if attaching and event == "eef_grasped":
+                    to_attach[world] = True
+                    details[world]["attached_object"] = target_object_name
                 signals[world] = ControlSignal.REACHED
                 self._steps[world] = 0
             elif steps >= self.timeout_steps:
@@ -288,6 +329,9 @@ class MjWarpEefControl:
                 signals[world] = ControlSignal.TIMED_OUT
             else:
                 signals[world] = ControlSignal.RUNNING
+
+        if to_attach.any():
+            self.attachments.attach(self.operator.name, target_object_name, to_attach)
 
     def _grasp_verdict(
         self,

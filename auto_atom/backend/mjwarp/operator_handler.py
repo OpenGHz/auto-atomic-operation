@@ -143,6 +143,7 @@ class MjWarpOperatorHandler(OperatorHandler):
             require_grasp=eef.require_grasp,
             joint_positions=eef.joint_positions,
             target_body_name=self._target_body_name(target),
+            target_object_name=None if target is None else target.name,
             world_mask=env_mask,
         )
 

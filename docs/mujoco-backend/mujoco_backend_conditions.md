@@ -337,7 +337,13 @@ task_operators:
   An entry listed there by hand is kept, e.g. to change `solref` / `solimp`.
 - **Validation:** building the backend checks that each attaching operator has a
   weld for every object it closes on, sitting on its EEF site's body.
-- **Backends:** native MuJoCo only; the MJWarp backend refuses `attach: true`.
+- **Backends:** native MuJoCo and MJWarp. On MJWarp each world welds its
+  object at its own grasp pose: an env with grasp welds batches `eq_data` per
+  world, and attaching or releasing sets `eq_active` only in the worlds
+  concerned. MJWarp has no noslip solver, so without the weld a carried object
+  creeps more than on native. MJWarp also checks that each weld holds the body
+  its object handler drives; it does not resolve `<name>_gs` bodies, so a
+  scene with one cannot use `attach` there.
 - **Low-level actions:** only the task runner's EEF primitive attaches. Raw
   gripper actions, e.g. data replay or an external policy driving
   `apply_joint_action`, do not, so a recording made with `attach` replays

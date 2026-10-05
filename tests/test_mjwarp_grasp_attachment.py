@@ -8,12 +8,16 @@ import pytest
 mujoco = pytest.importorskip("mujoco")
 pytest.importorskip("mujoco_warp")
 
+from auto_atom.backend.mjwarp.eef_control import MjWarpEefControl  # noqa: E402
+from auto_atom.backend.mjwarp.grasp_queries import MjWarpGraspQueries  # noqa: E402
+from auto_atom.backend.mjwarp.operator_state import register_operator  # noqa: E402
 from auto_atom.basis.mjwarp.attachments import MjWarpGraspAttachments  # noqa: E402
 from auto_atom.basis.mjwarp.state import (  # noqa: E402
     BATCHED_MODEL_FIELDS,
     MjWarpSceneState,
 )
 from auto_atom.config.env_config import GraspAttachmentConfig  # noqa: E402
+from auto_atom.execution_model import ControlSignal  # noqa: E402
 from auto_atom.scene_composition import create_grasp_welds  # noqa: E402
 
 # A gripper on three slide joints with one actuated finger, and a free cube
@@ -56,6 +60,10 @@ _SCENE = """
 _BOTH = np.array([True, True])
 _FIRST = np.array([True, False])
 _SECOND = np.array([False, True])
+
+
+class _StubIK:
+    pass
 
 
 @pytest.fixture(scope="module")
@@ -201,3 +209,116 @@ def test_missing_or_undeclared_welds_are_errors(host_model) -> None:
         MjWarpGraspAttachments(state, [("arm", "plate")])
     with pytest.raises(KeyError, match="No grasp attachment weld"):
         _attachments(state).attach("arm", "plate", _BOTH)
+
+
+# ----------------------------------------------------------------------
+# Gripper control and grasp queries
+# ----------------------------------------------------------------------
+
+
+def _operator(state: MjWarpSceneState):
+    return register_operator(
+        state,
+        name="arm",
+        root_body="gripper",
+        eef_site="eef_pose",
+        arm_actuators=("ax", "ay", "az"),
+        eef_actuators=("grip",),
+        ik_solver=_StubIK(),
+    )
+
+
+def _verdict(held: bool):
+    """Stand in for the finger-contact check."""
+    return lambda *_args, **_kwargs: {
+        "left_contact": held,
+        "right_contact": held,
+        "lateral_ok": held,
+    }
+
+
+def _control(state, attachments, **overrides) -> MjWarpEefControl:
+    control = MjWarpEefControl(
+        state=state,
+        operator=_operator(state),
+        eef_open_value=0.0,
+        eef_close_value=0.02,
+        eef_tolerance=0.002,
+        settle_steps=1,
+        attach=True,
+        attachments=attachments,
+        **overrides,
+    )
+    control._grasp_verdict = _verdict(True)
+    return control
+
+
+def _close(control: MjWarpEefControl, world_mask=None):
+    return control.control(
+        close=True,
+        target_body_name="cube",
+        target_object_name="cube",
+        world_mask=world_mask,
+    )
+
+
+def test_a_verified_grasp_attaches_and_opening_releases(host_model) -> None:
+    state = _state(host_model)
+    attachments = _attachments(state)
+    control = _control(state, attachments, pre_release_settle_steps=2)
+
+    result = _close(control, _FIRST)
+    assert result.signals[0] == ControlSignal.REACHED
+    assert result.details[0]["attached_object"] == "cube"
+    assert attachments.attached_object("arm", 0) == "cube"
+    assert attachments.attached_object("arm", 1) is None
+
+    # While welded, the object counts as grasped whatever its contacts show.
+    control._grasp_verdict = _verdict(False)
+    result = _close(control)
+    assert result.signals[0] == ControlSignal.REACHED
+    assert result.details[0]["grasp_check"]["attached"]
+    assert result.signals[1] == ControlSignal.RUNNING
+
+    # The weld survives the pre-release hold, then opening releases it.
+    control.control(close=False)
+    control.control(close=False)
+    assert attachments.attached_object("arm", 0) == "cube"
+    control.control(close=False)
+    assert attachments.attached_object("arm", 0) is None
+
+
+def test_without_attach_a_grasp_leaves_the_object_free(host_model) -> None:
+    state = _state(host_model)
+    attachments = _attachments(state)
+    control = _control(state, attachments)
+    control.attach = False
+
+    result = _close(control)
+
+    assert result.signals[0] == ControlSignal.REACHED
+    assert "attached_object" not in result.details[0]
+    assert attachments.attached_object("arm", 0) is None
+
+
+def test_attach_needs_the_env_welds(host_model) -> None:
+    state = _state(host_model)
+    with pytest.raises(ValueError, match="no grasp attachment welds"):
+        _control(state, None)
+
+
+def test_grasp_queries_count_a_welded_object_as_grasped(host_model) -> None:
+    state = _state(host_model)
+    attachments = _attachments(state)
+    queries = MjWarpGraspQueries(state, _operator(state), attachments=attachments)
+    assert not queries.is_object_grasped("cube").any()
+
+    attachments.attach("arm", "cube", _FIRST)
+
+    # No finger touches the cube; the weld alone holds it.
+    np.testing.assert_array_equal(queries.is_object_grasped("cube"), [True, False])
+    np.testing.assert_array_equal(
+        queries.is_operator_grasping({"cube": "cube"}), [True, False]
+    )
+    assert queries.grasped_object_name({"cube": "cube"}, 0) == "cube"
+    assert queries.grasped_object_name({"cube": "cube"}, 1) is None

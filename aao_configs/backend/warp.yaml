@@ -16,6 +16,8 @@
 #
 # MJWarp disables `noslip_iterations` on its compiled model with a warning;
 # grasped objects may creep under load. Shared MJCF and CPU physics retain it.
+# `+task_operators.<name>.control.grasp.attach=true` welds a verified grasp to
+# the gripper instead (docs/mujoco-backend/mujoco_backend_conditions.md 6.4).
 #
 # `njmax` is the constraint budget per world. 2048 provides headroom over the
 # previous 512 default; contact-heavy scenes may still need `env.njmax=<n>`.
