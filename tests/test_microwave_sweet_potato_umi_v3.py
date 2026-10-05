@@ -377,3 +377,67 @@ def test_randomization_presets_complete_headless(preset: str) -> None:
         assert float(np.linalg.norm(wrist_mounts[0] - wrist_mounts[1])) > 1e-4
     finally:
         runner.close()
+
+
+def test_grasp_attachment_holds_the_tuber_from_grasp_to_release() -> None:
+    """With grasp.attach the tuber is welded to the gripper while carried.
+
+    Round 15 of seed 201 drops the tuber in transport without the weld. With
+    it the tuber keeps its grasp pose, and a pre-release hold lets the arm
+    settle before the weld lets go.
+    """
+    ComponentRegistry.clear()
+    config = compose_task_config(
+        "microwave_sweet_potato",
+        [
+            "env.viewer=null",
+            "task.seed=201",
+            "randomization=microwave_sweet_potato/gravity",
+            "+task_operators.arm.control.grasp.attach=true",
+            "+task_operators.arm.control.grasp.pre_release_settle_steps=10",
+        ],
+        config_dir=_ROOT / "aao_configs",
+    )
+    runner = TaskRunner().from_config(prepare_task_file(config))
+    try:
+        single_env = runner._context.backend.get_env().envs[0]  # type: ignore[union-attr]
+        model, data = single_env.model, single_env.data
+        assert set(single_env.grasp_weld_bodies("arm")) == {"sweet_potato"}
+        gripper = _id(model, mujoco.mjtObj.mjOBJ_BODY, "umi_interface")
+        potato = _id(model, mujoco.mjtObj.mjOBJ_BODY, "sweet_potato")
+        target = _id(model, mujoco.mjtObj.mjOBJ_SITE, "microwave_target_site")
+
+        def potato_in_gripper() -> np.ndarray:
+            rotation = data.xmat[gripper].reshape(3, 3)
+            return rotation.T @ (data.xpos[potato] - data.xpos[gripper])
+
+        # Each reset draws from its own stream, so resets alone reach round 15.
+        for _ in range(14):
+            runner.reset()
+        update = runner.reset()
+        updates_used = 0
+        grasp_pose = None
+        drift = 0.0
+        attached_stages = set()
+        while not bool(np.all(update.done)) and updates_used < _MAX_UPDATES:
+            update = runner.update()
+            updates_used += 1
+            if single_env.attached_object("arm") == "sweet_potato":
+                attached_stages.add(update.stage_name[0])
+                if grasp_pose is None:
+                    grasp_pose = potato_in_gripper()
+                drift = max(
+                    drift, float(np.linalg.norm(potato_in_gripper() - grasp_pose))
+                )
+
+        assert update.success.tolist() == [True], update.details
+        # Welded through the carry and the place approach, released at the end.
+        assert attached_stages == {
+            "pick_sweet_potato",
+            "place_sweet_potato_in_microwave",
+        }
+        assert single_env.attached_object("arm") is None
+        assert drift < 1.0e-3
+        assert float(np.linalg.norm(data.xpos[potato] - data.site_xpos[target])) < 0.025
+    finally:
+        runner.close()

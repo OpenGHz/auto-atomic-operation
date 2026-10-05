@@ -192,6 +192,8 @@ aao-demo task=microwave_sweet_potato randomization=microwave_sweet_potato/gravit
 aao-demo task=microwave_sweet_potato randomization=microwave_sweet_potato/gravity task.seed=203 +round_selection=12
 ```
 
+加 `+task_operators.arm.control.grasp.attach=true +task_operators.arm.control.grasp.pre_release_settle_steps=10` 后，夹爪在确认抓住地瓜时与之固连，直到张开为止，上面三次都会成功。种子 201–206 上 `gravity` 由 116/120 升到 120/120（见 [抓取固连](../mujoco-backend/mujoco_backend_conditions.md#64-grasp-attachment)）。预设默认不开启。
+
 `tests/test_microwave_sweet_potato_umi_v3.py` 对两个预设各跑两个有种子的 episode。它检查：
 
 - 相机集合、门开角范围和重力设置

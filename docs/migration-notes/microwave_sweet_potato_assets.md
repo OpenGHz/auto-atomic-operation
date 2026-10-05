@@ -362,6 +362,24 @@ touched the cabinet or counter; the closest gripper mesh stayed 15.6 mm (default
 15.9 mm (`gravity`) and 3.5 mm (`zero_gravity`) from the microwave hulls. The
 target site stays at least 103 px inside the randomized front image.
 
+The optional
+[grasp attachment](../mujoco-backend/mujoco_backend_conditions.md#64-grasp-attachment)
+(`+task_operators.arm.control.grasp.attach=true`) welds the tuber to the gripper
+from the verified grasp until the jaws open, so it cannot slip. Over seeds
+201–206 (120 episodes per preset), the tuber kept its grasp pose to within
+0.05 mm:
+
+| | Without | `attach` | `attach` + `pre_release_settle_steps=10` |
+|---|---|---|---|
+| `gravity` | 116/120 (4 dropped in transport) | 119/120 | 120/120 |
+| `zero_gravity` | 120/120 | 120/120 | – (the preset already holds 15) |
+
+The one `attach` failure under gravity was opened while the arm still moved: the
+welded tuber sits about 6 mm higher than one sagging in the grip, fell further
+and rolled 21° off. The hold lets the arm settle first; the tuber then settled
+within 5.9 mm of the target, and nothing touched the door or cabinet. The task
+presets leave `attach` off.
+
 ## Provenance and integrity
 
 The OBJ files are byte-identical to the delivered bundle; transforms live in the MJCF.
