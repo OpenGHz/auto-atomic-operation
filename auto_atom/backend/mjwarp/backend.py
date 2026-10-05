@@ -39,7 +39,7 @@ from auto_atom.contracts import (
     SupportGeometry,
 )
 from auto_atom.utils.pose import PoseState
-from auto_atom.utils.seed import resolve_run_seed
+from auto_atom.utils.seed import reset_generator, resolve_run_seed
 
 logger = logging.getLogger(__name__)
 
@@ -121,6 +121,8 @@ class MjWarpObjectOnlyBackend(SceneBackend):
         """
         mask = self._normalize_mask(env_mask)
         self._reset_index += 1
+        # This reset, and the episode after it, draw from their own stream.
+        self._rng = reset_generator(self._seed, self._reset_index)
         self._last_reset_diagnostics.clear()
         self.env.reset(mask)
         for handler in self.operator_handlers.values():

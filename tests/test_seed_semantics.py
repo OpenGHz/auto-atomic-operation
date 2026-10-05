@@ -14,7 +14,7 @@ from auto_atom.backend.mjc.mujoco_backend import MujocoTaskBackend
 from auto_atom.basis.mjc.camera_noise import CameraNoiseProcessor
 from auto_atom.config.task import AutoAtomConfig
 from auto_atom.runtime import ExecutionContext
-from auto_atom.utils.seed import resolve_run_seed
+from auto_atom.utils.seed import reset_generator, resolve_run_seed
 
 _CAMERA = "env1_cam"
 _UNSET = object()
@@ -120,4 +120,26 @@ def test_camera_noise_root_seed_follows_the_same_policy() -> None:
     assert CameraNoiseProcessor(specs, seed=42)._seed == 42
     assert CameraNoiseProcessor(specs)._seed != CameraNoiseProcessor(specs)._seed, (
         "an unseeded processor must stay random"
+    )
+
+
+def test_each_reset_number_has_its_own_stream() -> None:
+    first = reset_generator(42, 3).uniform(0.0, 1.0, 4)
+    again = reset_generator(42, 3).uniform(0.0, 1.0, 4)
+    np.testing.assert_array_equal(first, again)
+    assert not np.array_equal(first, reset_generator(42, 4).uniform(0.0, 1.0, 4))
+    assert not np.array_equal(first, reset_generator(43, 3).uniform(0.0, 1.0, 4))
+
+
+def test_runner_side_randomness_restarts_at_every_reset() -> None:
+    """What one episode draws never shifts the next reset."""
+    busy, idle = _context(7), _context(7)
+    busy.begin_reset()
+    busy.random_generator.uniform(0.0, 1.0, 50)
+    idle.begin_reset()
+    busy.begin_reset()
+    idle.begin_reset()
+    np.testing.assert_array_equal(
+        busy.random_generator.uniform(0.0, 1.0, 3),
+        idle.random_generator.uniform(0.0, 1.0, 3),
     )

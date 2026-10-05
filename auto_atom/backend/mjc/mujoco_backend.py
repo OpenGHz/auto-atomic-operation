@@ -54,7 +54,7 @@ from ...utils.pose import (
     quaternion_to_rotation_matrix,
     resolve_pose_override,
 )
-from ...utils.seed import resolve_run_seed
+from ...utils.seed import reset_generator, resolve_run_seed
 from ...utils.transformations import quaternion_slerp
 from .clearance import (
     GeomTemplate,
@@ -1551,8 +1551,13 @@ class MujocoTaskBackend(SceneBackend):
     def reset(self, env_mask: Optional[np.ndarray] = None) -> None:
         mask = self._normalize_mask(env_mask)
         self._reset_index += 1
+        # This reset, and the episode after it, draw from their own stream.
+        self._rng = reset_generator(self.random_seed, self._reset_index)
         self._last_reset_diagnostics.clear()
         self.env.reset(env_mask)
+        set_noise_episode = getattr(self.env, "set_camera_noise_episode", None)
+        if set_noise_episode is not None:
+            set_noise_episode(self._reset_index, mask)
         for operator in self.operator_handlers.values():
             operator.home(mask)
         if self.initial_poses:
@@ -2156,7 +2161,11 @@ class MujocoTaskBackend(SceneBackend):
 
     @property
     def rng(self) -> np.random.Generator:
-        """The backend-owned generator the executor draws from."""
+        """The generator of the current reset, which the executor draws from.
+
+        Each reset replaces it with the stream for its reset number, so what an
+        episode draws does not shift the next reset.
+        """
         return self._rng
 
     @property

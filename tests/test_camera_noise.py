@@ -313,3 +313,43 @@ def test_torch_path_preserves_device_and_dtype() -> None:
     assert result[depth_key]["data"].device.type == device.split(":")[0]
     assert result[color_key]["data"].dtype == torch.float32
     assert result[depth_key]["data"].dtype == torch.float32
+
+
+def test_an_episode_row_ignores_how_many_captures_came_before() -> None:
+    """Episode N's noise depends on N and the capture within it, nothing else."""
+    spec = _spec(rgb=RGBNoiseConfig(gaussian_std=0.05))
+    key_creator = KeyCreator(False)
+    key = key_creator.create_color_key(CAMERA)
+
+    def capture(processor: CameraNoiseProcessor) -> np.ndarray:
+        return processor.process_batched_observation(
+            {
+                key: {
+                    "data": np.full((2, 4, 4, 3), 0.5, dtype=np.float32),
+                    "t": np.zeros(2),
+                }
+            },
+            key_creator,
+            structured=False,
+            batch_size=2,
+        )[key]["data"]
+
+    long_run = CameraNoiseProcessor({CAMERA: spec}, seed=31)
+    for _ in range(7):
+        capture(long_run)
+    long_run.reset([0, 1], episode=5)
+    after_long = [capture(long_run) for _ in range(2)]
+
+    short_run = CameraNoiseProcessor({CAMERA: spec}, seed=31)
+    capture(short_run)
+    short_run.reset([0, 1], episode=5)
+    after_short = [capture(short_run) for _ in range(2)]
+
+    for a, b in zip(after_long, after_short, strict=True):
+        np.testing.assert_array_equal(a, b)
+    assert not np.array_equal(after_long[0], after_long[1])
+
+    # A different episode number is a different stream.
+    other = CameraNoiseProcessor({CAMERA: spec}, seed=31)
+    other.reset([0, 1], episode=6)
+    assert not np.array_equal(capture(other), after_short[0])

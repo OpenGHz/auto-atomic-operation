@@ -106,7 +106,7 @@ from .utils.pose import (
     quaternion_to_rotation_matrix,
     rotate_pose_around_axis,
 )
-from .utils.seed import resolve_run_seed
+from .utils.seed import reset_generator, resolve_run_seed
 from .utils.transformations import quaternion_slerp
 
 if TYPE_CHECKING:
@@ -169,10 +169,20 @@ class ExecutionContext:
         repr=False,
     )
 
+    reset_count: int = field(init=False, repr=False, default=0)
+
     def __post_init__(self) -> None:
-        self.random_generator = np.random.default_rng(
-            resolve_run_seed(self.config.seed)
-        )
+        self._run_seed = resolve_run_seed(self.config.seed)
+        self.random_generator = np.random.default_rng(self._run_seed)
+
+    def begin_reset(self) -> None:
+        """Give the runner-owned generator the stream of the next reset.
+
+        It serves backends without their own generator, and follows the same
+        per-reset streams a backend derives with ``reset_generator``.
+        """
+        self.reset_count += 1
+        self.random_generator = reset_generator(self._run_seed, self.reset_count)
 
     def capture_grasp_binding(
         self,
@@ -605,6 +615,7 @@ class TaskRunner:
         mask: np.ndarray,
         context: ExecutionContext,
     ) -> TaskUpdate:
+        context.begin_reset()
         context.backend.reset(mask)
         self._require_stage_execution().reset(
             mask,

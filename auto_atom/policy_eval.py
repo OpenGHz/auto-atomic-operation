@@ -376,6 +376,7 @@ class PolicyEvaluator:
         context = self._require_context()
         mask = self._normalize_mask(env_mask)
         with self._sim_lock:
+            context.begin_reset()
             context.backend.reset(mask)
         self._require_stage_execution().reset(
             mask,

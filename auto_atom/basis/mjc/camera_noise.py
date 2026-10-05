@@ -40,24 +40,45 @@ class CameraNoiseProcessor:
         self._capture_index = 0
         self._seed = resolve_run_seed(seed)
         self._temporal_state: dict[tuple[str, str, int], tuple[float, float]] = {}
+        # A row's noise is keyed by its episode and its capture count within
+        # that episode, the capture index minus the episode's first capture.
+        self._default_episode = 0
+        self._episodes: dict[int, int] = {}
+        self._episode_starts: dict[int, int] = {}
 
     def set_seed(self, seed: int | None) -> None:
         """Set the root seed and restart the per-capture sequence."""
         self._seed = resolve_run_seed(seed)
         self._capture_index = 0
         self._temporal_state.clear()
+        self._default_episode = 0
+        self._episodes.clear()
+        self._episode_starts.clear()
 
-    def reset(self, logical_env_indices: Iterable[int] | None = None) -> None:
+    def reset(
+        self,
+        logical_env_indices: Iterable[int] | None = None,
+        *,
+        episode: int | None = None,
+    ) -> None:
         """Clear temporal state for every or selected logical environment row.
 
         Resetting temporal state prevents AR(1) and drift values from leaking
-        into the next reset.  The capture index deliberately continues so a
-        fixed root seed remains a stream of distinct sensor exposures across
-        resets; call :meth:`set_seed` when the entire sequence must restart.
+        into the next reset.  With ``episode`` the rows start that episode:
+        their noise is then keyed by the episode and the captures since this
+        call, independent of earlier captures, so a fixed root seed gives
+        distinct exposures per episode.  Without it the rows keep their
+        episode, and the capture index deliberately continues across the
+        reset.  Resetting every row without an ``episode`` restarts the
+        sequence; call :meth:`set_seed` to restart it with a new root seed.
         """
         if logical_env_indices is None:
             self._temporal_state.clear()
             self._capture_index = 0
+            self._episodes.clear()
+            self._episode_starts.clear()
+            if episode is not None:
+                self._default_episode = int(episode)
             return
         indices = {int(index) for index in logical_env_indices}
         if not indices:
@@ -67,6 +88,10 @@ class CameraNoiseProcessor:
             for key, state in self._temporal_state.items()
             if key[2] not in indices
         }
+        if episode is not None:
+            for index in indices:
+                self._episodes[index] = int(episode)
+                self._episode_starts[index] = self._capture_index
 
     @property
     def seed(self) -> int:
@@ -178,11 +203,15 @@ class CameraNoiseProcessor:
         digest = hashlib.blake2b(camera_name.encode("utf-8"), digest_size=8).digest()
         camera_id = int.from_bytes(digest, byteorder="little", signed=False)
         stream_id = 0 if stream == "rgb" else 1
+        row = int(logical_env_index)
+        episode = self._episodes.get(row, self._default_episode)
+        capture_in_episode = int(capture_index) - self._episode_starts.get(row, 0)
         return np.random.SeedSequence(
             [
                 self._seed,
-                int(capture_index),
-                int(logical_env_index),
+                episode,
+                capture_in_episode,
+                row,
                 camera_id & 0xFFFFFFFF,
                 camera_id >> 32,
                 stream_id,

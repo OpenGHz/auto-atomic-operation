@@ -1145,6 +1145,22 @@ is the root for **every** randomness source in a run — scene randomization,
 per-waypoint randomization, and camera sensor noise — so replaying a run only
 requires the same `task.seed`.
 
+Every reset draws from its own stream, derived from the seed and the reset's
+1-based number (`auto_atom.utils.seed.reset_generator`):
+
+- **Scene randomization** draws from that stream.
+- **Per-waypoint randomization** draws from it as each stage starts.
+- **Camera noise** is keyed by the reset number and the capture within the
+  episode.
+
+What one episode does therefore never shifts the next: round N of a seed
+depends only on the seed and N, whether the earlier rounds ran to completion,
+stopped early or ran a different policy.
+
+The exception is a non-IID scene generator (`latin_hypercube`, `sobol`,
+`poisson_disk`). It spreads samples across resets on purpose, so a reset
+depends on how many resets came before, though not on what their episodes did.
+
 Leaving `task.seed` unset keeps the run random, and the resolved seed is logged
 when the backend is built:
 

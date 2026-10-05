@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
+from auto_atom.backend.mjc import mujoco_backend as mujoco_backend_module
 from auto_atom.backend.mjc.mujoco_backend import MujocoTaskBackend
 from auto_atom.config.randomization import (
     PoseRandomizationConfig,
@@ -183,13 +184,18 @@ def test_default_case_is_the_reset_baseline() -> None:
     np.testing.assert_allclose(backend.live_pose("block").position[0], [0.5, 0.0, 0.0])
 
 
-def test_random_sample_is_a_plain_runtime_reset() -> None:
+def test_random_sample_is_a_plain_runtime_reset(monkeypatch) -> None:
     backend = _backend(
         {"block": PoseRandomRange(x=(0.1, 0.3), y=(-0.2, 0.0))},
         {"block": (1.0, 0.0, 0.0)},
     )
     inspector = _inspector(backend)
-    backend._rng = _SequenceRng([0.25, -0.05])
+    # The reset draws from the stream of its own reset number.
+    monkeypatch.setattr(
+        mujoco_backend_module,
+        "reset_generator",
+        lambda seed, reset_index: _SequenceRng([0.25, -0.05]),
+    )
 
     inspector.apply_random_sample()
 

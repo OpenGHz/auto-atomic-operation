@@ -2687,6 +2687,20 @@ class BatchedUnifiedMujocoEnv:
         if processor is not None:
             processor.set_seed(seed)
 
+    def set_camera_noise_episode(
+        self, episode: int, env_mask: np.ndarray | None = None
+    ) -> None:
+        """Start ``episode`` for the masked rows' camera noise.
+
+        Their noise is then keyed by the episode and the captures since, so
+        it does not depend on how many captures earlier episodes made.
+        """
+        processor = getattr(self, "_camera_noise_processor", None)
+        if processor is None:
+            return
+        mask = self._batch_adapter().normalize_mask(env_mask)
+        processor.reset(np.flatnonzero(mask), episode=episode)
+
     def _apply_camera_noise(
         self, observation: dict[str, dict[str, Any]]
     ) -> dict[str, dict[str, Any]]:

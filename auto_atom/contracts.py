@@ -824,7 +824,9 @@ class SceneBackend(ABC):
 
         Runner-owned seeded randomness is used when a backend returns ``None``.
         This keeps waypoint randomization deterministic without reaching into a
-        backend's private state.
+        backend's private state. A backend that owns one should derive it per
+        reset with :func:`auto_atom.utils.seed.reset_generator`, so an episode
+        depends only on the run seed and its reset number.
         """
         return None
 
