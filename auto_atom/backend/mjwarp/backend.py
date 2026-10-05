@@ -792,6 +792,11 @@ def _build_operator_handlers(
             n_substeps=env.n_substeps,
         )
 
+        if grasp.get("attach"):
+            raise NotImplementedError(
+                f"Operator '{name}' sets control.grasp.attach, which the MJWarp "
+                "backend does not support yet; use the native MuJoCo backend."
+            )
         eef_overrides: Dict[str, Any] = {
             "timeout_steps": int(control.get("timeout_steps", 100)),
             "settle_steps": int(grasp.get("settle_steps", 5)),

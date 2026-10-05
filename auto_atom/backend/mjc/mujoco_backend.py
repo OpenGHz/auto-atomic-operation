@@ -18,6 +18,7 @@ from auto_atom.config.motion import (
     PlacedToleranceConfig,
     PoseControlConfig,
 )
+from auto_atom.config.operations import Operation
 from auto_atom.config.pose import PoseOverrideConfig
 from auto_atom.config.randomization import (
     OperatorRandomizationConfig,
@@ -93,6 +94,16 @@ class MujocoGraspConfig(BaseModel):
     that nothing else stops (e.g. without gravity)."""
     release_settle_steps: int = 0
     """Control updates to wait after opening before the arm retreats."""
+    attach: bool = False
+    """Weld a verified grasp target to the gripper until the gripper opens.
+
+    Once a closing EEF primitive confirms the grasp, the object is held at its
+    pose relative to the gripper at that moment and can no longer slip; it is
+    released when the opening command is sent, after any
+    ``pre_release_settle_steps``. While attached the object counts as grasped.
+    The weld itself is compiled into the scene: task config preparation
+    declares one for every stage object this operator picks, pulls or grasps.
+    """
 
 
 class MujocoControlConfig(BaseModel):
@@ -695,6 +706,9 @@ class MujocoOperatorHandler(OperatorHandler):
             )
             if self._eef_steps[env_index] >= pre_release:
                 ctrl[self.eef_ctrl_index] = target_value
+                if not eef.close and self.control.grasp.attach:
+                    # Opening releases the weld before the jaws part.
+                    single_env.release_grasped_object(self.operator_name)
             self.env.step(
                 np.vstack(
                     [
@@ -796,6 +810,9 @@ class MujocoOperatorHandler(OperatorHandler):
                     env_index, self._last_target[env_index]
                 )
             if reached:
+                if target_grasped and self.control.grasp.attach:
+                    single_env.attach_grasped_object(self.operator_name, grasped_name)
+                    details[env_index]["attached_object"] = grasped_name
                 signals[env_index] = ControlSignal.REACHED
                 self._eef_steps[env_index] = 0
             elif self._eef_steps[env_index] >= self.control.timeout_steps:
@@ -1023,6 +1040,13 @@ class MujocoOperatorHandler(OperatorHandler):
         env_index: int,
         target: "MujocoObjectHandler",
     ) -> bool:
+        if (
+            self.control.grasp.attach
+            and self.env.envs[env_index].attached_object(self.operator_name)
+            == target.name
+        ):
+            # A welded object is held whatever its finger contacts show.
+            return True
         grasp_check = self._check_grasp_conditions(env_index, target)
         return bool(
             grasp_check["left_contact"]
@@ -2705,6 +2729,60 @@ def create_mujoco_env(
     return BatchedUnifiedMujocoEnv(config.model_copy(update={"name": env_name}))
 
 
+# Operations whose EEF closes on the stage object, so a grasp attachment may
+# hold that object.
+_CLOSING_OPERATIONS = frozenset({Operation.PICK, Operation.PULL, Operation.GRASP})
+
+
+def _validate_grasp_attachments(
+    config: AutoAtomConfig,
+    operator_handlers: Mapping[str, MujocoOperatorHandler],
+    env: BatchedUnifiedMujocoEnv,
+) -> None:
+    """Check that every attaching operator has the welds its stages need.
+
+    Each weld must sit on the body of the operator's EEF site, and every stage
+    object the operator closes on needs one. Both are config errors that would
+    otherwise surface only at the first grasp.
+    """
+    single_env = env.envs[0]
+    model = single_env.model
+    for name, handler in operator_handlers.items():
+        if not handler.control.grasp.attach:
+            continue
+        welds = single_env.grasp_weld_bodies(name)
+        site = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, handler.eef_site_name)
+        if site < 0:
+            raise ValueError(
+                f"Operator '{name}' sets grasp.attach but its EEF site "
+                f"'{handler.eef_site_name}' is not in the model."
+            )
+        gripper = int(model.site_bodyid[site])
+        for object_name, (body, _target) in welds.items():
+            if body != gripper:
+                raise ValueError(
+                    f"The grasp attachment weld of operator '{name}' for "
+                    f"'{object_name}' is on body "
+                    f"'{mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_BODY, body)}', "
+                    f"but its EEF site '{handler.eef_site_name}' is on body "
+                    f"'{mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_BODY, gripper)}'. "
+                    "Set env.operators.<name>.pose_site to the EEF site."
+                )
+        for stage in config.stages:
+            if stage.operation not in _CLOSING_OPERATIONS or not stage.object:
+                continue
+            stage_operator = stage.operator or (
+                name if len(operator_handlers) == 1 else ""
+            )
+            if stage_operator == name and stage.object not in welds:
+                raise ValueError(
+                    f"Operator '{name}' sets grasp.attach, but the scene has no "
+                    f"grasp attachment weld for '{stage.object}'. Task config "
+                    "preparation declares them in env.grasp_attachments; an env "
+                    "built without it must list them there."
+                )
+
+
 def build_mujoco_backend(
     task: AutoAtomConfig | Dict[str, Any],
     operators: Dict[str, OperatorConfig],
@@ -2845,6 +2923,8 @@ def build_mujoco_backend(
             env=env,
             body_name=body_name,
         )
+
+    _validate_grasp_attachments(config, operator_handlers, env)
 
     reset_config = MujocoResetConfig.from_task(config, operator_configs)
     backend = MujocoTaskBackend(

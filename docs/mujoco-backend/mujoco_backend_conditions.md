@@ -29,6 +29,9 @@ An object is considered "grasped" when the gripper is sufficiently closed and bo
 1. Physical bilateral finger contact is detected.
 2. The optional lateral threshold check passes.
 
+An object the operator holds by its grasp-attachment weld (see
+[6.4](#64-grasp-attachment)) counts as grasped regardless of its contacts.
+
 This keeps the predicate contact-aware while still allowing an additional
 gripper-centered geometric sanity check in scenes that need it.
 
@@ -299,6 +302,53 @@ Gripper has opened to within tolerance of fully open, or reached the minimum ope
 | `settle_steps` | `MujocoGraspConfig` | `5` | Control updates to wait before grasp check |
 | `pre_release_settle_steps` | `MujocoGraspConfig` | `0` | Control updates to hold the arm still before opening |
 | `release_settle_steps` | `MujocoGraspConfig` | `0` | Control updates to wait after opening before completion |
+| `attach` | `MujocoGraspConfig` | `false` | Weld a verified grasp target to the gripper until the gripper opens (6.4) |
+
+### 6.4 Grasp attachment
+
+With `control.grasp.attach: true` a verified grasp also welds the object to the
+gripper, so it cannot slip while carried:
+
+```yaml
+task_operators:
+  arm:
+    control:
+      grasp:
+        attach: true
+        pre_release_settle_steps: 10   # recommended, see below
+```
+
+- **When it attaches:** a closing EEF primitive confirms the grasp
+  (`event: eef_grasped`, both finger contacts on the stage target). The weld
+  then holds the object at its pose relative to the gripper at that moment, so
+  nothing jumps. `details["attached_object"]` names the welded object.
+- **When it releases:** when the opening command is sent, i.e. after any
+  `pre_release_settle_steps`, before the jaws part. A reset releases every weld.
+- **While attached:** the object counts as grasped (section 1), and both
+  objects keep their contacts and collisions.
+- **The weld:** a MuJoCo body weld between the body of the operator's EEF site
+  and the object's body (`<name>_gs` if there is one), with a stiff
+  `solref: [0.004, 1]`, `solimp: [0.99, 0.999, 0.001, 0.5, 2]`. In the
+  microwave task a carried tuber kept its grasp pose to within 0.05 mm.
+- **Compiled in advance:** equality constraints cannot be added to a compiled
+  model. Task config preparation therefore declares an inactive weld in
+  `env.grasp_attachments` for every stage object the operator picks, pulls or
+  grasps, on its EEF site (`env.operators.<name>.pose_site`, else `eef_pose`).
+  An entry listed there by hand is kept, e.g. to change `solref` / `solimp`.
+- **Validation:** building the backend checks that each attaching operator has a
+  weld for every object it closes on, sitting on its EEF site's body.
+- **Backends:** native MuJoCo only; the MJWarp backend refuses `attach: true`.
+- **Low-level actions:** only the task runner's EEF primitive attaches. Raw
+  gripper actions, e.g. data replay or an external policy driving
+  `apply_joint_action`, do not, so a recording made with `attach` replays
+  without it.
+
+Pair it with `pre_release_settle_steps`. A place waypoint counts as reached
+within its tolerance while the arm still moves. A welded object is held where
+it was grasped, not where it would sag in the grip, so opening at that moment
+can drop it from higher and with more speed than an unwelded one. In the
+gravity preset of `microwave_sweet_potato`, 1 of 120 episodes then rolled out
+of the placement tolerance; a 10-update hold made it 120/120.
 
 `require_grasp` belongs to the individual `eef` primitive rather than the
 operator defaults. `pick` and `pull` supply it automatically; use the explicit
@@ -345,6 +395,7 @@ task_operators:
         settle_steps: 5             # control updates before grasp check
         pre_release_settle_steps: 0 # control updates held still before opening
         release_settle_steps: 0     # control updates after opening
+        attach: false               # weld the grasped object until opening
       timeout_steps: 100            # max steps per action
 ```
 
@@ -358,6 +409,7 @@ task_operators:
 | `control.grasp.settle_steps` | 5 | updates | Min control updates before checking grasp |
 | `control.grasp.pre_release_settle_steps` | 0 | updates | Control updates the arm holds still before the gripper opens |
 | `control.grasp.release_settle_steps` | 0 | updates | Min control updates after opening before completion |
+| `control.grasp.attach` | false | - | Weld a verified grasp target to the gripper until the gripper opens |
 | `control.timeout_steps` | 100 | steps | Max steps per action before timeout |
 | `control.ik_unreachable_threshold` | 30 | streak | Consecutive IK failures inside `move_to_pose` after which the stage fails fast with `failure_category: ik_unreachable` instead of waiting for `timeout_steps` |
 

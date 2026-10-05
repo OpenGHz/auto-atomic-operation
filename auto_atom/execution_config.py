@@ -19,6 +19,11 @@ def prepare_task_config_for_instantiation(cfg: DictConfig) -> DictConfig:
     operator-owned MJCF layers and cameras never enter the simulation model.
     Runtime modules therefore receive one already-consistent object-only
     environment instead of hiding an operator after construction.
+
+    In physical execution, the grasp-attachment welds that
+    ``task_operators.<name>.control.grasp.attach`` needs are declared in
+    ``env.grasp_attachments`` (see :func:`declare_grasp_attachments`), since
+    they must be compiled into the scene.
     """
 
     prepared = OmegaConf.create(OmegaConf.to_container(cfg, resolve=False))
@@ -27,6 +32,7 @@ def prepare_task_config_for_instantiation(cfg: DictConfig) -> DictConfig:
         OmegaConf.select(prepared, "execution.mode", default="physical")
         != "object_only"
     ):
+        declare_grasp_attachments(prepared)
         return prepared
 
     task_operators = OmegaConf.select(prepared, "task_operators", default={})
@@ -115,6 +121,62 @@ def prepare_task_config_for_instantiation(cfg: DictConfig) -> DictConfig:
         removed_camera_names,
     )
     return prepared
+
+
+# Operations whose EEF closes on the stage object.
+_CLOSING_OPERATIONS = frozenset({"pick", "pull", "grasp"})
+
+
+def declare_grasp_attachments(cfg: DictConfig) -> None:
+    """Declare the welds that operators with ``grasp.attach`` need, in place.
+
+    One ``env.grasp_attachments`` entry per (operator, stage object) the
+    operator picks, pulls or grasps, welded to its EEF site
+    (``env.operators.<name>.pose_site``, else ``eef_pose``). Entries the
+    config already lists are kept and not repeated.
+    """
+    task_operators = OmegaConf.select(cfg, "task_operators", default={}) or {}
+    env_operators = OmegaConf.select(cfg, "env.operators", default={}) or {}
+    names = {
+        str(name)
+        for mapping in (task_operators, env_operators)
+        if isinstance(mapping, Mapping)
+        for name in mapping
+    }
+    stages = OmegaConf.select(cfg, "task.stages", default=[]) or []
+    declared = list(OmegaConf.select(cfg, "env.grasp_attachments", default=[]) or [])
+    seen = {
+        (
+            str(_mapping_value(entry, "operator", "")),
+            str(_mapping_value(entry, "object", "")),
+        )
+        for entry in declared
+    }
+    added = False
+    for stage in stages:
+        operation = str(_mapping_value(stage, "operation", ""))
+        object_name = str(_mapping_value(stage, "object", "") or "")
+        operator = str(_mapping_value(stage, "operator", "") or "")
+        if not operator and len(names) == 1:
+            operator = next(iter(names))
+        if operation not in _CLOSING_OPERATIONS or not object_name or not operator:
+            continue
+        attach = OmegaConf.select(
+            cfg, f"task_operators.{operator}.control.grasp.attach", default=False
+        )
+        if not attach or (operator, object_name) in seen:
+            continue
+        frame = (
+            OmegaConf.select(cfg, f"env.operators.{operator}.pose_site", default="")
+            or "eef_pose"
+        )
+        declared.append({"operator": operator, "object": object_name, "frame": frame})
+        seen.add((operator, object_name))
+        added = True
+    if added:
+        OmegaConf.update(
+            cfg, "env.grasp_attachments", declared, merge=False, force_add=True
+        )
 
 
 def normalize_env_collections(cfg: DictConfig) -> None:

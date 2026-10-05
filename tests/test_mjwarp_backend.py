@@ -505,7 +505,7 @@ def test_object_only_operator_surface_still_refuses(backend):
 # ----------------------------------------------------------------------
 
 
-def _build_via_builder(batch_size: int = 2):
+def _build_via_builder(batch_size: int = 2, overrides: tuple[str, ...] = ()):
     """Build in physical mode through the real builder, as a task file would."""
     ComponentRegistry.clear()
     cfg = compose_task_config(
@@ -514,6 +514,7 @@ def _build_via_builder(batch_size: int = 2):
             "execution.mode=physical",
             f"env.batch_size={batch_size}",
             "env.viewer=null",
+            *overrides,
         ],
         config_dir=_REPO_ROOT / "aao_configs",
     )
@@ -549,6 +550,12 @@ def assembled():
     backend, operators = _build_via_builder()
     yield backend, operators
     backend.teardown()
+
+
+def test_grasp_attachment_is_refused_rather_than_ignored():
+    """The welds are compiled in, but MJWarp cannot activate them yet."""
+    with pytest.raises(NotImplementedError, match="grasp.attach"):
+        _build_via_builder(overrides=("+task_operators.arm.control.grasp.attach=true",))
 
 
 def test_builder_assembles_an_operator_handler(assembled):
