@@ -32,12 +32,14 @@ from auto_atom.config.motion import (
     StageControlConfig,
 )
 from auto_atom.config.operations import Operation
+from auto_atom.config.orientation import NearestFeasibleOrientationGoalConfig
 from auto_atom.config.primitives import Orientation
 from auto_atom.config.reference import ControlledFrameKind, PoseReference
 from auto_atom.config.task import _phase_waypoint_count
 
 from .execution_model import (
     ArcExecutionSnapshot,
+    OrientationGroup,
     PrimitiveAction,
     StageExecutionPlan,
     _EnvUpdateEvent,
@@ -174,7 +176,64 @@ class TaskFlowBuilder:
             phase=TaskPhase.POST_MOVE,
         )
         actions.extend(post_actions)
+        TaskFlowBuilder._link_orientation_groups(actions)
         return actions, last_orientation
+
+    @staticmethod
+    def _link_orientation_groups(actions: List[PrimitiveAction]) -> None:
+        """Share one solved orientation among equal ``nearest_feasible`` goals.
+
+        Waypoints of the same phase whose goals are identical form one group,
+        in execution order; the runtime solves at the first and reuses it.
+        """
+        groups: dict[tuple[Any, Any], OrientationGroup] = {}
+        for action in actions:
+            pose = action.pose
+            if action.kind != "pose" or pose is None:
+                continue
+            if not isinstance(
+                pose.orientation_goal, NearestFeasibleOrientationGoalConfig
+            ):
+                continue
+            group = groups.setdefault(
+                (action.phase, pose.orientation_goal), OrientationGroup()
+            )
+            group.members.append(action)
+            action.orientation_group = group
+        # The group whose last member is the last pose before an opening EEF
+        # action places the object there: it owns that release (a posture may
+        # override its opening) and the post-release motion, which a
+        # clearance check covers with the opened gripper.
+        opening = next(
+            (
+                index
+                for index, action in enumerate(actions)
+                if action.kind == "eef"
+                and action.eef is not None
+                and not action.eef.close
+            ),
+            None,
+        )
+        if opening is None:
+            return
+        last_pose = next(
+            (
+                action
+                for action in reversed(actions[:opening])
+                if action.kind == "pose" and action.pose is not None
+            ),
+            None,
+        )
+        group = None if last_pose is None else last_pose.orientation_group
+        if group is None or group.members[-1] is not last_pose:
+            return
+        group.release = actions[opening]
+        group.retreat = [
+            action
+            for action in actions[opening + 1 :]
+            if action.kind == "pose" and action.pose is not None
+        ]
+        actions[opening].orientation_group = group
 
     @staticmethod
     def _normalize_control(stage: StageConfig) -> StageControlConfig:

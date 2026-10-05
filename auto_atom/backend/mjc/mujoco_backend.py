@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import logging
 from collections.abc import Mapping, Sequence
 from contextlib import contextmanager
@@ -26,6 +27,7 @@ from auto_atom.config.reference import PoseReference, RandomizationReference
 from auto_atom.config.task import AutoAtomConfig, OperatorConfig, OperatorInitialState
 from auto_atom.contracts import (
     CameraModel,
+    ClearanceReport,
     ContactObservation,
     IKSolver,
     ObjectHandler,
@@ -54,6 +56,14 @@ from ...utils.pose import (
 )
 from ...utils.seed import resolve_run_seed
 from ...utils.transformations import quaternion_slerp
+from .clearance import (
+    GeomTemplate,
+    capture_template,
+    check_paths,
+    obstacle_geoms,
+    probe_geoms,
+    subtree_bodies,
+)
 
 
 class MujocoToleranceConfig(BaseModel):
@@ -1227,6 +1237,9 @@ class MujocoTaskBackend(SceneBackend):
     _default_camera_poses: Dict[str, PoseState] = field(
         init=False, repr=False, default_factory=dict
     )
+    _opened_eef_templates: Dict[tuple[int, str, float], GeomTemplate] = field(
+        init=False, repr=False, default_factory=dict
+    )
 
     def __post_init__(self) -> None:
         self._seed_rng()
@@ -1557,6 +1570,169 @@ class MujocoTaskBackend(SceneBackend):
         if self.randomization.applies:
             self.randomization_executor.apply_randomization(mask)
         self.env.refresh_viewer()
+
+    # A settle stops once the gripper's joints move slower than this (rad/s
+    # or m/s), and gives up after this many steps.
+    _SETTLE_SPEED = 1e-4
+    _SETTLE_MAX_STEPS = 4000
+
+    def _opened_eef_template(
+        self,
+        env_index: int,
+        operator: "MujocoOperatorHandler",
+        command: EefControlConfig,
+    ) -> GeomTemplate:
+        """The gripper's geometry once it has settled at ``command``.
+
+        Settled on a scratch copy with contacts and gravity off, so only the
+        gripper's own actuation and linkage constraints act. The template is
+        EEF-relative and depends only on the commanded value, so it is cached.
+        """
+        value = float(operator._eef_target(command))
+        key = (env_index, operator.name, round(value, 9))
+        cached = self._opened_eef_templates.get(key)
+        if cached is not None:
+            return cached
+        single_env = self.env.envs[env_index]
+        model = single_env.model
+        site = mujoco.mj_name2id(
+            model, mujoco.mjtObj.mjOBJ_SITE, operator.eef_site_name
+        )
+        bodies = subtree_bodies(model, int(model.site_bodyid[site]))
+        dofs = [
+            int(model.jnt_dofadr[joint])
+            for joint in range(model.njnt)
+            if int(model.jnt_bodyid[joint]) in bodies
+            and int(model.jnt_type[joint]) != int(mujoco.mjtJoint.mjJNT_FREE)
+        ]
+        scratch = copy.copy(single_env.data)
+        saved_flags = model.opt.disableflags
+        saved_gravity = model.opt.gravity.copy()
+        model.opt.disableflags |= int(mujoco.mjtDisableBit.mjDSBL_CONTACT)
+        model.opt.gravity[:] = 0.0
+        try:
+            for step in range(self._SETTLE_MAX_STEPS):
+                scratch.ctrl[operator.eef_ctrl_index] = value
+                mujoco.mj_step(model, scratch)
+                if step >= 50 and (
+                    not dofs
+                    or float(np.max(np.abs(scratch.qvel[dofs]))) < self._SETTLE_SPEED
+                ):
+                    break
+        finally:
+            model.opt.disableflags = saved_flags
+            model.opt.gravity[:] = saved_gravity
+        mujoco.mj_kinematics(model, scratch)
+        template = self._eef_template(model, scratch, operator)
+        self._opened_eef_templates[key] = template
+        return template
+
+    @staticmethod
+    def _eef_template(
+        model: mujoco.MjModel,
+        data: mujoco.MjData,
+        operator: "MujocoOperatorHandler",
+    ) -> GeomTemplate:
+        """Geoms below the EEF frame's body, relative to the EEF frame."""
+        site = mujoco.mj_name2id(
+            model, mujoco.mjtObj.mjOBJ_SITE, operator.eef_site_name
+        )
+        if site < 0:
+            raise KeyError(f"EEF site '{operator.eef_site_name}' not found.")
+        bodies = subtree_bodies(model, int(model.site_bodyid[site]))
+        return capture_template(
+            data,
+            probe_geoms(model, bodies),
+            data.site_xpos[site],
+            np.asarray(data.site_xmat[site]).reshape(3, 3),
+        )
+
+    def held_object_clearance(
+        self,
+        operator_name: str,
+        object_name: Optional[str],
+        eef_paths: Sequence[PoseState],
+        bodies: Sequence[str],
+        margin: float,
+        *,
+        open_paths: Optional[Sequence[PoseState]] = None,
+        open_commands: Optional[Sequence[EefControlConfig]] = None,
+        env_index: int = 0,
+    ) -> ClearanceReport:
+        """Find the first candidate EEF path that keeps ``margin`` from ``bodies``.
+
+        The gripper is the subtree of the EEF frame's body, captured in its
+        current (closed) state and, for ``open_paths``, settled at each
+        ``open_commands`` entry. The held object keeps its current
+        EEF-relative pose. Everything happens on copies of the live data.
+        """
+        single_env = self.env.envs[env_index]
+        model = single_env.model
+        operator = self.get_operator_handler(operator_name)
+        scratch = copy.copy(single_env.data)
+        mujoco.mj_kinematics(model, scratch)
+        site = mujoco.mj_name2id(
+            model, mujoco.mjtObj.mjOBJ_SITE, operator.eef_site_name
+        )
+        eef_position = np.asarray(scratch.site_xpos[site], dtype=np.float64)
+        eef_rotation = np.asarray(scratch.site_xmat[site]).reshape(3, 3)
+        gripper = self._eef_template(model, scratch, operator)
+        moving = set(int(geom) for geom in gripper.geom_ids)
+        held = [gripper]
+        if object_name:
+            handler = self.get_object_handler(object_name)
+            if handler is None:
+                raise KeyError(f"Unknown held object '{object_name}'.")
+            object_body = mujoco.mj_name2id(
+                model, mujoco.mjtObj.mjOBJ_BODY, handler.body_name
+            )
+            object_geoms = obstacle_geoms(model, subtree_bodies(model, object_body))
+            held.append(
+                capture_template(scratch, object_geoms, eef_position, eef_rotation)
+            )
+            moving.update(int(geom) for geom in object_geoms)
+        released: list[list[GeomTemplate]] = []
+        if open_paths is not None:
+            commands = list(open_commands or [])
+            if len(commands) != len(open_paths):
+                raise ValueError("open_commands must give one command per open path")
+            released = [
+                [self._opened_eef_template(env_index, operator, command)]
+                for command in commands
+            ]
+
+        obstacle_bodies: set[int] = set()
+        for body_name in bodies:
+            body = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, body_name)
+            if body < 0:
+                raise KeyError(f"Clearance obstacle body '{body_name}' not found.")
+            obstacle_bodies |= subtree_bodies(model, body)
+        obstacles = np.asarray(
+            [
+                geom
+                for geom in obstacle_geoms(model, obstacle_bodies)
+                if int(geom) not in moving
+            ],
+            dtype=np.int64,
+        )
+
+        def as_arrays(path: PoseState) -> tuple[np.ndarray, np.ndarray]:
+            positions = np.asarray(path.position, dtype=np.float64).reshape(-1, 3)
+            rotations = np.asarray(
+                [quaternion_to_rotation_matrix(q) for q in path.orientation]
+            ).reshape(-1, 3, 3)
+            return positions, rotations
+
+        return check_paths(
+            model,
+            scratch,
+            held,
+            released,
+            [as_arrays(path) for path in eef_paths],
+            None if open_paths is None else [as_arrays(path) for path in open_paths],
+            obstacles,
+            margin,
+        )
 
     @contextmanager
     def defer_viewer_updates(self) -> Iterator[None]:

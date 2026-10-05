@@ -434,17 +434,104 @@ new site orientation just to express an axis constraint. For example, if an
 existing target site has identity orientation, a target vector `[0, 1, 0]`
 with `reference: object` selects its local +Y direction directly.
 
+### Nearest feasible orientation
+
+`nearest_feasible` constrains a few axis directions and picks the rest of the
+orientation for you: of all orientations that satisfy the constraints, it
+takes the one nearest to how the controlled frame arrives, so the waypoint
+turns as little as possible.
+
+```yaml
+# Place a held object with its long axis level at any heading, the jaws
+# either side by side or one above the other, keeping 10 mm from the cabinet.
+orientation_goal:
+  kind: nearest_feasible
+  reference: object                 # angles and offsets use this frame
+  primary_axis:
+    axis: [1.0, 0.0, 0.0]           # controlled-frame axis
+    elevation: [[0.0, 0.0]]         # level; azimuth omitted = any heading
+  constraints: []                   # shared by every posture
+  postures:                         # optional alternatives; one must hold
+    - name: side_by_side
+      constraints:
+        - frame: eef                # controlled | eef
+          axis: [0.0, 1.0, 0.0]     # jaw axis
+          elevation: [[-0.524, 0.524]]
+    - name: one_above_other
+      constraints:
+        - frame: eef
+          axis: [0.0, 1.0, 0.0]
+          elevation: [[1.047, 1.5708], [-1.5708, -1.047]]
+      offset: [0.0, 0.0, 0.03]      # moves every waypoint of the group
+      release_joint_positions: [0.008]  # the stage's release opens this far
+  resolution: 0.0873                # grid step in radians (default 5 deg)
+  clearance:                        # optional
+    bodies: [microwave, microwave_door]
+    margin: 0.010
+    step: 0.01
+    release_open: true
+```
+
+- **Angles:** elevation is the angle between an axis and the `reference`
+  frame's xy plane, in `[-pi/2, pi/2]`. Azimuth is the angle of its xy
+  projection from +x, in `[-pi, pi]`. Each field lists alternative intervals,
+  and an axis must fall in one of them; several intervals give several
+  postures, and the nearest one wins. An interval that wraps through ±pi is
+  written as two intervals.
+- **`primary_axis`:** the candidates are a grid over its azimuth and elevation
+  intervals and the full spin about it. The grid always contains the arriving
+  orientation clamped into the intervals, so an orientation that already
+  satisfies the goal is kept unrotated.
+- **`constraints`:** filter the candidates. `frame: eef` axes are converted
+  through the grasp captured when the object was picked, so a held-object
+  waypoint can constrain the gripper.
+- **`postures`:** alternative sets of constraints. A candidate must satisfy
+  the shared `constraints` and one posture's, and candidates of all postures
+  compete on rotation alone. The chosen posture's `offset`, a translation
+  along the `reference` axes, is added to every waypoint of the group. Its
+  `release_joint_positions` replaces the gripper command of the stage's
+  opening EEF action, as `eef.joint_positions` would. Diagnostics report the
+  chosen posture by `name`.
+- **One solution per group:** all waypoints of one stage phase whose goals are
+  identical share one orientation. It is solved at the first of them, so that
+  waypoint should sit well clear of obstacles: the motion into it is not
+  checked.
+- **`clearance`:** the backend places the gripper (the colliding geoms and
+  render meshes below the EEF frame) and the held object at the solved
+  orientation along the group's waypoints, sampled every `step`. It measures
+  them against the colliding geoms of `bodies`. With `release_open`, the
+  gripper is also checked opened at the release opening, at the last waypoint
+  and along the stage's waypoints after its opening EEF action. The opening
+  is the release command, or the posture's `release_joint_positions`, and the
+  MuJoCo backend settles the gripper's linkage at it on a scratch copy of the
+  simulation. This applies to the group whose last waypoint is the last pose
+  before that EEF action. Candidates are tried nearest first until one keeps
+  `margin` everywhere. The check uses the
+  commanded poses, so `margin` must also absorb tracking error. Only the
+  MuJoCo backend implements it; elsewhere a goal with `clearance` fails.
+- **When nothing fits:** the waypoint fails with `motion_goal_resolution_failed`
+  and names what blocked the nearest candidate.
+- **Completion:** waypoint and `placed` completion compare the full orientation
+  with the solved one.
+
+See [nearest-feasible place orientation](../design/nearest-feasible-place-orientation.md)
+for the design and the measurements behind the microwave task's settings.
+
+### Rejected combinations
+
 The first version deliberately rejects combinations whose semantics would be
 ambiguous or silently ignored:
 
 - any `orientation_goal` together with `orientation`, `rotation`, or
   rotational waypoint randomization;
-- `axis_alignment` together with `relative: true`;
+- `axis_alignment` or `nearest_feasible` together with `relative: true`;
+- `nearest_feasible` with `clearance` on an `eef` / `eef_world` reference,
+  whose position is only known when the waypoint starts;
 - any `orientation_goal` together with `arc`;
 - any `held_object` controlled frame together with `arc`;
 - `controlled_frame.kind: eef` together with an object-local `frame`.
 
-Position randomization remains valid with either orientation-goal kind. See
+Position randomization remains valid with every orientation-goal kind. See
 [Task File Schema](task_file_schema.md#controlled-frame-and-orientation-goal)
 for the compact field tables and direction values.
 

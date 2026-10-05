@@ -31,6 +31,7 @@ from typing import (
     List,
     Optional,
     Protocol,
+    Sequence,
     TypeVar,
     cast,
     runtime_checkable,
@@ -319,6 +320,33 @@ class SupportGeometry:
                 raise ValueError("SupportGeometry.points must have shape (N, 3)")
             object.__setattr__(self, "points", points)
         object.__setattr__(self, "center", center)
+
+
+@dataclass(frozen=True)
+class ClearanceReport:
+    """Outcome of checking candidate EEF paths for clearance.
+
+    When a path is clear, ``path_index`` names it and ``distance`` is its
+    closest approach over all samples. When none is, ``path_index`` is
+    ``None`` and the remaining fields describe what blocked the first path.
+    """
+
+    clear: bool
+    """Whether some path kept at least the requested margin everywhere."""
+    distance: float
+    """Closest approach in metres, capped by the backend's search range."""
+    path_index: Optional[int] = None
+    """Index of the first clear path."""
+    sample_index: Optional[int] = None
+    """Sample of the reported path at the closest approach."""
+    released: bool = False
+    """Whether the closest approach was the opened-gripper check."""
+    probe_geom: Optional[str] = None
+    """Name of the probed geom at the closest approach."""
+    obstacle_geom: Optional[str] = None
+    """Name of the obstacle geom at the closest approach."""
+    checked_paths: int = 0
+    """How many paths were checked."""
 
 
 @dataclass(frozen=True)
@@ -753,6 +781,34 @@ class SceneBackend(ABC):
     def get_joint_angle(self, name: str, env_index: int = 0) -> float:  # noqa: ARG002
         raise NotImplementedError(
             f"Backend does not support joint angle lookup (requested '{name}')."
+        )
+
+    def held_object_clearance(  # noqa: ARG002
+        self,
+        operator_name: str,
+        object_name: Optional[str],
+        eef_paths: Sequence[PoseState],
+        bodies: Sequence[str],
+        margin: float,
+        *,
+        open_paths: Optional[Sequence[PoseState]] = None,
+        open_commands: Optional[Sequence[EefControlConfig]] = None,
+        env_index: int = 0,
+    ) -> ClearanceReport:
+        """Find the first candidate EEF path along which nothing collides.
+
+        Each entry of ``eef_paths`` is one candidate: a batch of world EEF
+        poses in execution order. The geometry moving with the end effector
+        (and ``object_name``, held rigidly in its current EEF-relative pose)
+        is placed at every pose and measured against the colliding geometry
+        of ``bodies``; a candidate is clear when every sample keeps
+        ``margin``. ``open_paths``, when given, holds one batch per
+        candidate where the gripper alone, opened as the matching entry of
+        ``open_commands`` commands, must keep ``margin`` too.
+        Implementations must not change the live simulation state.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} does not support held-object clearance checks."
         )
 
     def set_interest_objects_and_operations(  # noqa: B027 — optional no-op hook

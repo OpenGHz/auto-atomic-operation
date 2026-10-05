@@ -15,14 +15,17 @@ import numpy as np
 from auto_atom.config.motion import PoseControlConfig
 from auto_atom.config.orientation import (
     AxisAlignmentOrientationGoalConfig,
+    AxisRangeConstraintFrame,
     AxisReference,
     FixedOrientationGoalConfig,
+    NearestFeasibleOrientationGoalConfig,
 )
 from auto_atom.config.reference import ControlledFrameKind, PoseReference
 
 from .execution_model import ResolvedMotionGoal, ResolvedObjectMotionGoal
 from .pose_goal import (
     axis_alignment_error,
+    nearest_feasible_candidates,
     resolve_axis_alignment_orientation,
     resolve_axis_in_world,
 )
@@ -33,6 +36,7 @@ from .utils.pose import (
     normalize_quaternion,
     pose_config_to_pose_state,
     quaternion_angular_distance,
+    quaternion_from_matrix_3x3,
 )
 
 
@@ -199,6 +203,58 @@ def resolve_object_motion_goal(
                 target_axis_world,
                 orientation_goal.direction,
             ),
+        )
+
+    elif isinstance(orientation_goal, NearestFeasibleOrientationGoalConfig):
+        all_constraints = [
+            *orientation_goal.constraints,
+            *(c for posture in orientation_goal.postures for c in posture.constraints),
+        ]
+        if orientation_goal.clearance is not None or any(
+            constraint.frame == AxisRangeConstraintFrame.EEF
+            for constraint in all_constraints
+        ):
+            raise ValueError(
+                "Object-only nearest_feasible goals support only controlled-frame "
+                "constraints without clearance: there is no end effector."
+            )
+        if any(any(posture.offset) for posture in orientation_goal.postures):
+            raise ValueError(
+                "Object-only nearest_feasible goals do not support posture offsets: "
+                "each waypoint resolves on its own, so they could disagree."
+            )
+        if orientation_goal.reference == AxisReference.WORLD:
+            reference_orientation = (0.0, 0.0, 0.0, 1.0)
+        else:
+            reference_orientation = object_target_reference_pose(
+                env_index=env_index,
+                target=target,
+                backend=backend,
+                reference_site=reference_site,
+            ).orientation[0]
+        rotations, _, _ = nearest_feasible_candidates(
+            world_from_controlled.orientation[0],
+            reference_orientation,
+            orientation_goal.primary_axis.axis,
+            primary_elevation=orientation_goal.primary_axis.elevation,
+            primary_azimuth=orientation_goal.primary_axis.azimuth,
+            constraints=[
+                (constraint.axis, constraint.elevation, constraint.azimuth)
+                for constraint in orientation_goal.constraints
+            ],
+            postures=[
+                [(c.axis, c.elevation, c.azimuth) for c in posture.constraints]
+                for posture in orientation_goal.postures
+            ],
+            resolution=orientation_goal.resolution,
+        )
+        if len(rotations) == 0:
+            raise ValueError(
+                "nearest_feasible: no orientation satisfies the axis constraints"
+            )
+        controlled_world_pose = PoseState(
+            position=controlled_world_pose.position[0],
+            orientation=quaternion_from_matrix_3x3(rotations[0]),
         )
 
     return ResolvedObjectMotionGoal(

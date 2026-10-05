@@ -156,6 +156,35 @@ class _EnvRuntimeState:
     reported_keypoint: Optional[_ResolvedTaskKeypoint] = None
 
 
+@dataclass(eq=False)
+class OrientationGroup:
+    """Waypoints of one stage phase that share a ``nearest_feasible`` goal.
+
+    The orientation is solved once, at the first member that runs, and every
+    member reuses it. A stage execution owns its own copy: action templates
+    are deep-copied per activation and the copy keeps this shared alias.
+    """
+
+    members: List["PrimitiveAction"] = field(default_factory=list)
+    """Member actions in execution order."""
+    release: Optional["PrimitiveAction"] = None
+    """The stage's opening EEF action, when this group's last member is the
+    last pose before it."""
+    retreat: List["PrimitiveAction"] = field(default_factory=list)
+    """Pose actions after ``release``."""
+    release_joint_positions: Optional[tuple] = None
+    """The chosen posture's opening command for ``release``, once solved."""
+    solution: Optional[PoseState] = None
+    """Once solved: the controlled-frame world orientation, with the chosen
+    posture's world offset as ``position``."""
+    details: Dict[str, Any] = field(default_factory=dict)
+    """How the solution was found, for diagnostics."""
+
+    def __repr__(self) -> str:
+        solved = "solved" if self.solution is not None else "unsolved"
+        return f"OrientationGroup({len(self.members)} members, {solved})"
+
+
 @dataclass
 class PrimitiveAction:
     """One runtime primitive emitted by a :class:`TaskFlowBuilder`."""
@@ -172,6 +201,9 @@ class PrimitiveAction:
     resolved_motion_goal: Optional[ResolvedMotionGoal] = None
     resolved_object_motion_goal: Optional[ResolvedObjectMotionGoal] = None
     reference_pose_snapshot: Optional[PoseState] = None
+    orientation_group: Optional[OrientationGroup] = field(
+        default=None, compare=False, repr=False
+    )
 
 
 @dataclass

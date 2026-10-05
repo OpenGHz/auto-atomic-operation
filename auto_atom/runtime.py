@@ -35,8 +35,10 @@ from auto_atom.config.motion import EefControlConfig, PoseControlConfig
 from auto_atom.config.operations import Operation
 from auto_atom.config.orientation import (
     AxisAlignmentOrientationGoalConfig,
+    AxisRangeConstraintFrame,
     AxisReference,
     FixedOrientationGoalConfig,
+    NearestFeasibleOrientationGoalConfig,
 )
 from auto_atom.config.primitives import Position
 from auto_atom.config.reference import (
@@ -88,6 +90,7 @@ from .motion_goal import (
     resolve_object_reference_pose as _resolve_object_reference_pose,
 )
 from .pose_goal import (
+    nearest_feasible_candidates,
     resolve_axis_alignment_orientation,
     resolve_axis_in_world,
 )
@@ -99,6 +102,8 @@ from .utils.pose import (
     pose_config_to_pose_state,
     position_within_tolerance,
     quaternion_angular_distance,
+    quaternion_from_matrix_3x3,
+    quaternion_to_rotation_matrix,
     rotate_pose_around_axis,
 )
 from .utils.seed import resolve_run_seed
@@ -1737,7 +1742,14 @@ class TaskRunner:
                 )
             return refined
         if action.kind == "eef" and action.eef is not None:
-            return operator.control_eef(action.eef, target, env_mask=env_mask)
+            eef = action.eef
+            group = action.orientation_group
+            if group is not None and group.release_joint_positions is not None:
+                # The posture chosen for the placement decides how far to open.
+                eef = eef.model_copy(
+                    update={"joint_positions": list(group.release_joint_positions)}
+                )
+            return operator.control_eef(eef, target, env_mask=env_mask)
         raise RuntimeError(f"Invalid primitive action '{action.kind}'.")
 
     @staticmethod
@@ -2181,6 +2193,26 @@ class TaskRunner:
                 position=controlled_world_pose.position[0],
                 orientation=aligned_orientation,
             )
+        elif isinstance(pose.orientation_goal, NearestFeasibleOrientationGoalConfig):
+            solved_orientation, posture_offset = (
+                TaskRunner._nearest_feasible_orientation(
+                    env_index=env_index,
+                    operator=operator,
+                    pose=pose,
+                    target=target,
+                    backend=backend,
+                    action=action,
+                    reference_site=reference_site,
+                    current_controlled_pose=current_controlled_pose,
+                    eef_from_controlled=eef_from_controlled,
+                    controlled_object_name=controlled_object_name,
+                )
+            )
+            controlled_world_pose = PoseState(
+                position=np.asarray(controlled_world_pose.position[0], dtype=np.float64)
+                + posture_offset,
+                orientation=solved_orientation,
+            )
 
         world_from_eef_goal = compose_pose(
             controlled_world_pose,
@@ -2203,6 +2235,337 @@ class TaskRunner:
             controlled_object_name=controlled_object_name,
             target_axis_world=target_axis_world,
         )
+
+    # Candidates are checked for clearance in batches, nearest first: the
+    # nearest usually passes, and a batch amortizes the backend's setup.
+    _CLEARANCE_BATCH = 16
+
+    @staticmethod
+    def _nearest_feasible_orientation(
+        env_index: int,
+        operator: OperatorHandler,
+        pose: PoseControlConfig,
+        target: Optional[ObjectHandler],
+        backend: SceneBackend,
+        action: Optional[PrimitiveAction],
+        reference_site: Optional[str],
+        current_controlled_pose: PoseState,
+        eef_from_controlled: PoseState,
+        controlled_object_name: Optional[str],
+    ) -> tuple[tuple[float, float, float, float], np.ndarray]:
+        """Solve a ``nearest_feasible`` goal once per waypoint group.
+
+        Returns the controlled-frame world orientation and the chosen
+        posture's world offset. The first member of the group solves from the
+        current controlled orientation and stores both; later members reuse
+        them, so every waypoint of the group targets the same orientation and
+        moves by the same offset.
+        """
+        group = action.orientation_group if action is not None else None
+        if group is not None and group.solution is not None:
+            return (
+                tuple(float(v) for v in group.solution.orientation[0]),
+                np.asarray(group.solution.position[0], dtype=np.float64),
+            )
+        goal = pose.orientation_goal
+        assert isinstance(goal, NearestFeasibleOrientationGoalConfig)
+
+        reference_pose = TaskRunner._resolve_axis_reference_pose(
+            env_index=env_index,
+            operator=operator,
+            target=target,
+            backend=backend,
+            reference_site=reference_site,
+            reference=goal.reference,
+        )
+        reference_orientation = (
+            (0.0, 0.0, 0.0, 1.0)
+            if reference_pose is None
+            else reference_pose.orientation[0]
+        )
+        eef_from_controlled_rotation = quaternion_to_rotation_matrix(
+            eef_from_controlled.orientation[0]
+        )
+
+        def controlled_constraints(entries):
+            return [
+                (
+                    np.asarray(constraint.axis, dtype=np.float64)
+                    if constraint.frame == AxisRangeConstraintFrame.CONTROLLED
+                    else eef_from_controlled_rotation.T
+                    @ np.asarray(constraint.axis, dtype=np.float64),
+                    constraint.elevation,
+                    constraint.azimuth,
+                )
+                for constraint in entries
+            ]
+
+        rotations, angles, posture_indices = nearest_feasible_candidates(
+            current_controlled_pose.orientation[0],
+            reference_orientation,
+            goal.primary_axis.axis,
+            primary_elevation=goal.primary_axis.elevation,
+            primary_azimuth=goal.primary_axis.azimuth,
+            constraints=controlled_constraints(goal.constraints),
+            postures=[
+                controlled_constraints(posture.constraints) for posture in goal.postures
+            ],
+            resolution=goal.resolution,
+        )
+        if len(rotations) == 0:
+            raise ValueError(
+                "nearest_feasible: no orientation satisfies the axis constraints"
+            )
+        reference_rotation = quaternion_to_rotation_matrix(reference_orientation)
+        posture_offsets = [
+            reference_rotation @ np.asarray(posture.offset, dtype=np.float64)
+            for posture in goal.postures
+        ] or [np.zeros(3)]
+
+        chosen = 0
+        details: Dict[str, Any] = {"feasible_candidates": int(len(rotations))}
+        if goal.clearance is not None:
+            members = (
+                [member for member in group.members if member.pose is not None]
+                if group is not None
+                else []
+            )
+            if action is not None and action not in members:
+                members = [action]
+            positions = TaskRunner._group_path_positions(
+                env_index=env_index,
+                operator=operator,
+                members=members or [PrimitiveAction(kind="pose", pose=pose)],
+                target=target,
+                backend=backend,
+                reference_site=reference_site,
+                step=goal.clearance.step,
+            )
+            offset = np.asarray(eef_from_controlled.position[0], dtype=np.float64)
+            release = group.release if group is not None else None
+            retreat = list(group.retreat) if group is not None else []
+            check_open = goal.clearance.release_open and release is not None
+            release_commands = []
+            if release is not None:
+                release_commands = [
+                    release.eef
+                    if posture.release_joint_positions is None
+                    else release.eef.model_copy(
+                        update={
+                            "joint_positions": list(posture.release_joint_positions)
+                        }
+                    )
+                    for posture in goal.postures
+                ] or [release.eef]
+            chosen = -1
+            first_block = None
+            for start in range(0, len(rotations), TaskRunner._CLEARANCE_BATCH):
+                batch = rotations[start : start + TaskRunner._CLEARANCE_BATCH]
+                paths = []
+                open_paths = []
+                open_commands = []
+                batch_postures = posture_indices[
+                    start : start + TaskRunner._CLEARANCE_BATCH
+                ]
+                for rotation, posture_index in zip(batch, batch_postures, strict=True):
+                    world_from_eef = rotation @ eef_from_controlled_rotation.T
+                    eef_positions = (
+                        positions
+                        + posture_offsets[int(posture_index)]
+                        - world_from_eef @ offset
+                    )
+                    quaternion = quaternion_from_matrix_3x3(world_from_eef)
+                    paths.append(
+                        PoseState(
+                            position=eef_positions,
+                            orientation=np.tile(quaternion, (len(positions), 1)),
+                        )
+                    )
+                    if check_open:
+                        open_commands.append(release_commands[int(posture_index)])
+                        open_paths.append(
+                            TaskRunner._retreat_path(
+                                env_index=env_index,
+                                operator=operator,
+                                release=PoseState(
+                                    position=eef_positions[-1], orientation=quaternion
+                                ),
+                                retreat=retreat,
+                                target=target,
+                                backend=backend,
+                                reference_site=reference_site,
+                                step=goal.clearance.step,
+                            )
+                        )
+                report = backend.held_object_clearance(
+                    operator.name,
+                    controlled_object_name,
+                    paths,
+                    goal.clearance.bodies,
+                    goal.clearance.margin,
+                    open_paths=open_paths if check_open else None,
+                    open_commands=open_commands if check_open else None,
+                    env_index=env_index,
+                )
+                if first_block is None and not report.clear:
+                    first_block = report
+                if report.clear:
+                    chosen = start + int(report.path_index)
+                    details["clearance_m"] = float(report.distance)
+                    break
+            if chosen < 0:
+                blocked = (
+                    ""
+                    if first_block is None
+                    else f"; the nearest was blocked by {first_block.probe_geom!r} "
+                    f"against {first_block.obstacle_geom!r} at "
+                    f"{first_block.distance * 1000.0:.1f} mm"
+                    + (
+                        ""
+                        if not first_block.released
+                        else " with the gripper opened at the release"
+                        if not first_block.sample_index
+                        else " with the gripper opened during the retreat"
+                    )
+                )
+                raise ValueError(
+                    f"nearest_feasible: none of {len(rotations)} feasible "
+                    f"orientations keeps {goal.clearance.margin * 1000.0:.1f} mm "
+                    f"from {list(goal.clearance.bodies)}{blocked}"
+                )
+            details["clearance_checked"] = chosen + 1
+
+        orientation = quaternion_from_matrix_3x3(rotations[chosen])
+        posture_offset = posture_offsets[int(posture_indices[chosen])]
+        details["rotation_rad"] = float(angles[chosen])
+        chosen_posture = (
+            goal.postures[int(posture_indices[chosen])] if goal.postures else None
+        )
+        if chosen_posture is not None:
+            details["posture"] = chosen_posture.name
+        if group is not None:
+            group.release_joint_positions = (
+                None
+                if chosen_posture is None
+                else chosen_posture.release_joint_positions
+            )
+            # ``position`` carries the posture offset, not a pose.
+            group.solution = PoseState(position=posture_offset, orientation=orientation)
+            group.details = details
+        return tuple(float(v) for v in orientation), posture_offset
+
+    @staticmethod
+    def _retreat_path(
+        env_index: int,
+        operator: OperatorHandler,
+        release: PoseState,
+        retreat: List[PrimitiveAction],
+        target: Optional[ObjectHandler],
+        backend: SceneBackend,
+        reference_site: Optional[str],
+        step: float,
+    ) -> PoseState:
+        """EEF poses from the release pose through the post-release motion.
+
+        Each retreat waypoint is resolved from the pose the previous one
+        leaves, so ``eef`` / ``eef_world`` references start at the
+        hypothetical release pose rather than the live EEF. A waypoint keeps
+        the orientation it starts with unless it fixes one.
+        """
+        poses = [release]
+        for action in retreat:
+            pose = action.pose
+            assert pose is not None
+            start = poses[-1]
+            if pose.arc is not None:
+                raise ValueError(
+                    "nearest_feasible clearance cannot follow an arc retreat waypoint"
+                )
+            if pose.reference == PoseReference.EEF:
+                reference_pose = start
+            elif pose.reference == PoseReference.EEF_WORLD:
+                reference_pose = PoseState(position=start.position[0])
+            else:
+                reference_pose = TaskRunner._resolve_reference_pose(
+                    env_index,
+                    operator,
+                    pose,
+                    target,
+                    reference_site=reference_site,
+                    backend=backend,
+                )
+            local_pose = TaskRunner._pose_config_to_local_pose(pose)
+            if pose.relative:
+                goal_pose = compose_pose(start, local_pose)
+            else:
+                goal_pose = compose_pose(reference_pose, local_pose)
+            fixes_orientation = bool(pose.orientation or pose.rotation) or isinstance(
+                pose.orientation_goal, FixedOrientationGoalConfig
+            )
+            if not fixes_orientation:
+                goal_pose = PoseState(
+                    position=goal_pose.position[0],
+                    orientation=start.orientation[0],
+                )
+            poses.append(goal_pose)
+        positions = [np.asarray(poses[0].position[0], dtype=np.float64)]
+        orientations = [np.asarray(poses[0].orientation[0], dtype=np.float64)]
+        for previous, current in zip(poses[:-1], poses[1:], strict=True):
+            begin = np.asarray(previous.position[0], dtype=np.float64)
+            end = np.asarray(current.position[0], dtype=np.float64)
+            count = max(1, int(np.ceil(np.linalg.norm(end - begin) / step)))
+            for fraction in np.linspace(0.0, 1.0, count + 1)[1:]:
+                positions.append(begin + (end - begin) * fraction)
+                orientations.append(
+                    np.asarray(
+                        quaternion_slerp(
+                            previous.orientation[0], current.orientation[0], fraction
+                        ),
+                        dtype=np.float64,
+                    )
+                )
+        return PoseState(
+            position=np.asarray(positions), orientation=np.asarray(orientations)
+        )
+
+    @staticmethod
+    def _group_path_positions(
+        env_index: int,
+        operator: OperatorHandler,
+        members: List[PrimitiveAction],
+        target: Optional[ObjectHandler],
+        backend: SceneBackend,
+        reference_site: Optional[str],
+        step: float,
+    ) -> np.ndarray:
+        """Controlled-frame targets of the members, joined by sampled segments."""
+        targets = []
+        for member in members:
+            assert member.pose is not None
+            reference_pose = TaskRunner._resolve_waypoint_reference_pose(
+                env_index=env_index,
+                operator=operator,
+                pose=member.pose,
+                target=target,
+                backend=backend,
+                action=member,
+                reference_site=reference_site,
+            )
+            local_pose = TaskRunner._pose_config_to_local_pose(member.pose)
+            targets.append(
+                np.asarray(
+                    compose_pose(reference_pose, local_pose).position[0],
+                    dtype=np.float64,
+                )
+            )
+        samples = [targets[0]]
+        for start, stop in zip(targets[:-1], targets[1:], strict=True):
+            count = max(1, int(np.ceil(np.linalg.norm(stop - start) / step)))
+            samples.extend(
+                start + (stop - start) * fraction
+                for fraction in np.linspace(0.0, 1.0, count + 1)[1:]
+            )
+        return np.asarray(samples, dtype=np.float64)
 
     @staticmethod
     def _resolve_current_controlled_frame(

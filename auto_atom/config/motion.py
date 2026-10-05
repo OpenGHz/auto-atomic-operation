@@ -15,6 +15,7 @@ from typing_extensions import Self
 from auto_atom.config.operations import Operation
 from auto_atom.config.orientation import (
     AxisAlignmentOrientationGoalConfig,
+    NearestFeasibleOrientationGoalConfig,
     OrientationGoalConfig,
 )
 from auto_atom.config.primitives import Orientation, Position, Rotation
@@ -221,6 +222,20 @@ class PoseControlConfig(BaseModel):
             if self.relative:
                 raise ValueError(
                     "axis_alignment orientation_goal does not support relative=true"
+                )
+        if isinstance(self.orientation_goal, NearestFeasibleOrientationGoalConfig):
+            if self.relative:
+                raise ValueError(
+                    "nearest_feasible orientation_goal does not support relative=true"
+                )
+            if self.orientation_goal.clearance is not None and self.reference in {
+                PoseReference.EEF,
+                PoseReference.EEF_WORLD,
+            }:
+                raise ValueError(
+                    "nearest_feasible clearance needs waypoint positions known in "
+                    "advance; use a world or object reference, not "
+                    f"{self.reference.value!r}"
                 )
         return self
 
