@@ -20,6 +20,7 @@ from auto_atom.policy_eval import ConfigDrivenDemoPolicy, PolicyEvaluator
 from .common import (
     ExampleLoopHooks,
     get_config_dir,
+    parse_round_selection,
     prepare_task_file,
     print_final_summary,
     run_example_rounds,
@@ -127,6 +128,10 @@ def _call_policy(
     version_base=None,
 )
 def main(cfg: DictConfig) -> None:
+    # Validate the round selection before building the environment.
+    rounds, selected_rounds = parse_round_selection(
+        cfg.get("round_selection"), cfg.get("rounds")
+    )
     task_file = prepare_task_file(cfg)
     policy_cfg = cfg.get("policy")
     policy = (
@@ -140,7 +145,6 @@ def main(cfg: DictConfig) -> None:
     )
     max_updates_cfg = cfg.get("max_updates")
     max_updates = None if max_updates_cfg is None else int(max_updates_cfg)
-    rounds = int(cfg.get("rounds", 1))
     use_input = bool(cfg.get("use_input", False))
     get_obs = bool(cfg.get("get_obs", False))
     print_updates = bool(cfg.get("print_updates", True))
@@ -154,6 +158,7 @@ def main(cfg: DictConfig) -> None:
         round_summaries = run_example_rounds(
             rounds=rounds,
             use_input=use_input,
+            selected_rounds=selected_rounds,
             hooks=ExampleLoopHooks(
                 reset_fn=evaluator.reset,
                 step_fn=lambda _step, update: evaluator.update(
@@ -179,6 +184,7 @@ def main(cfg: DictConfig) -> None:
                 start_label="Starting policy rollout...",
                 max_updates=max_updates,
                 print_updates=print_updates,
+                quiet_context_fn=evaluator.defer_viewer_updates,
             ),
         )
     finally:

@@ -332,6 +332,8 @@ class ExecutionSummary:
     completed_stage_info: Dict[str, List[Optional[str]]] = field(default_factory=dict)
     records: List[ExecutionRecord] = field(default_factory=list)
     timed_updates: Optional[int] = None
+    round_number: Optional[int] = None
+    """1-based round of a multi-round run this summary belongs to, if known."""
 
 
 class ComponentRegistry:
@@ -1039,6 +1041,14 @@ class TaskRunner:
             feature="TaskRunner.get_env()",
             expected_batch_size=backend.batch_size,
         )
+
+    def defer_viewer_updates(self) -> ContextManager[None]:
+        """Hold viewer refreshes, and the step delay they bring, for a block.
+
+        Execution is unchanged; the viewer shows the state once the block
+        ends. Multi-round runners use it to reset unselected rounds quietly.
+        """
+        return self._require_context().backend.defer_viewer_updates()
 
     def close(self) -> None:
         if self._context is None:

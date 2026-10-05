@@ -150,6 +150,7 @@ is selected by choosing config-group options, not by naming a config file —
 | Override | Type | Default | Description |
 |---|---|---|---|
 | `[+]rounds=N` | int | 1 | Number of demo rounds to run |
+| `+round_selection=...` | int \| str \| list | unset | Rounds to run and summarize, by printed 1-based number: `N`, `A-B`, `A-` (to `rounds`), or a list / comma-separated string of those. Earlier rounds are only reset and later ones not run; see [Round selection](#round-selection). Without `rounds`, the run ends at the last selected round |
 | `[+]use_input=true` | bool | false | Pause before every step, including warmup (press Enter to continue) |
 | `[+]max_updates=N` | int | 600 | Maximum public `TaskRunner.update()` calls per round; macro-boundary internal controller updates are limited separately |
 | `[+]perf_count=true` | bool | false | Capture observations each step for performance analysis |
@@ -176,6 +177,10 @@ error.
 ```bash
 # Multiple overrides
 aao-demo task=stack_color_blocks +rounds=3 env.batch_size=4 +max_updates=500
+
+# Replay round 13 of seed 94 without watching rounds 1-12
+aao-demo task=microwave_sweet_potato randomization=microwave_sweet_potato/zero_gravity \
+  task.seed=94 +round_selection=13
 
 # Override a nested key
 aao-demo task.stages.0.param.pre_move.0.position="[0.4, 0.0, 0.1]"
@@ -398,6 +403,34 @@ a task-level failure or `2` for an infrastructure/launcher failure; later
 `PENDING` combinations do not change that diagnosis. Exit code `130` means the
 sweep was interrupted. Reports are written before returning any nonzero code.
 
+### Round selection
+
+`round_selection` replays chosen rounds of a multi-round run, for example a
+failure reported as "round 13" of a seeded run:
+
+```bash
+aao-demo task=... task.seed=94 +round_selection=13           # round 13 of 13
+aao-demo task=... task.seed=94 +rounds=20 '+round_selection=[3,7,10-12]'
+aao-demo task=... task.seed=94 +rounds=20 +round_selection=15-   # 15 to 20
+```
+
+A selected round is identical to the same round of a run without a
+selection: same scene, same steps, same result. Every round draws from its
+own random stream, derived from `task.seed` and its round number (see
+[Reproducibility](../task-configuration/randomization.md#reproducibility)), so
+it does not depend on what the rounds before it did.
+
+- **Skipped rounds** before a selected one are only reset, quietly; no update
+  runs. The reset is kept because a non-IID scene generator
+  (`latin_hypercube`, `sobol`, `poisson_disk`) builds its cross-reset coverage
+  from earlier resets. Skipping costs about 20 ms per round of
+  `microwave_sweet_potato` headless.
+- **Summary:** only selected rounds appear in the final summary and in
+  `summary.json`, each under its real round number (`"round": 13`). The success
+  rate counts selected rounds only.
+- **Later rounds:** rounds after the last selected one cannot affect it and
+  are not run.
+
 ## aao-eval
 
 Run policy evaluation. Same Hydra config system as `aao-demo` but accepts an external policy.
@@ -413,6 +446,7 @@ aao-eval task=policy_eval_mock     # mock backend evaluation
 |---|---|---|---|
 | `max_updates=N` | int | None | Maximum steps before stopping (None = unlimited) |
 | `rounds=N` | int | 1 | Number of evaluation rounds |
+| `+round_selection=...` | int \| str \| list | unset | Rounds to evaluate and summarize, as for `aao-demo`. Skipped rounds are only reset; the policy is not queried for them |
 | `use_input=true` | bool | false | Pause before every step, including warmup |
 | `get_obs=true` | bool | false | Call `capture_observation()` and pass to policy each step |
 | `print_updates=false` | bool | true | Disable reset/step `TaskUpdate` dumps while retaining summaries |

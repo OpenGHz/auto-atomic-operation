@@ -16,6 +16,7 @@ from .common import (
     ExampleLoopHooks,
     describe_run,
     get_config_dir,
+    parse_round_selection,
     prepare_task_file,
     print_final_summary,
     run_example_rounds,
@@ -29,12 +30,15 @@ from .common import (
     version_base=None,
 )
 def main(cfg: DictConfig) -> None:
+    # Validate the round selection before building the environment.
+    rounds, selected_rounds = parse_round_selection(
+        cfg.get("round_selection"), cfg.get("rounds")
+    )
     task_file = prepare_task_file(cfg)
     t0 = perf_counter()
     runner = TaskRunner().from_config(task_file)
     init_time = perf_counter() - t0
 
-    rounds = int(cfg.get("rounds", 1))
     use_input = bool(cfg.get("use_input", False))
     max_updates = int(cfg.get("max_updates", 600))
     perf_count = bool(cfg.get("perf_count", False))
@@ -55,6 +59,7 @@ def main(cfg: DictConfig) -> None:
         round_summaries = run_example_rounds(
             rounds=rounds,
             use_input=use_input,
+            selected_rounds=selected_rounds,
             hooks=ExampleLoopHooks(
                 reset_fn=runner.reset,
                 step_fn=_step_fn,
@@ -72,6 +77,7 @@ def main(cfg: DictConfig) -> None:
                 start_label="Scene reset complete; viewer refreshed. Starting task updates...",
                 max_updates=max_updates,
                 print_updates=print_updates,
+                quiet_context_fn=runner.defer_viewer_updates,
             ),
         )
         print_final_summary(round_summaries, init_time_sec=init_time)
@@ -89,6 +95,9 @@ def main(cfg: DictConfig) -> None:
                 "print_updates": print_updates,
                 "viewer": viewer_cfg is not None,
                 "rounds": rounds,
+                "round_selection": (
+                    None if selected_rounds is None else sorted(selected_rounds)
+                ),
                 "max_updates": max_updates,
                 "execution": task_file.execution.model_dump(mode="json"),
             },

@@ -7,7 +7,7 @@ import time
 from copy import deepcopy
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, ContextManager, Dict, List, Optional
 
 import numpy as np
 
@@ -267,6 +267,10 @@ class PolicyEvaluator:
     @property
     def batch_size(self) -> int:
         return self._require_context().backend.batch_size
+
+    def defer_viewer_updates(self) -> ContextManager[None]:
+        """Hold viewer refreshes, and the step delay they bring, for a block."""
+        return self._require_context().backend.defer_viewer_updates()
 
     @property
     def stage_plans(self) -> List[StageExecutionPlan]:

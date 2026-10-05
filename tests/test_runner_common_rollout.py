@@ -428,3 +428,169 @@ def test_max_updates_message_is_only_printed_for_an_incomplete_rollout(
 
     assert "Reached max_updates=1, stopping rollout." in capped_output
     assert "Reached max_updates" not in completed_output
+
+
+# ----------------------------------------------------------------------
+# Round selection
+# ----------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("value", "rounds", "expected"),
+    [
+        pytest.param(None, None, (1, None), id="default-one-round"),
+        pytest.param(None, 5, (5, None), id="all-rounds"),
+        pytest.param(13, None, (13, frozenset({13})), id="int-ends-the-run"),
+        pytest.param("13", 20, (20, frozenset({13})), id="string-int"),
+        pytest.param(
+            [3, 7, "10-12"], None, (12, frozenset({3, 7, 10, 11, 12})), id="list"
+        ),
+        pytest.param("3,7,10-12", None, (12, frozenset({3, 7, 10, 11, 12})), id="csv"),
+        pytest.param("8-", 10, (10, frozenset({8, 9, 10})), id="open-range"),
+        pytest.param(["2-4", 3], None, (4, frozenset({2, 3, 4})), id="overlap"),
+    ],
+)
+def test_round_selection_is_parsed_into_1_based_rounds(value, rounds, expected) -> None:
+    assert common.parse_round_selection(value, rounds) == expected
+
+
+@pytest.mark.parametrize(
+    ("value", "rounds", "message"),
+    [
+        pytest.param([], None, "selects no round", id="empty"),
+        pytest.param(0, None, "1-based", id="zero"),
+        pytest.param(-2, None, "1-based", id="negative"),
+        pytest.param("5-3", None, "ends before it starts", id="reversed"),
+        pytest.param("8-", None, "needs rounds", id="open-without-rounds"),
+        pytest.param(12, 10, "only 10 rounds", id="beyond-rounds"),
+        pytest.param("a", None, "must be N, A-B or A-", id="text"),
+        pytest.param(True, None, "not a round number", id="bool"),
+        pytest.param(None, 0, "at least 1", id="zero-rounds"),
+    ],
+)
+def test_invalid_round_selections_are_rejected(value, rounds, message) -> None:
+    with pytest.raises(ValueError, match=message):
+        common.parse_round_selection(value, rounds)
+
+
+def _scripted_rounds(
+    rounds: int,
+    *,
+    selected_rounds=None,
+    use_input: bool = False,
+) -> tuple[list[ExecutionSummary], list[str]]:
+    """Each round resets and needs two updates; every call is logged."""
+    calls: list[str] = []
+    round_counter = {"round": 0}
+
+    def before_round(r: int) -> None:
+        round_counter["round"] = r + 1
+        calls.append(f"before {r + 1}")
+
+    def reset_fn() -> TaskUpdate:
+        calls.append(f"reset {round_counter['round']}")
+        return _update([False])
+
+    def step_fn(step: int, _previous: TaskUpdate) -> TaskUpdate:
+        calls.append(f"step {round_counter['round']}.{step}")
+        return _update([step >= 1])
+
+    class _Quiet:
+        def __enter__(self):
+            calls.append(f"quiet {round_counter['round'] + 1}")
+
+        def __exit__(self, *exc):
+            calls.append("loud")
+
+    summaries = run_example_rounds(
+        rounds=rounds,
+        use_input=use_input,
+        selected_rounds=selected_rounds,
+        hooks=ExampleLoopHooks(
+            reset_fn=reset_fn,
+            step_fn=step_fn,
+            summarize_fn=_summary,
+            records_fn=list,
+            before_round_fn=before_round,
+            quiet_context_fn=_Quiet,
+        ),
+    )
+    return summaries, calls
+
+
+def test_unselected_rounds_are_only_reset(capsys) -> None:
+    summaries, calls = _scripted_rounds(4, selected_rounds={2, 4})
+    out = capsys.readouterr().out
+
+    # A skipped round prepares and resets, quietly, but takes no update; a
+    # selected round makes exactly the calls of a run without a selection.
+    assert calls == [
+        "quiet 1",
+        "before 1",
+        "reset 1",
+        "loud",
+        "before 2",
+        "reset 2",
+        "step 2.0",
+        "step 2.1",
+        "quiet 3",
+        "before 3",
+        "reset 3",
+        "loud",
+        "before 4",
+        "reset 4",
+        "step 4.0",
+        "step 4.1",
+    ]
+    assert [summary.round_number for summary in summaries] == [2, 4]
+
+    assert "Skipping round 1 of 4 (not selected, reset only)..." in out
+    assert "Skipping round 3 of 4 (not selected, reset only)..." in out
+    assert "Round 1/4" not in out and "Round 3/4" not in out
+    assert "Round 2/4" in out and "Round 4/4" in out
+
+
+def test_rounds_after_the_last_selected_one_are_not_run(capsys) -> None:
+    summaries, calls = _scripted_rounds(5, selected_rounds={2})
+
+    assert [summary.round_number for summary in summaries] == [2]
+    assert not any(call.endswith((" 3", " 4", " 5")) for call in calls)
+    assert "Skipped rounds 3-5 of 5: after the last selected round." in (
+        capsys.readouterr().out
+    )
+
+
+def test_a_run_of_skipped_rounds_is_announced_once(capsys) -> None:
+    _scripted_rounds(5, selected_rounds={5})
+
+    out = capsys.readouterr().out
+    assert out.count("Skipping") == 1
+    assert "Skipping rounds 1-4 of 5 (not selected, reset only)..." in out
+
+
+def test_skipped_rounds_do_not_wait_for_input(monkeypatch) -> None:
+    prompts: list[str] = []
+    monkeypatch.setattr("builtins.input", lambda prompt="": prompts.append(prompt))
+
+    _scripted_rounds(3, selected_rounds={3}, use_input=True)
+
+    # Two updates of round 3 only.
+    assert len(prompts) == 2
+
+
+def test_selected_rounds_outside_the_run_are_rejected() -> None:
+    with pytest.raises(ValueError, match=r"outside 1\.\.3"):
+        _scripted_rounds(3, selected_rounds={4})
+
+
+def test_summaries_report_the_selected_round_numbers(capsys, tmp_path: Path) -> None:
+    summaries, _ = _scripted_rounds(4, selected_rounds={2, 4})
+    capsys.readouterr()
+
+    print_final_summary(summaries)
+    out = capsys.readouterr().out
+    assert "Round 2\n" in out and "Round 4\n" in out and "Round 1\n" not in out
+
+    path = save_final_summary(summaries, tmp_path / "summary.json")
+    rounds = json.loads(path.read_text())["rounds"]
+    assert [entry["round"] for entry in rounds] == [2, 4]

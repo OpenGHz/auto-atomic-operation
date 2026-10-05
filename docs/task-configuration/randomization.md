@@ -1155,7 +1155,9 @@ Every reset draws from its own stream, derived from the seed and the reset's
 
 What one episode does therefore never shifts the next: round N of a seed
 depends only on the seed and N, whether the earlier rounds ran to completion,
-stopped early or ran a different policy.
+stopped early or ran a different policy. `+round_selection=N` uses this to
+replay a round without running the earlier ones; see
+[Round selection](../getting-started/cli_reference.md#round-selection).
 
 The exception is a non-IID scene generator (`latin_hypercube`, `sobol`,
 `poisson_disk`). It spreads samples across resets on purpose, so a reset
