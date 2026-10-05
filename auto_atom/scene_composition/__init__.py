@@ -15,6 +15,7 @@ different asset family does not require changing ``EnvConfig`` or the viewer.
 """
 
 from .adapters import register_asset_adapter, register_scene_assembler
+from .attachments import GraspWeldElementSpec, create_grasp_welds, grasp_weld_name
 from .cameras import CameraElementSpec, create_camera_elements
 from .composer import (
     SceneComposer,
@@ -53,6 +54,7 @@ __all__ = [
     "AssetAnchorCoordinateConfig",
     "AssetScaleRuleConfig",
     "CameraElementSpec",
+    "GraspWeldElementSpec",
     "MjcfLayerConfig",
     "SceneConfig",
     "SceneLayerConfig",
@@ -64,6 +66,8 @@ __all__ = [
     "compile_scene",
     "compose_scene",
     "create_camera_elements",
+    "create_grasp_welds",
+    "grasp_weld_name",
     "load_composed_scene",
     "materialize_scene",
     "register_asset_adapter",

@@ -28,7 +28,11 @@ from pydantic import (
     model_validator,
 )
 
-from auto_atom.scene_composition import CameraElementSpec, SceneConfig
+from auto_atom.scene_composition import (
+    CameraElementSpec,
+    GraspWeldElementSpec,
+    SceneConfig,
+)
 
 
 class DataType(str, Enum):
@@ -447,6 +451,43 @@ class OperatorBinding(BaseModel, frozen=True):
     """Solver-specific keyword arguments passed to *ik_factory*."""
 
 
+class GraspAttachmentConfig(BaseModel, frozen=True):
+    """A weld that holds a grasped object rigidly in an operator's gripper.
+
+    The scene carries the weld inactive. A backend activates it, at the
+    object's current pose relative to the gripper, once it has verified a
+    grasp of the object, and deactivates it when the gripper opens. Task
+    configs normally do not list these: enabling
+    ``task_operators.<name>.control.grasp.attach`` declares one for every
+    stage object the operator picks, pulls or grasps.
+    """
+
+    model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid")
+
+    operator: str
+    """Logical operator holding the object."""
+    object: str
+    """Logical object name; its ``<name>_gs`` body if there is one, else its
+    body, is welded, as backends resolve object bodies."""
+    frame: str = "eef_pose"
+    """Gripper site or body the object is welded to; a site welds its body.
+    It must be on the same body as the operator's EEF site."""
+    solref: Tuple[float, float] = (0.004, 1.0)
+    """Constraint ``solref`` of the weld: stiff, so a carried object keeps its
+    grasp pose to well under a millimetre while it accelerates."""
+    solimp: Tuple[float, float, float, float, float] = (0.99, 0.999, 0.001, 0.5, 2.0)
+    """Constraint ``solimp`` of the weld."""
+
+    def to_weld_element(self) -> GraspWeldElementSpec:
+        return GraspWeldElementSpec(
+            operator=self.operator,
+            object=self.object,
+            frame=self.frame,
+            solref=tuple(self.solref),
+            solimp=tuple(self.solimp),
+        )
+
+
 class EnvConfig(BaseModel, frozen=True):
     model_config = ConfigDict(
         validate_assignment=True,
@@ -464,6 +505,9 @@ class EnvConfig(BaseModel, frozen=True):
     """The sensor categories that should be exposed in captured observations."""
     cameras: List[CameraSpec] = Field(default_factory=list)
     """The camera specifications to initialize when camera output is enabled."""
+    grasp_attachments: Tuple[GraspAttachmentConfig, ...] = ()
+    """Inactive gripper-to-object welds compiled into the scene; see
+    :class:`GraspAttachmentConfig`."""
     hide_operators_in_camera: bool = False
     """Hide configured operators from native MuJoCo camera rendering.
 
@@ -624,6 +668,12 @@ class EnvConfig(BaseModel, frozen=True):
         if DataType.CAMERA not in self.enabled_sensors:
             return ()
         return tuple(camera.to_camera_element() for camera in self.cameras)
+
+    def grasp_weld_elements(self) -> tuple[GraspWeldElementSpec, ...]:
+        """Describe the grasp-attachment welds the scene must carry."""
+        return tuple(
+            attachment.to_weld_element() for attachment in self.grasp_attachments
+        )
 
     @model_validator(mode="after")
     def validate_batch(self):

@@ -80,7 +80,11 @@ class MjWarpObjectOnlyEnv:
         self.host_model = (
             host_model
             if host_model is not None
-            else load_composed_scene(config.scene, cameras=config.camera_elements())
+            else load_composed_scene(
+                config.scene,
+                cameras=config.camera_elements(),
+                welds=config.grasp_weld_elements(),
+            )
         )
         if config.sim_freq is not None:
             self.host_model.opt.timestep = 1.0 / config.sim_freq

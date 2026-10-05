@@ -12,6 +12,7 @@ from pathlib import Path
 
 from .adapters import compile_asset_layer
 from .adapters.mjcf import load_mjcf_fragment
+from .attachments import GraspWeldElementSpec, create_grasp_welds
 from .cameras import CameraElementSpec, create_camera_elements
 from .config import AssetAssemblyLayerConfig, MjcfLayerConfig, SceneConfig
 from .contracts import SceneArtifact, SceneContribution
@@ -142,13 +143,15 @@ def load_composed_scene(
     artifact: SceneArtifact | None = None,
     *,
     cameras: Sequence[CameraElementSpec] = (),
+    welds: Sequence[GraspWeldElementSpec] = (),
 ):
     """Compile a declarative scene into a MuJoCo model.
 
     ``cameras`` are the cameras the task config needs; the ones the scene does
-    not author are created on their mount frames before compilation.  The scene
+    not author are created on their mount frames before compilation.  ``welds``
+    are the inactive grasp-attachment welds a backend may activate.  The scene
     is loaded through :class:`mujoco.MjSpec` for that reason — with no such
-    camera this is the same model the XML alone describes.
+    camera or weld this is the same model the XML alone describes.
     """
     try:
         import mujoco
@@ -158,10 +161,12 @@ def load_composed_scene(
     if not config.layers and artifact is None:
         spec = mujoco.MjSpec.from_file(str(config.base.expanduser().resolve()))
         create_camera_elements(spec, cameras)
+        create_grasp_welds(spec, welds)
         return spec.compile()
     with materialize_scene(config, artifact) as path:
         spec = mujoco.MjSpec.from_file(str(path))
         create_camera_elements(spec, cameras)
+        create_grasp_welds(spec, welds)
         return spec.compile()
 
 

@@ -44,9 +44,11 @@ from auto_atom.contracts import (
 from auto_atom.randomization import RandomizationConstraintEvaluator
 from auto_atom.scene_composition import (
     CameraElementSpec,
+    GraspWeldElementSpec,
     SceneArtifact,
     SceneConfig,
     compile_scene,
+    grasp_weld_name,
     load_composed_scene,
 )
 from auto_atom.utils.pose import (
@@ -79,6 +81,7 @@ class MujocoBasis:
             config.scene,
             self.scene_artifact,
             config.camera_elements(),
+            config.grasp_weld_elements(),
         )
         if config.sim_freq is not None:
             self.model.opt.timestep = 1.0 / config.sim_freq
@@ -122,6 +125,17 @@ class MujocoBasis:
         # authored qpos0 pose may overlap scene geometry, so skip its contacts.
         forward_without_contacts(self.model, self.data)
         self._sync_mocap_to_freejoint()
+
+        # Grasp-attachment welds: (operator, object) -> equality id, and the
+        # object each operator currently holds by its weld.
+        self._grasp_welds: dict[tuple[str, str], int] = {}
+        for attachment in config.grasp_attachments:
+            name = grasp_weld_name(attachment.operator, attachment.object)
+            equality = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_EQUALITY, name)
+            if equality < 0:
+                raise ValueError(f"Grasp attachment weld '{name}' is missing.")
+            self._grasp_welds[(attachment.operator, attachment.object)] = equality
+        self._attached_objects: dict[str, str] = {}
 
         # Bind pre-step callbacks (already instantiated by Hydra).
         self._pre_step_callbacks: list[Callable] = []
@@ -513,8 +527,9 @@ class MujocoBasis:
         scene: SceneConfig,
         artifact: SceneArtifact | None = None,
         cameras: tuple[CameraElementSpec, ...] = (),
+        welds: tuple[GraspWeldElementSpec, ...] = (),
     ) -> tuple[Any, Any]:
-        model = load_composed_scene(scene, artifact, cameras=cameras)
+        model = load_composed_scene(scene, artifact, cameras=cameras, welds=welds)
         data = mujoco.MjData(model)
         return model, data
 
@@ -931,6 +946,75 @@ class MujocoBasis:
             actuator_ids,
         )
         self._prev_ctrl = None
+        # The reset restores eq_active from eq_active0 (inactive); keep the
+        # bookkeeping in step even for a model that defaults them active.
+        for equality in self._grasp_welds.values():
+            self.data.eq_active[equality] = 0
+        self._attached_objects.clear()
+
+    # ------------------------------------------------------------------
+    # Grasp attachments
+    # ------------------------------------------------------------------
+
+    def grasp_weld_bodies(self, operator: str) -> dict[str, tuple[int, int]]:
+        """``object -> (gripper body id, object body id)`` of ``operator``'s welds."""
+        return {
+            object_name: (
+                int(self.model.eq_obj1id[equality]),
+                int(self.model.eq_obj2id[equality]),
+            )
+            for (owner, object_name), equality in self._grasp_welds.items()
+            if owner == operator
+        }
+
+    def attach_grasped_object(self, operator: str, object_name: str) -> None:
+        """Weld ``object_name`` to ``operator``'s gripper where it is now.
+
+        The weld's relative pose is the current one, so the object does not
+        jump; from then on it moves rigidly with the gripper until
+        :meth:`release_grasped_object`.
+        """
+        equality = self._grasp_welds.get((operator, object_name))
+        if equality is None:
+            raise KeyError(
+                f"No grasp attachment weld for operator '{operator}' and object "
+                f"'{object_name}'."
+            )
+        held = self._attached_objects.get(operator)
+        if held == object_name:
+            return
+        if held is not None:
+            self.release_grasped_object(operator)
+        # data.xpos lags qpos by the last step's integration; refresh it.
+        mujoco.mj_kinematics(self.model, self.data)
+        gripper = int(self.model.eq_obj1id[equality])
+        target = int(self.model.eq_obj2id[equality])
+        rotation = np.asarray(self.data.xmat[gripper]).reshape(3, 3)
+        relative_position = rotation.T @ (
+            self.data.xpos[target] - self.data.xpos[gripper]
+        )
+        inverse = np.zeros(4)
+        mujoco.mju_negQuat(inverse, self.data.xquat[gripper])
+        relative_quat = np.zeros(4)
+        mujoco.mju_mulQuat(relative_quat, inverse, self.data.xquat[target])
+        # Weld data: anchor (3, in the object frame), the object's pose in the
+        # gripper frame (position 3, quaternion 4 in wxyz), torquescale (1).
+        self.model.eq_data[equality, 0:3] = 0.0
+        self.model.eq_data[equality, 3:6] = relative_position
+        self.model.eq_data[equality, 6:10] = relative_quat
+        self.data.eq_active[equality] = 1
+        self._attached_objects[operator] = object_name
+
+    def release_grasped_object(self, operator: str) -> str | None:
+        """Deactivate ``operator``'s grasp weld; return the object it held."""
+        held = self._attached_objects.pop(operator, None)
+        if held is not None:
+            self.data.eq_active[self._grasp_welds[(operator, held)]] = 0
+        return held
+
+    def attached_object(self, operator: str) -> str | None:
+        """The object ``operator`` currently holds by its weld, if any."""
+        return self._attached_objects.get(operator)
 
     def reset(self) -> None:
         """Restore low-level state and notify higher-level wrappers."""
