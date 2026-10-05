@@ -36,7 +36,8 @@ from typing import (
 
 import numpy as np
 
-from auto_atom.basis.mjwarp.state import MjWarpSceneState
+from auto_atom.basis.mjwarp.attachments import MjWarpGraspAttachments
+from auto_atom.basis.mjwarp.state import BATCHED_MODEL_FIELDS, MjWarpSceneState
 from auto_atom.config.env_config import EnvConfig
 from auto_atom.contracts import CameraModel, PoseConstraintReport, SupportGeometry
 from auto_atom.randomization import RandomizationConstraintEvaluator
@@ -91,14 +92,28 @@ class MjWarpObjectOnlyEnv:
         if config.gravity is not None:
             self.host_model.opt.gravity[:] = config.gravity
         host_data = self._initial_host_data()
+        attachments = [
+            (attachment.operator, attachment.object)
+            for attachment in config.grasp_attachments
+        ]
         self.state = MjWarpSceneState(
             self.host_model,
             nworld=int(config.batch_size),
             njmax=njmax,
+            # Each world welds its grasp at its own pose, and the weld pose
+            # lives in the model's eq_data.
+            batched_fields=(
+                BATCHED_MODEL_FIELDS + ("eq_data",)
+                if attachments
+                else BATCHED_MODEL_FIELDS
+            ),
             host_data=host_data,
             nconmax=nconmax,
         )
         self._initial_integration_state = self.state.integration_state()
+        self.grasp_attachments: Optional[MjWarpGraspAttachments] = (
+            MjWarpGraspAttachments(self.state, attachments) if attachments else None
+        )
 
         self._camera_specs = {camera.name: camera for camera in config.cameras}
         self._resolve_camera_ids()
@@ -430,6 +445,10 @@ class MjWarpObjectOnlyEnv:
             values[mask] = baseline[mask]
             target.assign(values)
         self.state.restore_integration_state(self._initial_integration_state, mask)
+        if self.grasp_attachments is not None:
+            # The restored integration state already deactivated the welds;
+            # this clears which object each operator was holding.
+            self.grasp_attachments.reset(mask)
         for operator in self._operators.values():
             operator.restore_baseline(mask)
         self._randomization_constraints.reset()
