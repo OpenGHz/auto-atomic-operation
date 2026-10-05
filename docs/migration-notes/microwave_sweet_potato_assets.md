@@ -222,9 +222,9 @@ its long axis (±180°), anywhere the front camera sees it. It need not be over 
 counter: the proposal box (x -25/+45 cm, y -20/+5 cm around its rest position) is
 wider than the counter top, and `visible_in` on `env1_cam` (bounding sphere, 8 px
 margin) trims it to the view. The box's own limits only keep the tuber clear of
-the counter top (z), the cabinet (+y) and the opened door (-x). Over 300 resets 93
-tubers started beyond the counter's edges; the tuber mesh stayed at least 43 px
-inside the 640×352 image, 8.6 cm above the counter top, and 9.0 cm and 11.8 cm
+the counter top (z), the cabinet (+y) and the opened door (-x). Over 300 resets 91
+tubers started beyond the counter's edges; the tuber mesh stayed at least 25 px
+inside the 640×352 image, 8.8 cm above the counter top, and 8.3 cm and 11.2 cm
 from the cabinet and door hulls.
 
 `visible_in` names `env1_cam` instead of `all`: the gripper's home pose follows the
@@ -354,36 +354,21 @@ while carried, no finger–microwave contact, and positive clearance between eve
 gripper mesh (including render-only meshes) and the microwave hulls. The visual
 scans sit about 2 mm inside the hulls, so hull clearance also bounds visual clipping. It also
 requires a final error of at most 0.025 m after one more second of free settling.
-The recorded run completes in 125 control updates with a 5.2 mm settled error, and
-the minimum gripper–microwave clearance is 15.7 mm. Each preset also runs two seeded
+The recorded run completes in 127 control updates with a 4.8 mm settled error, and
+the minimum gripper–microwave clearance is 15.6 mm. Each preset also runs two seeded
 episodes headless and checks the camera set (`env1_cam` and the wrist camera), that
 the gripper starts above the tuber, that a floating tuber's centre is inside the
 front image, the door range, and (`zero_gravity`) that the pick frame sits on the
 jaw contact tilted at most 20° and that the tuber floats within 25 mm of the
-chosen posture's release pose. In sweeps of the
-presets before the zero-gravity grasp tilt (batch 1, 20
-episodes per seed), the default randomization succeeded 20/20, and over four seeds
-`zero_gravity` succeeded 80/80 and `gravity` 77/80. The three `gravity` failures
-dropped the tuber while sliding it in after grasps tilted 15–16°, the occasional
-slip of a tilted grasp described above. No episode showed gripper or tuber contact
-with the door, or gripper contact with the cabinet or counter; the minimum
-render-mesh clearances to the microwave hulls were 5.6 mm (`gravity`) and 0.6 mm
-(`zero_gravity`). With the cameras randomized as well, two more seeds (40 episodes
-per preset) succeeded 40/40 for both presets without such contact, and the tuber
-mesh started at least 58 px (`gravity`) and 49 px (`zero_gravity`) inside the
-rotated front image. With the zero-gravity grasp tilt and jaw roll added,
-`zero_gravity` succeeded 159/160 over eight seeds (20 episodes each); the one
-failure lost a 19° grasp while the tuber was turned into the cavity. No episode
-touched the door or the cabinet, and the closest render mesh stayed 3.1 mm from the
-microwave hulls: the in-cavity pitch is now always nose-down. `gravity` is
-unchanged, with per-episode results identical to before on the same seeds.
-With the target moved 3 cm out of the cavity, the default randomization,
-`gravity` and `zero_gravity` each succeeded 40/40 over two seeds, without door or
-cabinet contact. Settled errors stayed at most 5.9 mm under gravity; without
-gravity the per-episode placement errors were unchanged, and the closest gripper
-mesh stayed 15.6 mm (default), 16.2 mm (`gravity`) and 9.5 mm (`zero_gravity`) from
-the microwave hulls. The target site stays at least 101 px inside the randomized
-front image.
+chosen posture's release pose.
+
+In sweeps of 20 episodes per seed (batch 1), the default randomization succeeded
+60/60 and `gravity` 57/60 over three seeds, and `zero_gravity` 120/120 over six
+seeds, 11 of them with upright jaws. The three `gravity` failures dropped the tuber
+on the way into the cavity. No episode touched the door, and the gripper never
+touched the cabinet or counter; the closest gripper mesh stayed 15.6 mm (default),
+15.9 mm (`gravity`) and 3.5 mm (`zero_gravity`) from the microwave hulls. The
+target site stays at least 103 px inside the randomized front image.
 
 ## Provenance and integrity
 
