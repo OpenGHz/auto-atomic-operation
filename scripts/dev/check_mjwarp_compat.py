@@ -7,13 +7,13 @@ only worth scoping if it accepts our scenes in the first place, and its
 documents -- notably non-zero ``margin`` on mesh CCD pairs.  This script answers
 that question empirically instead of by inspection.
 
-It runs in two stages because MJWarp normally lives in a different environment
-than the project:
+It runs in two stages, so the probe can use a different MJWarp install than
+the one that exported the models:
 
 ``export``
     Compile each execution mode's scene through the real Hydra +
     scene-composition path and save it as a ``.mjb`` plus a JSON manifest.
-    Must run in the project environment.
+    Must run in a project environment.
 
 ``probe``
     Load those models into MJWarp: ``put_model`` (the feature gate), per-world
@@ -21,27 +21,25 @@ than the project:
     round-trip, and the batch renderer against the config's own camera specs.
     Must run in an environment with ``mujoco_warp`` installed.
 
-``both`` (the default) runs ``export`` in-process and re-executes this file for
-``probe`` under ``--probe-python``.
+``both`` (the default) runs ``export`` in-process, then ``probe`` in-process or,
+with ``--probe-python``, by re-executing this file under that interpreter.
 
 Examples::
 
-    # One shot, project env for export and a probe venv for the MJWarp half.
-    python scripts/dev/check_mjwarp_compat.py --probe-python /tmp/mjw/venv/bin/python
+    # One shot in the pixi `warp` environment, which has both halves.
+    pixi run -e warp python scripts/dev/check_mjwarp_compat.py
 
     # Stages separately.
-    python scripts/dev/check_mjwarp_compat.py export --task rack_plate
-    python scripts/dev/check_mjwarp_compat.py export --task open_door \\
+    pixi run python scripts/dev/check_mjwarp_compat.py export --task rack_plate
+    pixi run python scripts/dev/check_mjwarp_compat.py export --task open_door \\
         --override embodiment=p7_v3_umi_v3
-    /tmp/mjw/venv/bin/python scripts/dev/check_mjwarp_compat.py probe outputs/mjwarp-compat
+    pixi run -e warp python scripts/dev/check_mjwarp_compat.py probe \\
+        outputs/mjwarp-compat
 
 A ``.mjb`` is tied to the MuJoCo version that wrote it, so the manifest records
 that version and ``probe`` refuses a mismatch rather than failing obscurely.
-
-To create a probe environment::
-
-    python -m venv /tmp/mjw/venv
-    /tmp/mjw/venv/bin/pip install mujoco-warp "mujoco==<project version>"
+The ``warp`` environment shares the default environment's MuJoCo pin; a probe
+interpreter given with ``--probe-python`` needs that same version.
 
 Exit status is 0 when every model passes, 1 when any model is rejected, and 2
 for a usage or environment error.

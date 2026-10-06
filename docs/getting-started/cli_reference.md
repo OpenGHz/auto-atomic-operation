@@ -69,6 +69,10 @@ $PYTHON scripts/dev/run_tests_safe.py \
   --no-continue-on-failure --launcher=prlimit
 ```
 
+With pixi, `pixi run test` runs it in the default environment, where the
+MJWarp tests skip because `mujoco_warp` is not installed. `pixi run -e warp
+test` runs them too.
+
 `--batch-mode=all` is available when a test suite relies on pytest state shared
 across files, but it deliberately gives up per-file failure isolation and
 forces effective concurrency to one (there is only one batch); that scope
@@ -137,7 +141,7 @@ is selected by choosing config-group options, not by naming a config file —
 | `task` | `aao_configs/task/*.yaml` | `pick_and_place` | Stages, waypoints, and randomization. Each task also selects its scene and default embodiment |
 | `embodiment` | `aao_configs/embodiment/*.yaml` (e.g. `robotiq_mocap`, `xf9600_mocap`, `franka_robotiq`, `p7_g2p`, `airbot_play_g2p`) | set by the task | Robot and gripper. Task-specific tuning in `adapt/<task>/<embodiment>.yaml` is applied automatically |
 | `render` | `mujoco`, `gs` | `mujoco` | `gs` enables Gaussian-splatting rendering; choose the background with `render_assets/background=<name>` |
-| `backend` | `cpu`, `warp` | `cpu` | `backend=warp` selects the GPU mujoco_warp backend |
+| `backend` | `cpu`, `warp` | `cpu` | `backend=warp` selects the GPU mujoco_warp backend; run it in the pixi `warp` environment (`pixi run -e warp aao-demo ...`), which installs `mujoco_warp` |
 | `platform` | `egl` | none | `platform=egl` sets the EGL/NVIDIA environment variables for headless rendering |
 | `observation` | `default`, `rgb_only` | `default` | Camera resolution and modalities; tune single fields with `observation.camera.width=...`, `observation.camera.enable_mask=true`, ... |
 | `camera_layout` | `all`, `operator_only`, `no_operator` | `all` | Which camera roles (wrist / scene / object) are kept |

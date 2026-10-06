@@ -1,9 +1,9 @@
 # @package _global_
 #
 # GPU (mujoco_warp) backend.  Select it from the command line without editing
-# any task config:
+# any task config, in the pixi `warp` environment, which installs mujoco_warp:
 #
-#     aao-demo task=<task> backend=warp
+#     pixi run -e warp aao-demo task=<task> backend=warp
 #
 # The `backend` entry of `config.yaml` composes after the simulator,
 # embodiment, task and adapt entries, so its builder and `env._target_` win
