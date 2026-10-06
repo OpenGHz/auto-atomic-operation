@@ -114,9 +114,16 @@ huggingface_hub = "*"
 # Set HF_ENDPOINT to use a mirror when huggingface.co is unreachable.
 gs-assets = "hf download OpenGHz/auto-atom-assets --repo-type=dataset --include 'assets/gs/*' --local-dir ."
 
+# GPU MuJoCo environment for `backend=warp`: `pixi run -e warp ...`.
+# Adds the `mjwarp` extra on top of the default environment, with the same
+# MuJoCo pin, so its tests run instead of skipping: `pixi run -e warp test`.
+[tool.pixi.feature.mjwarp.pypi-dependencies]
+auto-atomic-operation = { path = ".", editable = true, extras = ["mujoco", "mjwarp"] }
+
 [tool.pixi.environments]
 default = ["py312"]
 gs = ["gs"]
+warp = ["py312", "mjwarp"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
