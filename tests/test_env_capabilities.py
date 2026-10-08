@@ -12,7 +12,7 @@ from auto_atom.config.task import TaskFileConfig
 from auto_atom.ipc.service import _default_action_applier as ipc_action_applier
 from auto_atom.mock import MockEnv, build_mock_backend
 from auto_atom.policy_eval import PolicyEvaluator
-from auto_atom.runner.policy_eval import _default_action_applier as cli_action_applier
+from auto_atom.policy_eval import default_action_applier as cli_action_applier
 from auto_atom.contracts import (
     EnvProtocol,
     InfoEnvProtocol,

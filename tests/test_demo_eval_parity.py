@@ -21,12 +21,13 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from auto_atom.config_loader import compose_task_config
-from auto_atom.policy_eval import ConfigDrivenDemoPolicy, PolicyEvaluator
-from auto_atom.runner.common import prepare_task_file
-from auto_atom.runner.policy_eval import (
-    _default_action_applier,
-    _default_observation_getter,
+from auto_atom.policy_eval import (
+    ConfigDrivenDemoPolicy,
+    PolicyEvaluator,
+    default_action_applier,
+    default_observation_getter,
 )
+from auto_atom.runner.common import prepare_task_file
 from auto_atom.runtime import ComponentRegistry, TaskRunner
 
 
@@ -79,7 +80,7 @@ def _run_eval(task: str, extra_overrides: List[str]) -> Tuple[List[bool], List[s
     policy = ConfigDrivenDemoPolicy()
     evaluator = PolicyEvaluator(
         action_applier=policy.action_applier,
-        observation_getter=_default_observation_getter,
+        observation_getter=default_observation_getter,
     ).from_config(task_file)
     try:
         update = evaluator.reset()
