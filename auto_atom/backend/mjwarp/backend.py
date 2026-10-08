@@ -40,7 +40,7 @@ from auto_atom.contracts import (
     SupportGeometry,
 )
 from auto_atom.utils.pose import PoseState
-from auto_atom.utils.seed import reset_generator, resolve_run_seed
+from auto_atom.utils.seed import ResetAddress, reset_generator, resolve_run_seed
 
 logger = logging.getLogger(__name__)
 
@@ -83,6 +83,8 @@ class MjWarpObjectOnlyBackend(SceneBackend):
         )
 
         self._reset_index = 0
+        self._next_reset_address: Optional[ResetAddress] = None
+        self._reset_address: Optional[ResetAddress] = None
         self._seed = resolve_run_seed(config.seed)
         self._rng = np.random.default_rng(self._seed)
         self._baseline_object_poses: Dict[str, PoseState] = {}
@@ -121,9 +123,19 @@ class MjWarpObjectOnlyBackend(SceneBackend):
         this is a cost saving rather than a correctness trade.
         """
         mask = self._normalize_mask(env_mask)
-        self._reset_index += 1
+        address, self._next_reset_address = self._next_reset_address, None
+        if address is not None and int(np.count_nonzero(mask)) != 1:
+            raise ValueError("An addressed reset must select exactly one world.")
+        self._reset_address = address
+        self._reset_index = (
+            self._reset_index + 1 if address is None else address.reset_index
+        )
         # This reset, and the episode after it, draw from their own stream.
-        self._rng = reset_generator(self._seed, self._reset_index)
+        self._rng = (
+            reset_generator(self._seed, self._reset_index)
+            if address is None
+            else reset_generator(self._seed, address.reset_index, address.retry)
+        )
         self._last_reset_diagnostics.clear()
         self.env.reset(mask)
         for handler in self.operator_handlers.values():
@@ -441,6 +453,15 @@ class MjWarpObjectOnlyBackend(SceneBackend):
     @property
     def reset_index(self) -> int:
         return self._reset_index
+
+    def set_reset_address(self, address: ResetAddress) -> None:
+        """Give the next reset ``address`` (see ``AddressableResetHost``)."""
+        self._next_reset_address = address
+
+    @property
+    def reset_address(self) -> Optional[ResetAddress]:
+        """The address of the latest reset, ``None`` when it was counted."""
+        return self._reset_address
 
     @property
     def randomization_executor(self) -> Any:

@@ -44,6 +44,7 @@ from auto_atom.config.primitives import Position
 from auto_atom.config.task import AutoAtomConfig, TaskFileConfig
 from auto_atom.execution_model import ControlResult
 from auto_atom.utils.pose import PoseState
+from auto_atom.utils.seed import ResetAddress
 
 logger = logging.getLogger(__name__)
 
@@ -856,6 +857,37 @@ class SceneBackend(ABC):
     # ``RandomizationHost``. A backend that supports constrained randomization
     # implements those members structurally; a backend that does not needs to
     # know nothing about them.
+
+
+@runtime_checkable
+class AddressableResetHost(Protocol):
+    """A backend whose next reset can be given its number instead of counting.
+
+    An episode stream that runs env slots out of step assigns each episode's
+    reset number itself, so the episode depends only on the run seed and that
+    number: not on which slot ran it, how many slots there are, or what reset
+    before it. ``set_reset_address`` applies to the next ``reset()`` only, which
+    must select one env. That reset draws exactly what the counted reset of the
+    same number draws, except that
+
+    - state carried between resets (coverage history, Poisson-disk streams)
+      is cleared first, so no earlier reset shapes it;
+    - the env row does not reach the sampled content: QMC candidates, Poisson
+      streams, and camera noise are keyed as for row 0 of a batch of one;
+    - ``retry`` selects a further stream and further candidates.
+
+    A backend with a random source it cannot derive from the run seed must
+    refuse the address rather than silently ignore it.
+    """
+
+    def set_reset_address(self, address: ResetAddress) -> None:
+        """Give the next reset ``address``; raise if it cannot be honoured."""
+        ...
+
+    @property
+    def reset_address(self) -> Optional[ResetAddress]:
+        """The address of the latest reset, ``None`` when it was counted."""
+        ...
 
 
 def _teardown_backend_after_initialization_failure(backend: SceneBackend) -> None:

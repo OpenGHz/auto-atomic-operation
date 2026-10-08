@@ -1025,6 +1025,17 @@ class GaussianRenderConfig(BaseModel):
         """Whether any entry of ``background_transform_randomization`` is set."""
         return bool(self.background_transform_randomization)
 
+    def unseeded_randomness(self) -> tuple[str, ...]:
+        """Configured choices drawn from an unseeded generator, not ``task.seed``."""
+        sources = []
+        if self.is_multi_background():
+            sources.append("the GS background pool")
+        if self.background_transform_randomization:
+            sources.append("GS background transform randomization")
+        if self.foreground_variant:
+            sources.append("GS foreground variants")
+        return tuple(sources)
+
     def resolved_body_gaussians(self, variant_idx: int | None = None) -> Dict[str, str]:
         """Return ``body_gaussians`` with any configured transforms / mirrors
         substituted by the corresponding cached PLY paths.
@@ -1735,6 +1746,11 @@ class GSUnifiedMujocoEnv(UnifiedMujocoEnv):
         self._bg_gs_renderer = self._make_bg_renderer(background_ply)
         object.__setattr__(self.config.gaussian_render, "background_transform", pose)
         return pose
+
+    @property
+    def unseeded_randomness(self) -> tuple[str, ...]:
+        """Random choices of this env that do not follow the run seed."""
+        return self.config.gaussian_render.unseeded_randomness()
 
     def capture_observation(self) -> dict[str, dict[str, Any]]:
         obs = self._capture_observation_raw()
@@ -2475,6 +2491,11 @@ class BatchedGSUnifiedMujocoEnv(BatchedUnifiedMujocoEnv):
         self._bg_cache.clear()
         object.__setattr__(self.config.gaussian_render, "background_transform", pose)
         return pose
+
+    @property
+    def unseeded_randomness(self) -> tuple[str, ...]:
+        """Random choices of this env that do not follow the run seed."""
+        return self.config.gaussian_render.unseeded_randomness()
 
     # ------------------------------------------------------------------
     # observation capture

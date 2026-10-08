@@ -72,6 +72,7 @@ from auto_atom.randomization import (
     RandomizationAncestors,
     RandomizationFailureError,
     RandomizationPlan,
+    addressed_poisson_seed,
     compile_randomization_plan,
     copy_randomization_ancestors,
     distribution_uses_space_filling_history,
@@ -94,7 +95,7 @@ from auto_atom.randomization import (
     validate_randomization_configuration,
 )
 from auto_atom.utils.pose import PoseState, compose_pose, inverse_pose
-from auto_atom.utils.seed import resolve_run_seed
+from auto_atom.utils.seed import ResetAddress, resolve_run_seed
 
 DEFAULT_ATTEMPT_BUDGET = RandomizationFailureConfig().max_attempts
 """Attempt budget for a component whose specs leave ``failure.max_attempts``
@@ -442,6 +443,11 @@ class RandomizationExecutor:
     #  Reset preparation
     # ------------------------------------------------------------------
 
+    @property
+    def reset_address(self) -> Optional[ResetAddress]:
+        """The host's address for this reset; ``None`` for a counted reset."""
+        return getattr(self._host, "reset_address", None)
+
     def begin_reset(self) -> None:
         """Prepare one reset before any pose is sampled.
 
@@ -450,7 +456,17 @@ class RandomizationExecutor:
         operator entries are dropped and re-resolved each reset while object auto radii (static
         geometry) stay cached. Configured regions are validated here so a bad
         reference fails before the scene is mutated.
+
+        An addressed reset (the host reports a ``reset_address``) must not
+        depend on the resets before it, so it also drops the coverage history,
+        the Poisson-disk streams, and every cached radius: non-IID generators
+        then spread candidates within the reset's attempts only, not across
+        episodes.
         """
+        if self.reset_address is not None:
+            self.clear_history()
+            self._poisson_streams.clear()
+            self._auto_radius_cache.clear()
         self._auto_radius_cache = {
             key: value
             for key, value in self._auto_radius_cache.items()
@@ -677,8 +693,11 @@ class RandomizationExecutor:
             reference_context.extend(
                 np.asarray(selected_pose.orientation[0], dtype=np.float64).tolist()
             )
+        address = self.reset_address
+        # An addressed reset keys its content as row 0 of a batch of one.
+        stream_row = env_index if address is None else 0
         key = (
-            env_index,
+            stream_row,
             action_spec.label,
             position_axes,
             lower_bounds,
@@ -691,22 +710,27 @@ class RandomizationExecutor:
         )
         stream = self._poisson_streams.get(key)
         if stream is None:
-            label_seed = sum(
-                (index + 1) * ord(character)
-                for index, character in enumerate(action_spec.label)
-            )
+            # The host reports the run's resolved root seed, so a seeded run
+            # gets the same Poisson lattice as the rest of its randomness; an
+            # unseeded host resolves to its own entropy seed here rather than
+            # collapsing to a fixed 0.
+            run_seed = resolve_run_seed(self._host.seed)
+            if address is None:
+                label_seed = sum(
+                    (index + 1) * ord(character)
+                    for index, character in enumerate(action_spec.label)
+                )
+                seed = run_seed + env_index * 10_007 + label_seed
+            else:
+                seed = addressed_poisson_seed(
+                    run_seed, action_spec.label, address.reset_index, address.retry
+                )
             stream = PoissonDiskCandidateStream(
                 poisson_config,
                 lower_bounds=lower_bounds,
                 upper_bounds=upper_bounds,
                 radius=spacing,
-                # The host reports the run's resolved root seed, so a seeded run
-                # gets the same Poisson lattice as the rest of its randomness;
-                # an unseeded host resolves to its own entropy seed here rather
-                # than collapsing to a fixed 0.
-                seed=resolve_run_seed(self._host.seed)
-                + env_index * 10_007
-                + label_seed,
+                seed=seed,
             )
             self._poisson_streams[key] = stream
         return stream
@@ -724,7 +748,17 @@ class RandomizationExecutor:
         if generator is None:
             return None
         block_size = int(getattr(distribution, "candidate_count", 1))
-        key = (stream, generator, dimension, block_size, attempt, self._host.seed)
+        address = self.reset_address
+        retry = 0 if address is None else address.retry
+        key = (
+            stream,
+            generator,
+            dimension,
+            block_size,
+            attempt,
+            retry,
+            self._host.seed,
+        )
         sequence = self._qmc_sequences.get(key)
         if sequence is None:
             sequence = QmcCandidateSequence(
@@ -733,7 +767,7 @@ class RandomizationExecutor:
                 # As for Poisson-disk streams: an unseeded host resolves to its
                 # own entropy seed rather than a fixed one.
                 seed=qmc_sequence_seed(
-                    resolve_run_seed(self._host.seed), stream, attempt
+                    resolve_run_seed(self._host.seed), stream, attempt, retry
                 ),
                 block_size=block_size,
             )
@@ -755,10 +789,22 @@ class RandomizationExecutor:
         )
         if sequence is None:
             return None
-        return sequence.point(
-            qmc_candidate_index(
-                self._host.reset_index, env_index, self._host.batch_size
-            )
+        return sequence.point(self._qmc_index(env_index))
+
+    def _addressed_qmc_index(self) -> Optional[int]:
+        """The candidate index every env reads in an addressed reset, else ``None``."""
+        return None if self.reset_address is None else self._qmc_index(0)
+
+    def _qmc_index(self, env_index: int) -> int:
+        """Candidate index this reset reads for one environment.
+
+        An addressed reset reads as row 0 of a batch of one, so its point
+        depends on its number alone.
+        """
+        if self.reset_address is not None:
+            return qmc_candidate_index(self._host.reset_index, 0, 1)
+        return qmc_candidate_index(
+            self._host.reset_index, env_index, self._host.batch_size
         )
 
     def _pose_from_axis_values(
@@ -1931,6 +1977,7 @@ class RandomizationExecutor:
                 qmc_sequence=self._qmc_sequence(
                     f"camera:{camera_name}", canonical.distribution, dimension=6
                 ),
+                qmc_index=self._addressed_qmc_index(),
             )
             self._host.set_camera_pose(camera_name, sampled, env_mask)
 
@@ -1975,6 +2022,7 @@ class RandomizationExecutor:
             qmc_sequence=self._qmc_sequence(
                 f"camera:{camera_name}", canonical.distribution, dimension=6
             ),
+            qmc_index=self._addressed_qmc_index(),
         )
         self._host.set_camera_mount_pose(camera_name, sampled, env_mask)
 

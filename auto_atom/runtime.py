@@ -106,7 +106,7 @@ from .utils.pose import (
     quaternion_to_rotation_matrix,
     rotate_pose_around_axis,
 )
-from .utils.seed import reset_generator, resolve_run_seed
+from .utils.seed import ResetAddress, reset_generator, resolve_run_seed
 from .utils.transformations import quaternion_slerp
 
 if TYPE_CHECKING:
@@ -170,19 +170,57 @@ class ExecutionContext:
     )
 
     reset_count: int = field(init=False, repr=False, default=0)
+    env_generators: Dict[int, np.random.Generator] = field(
+        init=False,
+        repr=False,
+        default_factory=dict,
+    )
+    """Per-env waypoint generators bound by addressed resets."""
 
     def __post_init__(self) -> None:
         self._run_seed = resolve_run_seed(self.config.seed)
         self.random_generator = np.random.default_rng(self._run_seed)
 
-    def begin_reset(self) -> None:
+    def begin_reset(self, address: Optional[ResetAddress] = None) -> None:
         """Give the runner-owned generator the stream of the next reset.
 
         It serves backends without their own generator, and follows the same
-        per-reset streams a backend derives with ``reset_generator``.
+        per-reset streams a backend derives with ``reset_generator``. With an
+        ``address`` the reset takes that number instead of the next count.
         """
-        self.reset_count += 1
-        self.random_generator = reset_generator(self._run_seed, self.reset_count)
+        if address is None:
+            self.reset_count += 1
+            self.random_generator = reset_generator(self._run_seed, self.reset_count)
+            return
+        self.reset_count = address.reset_index
+        self.random_generator = reset_generator(
+            self._run_seed, address.reset_index, address.retry
+        )
+
+    def bind_env_generators(self, env_mask: np.ndarray, *, addressed: bool) -> None:
+        """Fix the waypoint generator of the envs a reset just started.
+
+        After an addressed reset each env keeps that reset's generator, so
+        its waypoints do not draw from whichever env reset last. A counted
+        reset releases the envs to the shared generator of the latest reset.
+        """
+        for env_index in np.flatnonzero(np.asarray(env_mask, dtype=bool)):
+            if addressed:
+                backend_rng = self.backend.rng
+                self.env_generators[int(env_index)] = (
+                    backend_rng if backend_rng is not None else self.random_generator
+                )
+            else:
+                self.env_generators.pop(int(env_index), None)
+
+    def waypoint_generator(
+        self, env_index: Optional[int] = None
+    ) -> np.random.Generator:
+        """The generator waypoint randomization of ``env_index`` draws from."""
+        if env_index is not None and env_index in self.env_generators:
+            return self.env_generators[env_index]
+        backend_rng = self.backend.rng
+        return backend_rng if backend_rng is not None else self.random_generator
 
     def capture_grasp_binding(
         self,
@@ -461,8 +499,8 @@ class TaskRunner:
             stage_execution = StageExecution(
                 context,
                 plan,
-                actions_factory=lambda stage_plan: self._materialize_stage_actions(
-                    stage_plan
+                actions_factory=lambda stage_plan, env_index: (
+                    self._materialize_stage_actions(stage_plan, env_index)
                 ),
                 timeline=timeline,
                 action_runner=lambda env_index, stage_plan, action, env_mask: (
@@ -498,10 +536,13 @@ class TaskRunner:
     def _materialize_stage_actions(
         self,
         plan: StageExecutionPlan,
+        env_index: Optional[int] = None,
     ) -> List[PrimitiveAction]:
         timeline = self._require_timeline()
         actions = timeline.clone_stage_actions(plan.stage_index)
-        TaskRunner._apply_waypoint_randomization(actions, self._require_context())
+        TaskRunner._apply_waypoint_randomization(
+            actions, self._require_context(), env_index
+        )
         if self._require_context().is_object_only:
             TaskRunner._materialize_object_only_actions(plan, actions)
         return actions
@@ -1098,6 +1139,7 @@ class TaskRunner:
     def _apply_waypoint_randomization(
         actions: List[PrimitiveAction],
         context: ExecutionContext,
+        env_index: Optional[int] = None,
     ) -> None:
         """Apply per-waypoint randomization to pose actions in-place.
 
@@ -1119,8 +1161,7 @@ class TaskRunner:
             # The scope's master switch covers waypoint randomization too, so a
             # disabled scope reproduces one deterministic scene everywhere.
             return
-        backend_rng = context.backend.rng
-        rng = backend_rng if backend_rng is not None else context.random_generator
+        rng = context.waypoint_generator(env_index)
         for action in actions:
             if action.kind != "pose" or action.pose is None:
                 continue

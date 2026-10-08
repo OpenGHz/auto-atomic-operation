@@ -530,9 +530,11 @@ def compile_randomization_plan(
     )
 
 
-# Keeps QMC sequence seeds apart from the per-reset streams, which spawn the
-# run seed with a one-element key (``auto_atom.utils.seed.reset_generator``).
+# Keep QMC sequence and addressed Poisson-disk seeds apart from the per-reset
+# streams, which spawn the run seed with a key of the reset number and, for a
+# retry, its retry (``auto_atom.utils.seed.reset_generator``).
 _QMC_STREAM_DOMAIN = 0x514D43
+_POISSON_STREAM_DOMAIN = 0x504453
 
 _QMC_SEQUENCE_GENERATORS = frozenset(
     {
@@ -543,23 +545,43 @@ _QMC_SEQUENCE_GENERATORS = frozenset(
 )
 
 
-def qmc_sequence_seed(run_seed: int, stream: str, level: int) -> np.random.SeedSequence:
+def qmc_sequence_seed(
+    run_seed: int, stream: str, level: int, retry: int = 0
+) -> np.random.SeedSequence:
     """Seed of the QMC candidate sequence of ``stream`` at attempt ``level``.
 
     ``stream`` names what is sampled, such as an entity label or a camera. Each
     attempt level gets its own scramble of the run seed, so the first attempts
     of consecutive resets read consecutive points of one sequence while
-    retries read other sequences.
+    retries read other sequences. A positive ``retry`` (a retried addressed
+    reset) scrambles further, so the retry does not reread the same points.
     """
     digest = hashlib.blake2b(stream.encode("utf-8"), digest_size=8).digest()
+    key = (_QMC_STREAM_DOMAIN, int.from_bytes(digest, byteorder="little"), int(level))
     return np.random.SeedSequence(
+        int(run_seed), spawn_key=key if retry == 0 else (*key, int(retry))
+    )
+
+
+def addressed_poisson_seed(
+    run_seed: int, stream: str, reset_index: int, retry: int
+) -> int:
+    """Seed of the Poisson-disk stream ``stream`` starts in one addressed reset.
+
+    An addressed reset starts its streams afresh, so each must be seeded by the
+    reset's number for consecutive episodes to differ.
+    """
+    digest = hashlib.blake2b(stream.encode("utf-8"), digest_size=8).digest()
+    sequence = np.random.SeedSequence(
         int(run_seed),
         spawn_key=(
-            _QMC_STREAM_DOMAIN,
+            _POISSON_STREAM_DOMAIN,
             int.from_bytes(digest, byteorder="little"),
-            int(level),
+            int(reset_index),
+            int(retry),
         ),
     )
+    return int(sequence.generate_state(1, dtype=np.uint32)[0])
 
 
 class QmcCandidateSequence:
@@ -1087,11 +1109,13 @@ def sample_pose_batch(
     distribution: Optional[RandomizationDistributionConfig] = None,
     reset_index: int = 0,
     qmc_sequence: Optional[QmcCandidateSequence] = None,
+    qmc_index: Optional[int] = None,
 ) -> PoseState:
     """Sample one pose per enabled environment into a batched ``PoseState``.
 
     A non-IID ``distribution`` reads each environment's point of
-    ``qmc_sequence`` at :func:`qmc_candidate_index`.
+    ``qmc_sequence`` at :func:`qmc_candidate_index`, or every environment at
+    ``qmc_index`` when it is given (an addressed reset).
     """
     base_pose = base_pose.broadcast_to(batch_size)
     position = base_pose.position.copy()
@@ -1111,6 +1135,8 @@ def sample_pose_batch(
                 if qmc_sequence is None
                 else qmc_sequence.point(
                     qmc_candidate_index(reset_index, env_index, batch_size)
+                    if qmc_index is None
+                    else qmc_index
                 )
             ),
         )

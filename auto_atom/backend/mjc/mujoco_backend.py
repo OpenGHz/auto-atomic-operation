@@ -55,7 +55,7 @@ from ...utils.pose import (
     quaternion_to_rotation_matrix,
     resolve_pose_override,
 )
-from ...utils.seed import reset_generator, resolve_run_seed
+from ...utils.seed import ResetAddress, reset_generator, resolve_run_seed
 from ...utils.transformations import quaternion_slerp
 from .clearance import (
     GeomTemplate,
@@ -1239,6 +1239,10 @@ class MujocoTaskBackend(SceneBackend):
     random_seed: Optional[int] = None
     _rng: np.random.Generator = field(init=False, repr=False)
     _reset_index: int = field(init=False, repr=False, default=0)
+    _next_reset_address: Optional[ResetAddress] = field(
+        init=False, repr=False, default=None
+    )
+    _reset_address: Optional[ResetAddress] = field(init=False, repr=False, default=None)
     _last_reset_diagnostics: Dict[int, List[Dict[str, Any]]] = field(
         init=False,
         repr=False,
@@ -1550,6 +1554,8 @@ class MujocoTaskBackend(SceneBackend):
             raise
         self._seed_rng()
         self._reset_index = 0
+        self._next_reset_address = None
+        self._reset_address = None
         self._last_reset_diagnostics.clear()
         self._randomization_executor_instance = None
         for recorded in (
@@ -1572,16 +1578,45 @@ class MujocoTaskBackend(SceneBackend):
             self._apply_camera_initial_poses()
         self._record_default_poses()
 
+    def set_reset_address(self, address: ResetAddress) -> None:
+        """Give the next reset ``address`` (see ``AddressableResetHost``)."""
+        unseeded = tuple(getattr(self.env, "unseeded_randomness", ()))
+        if unseeded:
+            raise ValueError(
+                "An addressed reset must be a function of the run seed and its "
+                f"number, but this environment also draws {', '.join(unseeded)} "
+                "from an unseeded generator."
+            )
+        self._next_reset_address = address
+
+    @property
+    def reset_address(self) -> Optional[ResetAddress]:
+        """The address of the latest reset, ``None`` when it was counted."""
+        return self._reset_address
+
     def reset(self, env_mask: Optional[np.ndarray] = None) -> None:
         mask = self._normalize_mask(env_mask)
-        self._reset_index += 1
+        address, self._next_reset_address = self._next_reset_address, None
+        if address is not None and int(np.count_nonzero(mask)) != 1:
+            raise ValueError("An addressed reset must select exactly one env.")
+        self._reset_address = address
+        self._reset_index = (
+            self._reset_index + 1 if address is None else address.reset_index
+        )
         # This reset, and the episode after it, draw from their own stream.
-        self._rng = reset_generator(self.random_seed, self._reset_index)
+        self._rng = (
+            reset_generator(self.random_seed, self._reset_index)
+            if address is None
+            else reset_generator(self.random_seed, address.reset_index, address.retry)
+        )
         self._last_reset_diagnostics.clear()
         self.env.reset(env_mask)
         set_noise_episode = getattr(self.env, "set_camera_noise_episode", None)
         if set_noise_episode is not None:
-            set_noise_episode(self._reset_index, mask)
+            if address is None:
+                set_noise_episode(self._reset_index, mask)
+            else:
+                set_noise_episode(self._reset_index, mask, retry=address.retry)
         for operator in self.operator_handlers.values():
             operator.home(mask)
         if self.initial_poses:

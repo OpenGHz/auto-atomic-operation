@@ -42,7 +42,8 @@ from .utils.pose import (
     quaternion_angular_distance,
 )
 
-StageActionsFactory = Callable[[StageExecutionPlan], List[PrimitiveAction]]
+StageActionsFactory = Callable[[StageExecutionPlan, int], List[PrimitiveAction]]
+"""Materialize one stage's primitive actions for one env."""
 StageActionRunner = Callable[
     [int, StageExecutionPlan, PrimitiveAction, np.ndarray], ControlResult
 ]
@@ -521,7 +522,9 @@ class StageExecution:
                 held_object_name,
             )
         actions = (
-            self.actions_factory(plan) if actions_override is None else actions_override
+            self.actions_factory(plan, env_index)
+            if actions_override is None
+            else actions_override
         )
         return ActiveStageState(
             plan=plan,

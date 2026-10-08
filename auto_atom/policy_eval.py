@@ -18,6 +18,7 @@ from auto_atom.config.operations import Operation
 from auto_atom.config.reference import ControlledFrameKind
 from auto_atom.config.task import TaskFileConfig
 from auto_atom.contracts import (
+    AddressableResetHost,
     EnvProtocol,
     InfoEnvProtocol,
     ObjectHandler,
@@ -52,6 +53,7 @@ from .runtime import (
     _EnvRuntimeState,
 )
 from .stage_execution import PolicyStageFeedback, StageExecution
+from .utils.seed import ResetAddress
 
 
 @dataclass
@@ -216,6 +218,7 @@ class ConfigDrivenDemoPolicy:
                 evaluator.materialize_policy_stage_actions(
                     None if self._use_evaluator_timeline else self.builder,
                     plan.stage_index,
+                    env_index,
                 )
             )
             self._cached_stage_indices[env_index] = stage_index
@@ -374,8 +377,8 @@ class PolicyEvaluator:
             stage_execution = StageExecution(
                 context,
                 plan,
-                actions_factory=lambda stage_plan: (
-                    self._materialize_object_only_policy_actions(stage_plan)
+                actions_factory=lambda stage_plan, env_index: (
+                    self._materialize_object_only_policy_actions(stage_plan, env_index)
                 ),
                 timeline=timeline,
                 completion_pose_resolver=self._resolve_completion_pose,
@@ -398,20 +401,49 @@ class PolicyEvaluator:
     def _materialize_object_only_policy_actions(
         self,
         plan: StageExecutionPlan,
+        env_index: Optional[int] = None,
     ) -> List[PrimitiveAction]:
         actions = self._require_timeline().clone_stage_actions(plan.stage_index)
         if self._require_context().is_object_only:
-            TaskRunner._apply_waypoint_randomization(actions, self._require_context())
+            TaskRunner._apply_waypoint_randomization(
+                actions, self._require_context(), env_index
+            )
             TaskRunner._materialize_object_only_actions(plan, actions)
         return actions
 
-    def reset(self, env_mask: Optional[np.ndarray] = None) -> TaskUpdate:
+    def reset(
+        self,
+        env_mask: Optional[np.ndarray] = None,
+        *,
+        address: Optional[ResetAddress] = None,
+    ) -> TaskUpdate:
+        """Reset the masked envs; ``address`` numbers the reset of one env.
+
+        An addressed reset (see :class:`AddressableResetHost`) makes the env's
+        episode a function of the run seed and ``address`` alone. It needs a
+        backend that supports addressing and a mask that selects one env.
+        """
         self._raise_sim_loop_error()
         context = self._require_context()
         mask = self._normalize_mask(env_mask)
+        if address is not None:
+            if int(np.count_nonzero(mask)) != 1:
+                raise ValueError(
+                    "An addressed reset numbers one episode, so its env_mask must "
+                    f"select exactly one env; got {int(np.count_nonzero(mask))}."
+                )
+            backend = context.backend
+            if not isinstance(backend, AddressableResetHost):
+                raise TypeError(
+                    f"{type(backend).__name__} cannot be given a reset number "
+                    "(AddressableResetHost)."
+                )
         with self._sim_lock:
-            context.begin_reset()
+            if address is not None:
+                backend.set_reset_address(address)
+            context.begin_reset(address)
             context.backend.reset(mask)
+            context.bind_env_generators(mask, addressed=address is not None)
         self._require_stage_execution().reset(
             mask,
             lambda env_index: _collect_reset_details(env_index, context),
@@ -769,6 +801,7 @@ class PolicyEvaluator:
         self,
         builder: Optional[TaskFlowBuilder],
         stage_index: int,
+        env_index: Optional[int] = None,
     ) -> List[PrimitiveAction]:
         """Clone one builder's nominal stage and apply scripted randomization.
 
@@ -790,7 +823,9 @@ class PolicyEvaluator:
                 )
                 self._builder_timelines[key] = timeline
         actions = timeline.clone_stage_actions(stage_index)
-        TaskRunner._apply_waypoint_randomization(actions, self._require_context())
+        TaskRunner._apply_waypoint_randomization(
+            actions, self._require_context(), env_index
+        )
         if self._require_context().is_object_only:
             TaskRunner._materialize_object_only_actions(
                 self._plan[stage_index],

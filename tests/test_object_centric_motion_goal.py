@@ -173,10 +173,8 @@ def test_nonzero_grasp_transform_retargets_object_goal_to_eef_in_se3() -> None:
     )
     operator = backend.get_operator_handler("arm")
     operator.end_effector_pose = current_world_from_eef
-    backend.get_grasped_object_name = (
-        lambda operator_name, env_index: "plate"
-        if operator_name == "arm" and env_index == 0
-        else None
+    backend.get_grasped_object_name = lambda operator_name, env_index: (
+        "plate" if operator_name == "arm" and env_index == 0 else None
     )
     binding = GraspBinding(
         env_index=0,
@@ -340,7 +338,7 @@ def test_grasp_bindings_are_isolated_and_partial_reset_clears_one_env() -> None:
     execution = StageExecution(
         context,
         [],
-        actions_factory=lambda _plan: [],
+        actions_factory=lambda _plan, _env_index: [],
     )
     execution.reset(
         np.asarray([True, False]),
@@ -386,7 +384,7 @@ def test_verified_release_clears_only_its_operator_binding() -> None:
     execution = StageExecution(
         context,
         [plan],
-        actions_factory=lambda _plan: [release],
+        actions_factory=lambda _plan, _env_index: [release],
     )
 
     failure = execution._update_grasp_binding_after_eef(0, active, release)
@@ -1269,7 +1267,7 @@ def test_verified_pick_captures_binding_before_first_held_object_post_move() -> 
     execution = StageExecution(
         context,
         [plan],
-        actions_factory=lambda _plan: actions,
+        actions_factory=lambda _plan, _env_index: actions,
         action_runner=run_action,
     )
 
@@ -1344,7 +1342,7 @@ def test_repeated_close_for_same_object_does_not_rebind_after_slip() -> None:
     execution = StageExecution(
         context,
         [plan],
-        actions_factory=lambda _plan: [close],
+        actions_factory=lambda _plan, _env_index: [close],
     )
 
     failure = execution._update_grasp_binding_after_eef(0, active, close)

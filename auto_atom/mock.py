@@ -17,6 +17,7 @@ from auto_atom.contracts import (
 )
 
 from .runtime import ComponentRegistry, ControlResult, ControlSignal, PoseState
+from .utils.seed import ResetAddress
 
 
 @dataclass
@@ -192,6 +193,12 @@ class MockSceneBackend(SceneBackend):
     lifecycle_events: List[str] = field(default_factory=list)
     interest_updates: List[Dict[str, List[str]]] = field(default_factory=list)
     env: MockEnv = field(init=False)
+    reset_index: int = field(init=False, default=0)
+    """Number of the latest reset: counted, or given by ``set_reset_address``."""
+    reset_address: Optional[ResetAddress] = field(init=False, default=None)
+    _next_reset_address: Optional[ResetAddress] = field(
+        init=False, default=None, repr=False
+    )
 
     def __post_init__(self) -> None:
         self.env = MockEnv(batch_size=self.batch_size)
@@ -204,8 +211,16 @@ class MockSceneBackend(SceneBackend):
             f"setup(env={config.env_name}, seed={config.seed})"
         )
 
+    def set_reset_address(self, address: ResetAddress) -> None:
+        self._next_reset_address = address
+
     def reset(self, env_mask: Optional[np.ndarray] = None) -> None:
         self.lifecycle_events.append("reset()")
+        address, self._next_reset_address = self._next_reset_address, None
+        self.reset_address = address
+        self.reset_index = (
+            self.reset_index + 1 if address is None else address.reset_index
+        )
         mask = (
             np.ones(self.batch_size, dtype=bool)
             if env_mask is None

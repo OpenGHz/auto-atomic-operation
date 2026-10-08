@@ -2688,18 +2688,35 @@ class BatchedUnifiedMujocoEnv:
             processor.set_seed(seed)
 
     def set_camera_noise_episode(
-        self, episode: int, env_mask: np.ndarray | None = None
+        self,
+        episode: int,
+        env_mask: np.ndarray | None = None,
+        *,
+        retry: int | None = None,
     ) -> None:
         """Start ``episode`` for the masked rows' camera noise.
 
         Their noise is then keyed by the episode and the captures since, so
-        it does not depend on how many captures earlier episodes made.
+        it does not depend on how many captures earlier episodes made. A
+        ``retry`` marks an addressed episode, keyed independently of its row.
         """
         processor = getattr(self, "_camera_noise_processor", None)
         if processor is None:
             return
         mask = self._batch_adapter().normalize_mask(env_mask)
-        processor.reset(np.flatnonzero(mask), episode=episode)
+        processor.reset(np.flatnonzero(mask), episode=episode, retry=retry)
+
+    def hold_camera_noise(self, env_mask: np.ndarray) -> None:
+        """Let the next capture repeat the masked rows' latest noise frame.
+
+        For a capture made on behalf of other rows: the held rows' noise is
+        neither changed nor advanced by it.
+        """
+        processor = getattr(self, "_camera_noise_processor", None)
+        if processor is None:
+            return
+        mask = self._batch_adapter().normalize_mask(env_mask)
+        processor.hold(np.flatnonzero(mask))
 
     def _apply_camera_noise(
         self, observation: dict[str, dict[str, Any]]

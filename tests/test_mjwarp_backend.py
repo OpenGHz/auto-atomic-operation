@@ -225,6 +225,36 @@ def test_reset_is_reproducible_for_a_fixed_seed():
     np.testing.assert_allclose(first_poses, second_poses, rtol=1e-6, atol=1e-7)
 
 
+def test_an_addressed_reset_ignores_the_world_and_earlier_resets(backend):
+    """A numbered reset of one world draws what that number draws anywhere."""
+    from auto_atom.contracts import AddressableResetHost
+    from auto_atom.utils.seed import ResetAddress
+
+    assert isinstance(backend, AddressableResetHost)
+    backend.reset()
+    backend.set_reset_address(ResetAddress(5))
+    backend.reset(np.asarray([False, True]))
+    late = np.asarray(backend.get_object_handler("object").get_pose().position[1])
+    assert (backend.reset_index, backend.reset_address) == (5, ResetAddress(5))
+
+    fresh = _build()
+    try:
+        fresh.set_reset_address(ResetAddress(5))
+        fresh.reset(np.asarray([True, False]))
+        first = np.asarray(fresh.get_object_handler("object").get_pose().position[0])
+        fresh.set_reset_address(ResetAddress(5, retry=1))
+        fresh.reset(np.asarray([True, False]))
+        retried = np.asarray(fresh.get_object_handler("object").get_pose().position[0])
+    finally:
+        fresh.teardown()
+
+    np.testing.assert_allclose(late, first, rtol=1e-6, atol=1e-7)
+    assert not np.allclose(retried, first, atol=1e-4)
+    with pytest.raises(ValueError, match="exactly one world"):
+        backend.set_reset_address(ResetAddress(1))
+        backend.reset()
+
+
 def test_operator_queries_fail_loudly(backend):
     """No operator exists, and a stub would read as a legitimate answer.
 

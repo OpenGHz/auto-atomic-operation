@@ -41,10 +41,16 @@ class CameraNoiseProcessor:
         self._seed = resolve_run_seed(seed)
         self._temporal_state: dict[tuple[str, str, int], tuple[float, float]] = {}
         # A row's noise is keyed by its episode and its capture count within
-        # that episode, the capture index minus the episode's first capture.
+        # that episode, the capture index minus the episode's first capture
+        # and minus the captures it was held through.
         self._default_episode = 0
         self._episodes: dict[int, int] = {}
         self._episode_starts: dict[int, int] = {}
+        self._held_captures: dict[int, int] = {}
+        # Rows of addressed episodes: keyed as row 0, plus the episode's retry.
+        self._addressed_retries: dict[int, int] = {}
+        self._hold_next: set[int] = set()
+        self._holding: frozenset[int] = frozenset()
 
     def set_seed(self, seed: int | None) -> None:
         """Set the root seed and restart the per-capture sequence."""
@@ -54,12 +60,16 @@ class CameraNoiseProcessor:
         self._default_episode = 0
         self._episodes.clear()
         self._episode_starts.clear()
+        self._held_captures.clear()
+        self._addressed_retries.clear()
+        self._hold_next.clear()
 
     def reset(
         self,
         logical_env_indices: Iterable[int] | None = None,
         *,
         episode: int | None = None,
+        retry: int | None = None,
     ) -> None:
         """Clear temporal state for every or selected logical environment row.
 
@@ -71,12 +81,20 @@ class CameraNoiseProcessor:
         episode, and the capture index deliberately continues across the
         reset.  Resetting every row without an ``episode`` restarts the
         sequence; call :meth:`set_seed` to restart it with a new root seed.
+
+        ``retry`` marks an addressed episode (it needs ``episode``): its noise
+        is keyed as row 0 of a batch of one plus the retry, so the episode
+        looks the same whichever row runs it.
         """
+        if retry is not None and episode is None:
+            raise ValueError("An addressed camera-noise episode needs its episode.")
         if logical_env_indices is None:
             self._temporal_state.clear()
             self._capture_index = 0
             self._episodes.clear()
             self._episode_starts.clear()
+            self._held_captures.clear()
+            self._addressed_retries.clear()
             if episode is not None:
                 self._default_episode = int(episode)
             return
@@ -92,6 +110,35 @@ class CameraNoiseProcessor:
             for index in indices:
                 self._episodes[index] = int(episode)
                 self._episode_starts[index] = self._capture_index
+                self._held_captures.pop(index, None)
+                if retry is None:
+                    self._addressed_retries.pop(index, None)
+                else:
+                    self._addressed_retries[index] = int(retry)
+
+    def hold(self, logical_env_indices: Iterable[int]) -> None:
+        """Let the next capture repeat these rows' latest frame.
+
+        A held row's capture is keyed like its previous one and keeps its
+        temporal offset, so a capture made for other rows (after resetting
+        them, say) neither changes the held rows' noise nor advances it.
+        """
+        self._hold_next.update(int(index) for index in logical_env_indices)
+
+    def _begin_capture(self) -> int:
+        """Count one capture and apply the pending holds; its global index."""
+        capture_index = self._capture_index
+        self._capture_index += 1
+        holding = set()
+        for row in self._hold_next:
+            held = self._held_captures.get(row, 0)
+            # Only a row with a frame in this episode has one to repeat.
+            if capture_index - self._episode_starts.get(row, 0) - held > 0:
+                self._held_captures[row] = held + 1
+                holding.add(row)
+        self._holding = frozenset(holding)
+        self._hold_next.clear()
+        return capture_index
 
     @property
     def seed(self) -> int:
@@ -107,8 +154,7 @@ class CameraNoiseProcessor:
         logical_env_index: int = 0,
     ) -> dict[str, dict[str, Any]]:
         """Apply one capture's noise to a single logical observation."""
-        capture_index = self._capture_index
-        self._capture_index += 1
+        capture_index = self._begin_capture()
         for camera_name, spec in self._camera_specs.items():
             noise = getattr(spec, "noise", None)
             if noise is None:
@@ -147,8 +193,7 @@ class CameraNoiseProcessor:
         """Apply one capture's noise independently to every logical batch row."""
         if batch_size < 1:
             raise ValueError(f"batch_size must be positive, got {batch_size}")
-        capture_index = self._capture_index
-        self._capture_index += 1
+        capture_index = self._begin_capture()
         for camera_name, spec in self._camera_specs.items():
             noise = getattr(spec, "noise", None)
             if noise is None:
@@ -205,18 +250,24 @@ class CameraNoiseProcessor:
         stream_id = 0 if stream == "rgb" else 1
         row = int(logical_env_index)
         episode = self._episodes.get(row, self._default_episode)
-        capture_in_episode = int(capture_index) - self._episode_starts.get(row, 0)
-        return np.random.SeedSequence(
-            [
-                self._seed,
-                episode,
-                capture_in_episode,
-                row,
-                camera_id & 0xFFFFFFFF,
-                camera_id >> 32,
-                stream_id,
-            ]
+        capture_in_episode = (
+            int(capture_index)
+            - self._episode_starts.get(row, 0)
+            - self._held_captures.get(row, 0)
         )
+        retry = self._addressed_retries.get(row)
+        entropy = [
+            self._seed,
+            episode,
+            capture_in_episode,
+            row if retry is None else 0,
+            camera_id & 0xFFFFFFFF,
+            camera_id >> 32,
+            stream_id,
+        ]
+        if retry:
+            entropy.append(retry)
+        return np.random.SeedSequence(entropy)
 
     def _torch_generator(
         self,
@@ -263,8 +314,14 @@ class CameraNoiseProcessor:
             state_key, (0.0, 0.0)
         )
         innovation_std = jitter_std * np.sqrt(max(0.0, 1.0 - ar1 * ar1))
-        jitter = ar1 * previous_jitter + float(rng.normal(0.0, innovation_std))
-        drift = drift_decay * previous_drift + float(rng.normal(0.0, drift_std))
+        jitter_innovation = float(rng.normal(0.0, innovation_std))
+        drift_innovation = float(rng.normal(0.0, drift_std))
+        if int(logical_env_index) in self._holding:
+            # The innovations are drawn anyway, so the generator reaches the
+            # per-pixel noise in the state of the frame being repeated.
+            return previous_jitter + previous_drift
+        jitter = ar1 * previous_jitter + jitter_innovation
+        drift = drift_decay * previous_drift + drift_innovation
         self._temporal_state[state_key] = (jitter, drift)
         return jitter + drift
 

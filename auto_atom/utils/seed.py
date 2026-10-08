@@ -13,13 +13,41 @@ Every reset draws from its own stream, derived from the run seed and the
 reset's 1-based number (:func:`reset_generator`). What one episode consumes
 therefore never shifts the next one, so episode ``N`` of a seed is the same
 whether or not the episodes before it ran to completion.
+
+A caller that schedules resets out of order gives a reset its number instead
+of letting the backend count (:class:`ResetAddress`); a retry of the same
+number then draws from its own child stream.
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import numpy as np
 
-__all__ = ["reset_generator", "resolve_run_seed"]
+__all__ = ["ResetAddress", "reset_generator", "resolve_run_seed"]
+
+
+@dataclass(frozen=True)
+class ResetAddress:
+    """The number one reset is given, rather than counted, and its retry.
+
+    Retry ``0`` draws exactly what the ``reset_index``-th counted reset of the
+    run draws; each further retry draws from its own stream.
+    """
+
+    reset_index: int
+    """1-based reset number."""
+    retry: int = 0
+    """Attempts of this number before this one."""
+
+    def __post_init__(self) -> None:
+        if self.reset_index < 1:
+            raise ValueError(
+                f"reset_index is 1-based and must be positive, got {self.reset_index}"
+            )
+        if self.retry < 0:
+            raise ValueError(f"retry must be non-negative, got {self.retry}")
 
 
 def resolve_run_seed(seed: int | None) -> int:
@@ -34,14 +62,16 @@ def resolve_run_seed(seed: int | None) -> int:
     return int(seed)
 
 
-def reset_generator(seed: int, reset_index: int) -> np.random.Generator:
+def reset_generator(seed: int, reset_index: int, retry: int = 0) -> np.random.Generator:
     """The generator reset number ``reset_index`` of run ``seed`` draws from.
 
     A child stream of the run seed (``SeedSequence`` spawn key), so streams of
-    different resets are statistically independent.
+    different resets are statistically independent. A positive ``retry`` adds
+    a level to the key: a retried reset draws a stream of its own.
     """
     if reset_index < 0:
         raise ValueError(f"reset_index must be non-negative, got {reset_index}")
-    return np.random.default_rng(
-        np.random.SeedSequence(int(seed), spawn_key=(int(reset_index),))
-    )
+    if retry < 0:
+        raise ValueError(f"retry must be non-negative, got {retry}")
+    spawn_key = (int(reset_index),) if retry == 0 else (int(reset_index), int(retry))
+    return np.random.default_rng(np.random.SeedSequence(int(seed), spawn_key=spawn_key))
