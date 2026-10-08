@@ -67,6 +67,7 @@ from auto_atom.randomization import (
     ROTATION_AXES,
     CollisionParticipant,
     PoissonDiskCandidateStream,
+    QmcCandidateSequence,
     RandomizationAction,
     RandomizationAncestors,
     RandomizationFailureError,
@@ -81,6 +82,10 @@ from auto_atom.randomization import (
     maximin_select,
     parse_entity_reference,
     pose_from_axis_values,
+    qmc_candidate_index,
+    qmc_point_dimension,
+    qmc_sequence_generator,
+    qmc_sequence_seed,
     reference_ancestors,
     resolve_collision_ancestors,
     resolve_collision_radius,
@@ -352,6 +357,9 @@ class RandomizationExecutor:
         self._logger = logger or logging.getLogger(__name__)
         self._history: Dict[Tuple[str, ...], List[np.ndarray]] = {}
         self._poisson_streams: Dict[Tuple[object, ...], PoissonDiskCandidateStream] = {}
+        # One sequence per sampled stream, attempt level and shape. Its points
+        # depend only on the run seed and their index, so this is a cache.
+        self._qmc_sequences: Dict[Tuple[object, ...], QmcCandidateSequence] = {}
         # Auto-resolved collision radii are cached per (kind, owner, env). Object
         # entries stay valid for the backend lifetime (static geometry); operator
         # entries are dropped every reset (their geometry follows the reset's
@@ -366,9 +374,10 @@ class RandomizationExecutor:
     def history(self) -> Dict[Tuple[str, ...], List[np.ndarray]]:
         """Accepted cross-reset samples, keyed by component.
 
-        The history is intentionally *not* cleared per reset: it is the
-        persistent sequence that makes non-IID generators cover the proposal
-        volume across resets instead of restarting every reset.
+        The history is intentionally *not* cleared per reset: non-IID
+        generators reject candidates closer than ``spacing`` to it, and
+        ``maximin`` scores against it, so coverage builds up across resets
+        instead of restarting every reset.
         """
         return self._history
 
@@ -574,18 +583,9 @@ class RandomizationExecutor:
     #  Pose sampling: regions, references, and generators
     # ------------------------------------------------------------------
 
-    def _select_region(
-        self,
-        spec: RandomizationInput,
-        *,
-        candidate_index: int = 0,
-    ) -> PoseRandomRange:
+    def _select_region(self, spec: RandomizationInput) -> PoseRandomRange:
         """Select one region for one sampling attempt."""
-        return select_randomization_region(
-            self._host.rng,
-            spec,
-            candidate_index=candidate_index,
-        )
+        return select_randomization_region(self._host.rng, spec)
 
     def _baseline_or_live(self, label: str) -> PoseState:
         """A target's recorded reset baseline, or its live pose when unrecorded.
@@ -710,6 +710,56 @@ class RandomizationExecutor:
             )
             self._poisson_streams[key] = stream
         return stream
+
+    def _qmc_sequence(
+        self,
+        stream: str,
+        distribution: object,
+        *,
+        dimension: int,
+        attempt: int = 0,
+    ) -> Optional[QmcCandidateSequence]:
+        """The QMC sequence ``stream`` draws attempt ``attempt`` from, if any."""
+        generator = qmc_sequence_generator(distribution)
+        if generator is None:
+            return None
+        block_size = int(getattr(distribution, "candidate_count", 1))
+        key = (stream, generator, dimension, block_size, attempt, self._host.seed)
+        sequence = self._qmc_sequences.get(key)
+        if sequence is None:
+            sequence = QmcCandidateSequence(
+                generator,
+                dimension=dimension,
+                # As for Poisson-disk streams: an unseeded host resolves to its
+                # own entropy seed rather than a fixed one.
+                seed=qmc_sequence_seed(
+                    resolve_run_seed(self._host.seed), stream, attempt
+                ),
+                block_size=block_size,
+            )
+            self._qmc_sequences[key] = sequence
+        return sequence
+
+    def _qmc_point(
+        self,
+        stream: str,
+        distribution: object,
+        *,
+        dimension: int,
+        env_index: int,
+        attempt: int,
+    ) -> Optional[np.ndarray]:
+        """This reset's point of ``stream`` for one environment and attempt."""
+        sequence = self._qmc_sequence(
+            stream, distribution, dimension=dimension, attempt=attempt
+        )
+        if sequence is None:
+            return None
+        return sequence.point(
+            qmc_candidate_index(
+                self._host.reset_index, env_index, self._host.batch_size
+            )
+        )
 
     def _pose_from_axis_values(
         self,
@@ -866,9 +916,13 @@ class RandomizationExecutor:
         env_index: int,
         working_poses: Dict[str, PoseState],
         *,
-        candidate_index: int = 0,
+        attempt: int = 0,
     ) -> tuple[Dict[str, PoseState], List[PendingRandomizationAction]]:
-        """Draw one action's region and axis values for one environment."""
+        """Draw one action's region and axis values for one environment.
+
+        ``attempt`` numbers this environment's candidates within the reset; a
+        non-IID generator reads its point from the sequence of that attempt.
+        """
         if not self._is_samplable(action_spec):
             self._logger.warning(
                 "Randomization key '%s' does not match any object or operator "
@@ -877,10 +931,7 @@ class RandomizationExecutor:
             )
             return {}, []
 
-        selected_range = self._select_region(
-            action_spec.randomization,
-            candidate_index=candidate_index,
-        )
+        selected_range = self._select_region(action_spec.randomization)
         distribution = action_spec.randomization.distribution
         poisson_stream = self._poisson_stream_for_action(
             action_spec,
@@ -893,8 +944,13 @@ class RandomizationExecutor:
             self._host.rng,
             selected_range,
             distribution=distribution,
-            sample_index=candidate_index,
-            reset_index=self._host.reset_index,
+            qmc_point=self._qmc_point(
+                f"entity:{action_spec.label}",
+                distribution,
+                dimension=qmc_point_dimension(poisson_stream),
+                env_index=env_index,
+                attempt=attempt,
+            ),
             poisson_stream=poisson_stream,
         )
         return self._compose_target_for_env(
@@ -1277,7 +1333,6 @@ class RandomizationExecutor:
         valid_candidates: list[
             tuple[Dict[str, PoseState], List[PendingRandomizationAction], np.ndarray]
         ] = []
-        stable_labels = {label: index for index, label in enumerate(sorted(component))}
         for attempt in range(attempt_budget):
             working_poses = dict(accepted_env_poses)
             env_sampled_poses: Dict[str, PoseState] = {}
@@ -1292,11 +1347,7 @@ class RandomizationExecutor:
                     action_specs[action_label],
                     env_index,
                     working_poses,
-                    candidate_index=(
-                        self._host.reset_index * 1009
-                        + attempt * 17
-                        + stable_labels[action_label]
-                    ),
+                    attempt=attempt,
                 )
                 for key, pose in sampled_poses.items():
                     working_poses[key] = pose
@@ -1633,11 +1684,7 @@ class RandomizationExecutor:
                     action_spec,
                     env_index,
                     working_poses,
-                    candidate_index=(
-                        self._host.reset_index * 1009
-                        + attempt * 17
-                        + sum(ord(c) for c in member)
-                    ),
+                    attempt=attempt,
                 )
                 candidate = next(
                     (item for item in candidate_actions if item.label == member),
@@ -1881,6 +1928,9 @@ class RandomizationExecutor:
                 batch_size=self._host.batch_size,
                 distribution=canonical.distribution,
                 reset_index=self._host.reset_index,
+                qmc_sequence=self._qmc_sequence(
+                    f"camera:{camera_name}", canonical.distribution, dimension=6
+                ),
             )
             self._host.set_camera_pose(camera_name, sampled, env_mask)
 
@@ -1922,6 +1972,9 @@ class RandomizationExecutor:
             batch_size=self._host.batch_size,
             distribution=canonical.distribution,
             reset_index=self._host.reset_index,
+            qmc_sequence=self._qmc_sequence(
+                f"camera:{camera_name}", canonical.distribution, dimension=6
+            ),
         )
         self._host.set_camera_mount_pose(camera_name, sampled, env_mask)
 

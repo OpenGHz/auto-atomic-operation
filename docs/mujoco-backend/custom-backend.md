@@ -471,7 +471,7 @@ operator, camera, joint, and named-frame bindings. Backend-specific limitations
 must not reinterpret shared frame modes or omitted-axis behavior.
 
 The shared layer already owns plan compilation (`compile_randomization_plan`),
-candidate generation and sampling (`unit_candidate`, `PoissonDiskCandidateStream`,
+candidate generation and sampling (`QmcCandidateSequence`, `PoissonDiskCandidateStream`,
 `maximin_select`, `sample_pose_for_env`, `select_randomization_region`),
 collision rejection (`find_collision_participant`), configuration validation
 (`validate_randomization_configuration`), the deterministic `visible_in`

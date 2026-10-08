@@ -28,7 +28,9 @@ from auto_atom.config.randomization import (
     OperatorRandomizationConfig,
     PoseRandomRange,
     RandomizationConstraintConfig,
+    RandomizationDistributionConfig,
     RandomizationFailureConfig,
+    RandomizationGeneratorKind,
     RandomizationSpec,
     RandomizationStrategy,
     RandomizationVisibilityConfig,
@@ -348,6 +350,39 @@ def test_object_mounted_camera_samples_the_mount_frame() -> None:
 
     assert "camera_mount" in host.events
     assert "camera" not in host.events
+
+
+def test_a_poisson_disk_camera_samples_every_axis_independently() -> None:
+    """A camera has no Poisson-disk stream, so all its axes come from one point.
+
+    Position and rotation axes read different coordinates of it; they once
+    shared the first three, so ``x`` and ``roll`` came out equal.
+    """
+    host = _RecordingHost()
+    config = ResolvedRandomizationConfig(
+        scope=ResolvedRandomizationScope(
+            entities=_entities(),
+            cameras={
+                CAMERA: RandomizationSpec(
+                    proposal=PoseRandomRange(x=(0.0, 1.0), roll=(0.0, 1.0)),
+                    distribution=RandomizationDistributionConfig(
+                        generator=RandomizationGeneratorKind.POISSON_DISK,
+                        spacing=0.1,
+                    ),
+                )
+            },
+            strategy=RandomizationStrategy.RSA,
+        )
+    )
+    executor = RandomizationExecutor(host, config)
+
+    executor.apply_camera_randomization(np.asarray([True], dtype=bool))
+
+    pose = host.poses[CAMERA]
+    qx, qw = pose.orientation[0][0], pose.orientation[0][3]
+    roll = 2.0 * np.arctan2(qx, qw)
+    assert 0.0 <= roll <= 1.0
+    assert not np.isclose(pose.position[0][0], roll)
 
 
 def test_operator_mounted_camera_samples_the_mount_frame() -> None:

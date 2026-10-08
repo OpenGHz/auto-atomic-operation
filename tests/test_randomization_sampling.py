@@ -102,8 +102,6 @@ def test_sampling_is_reproducible_for_a_given_seed() -> None:
         ),
         env_index=0,
         batch_size=1,
-        sample_index=3,
-        reset_index=1,
     )
     first = sample_pose_for_env(np.random.default_rng(7), **kwargs)
     second = sample_pose_for_env(np.random.default_rng(7), **kwargs)

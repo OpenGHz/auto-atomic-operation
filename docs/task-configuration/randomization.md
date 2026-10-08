@@ -431,7 +431,20 @@ The generator names are the algorithms, not a second family/category field.
 `candidate_count` is greater than one; with `candidate_count: 1`, both selectors
 are equivalent because there is only one feasible candidate to choose. The
 generator, together with the accepted-sample history, determines coverage
-across resets. SciPy is a core project dependency for these generators
+across resets.
+
+`sobol` and `halton` draw from one scrambled sequence per randomized entity (or
+camera), derived from `task.seed`. The first candidate of each reset is point
+`reset_index × batch_size + env_index` of that sequence, so consecutive resets,
+and the environments of one reset, read consecutive points and the accepted
+samples of a run spread like one low-discrepancy sequence. Each further attempt
+within a reset reads the same point of its own sequence. A point depends only on
+the seed and its index, never on which candidates were drawn before.
+`latin_hypercube` cannot be extended, so it chains independent Latin hypercube
+designs of `candidate_count` points: every `candidate_count` consecutive resets
+are stratified on each axis. With the default `candidate_count: 1` that leaves
+nothing to stratify, so set it to the size of the blocks to stratify.
+SciPy is a core project dependency for these generators
 and for the vectorized distance calculations used by maximin; the backend does
 not provide separate sampling implementations.
 
@@ -1159,9 +1172,15 @@ stopped early or ran a different policy. `+round_selection=N` uses this to
 replay a round without running the earlier ones; see
 [Round selection](../getting-started/cli_reference.md#round-selection).
 
-The exception is a non-IID scene generator (`latin_hypercube`, `sobol`,
-`poisson_disk`). It spreads samples across resets on purpose, so a reset
-depends on how many resets came before, though not on what their episodes did.
+The exceptions are the non-IID scene generators, which spread samples across
+resets on purpose, though never on what earlier episodes did:
+
+- `poisson_disk` advances one stream per entity with every draw, so a reset
+  depends on the draws of the resets before it.
+- `latin_hypercube`, `halton` and `sobol` address their points by reset number,
+  environment and attempt. A reset depends on earlier ones only through the
+  accepted-sample history: with `spacing > 0`, a candidate closer than
+  `spacing` to an earlier sample is rejected and the next attempt is used.
 
 Leaving `task.seed` unset keeps the run random, and the resolved seed is logged
 when the backend is built:

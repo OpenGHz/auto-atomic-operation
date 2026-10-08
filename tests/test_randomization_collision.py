@@ -7,6 +7,7 @@ from typing import Dict, Iterable, Optional
 
 import numpy as np
 import pytest
+from scipy.stats import qmc
 
 from auto_atom.backend.mjc.mujoco_backend import MujocoTaskBackend
 from auto_atom.config.randomization import ResolvedRandomizationScope
@@ -157,6 +158,7 @@ def _make_backend(
     object_positions: Dict[str, tuple[float, float, float]],
     randomization_groups: Optional[Dict[str, RandomizationGroupConfig]] = None,
     strategy: RandomizationStrategy = RandomizationStrategy.RSA,
+    random_seed: Optional[int] = None,
 ) -> MujocoTaskBackend:
     object_handlers = {
         name: DummyObjectHandler(
@@ -176,6 +178,7 @@ def _make_backend(
             scope=_scope(randomization, strategy=strategy),
             groups=dict(randomization_groups or {}),
         ),
+        random_seed=random_seed,
     )
     backend._default_object_poses = {
         name: handler.get_pose() for name, handler in object_handlers.items()
@@ -692,6 +695,8 @@ def test_maximin_reference_component_is_declaration_order_independent() -> None:
         backend = _make_backend(
             randomization=randomization,
             object_positions={"vase": (0.0, 0.0, 0.0), "flower": (0.0, 0.0, 0.0)},
+            # Both runs share a seed, so only the declaration order differs.
+            random_seed=0,
         )
         backend.randomization_executor.apply_randomization(
             np.asarray([True], dtype=bool)
@@ -751,6 +756,93 @@ def test_first_feasible_non_iid_generator_avoids_accepted_samples_across_resets(
     assert len(history) == 2
     assert np.allclose(history[0], first)
     assert np.allclose(history[1], second)
+
+
+_QMC_GENERATORS = [
+    RandomizationGeneratorKind.SOBOL,
+    RandomizationGeneratorKind.HALTON,
+    RandomizationGeneratorKind.LATIN_HYPERCUBE,
+]
+
+
+def _qmc_scenes(
+    generator: RandomizationGeneratorKind,
+    *,
+    seed: int,
+    resets: Iterable[int],
+    candidate_count: int = 1,
+) -> np.ndarray:
+    """The vase's x/y after each reset, sampled from the unit square."""
+    spec = RandomizationSpec(
+        proposal=PoseRandomRange(
+            reference=RandomizationReference.ABSOLUTE_WORLD,
+            x=(0.0, 1.0),
+            y=(0.0, 1.0),
+        ),
+        distribution=RandomizationDistributionConfig(
+            generator=generator, candidate_count=candidate_count
+        ),
+    )
+    backend = _make_backend(
+        randomization={"vase": spec},
+        object_positions={"vase": (0.0, 0.0, 0.0)},
+        random_seed=seed,
+    )
+    scenes = []
+    for reset_index in resets:
+        backend._reset_index = reset_index
+        backend.randomization_executor.begin_reset()
+        backend.randomization_executor.apply_randomization(
+            np.asarray([True], dtype=bool)
+        )
+        scenes.append(backend.object_handlers["vase"].get_pose().position[0, :2].copy())
+    return np.asarray(scenes)
+
+
+@pytest.mark.parametrize("generator", _QMC_GENERATORS)
+def test_qmc_scenes_follow_the_run_seed(generator) -> None:
+    resets = range(1, 9)
+    first = _qmc_scenes(generator, seed=1, resets=resets)
+
+    assert np.array_equal(first, _qmc_scenes(generator, seed=1, resets=resets))
+    assert not np.allclose(first, _qmc_scenes(generator, seed=2, resets=resets))
+
+
+@pytest.mark.parametrize(
+    "generator", [RandomizationGeneratorKind.SOBOL, RandomizationGeneratorKind.HALTON]
+)
+def test_qmc_scenes_spread_like_one_low_discrepancy_sequence(generator) -> None:
+    """Consecutive resets read consecutive points of one scrambled sequence.
+
+    128 IID samples of the unit square have a centred discrepancy of at least
+    1.1e-3 over 20 seeds; one Sobol or Halton sequence stays below 2e-4.
+    """
+    for seed in range(3):
+        scenes = _qmc_scenes(generator, seed=seed, resets=range(1, 129))
+        assert qmc.discrepancy(scenes) < 5e-4
+
+
+@pytest.mark.parametrize("generator", _QMC_GENERATORS)
+def test_a_qmc_reset_depends_only_on_its_number(generator) -> None:
+    """Without spacing, earlier resets do not shift a later one."""
+    after_earlier = _qmc_scenes(generator, seed=1, resets=range(1, 11))[-1]
+    alone = _qmc_scenes(generator, seed=1, resets=[10])[0]
+
+    assert np.array_equal(after_earlier, alone)
+
+
+def test_latin_hypercube_stratifies_consecutive_resets() -> None:
+    """Each block of ``candidate_count`` resets is one Latin hypercube."""
+    scenes = _qmc_scenes(
+        RandomizationGeneratorKind.LATIN_HYPERCUBE,
+        seed=1,
+        # Reset numbers 8-23 are indices 8-23: blocks 1 and 2 of 8.
+        resets=range(8, 24),
+        candidate_count=8,
+    )
+    for block in (scenes[:8], scenes[8:]):
+        strata = np.sort(np.floor(block * 8).astype(int), axis=0)
+        assert np.array_equal(strata, np.tile(np.arange(8)[:, None], (1, 2)))
 
 
 def test_poisson_disk_uses_physical_bounds_across_resets() -> None:

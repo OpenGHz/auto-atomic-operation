@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
+from scipy.stats import qmc
 
 from auto_atom.config.randomization import (
     OperatorRandomizationConfig,
@@ -26,10 +27,11 @@ from auto_atom.config.randomization import (
 from auto_atom.config.task import AutoAtomConfig
 from auto_atom.randomization import (
     PoissonDiskCandidateStream,
+    QmcCandidateSequence,
     RandomizationFailureError,
     compile_randomization_plan,
     maximin_select,
-    unit_candidate,
+    qmc_sequence_seed,
 )
 from auto_atom.runner.data_replay import DataReplayTaskFileConfig
 
@@ -585,35 +587,69 @@ def test_hard_sphere_group_accepts_auto_radius_but_rejects_exempt_member() -> No
         )
 
 
-def test_halton_candidates_are_deterministic_and_bounded() -> None:
-    first = unit_candidate(
-        rng=np.random.default_rng(7),
-        dimension=4,
-        generator=RandomizationGeneratorKind.HALTON,
-        index=8,
-        candidate_count=32,
+def _qmc_sequence(
+    generator: RandomizationGeneratorKind,
+    seed: int = 7,
+    *,
+    dimension: int = 4,
+    block_size: int = 1,
+) -> QmcCandidateSequence:
+    return QmcCandidateSequence(
+        generator,
+        dimension=dimension,
+        seed=qmc_sequence_seed(seed, "entity:vase", 0),
+        block_size=block_size,
     )
-    second = unit_candidate(
-        rng=np.random.default_rng(999),
-        dimension=4,
-        generator=RandomizationGeneratorKind.HALTON,
-        index=8,
-        candidate_count=32,
-    )
-    assert np.array_equal(first, second)
-    assert np.all((first >= 0.0) & (first <= 1.0))
 
 
-def test_sobol_candidates_use_scipy_qmc() -> None:
-    candidate = unit_candidate(
-        rng=np.random.default_rng(7),
-        dimension=3,
-        generator=RandomizationGeneratorKind.SOBOL,
-        index=2,
-        candidate_count=8,
+@pytest.mark.parametrize(
+    "generator",
+    [
+        RandomizationGeneratorKind.SOBOL,
+        RandomizationGeneratorKind.HALTON,
+        RandomizationGeneratorKind.LATIN_HYPERCUBE,
+    ],
+)
+def test_qmc_points_depend_only_on_seed_and_index(generator) -> None:
+    sequence = _qmc_sequence(generator, block_size=8)
+    in_order = np.vstack([sequence.point(index) for index in range(20)])
+    # Reading out of order, or from a fresh sequence, gives the same points.
+    assert np.array_equal(sequence.point(3), in_order[3])
+    assert np.array_equal(
+        _qmc_sequence(generator, block_size=8).point(17), in_order[17]
     )
-    assert candidate.shape == (3,)
-    assert np.all((candidate >= 0.0) & (candidate <= 1.0))
+    assert np.all((in_order >= 0.0) & (in_order < 1.0))
+    # The run seed scrambles the sequence.
+    other_seed = _qmc_sequence(generator, seed=8, block_size=8)
+    assert not np.allclose(other_seed.point(3), in_order[3])
+
+
+@pytest.mark.parametrize(
+    ("generator", "engine"),
+    [
+        (RandomizationGeneratorKind.SOBOL, qmc.Sobol),
+        (RandomizationGeneratorKind.HALTON, qmc.Halton),
+    ],
+)
+def test_qmc_points_are_one_scipy_sequence(generator, engine) -> None:
+    sequence = _qmc_sequence(generator)
+    reference = engine(
+        d=4,
+        scramble=True,
+        seed=np.random.default_rng(qmc_sequence_seed(7, "entity:vase", 0)),
+    ).random(n=64)
+    assert np.allclose(np.vstack([sequence.point(i) for i in range(64)]), reference)
+    # Skipping ahead, as a later reset does, lands on the same points.
+    assert np.allclose(_qmc_sequence(generator).point(40), reference[40])
+
+
+def test_latin_hypercube_stratifies_each_block() -> None:
+    sequence = _qmc_sequence(RandomizationGeneratorKind.LATIN_HYPERCUBE, block_size=8)
+    for block in range(3):
+        points = np.vstack([sequence.point(block * 8 + i) for i in range(8)])
+        # One point in each eighth of every axis.
+        strata = np.sort(np.floor(points * 8).astype(int), axis=0)
+        assert np.array_equal(strata, np.tile(np.arange(8)[:, None], (1, 4)))
 
 
 def test_poisson_disk_generator_accepts_scipy_parameters() -> None:
