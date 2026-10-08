@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import copy
 import itertools
+import logging
 import threading
 from collections import Counter, deque
 from dataclasses import asdict, dataclass, field
@@ -19,6 +20,8 @@ from typing import Any, Deque, Dict, Iterator, List, Literal, Optional
 import numpy as np
 
 from .config import StreamConfig
+
+logger = logging.getLogger(__name__)
 
 AttemptKind = Literal["success", "failed", "truncated", "randomization_failed"]
 
@@ -76,6 +79,10 @@ class StreamStats:
     invalid_skipped: int = 0
     """Invalid attempts discarded rather than yielded."""
     retries: int = 0
+    abandoned: int = 0
+    """Episode indices skipped after ``retry_budget`` retries."""
+    abandoned_indices: Deque[int] = field(default_factory=lambda: deque(maxlen=1024))
+    """The latest skipped episode indices (bounded)."""
     consecutive_invalid: int = 0
     invalid_reasons: Dict[str, int] = field(default_factory=dict)
     """Invalid attempts by ``kind:category``, kept or not."""
@@ -118,6 +125,7 @@ class StreamStats:
         """Counters and derived rates as plain JSON-ready values."""
         data = asdict(self)
         data["recent_steps"] = list(self.recent_steps)
+        data["abandoned_indices"] = list(self.abandoned_indices)
         for name in (
             "rollouts",
             "success_rate",
@@ -156,7 +164,11 @@ class InvalidEpisodeError(StreamError):
 
 
 class RetryBudgetExhaustedError(InvalidEpisodeError):
-    """An episode index stayed invalid through ``retry_budget`` retries."""
+    """An episode index stayed invalid through ``retry_budget`` retries.
+
+    Raised only with ``on_retry_exhausted="raise"``; otherwise the index is
+    skipped.
+    """
 
 
 class StreamUnhealthyError(StreamError):
@@ -223,7 +235,9 @@ class AttemptScheduler:
         """Count ``outcome`` and decide whether its episode is yielded.
 
         Raises :class:`InvalidEpisodeError`, :class:`RetryBudgetExhaustedError`
-        or :class:`StreamUnhealthyError` as the failure policy demands.
+        or :class:`StreamUnhealthyError` as the failure policy demands. An
+        index that exhausts its retries is otherwise skipped: counted in
+        ``StreamStats.abandoned`` and logged.
         """
         with self._lock:
             stats = self._stats
@@ -268,14 +282,23 @@ class AttemptScheduler:
             history = self._invalid.setdefault(attempt.episode_index, [])
             history.append(outcome.describe(attempt))
             if attempt.retry >= self.config.retry_budget:
-                raise RetryBudgetExhaustedError(
+                exhausted = (
                     f"Episode {attempt.episode_index} stayed invalid through "
                     f"retry_budget={self.config.retry_budget} retries; last: "
-                    f"{message}",
-                    copy.deepcopy(stats),
-                    attempt=attempt,
-                    outcome=outcome,
+                    f"{message}"
                 )
+                if self.config.on_retry_exhausted == "raise":
+                    raise RetryBudgetExhaustedError(
+                        exhausted,
+                        copy.deepcopy(stats),
+                        attempt=attempt,
+                        outcome=outcome,
+                    )
+                stats.abandoned += 1
+                stats.abandoned_indices.append(attempt.episode_index)
+                del self._invalid[attempt.episode_index]
+                logger.warning("%s. Skipping it.", exhausted)
+                return Verdict(False, [])
             stats.retries += 1
             self._retries.append(
                 EpisodeAttempt(attempt.episode_index, attempt.retry + 1)

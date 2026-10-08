@@ -103,8 +103,27 @@ def test_resample_retries_the_same_index_before_new_ones() -> None:
     assert stats.success_rate == 0.5
 
 
-def test_exhausted_retry_budget_raises() -> None:
-    scheduler = AttemptScheduler(_config(retry_budget=1))
+def test_an_index_that_exhausts_its_retries_is_skipped(caplog) -> None:
+    scheduler = AttemptScheduler(_config(num_episodes=3, retry_budget=1))
+
+    scheduler.judge(scheduler.next_attempt(), TRUNCATED)
+    skipped = scheduler.judge(scheduler.next_attempt(), TRUNCATED)
+    after = scheduler.next_attempt()
+    emitted = scheduler.judge(after, SUCCESS)
+
+    assert not skipped.emit
+    assert after == EpisodeAttempt(1)
+    # The skipped index's discarded attempts do not leak into the next one.
+    assert emitted.emit and emitted.invalid_attempts == []
+    stats = scheduler.snapshot()
+    assert (stats.abandoned, list(stats.abandoned_indices)) == (1, [0])
+    assert stats.to_dict()["abandoned_indices"] == [0]
+    assert (stats.retries, stats.invalid_skipped) == (1, 2)
+    assert "Episode 0 stayed invalid through retry_budget=1" in caplog.text
+
+
+def test_exhausted_retries_raise_when_asked() -> None:
+    scheduler = AttemptScheduler(_config(retry_budget=1, on_retry_exhausted="raise"))
 
     scheduler.judge(scheduler.next_attempt(), TRUNCATED)
     with pytest.raises(RetryBudgetExhaustedError, match="retry_budget=1") as error:
@@ -112,6 +131,18 @@ def test_exhausted_retry_budget_raises() -> None:
 
     assert error.value.attempt == EpisodeAttempt(0, retry=1)
     assert error.value.stats.truncations == 2
+
+
+def test_skipping_still_trips_the_breaker_on_an_infeasible_task() -> None:
+    scheduler = AttemptScheduler(_config(retry_budget=3, max_consecutive_invalid=20))
+
+    with pytest.raises(StreamUnhealthyError):
+        for _ in range(100):
+            scheduler.judge(scheduler.next_attempt(), FAILED)
+
+    # Retries go before new indices, so four indices are skipped whole.
+    stats = scheduler.snapshot()
+    assert (stats.attempts, stats.abandoned) == (20, 4)
 
 
 def test_keep_yields_failed_rollouts_but_retries_failed_resets() -> None:
@@ -273,7 +304,9 @@ def test_failed_reset_randomization_is_resampled(monkeypatch) -> None:
 
 def test_producer_errors_reach_the_consumer() -> None:
     with (
-        EpisodeStream.from_config(_config(num_episodes=5, retry_budget=0)) as episodes,
+        EpisodeStream.from_config(
+            _config(num_episodes=5, retry_budget=0, on_retry_exhausted="raise")
+        ) as episodes,
         pytest.raises(RetryBudgetExhaustedError),
     ):
         next(episodes)
@@ -291,3 +324,13 @@ def test_infeasible_task_trips_the_breaker_through_the_stream() -> None:
     assert len(kept) == 2
     assert not any(episode.success for episode in kept)
     assert episodes.stats.failures == 3
+
+
+def test_a_finite_stream_ends_short_of_its_skipped_indices() -> None:
+    with EpisodeStream.from_config(_config(num_episodes=3, retry_budget=1)) as episodes:
+        collected = list(episodes)
+
+    assert collected == []
+    stats = episodes.stats
+    assert list(stats.abandoned_indices) == [0, 1, 2]
+    assert stats.attempts == 6

@@ -60,13 +60,20 @@ class StreamConfig(BaseModel):
     """Environment slots run in one process (``env.batch_size``)."""
     num_episodes: Optional[PositiveInt] = None
     """Episode indices ``0 .. num_episodes - 1`` before sharding; ``None`` runs
-    without end."""
+    without end. Skipped indices (``on_retry_exhausted``) yield no episode."""
     on_invalid: Literal["resample", "keep", "raise"] = "resample"
     """What a failed or truncated episode does: retry its index, be yielded
     with ``success=False``, or raise. A failed reset randomization has no
     episode to keep, so ``keep`` retries it too."""
     retry_budget: NonNegativeInt = 3
-    """Retries of one episode index before the stream raises."""
+    """Retries of one invalid episode index before ``on_retry_exhausted``."""
+    on_retry_exhausted: Literal["skip", "raise"] = "skip"
+    """What an index that stayed invalid through ``retry_budget`` retries
+    does: be skipped (counted in ``StreamStats.abandoned``), or raise
+    ``RetryBudgetExhaustedError``. Skipping keeps an endless stream alive on a
+    task that sometimes fails; a task that always fails still trips
+    ``max_consecutive_invalid``. Which indices are skipped depends only on
+    ``(base_seed, index)`` under ``determinism="episode"``."""
     max_consecutive_invalid: PositiveInt = 20
     """Invalid attempts in a row after which the stream is unhealthy."""
     queue_size: PositiveInt = 16
