@@ -53,8 +53,9 @@ class StreamConfig(BaseModel):
     max_updates: PositiveInt = 600
     """Control ticks an episode may take before it is truncated."""
     sample_stride: PositiveInt = 1
-    """Record every ``sample_stride``-th control tick (and always the last).
-    Commands are still issued every tick."""
+    """Record every ``sample_stride``-th control tick, starting with tick 0.
+    Commands are still issued every tick; each recorded row pairs the
+    observation before its tick with the command the tick issued."""
     batch_size: PositiveInt = 1
     """Environment slots run in one process (``env.batch_size``)."""
     num_episodes: Optional[PositiveInt] = None

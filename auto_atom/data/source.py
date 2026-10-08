@@ -63,7 +63,10 @@ class _SlotRun:
     scene: Dict[str, Any]
     randomization: Dict[str, Any]
     started: float
-    initial_observation: Dict[str, Any] = field(default_factory=dict)
+    pending: Optional[Tuple[Dict[str, Any], float]] = None
+    """Observation (and its time) the next tick decides on, if that tick is
+    recorded."""
+    final_observation: Dict[str, Any] = field(default_factory=dict)
     recorder: EpisodeRecorder = field(default_factory=EpisodeRecorder)
     steps: int = 0
 
@@ -115,7 +118,8 @@ class EvaluatorEpisodeSource:
             update = evaluator.update(policy.act({}, acted_on, evaluator), active)
 
             finished: List[int] = []
-            sampled: List[int] = []
+            observed: List[int] = []
+            recorded: List[int] = []
             for slot in np.flatnonzero(active):
                 run = self._slots[slot]
                 assert run is not None
@@ -123,25 +127,45 @@ class EvaluatorEpisodeSource:
                 ended = bool(update.done[slot]) or run.steps >= self.config.max_updates
                 if ended:
                     finished.append(int(slot))
+                # Observe for the final observation, or before the next
+                # recorded tick (tick number run.steps).
                 if ended or run.steps % self.config.sample_stride == 0:
-                    sampled.append(int(slot))
-            if sampled:
-                self._hold_noise_except(sampled)
+                    observed.append(int(slot))
+                if run.pending is not None:
+                    recorded.append(int(slot))
+            observation = None
+            if observed:
+                self._hold_noise_except(observed)
                 observation = evaluator.get_observation()
-            for slot in sampled:
+            if recorded:
+                # The tick's command, which only a capture after it reports.
+                commands_capture = (
+                    observation if observation is not None else self._capture_commands()
+                )
+                for slot in recorded:
+                    run = self._slots[slot]
+                    assert run is not None and run.pending is not None
+                    _, commands, _ = split_observation(commands_capture, slot)
+                    measured, sim_time = run.pending
+                    run.recorder.append(
+                        tick=run.steps - 1,
+                        obs=measured,
+                        action=commands,
+                        update=acted_on,
+                        env_index=slot,
+                        sim_time=sim_time,
+                    )
+                    run.pending = None
+            for slot in observed:
                 run = self._slots[slot]
-                assert run is not None
-                measured, commands, sim_time = split_observation(
+                assert run is not None and observation is not None
+                measured, _, sim_time = split_observation(
                     observation, slot, observation_keys=self.config.observation_keys
                 )
-                run.recorder.append(
-                    tick=run.steps - 1,
-                    obs=measured,
-                    action=commands,
-                    update=acted_on,
-                    env_index=slot,
-                    sim_time=sim_time,
-                )
+                if slot in finished:
+                    run.final_observation = measured
+                else:
+                    run.pending = (measured, sim_time)
 
             for slot in finished:
                 run = self._slots[slot]
@@ -269,9 +293,10 @@ class EvaluatorEpisodeSource:
         for slot in started_slots:
             run = self._slots[slot]
             assert run is not None
-            run.initial_observation, _, _ = split_observation(
+            measured, _, sim_time = split_observation(
                 observation, slot, observation_keys=self.config.observation_keys
             )
+            run.pending = (measured, sim_time)
         return latest
 
     def _reset_groups(
@@ -293,12 +318,28 @@ class EvaluatorEpisodeSource:
         ((_, attempt),) = group
         return ResetAddress(attempt.episode_index + 1, attempt.retry)
 
+    def _capture_commands(self) -> Dict[str, Dict[str, Any]]:
+        """Every row's command channels, rendering nothing when the env can.
+
+        Without ``capture_commands`` this is a full capture that holds every
+        row's camera noise, so it costs a render but changes no episode.
+        """
+        evaluator = self._require_evaluator()
+        # CommandObservationEnvProtocol, checked by attribute: isinstance()
+        # would cache a class's answer.
+        capture_commands = getattr(evaluator.get_env(), "capture_commands", None)
+        if capture_commands is not None:
+            return capture_commands()
+        self._hold_noise_except([])
+        return evaluator.get_observation()
+
     def _hold_noise_except(self, slots: List[int]) -> None:
         """Keep the next capture from advancing the camera noise of other slots.
 
         An episode-deterministic stream counts a slot's noise frames over the
-        captures made for it (its initial observation and its recorded
-        ticks), not the ones made for other slots.
+        captures made for it (its first observation, the observation before
+        each further recorded tick, and its final observation), not the ones
+        made for other slots.
         """
         if self.config.determinism == "sequential":
             return
@@ -367,7 +408,7 @@ class EvaluatorEpisodeSource:
             truncated=kind == "truncated",
             failure_reason=reason,
             transitions=run.recorder.arrays(),
-            initial_observation=run.initial_observation,
+            final_observation=run.final_observation,
             scene=run.scene,
             randomization=run.randomization,
             records=records,

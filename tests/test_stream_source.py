@@ -25,21 +25,25 @@ CONFIG_DIR = str(Path(__file__).resolve().parents[1] / "aao_configs")
 
 
 @pytest.fixture(autouse=True)
-def eef_observations(monkeypatch) -> None:
-    """Make the mock env report EEF poses, an EEF command, and a capture clock."""
+def captures(monkeypatch) -> Dict[str, int]:
+    """Make the mock env report EEF poses, an EEF command, and a capture clock.
+
+    The EEF command channel reports the EEF pose, which the mock operator sets
+    on reaching it. Returns the count of full captures.
+    """
+    counts = {"full": 0}
     original = mock.MockSceneBackend.__post_init__
 
     def post_init(self: Any) -> None:
         original(self)
         self.env.backend = self
-        self.env.captures = 0
 
     def capture_observation(env: Any) -> Dict[str, Dict[str, Any]]:
-        env.captures += 1
+        counts["full"] += 1
         backend = env.backend
         operator = sorted(backend.operators)[0]
         eef = backend.get_operator_handler(operator).get_end_effector_pose()
-        stamp = np.full(backend.batch_size, float(env.captures))
+        stamp = np.full(backend.batch_size, float(counts["full"]))
         return {
             "arm/eef/position": {"data": eef.position.copy(), "t": stamp},
             "arm/eef/orientation": {"data": eef.orientation.copy(), "t": stamp},
@@ -48,6 +52,26 @@ def eef_observations(monkeypatch) -> None:
 
     monkeypatch.setattr(mock.MockSceneBackend, "__post_init__", post_init)
     monkeypatch.setattr(mock.MockEnv, "capture_observation", capture_observation)
+    return counts
+
+
+@pytest.fixture
+def command_captures(monkeypatch) -> List[int]:
+    """Give the mock env a render-free ``capture_commands``; logs each call."""
+    calls: List[int] = []
+
+    def capture_commands(env: Any) -> Dict[str, Dict[str, Any]]:
+        calls.append(1)
+        backend = env.backend
+        operator = sorted(backend.operators)[0]
+        eef = backend.get_operator_handler(operator).get_end_effector_pose()
+        stamp = np.full(backend.batch_size, -1.0)
+        return {"action/arm/eef/position": {"data": eef.position.copy(), "t": stamp}}
+
+    monkeypatch.setattr(
+        mock.MockEnv, "capture_commands", capture_commands, raising=False
+    )
+    return calls
 
 
 def _config(task: str, **fields: Any) -> StreamConfig:
@@ -64,7 +88,7 @@ def _run(config: StreamConfig) -> List[Any]:
         source.close()
 
 
-def test_successful_episode_rows_align_with_ticks_labels_and_observations() -> None:
+def test_each_row_pairs_the_observation_before_a_tick_with_its_command() -> None:
     (episode,) = _run(_config("policy_eval_mock"))
 
     arrays = episode.transitions
@@ -73,13 +97,21 @@ def test_successful_episode_rows_align_with_ticks_labels_and_observations() -> N
     assert episode.failure_reason is None
     assert len(episode) == steps == 2
     assert arrays.tick.tolist() == list(range(steps))
-    assert arrays.obs["arm/eef/position"].shape == (steps, 3)
     assert arrays.stage_name.tolist() == ["observe_home_pose"] * steps
     assert arrays.stage_index.tolist() == [0] * steps
-    # The capture right after the reset is the initial observation, so the
-    # observation of tick t is capture t + 2.
-    np.testing.assert_array_equal(arrays.sim_time, np.arange(steps) + 2.0)
-    assert set(episode.initial_observation) == {
+    # Capture 1 follows the reset and capture t + 1 follows tick t - 1, so the
+    # observation tick t decides on is capture t + 1.
+    np.testing.assert_array_equal(arrays.sim_time, np.arange(steps) + 1.0)
+    # Tick 1 reaches the commanded pose: its command is what the observation
+    # after it shows, the final observation.
+    position = arrays.obs["arm/eef/position"]
+    commands = arrays.action["action/arm/eef/position"]
+    np.testing.assert_array_equal(commands[0], position[1])
+    np.testing.assert_array_equal(
+        commands[-1], episode.final_observation["arm/eef/position"]
+    )
+    np.testing.assert_allclose(position[0], [0.2, 0.0, 0.3])
+    assert set(episode.final_observation) == {
         "arm/eef/position",
         "arm/eef/orientation",
     }
@@ -134,14 +166,30 @@ def test_episode_cut_by_max_updates_is_truncated() -> None:
     assert episode.metadata["steps"] == 2
 
 
-def test_sample_stride_keeps_every_kth_tick_and_the_last() -> None:
+def test_sample_stride_records_ticks_zero_k_2k(
+    captures: Dict[str, int], command_captures: List[int]
+) -> None:
     (episode,) = _run(_config("mock", on_invalid="keep", sample_stride=3))
 
     steps = episode.metadata["steps"]
-    expected = [tick for tick in range(steps) if (tick + 1) % 3 == 0]
-    if steps - 1 not in expected:
-        expected.append(steps - 1)
-    assert episode.transitions.tick.tolist() == expected
+    assert steps == 4
+    assert episode.transitions.tick.tolist() == [0, 3]
+    # Full captures: after the reset, before tick 3, and the final one. Tick
+    # 0's command needs one more capture, and it renders nothing.
+    assert captures["full"] == 3
+    assert len(command_captures) == 1
+    np.testing.assert_array_equal(episode.transitions.sim_time, [1.0, 2.0])
+
+
+def test_without_capture_commands_a_command_costs_a_full_capture(
+    captures: Dict[str, int],
+) -> None:
+    (episode,) = _run(_config("mock", on_invalid="keep", sample_stride=3))
+
+    assert episode.transitions.tick.tolist() == [0, 3]
+    assert captures["full"] == 4
+    # The extra capture follows tick 0; the rows still hold their own frames.
+    np.testing.assert_array_equal(episode.transitions.sim_time, [1.0, 3.0])
 
 
 def test_observation_keys_filter_measurements_but_keep_commands() -> None:
@@ -150,7 +198,7 @@ def test_observation_keys_filter_measurements_but_keep_commands() -> None:
     )
 
     assert list(episode.transitions.obs) == ["arm/eef/position"]
-    assert list(episode.initial_observation) == ["arm/eef/position"]
+    assert list(episode.final_observation) == ["arm/eef/position"]
     assert list(episode.transitions.action) == ["action/arm/eef/position"]
 
 

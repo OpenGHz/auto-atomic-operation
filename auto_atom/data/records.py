@@ -21,7 +21,7 @@ class Transition:
     """One recorded control tick: a row of :class:`EpisodeArrays`."""
 
     obs: Dict[str, np.ndarray]
-    """Observation captured after the tick, batch dimension removed."""
+    """Observation the tick's command was decided on, batch dimension removed."""
     action: Dict[str, np.ndarray]
     """Command issued on the tick; see :attr:`EpisodeArrays.action`."""
     tick: int
@@ -38,20 +38,21 @@ class Transition:
 class EpisodeArrays:
     """Columnar episode rows: every column has the same leading length ``T``.
 
-    Row ``t`` pairs the command of control tick ``tick[t]`` with the labels
-    it was issued under and the observation that followed it:
+    Row ``t`` is one ``(observation, command)`` sample of control tick
+    ``tick[t]``:
 
-    - ``action``: the command issued on the tick, from the environment's
-      command channels (observation keys with an ``action/`` segment), under
-      their observation keys.
+    - ``obs`` and ``sim_time``: the observation the command was decided on,
+      captured before the tick. Row 0 holds the observation right after the
+      reset.
+    - ``action``: the command the tick issued, from the environment's command
+      channels (observation keys with an ``action/`` segment), under their
+      observation keys.
     - ``stage_index`` ... ``phase_step``: the ``TaskUpdate`` the policy acted
       on, i.e. the stage the command belongs to. ``-1`` / ``""`` mean none.
-    - ``obs`` and ``sim_time``: the observation captured after the tick.
 
-    A ``(obs_t, action_t)`` sample therefore takes ``obs`` from the previous
-    row (``Episode.initial_observation`` for row 0); that shift belongs in
-    the training adapter. With ``sample_stride > 1`` rows skip ticks, which
-    ``tick`` makes explicit; the last tick is always recorded.
+    With ``sample_stride = k`` the rows are ticks ``0, k, 2k, ...``, which
+    ``tick`` makes explicit; every row is still a matching pair. What the last
+    command led to is ``Episode.final_observation``.
     """
 
     obs: Dict[str, np.ndarray]
@@ -154,8 +155,8 @@ class Episode:
     truncated: bool
     failure_reason: Optional[str]
     transitions: EpisodeArrays
-    initial_observation: Dict[str, np.ndarray]
-    """Observation captured right after the reset, batch dimension removed."""
+    final_observation: Dict[str, np.ndarray]
+    """Observation after the episode's last tick, batch dimension removed."""
     scene: Dict[str, Any]
     """Ground truth after the reset: object, operator, and camera poses."""
     randomization: Dict[str, Any]

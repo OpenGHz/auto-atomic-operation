@@ -87,13 +87,16 @@ def stall_slot_one(monkeypatch) -> None:
     monkeypatch.setattr(ConfigDrivenDemoPolicy, "act", stalling_act)
 
 
+@pytest.mark.parametrize("cheap_commands", [True, False])
 def test_a_slot_noise_frames_are_its_own_captures_only(
-    monkeypatch, stall_slot_one
+    monkeypatch, stall_slot_one, cheap_commands: bool
 ) -> None:
     """Each episode's noise advances once per capture made for it.
 
-    That is its initial observation and each recorded tick, however the other
-    slot's resets and sampled ticks interleave with it.
+    That is its first observation, the observation before each further
+    recorded row, and its final observation, however the other slot's resets
+    and recorded ticks interleave with it, and whether reading a command takes
+    a render-free capture or a full capture.
     """
     frames: Dict[int, int] = {}
     episode_of_slot: Dict[int, int] = {}
@@ -121,6 +124,10 @@ def test_a_slot_noise_frames_are_its_own_captures_only(
         mock.MockEnv, "hold_camera_noise", hold_camera_noise, raising=False
     )
     monkeypatch.setattr(mock.MockEnv, "capture_observation", capture_observation)
+    if cheap_commands:
+        monkeypatch.setattr(
+            mock.MockEnv, "capture_commands", lambda self: {}, raising=False
+        )
 
     with EpisodeStream.from_config(
         _mock_config(
