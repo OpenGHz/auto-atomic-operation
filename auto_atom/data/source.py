@@ -1,8 +1,8 @@
 """Episode producers.
 
 :class:`EvaluatorEpisodeSource` is the producer: a :class:`PolicyEvaluator`
-driven by a policy, :class:`ConfigDrivenDemoPolicy` by default, so demo data
-and policy data take one code path. Each env slot runs its own episode; a
+driven by the config-driven demo policy, the same actions ``aao-demo`` takes.
+Other policies are not supported yet. Each env slot runs its own episode; a
 slot that finishes is reset on its own and starts the next attempt while the
 others keep running.
 """
@@ -10,14 +10,11 @@ others keep running.
 from __future__ import annotations
 
 import dataclasses
-import importlib
-import inspect
 import threading
 import time
 from dataclasses import dataclass, field
 from typing import (
     Any,
-    Callable,
     Dict,
     Iterable,
     Iterator,
@@ -32,13 +29,7 @@ import numpy as np
 
 from auto_atom.config_loader import load_task_file_hydra
 from auto_atom.contracts import AddressableResetHost
-from auto_atom.policy_eval import (
-    ConfigDrivenDemoPolicy,
-    PolicyEvaluator,
-    call_policy,
-    default_action_applier,
-    default_observation_getter,
-)
+from auto_atom.policy_eval import ConfigDrivenDemoPolicy, PolicyEvaluator
 from auto_atom.randomization import RandomizationFailureError
 from auto_atom.runtime import (
     ComponentRegistry,
@@ -50,18 +41,9 @@ from auto_atom.utils.pose import PoseState
 from auto_atom.utils.seed import ResetAddress
 
 from .attempts import AttemptOutcome, AttemptScheduler, EpisodeAttempt
-from .config import DEMO_POLICY, StreamConfig
-from .recording import (
-    EpisodeRecorder,
-    missing_observation_keys,
-    policy_action_row,
-    split_observation,
-)
+from .config import StreamConfig
+from .recording import EpisodeRecorder, missing_observation_keys, split_observation
 from .records import Episode
-
-PolicyFactory = Callable[[], Any]
-"""Builds a policy; must be picklable (a module-level callable) to reach a
-spawned worker."""
 
 
 class EpisodeSource(Protocol):
@@ -70,19 +52,6 @@ class EpisodeSource(Protocol):
     def episodes(self) -> Iterator[Episode]: ...
 
     def close(self) -> None: ...
-
-
-def resolve_policy_factory(name: str) -> PolicyFactory:
-    """The factory a ``StreamConfig.policy`` name refers to."""
-    if name == DEMO_POLICY:
-        return ConfigDrivenDemoPolicy
-    module_name, _, attribute = name.partition(":")
-    target: Any = importlib.import_module(module_name)
-    for part in attribute.split("."):
-        target = getattr(target, part)
-    if not callable(target):
-        raise TypeError(f"Policy factory {name!r} is not callable.")
-    return target
 
 
 @dataclass
@@ -112,16 +81,13 @@ class EvaluatorEpisodeSource:
         config: StreamConfig,
         *,
         scheduler: Optional[AttemptScheduler] = None,
-        policy: Optional[PolicyFactory] = None,
         stop_event: Optional[threading.Event] = None,
     ) -> None:
         self.config = config
         self.scheduler = scheduler or AttemptScheduler(config)
-        self._policy_factory = policy or resolve_policy_factory(config.policy)
         self._stop = stop_event or threading.Event()
         self._evaluator: Optional[PolicyEvaluator] = None
-        self._policy: Any = None
-        self._reset_policy: Callable[[np.ndarray], None] = lambda _mask: None
+        self._policy = ConfigDrivenDemoPolicy()
         self._slots: List[Optional[_SlotRun]] = []
 
     def close(self) -> None:
@@ -134,11 +100,9 @@ class EvaluatorEpisodeSource:
 
     def episodes(self) -> Iterator[Episode]:
         evaluator = self._open()
-        batch_size = evaluator.batch_size
         policy = self._policy
-        reads_observation = not isinstance(policy, ConfigDrivenDemoPolicy)
-        self._slots = [None] * batch_size
-        update, observation = self._start_slots(range(batch_size))
+        self._slots = [None] * evaluator.batch_size
+        update = self._start_slots(range(evaluator.batch_size))
 
         while update is not None and any(self._slots):
             if self._stop.is_set():
@@ -147,10 +111,8 @@ class EvaluatorEpisodeSource:
             # Idle slots (shard exhausted) read as done, so the policy leaves
             # them alone instead of drawing their first stage's actions.
             acted_on = dataclasses.replace(update, done=update.done | ~active)
-            action = call_policy(
-                policy, observation if reads_observation else {}, acted_on, evaluator
-            )
-            update = evaluator.update(action, active)
+            # The demo policy does not read observations.
+            update = evaluator.update(policy.act({}, acted_on, evaluator), active)
 
             finished: List[int] = []
             sampled: List[int] = []
@@ -163,10 +125,8 @@ class EvaluatorEpisodeSource:
                     finished.append(int(slot))
                 if ended or run.steps % self.config.sample_stride == 0:
                     sampled.append(int(slot))
-            if sampled or reads_observation:
-                self._hold_noise_except(
-                    np.flatnonzero(active).tolist() if reads_observation else sampled
-                )
+            if sampled:
+                self._hold_noise_except(sampled)
                 observation = evaluator.get_observation()
             for slot in sampled:
                 run = self._slots[slot]
@@ -177,7 +137,7 @@ class EvaluatorEpisodeSource:
                 run.recorder.append(
                     tick=run.steps - 1,
                     obs=measured,
-                    action={**commands, **policy_action_row(action, slot, batch_size)},
+                    action=commands,
                     update=acted_on,
                     env_index=slot,
                     sim_time=sim_time,
@@ -193,9 +153,9 @@ class EvaluatorEpisodeSource:
                 if self._stop.is_set():
                     return
             if finished:
-                restarted, restart_observation = self._start_slots(finished)
+                restarted = self._start_slots(finished)
                 if restarted is not None:
-                    update, observation = restarted, restart_observation
+                    update = restarted
 
     # ------------------------------------------------------------------
     #  Construction
@@ -215,21 +175,15 @@ class EvaluatorEpisodeSource:
                 f"++env.batch_size={config.batch_size}",
             ],
         )
-        policy = self._policy_factory()
         evaluator = PolicyEvaluator(
-            action_applier=getattr(policy, "action_applier", default_action_applier),
-            observation_getter=getattr(
-                policy, "observation_getter", default_observation_getter
-            ),
+            action_applier=self._policy.action_applier
         ).from_config(task_file)
         self._evaluator = evaluator
-        self._policy = policy
         if evaluator.batch_size != config.batch_size:
             raise ValueError(
                 f"The task built {evaluator.batch_size} env(s); the stream asked "
                 f"for batch_size={config.batch_size} through env.batch_size."
             )
-        self._reset_policy = _policy_resetter(policy, evaluator.batch_size)
         backend = evaluator.context.backend
         if config.determinism == "episode" and not isinstance(
             backend, AddressableResetHost
@@ -245,14 +199,13 @@ class EvaluatorEpisodeSource:
     #  Slot lifecycle
     # ------------------------------------------------------------------
 
-    def _start_slots(self, slots: Iterable[int]) -> Tuple[Optional[TaskUpdate], Any]:
+    def _start_slots(self, slots: Iterable[int]) -> Optional[TaskUpdate]:
         """Reset idle ``slots`` onto their next attempts.
 
         Sequential streams reset the slots together, as one batched reset;
         an attempt whose reset randomization fails is judged and its slot
-        tries the next attempt. Returns the latest ``TaskUpdate`` and the
-        observation after the resets, or ``(None, None)`` when no slot
-        started.
+        tries the next attempt. Returns the latest ``TaskUpdate``, or
+        ``None`` when no slot started.
         """
         evaluator = self._require_evaluator()
         waiting = list(slots)
@@ -285,7 +238,8 @@ class EvaluatorEpisodeSource:
                         failed.append(slot)
                     continue
                 latest = update
-                self._reset_policy(mask)
+                # Only the reset slots: the others keep the actions they drew.
+                self._policy.reset(env_mask=mask)
                 for slot, attempt in group:
                     self._slots[slot] = _SlotRun(
                         attempt=attempt,
@@ -300,7 +254,7 @@ class EvaluatorEpisodeSource:
                     started_slots.append(slot)
             waiting = failed
         if latest is None:
-            return None, None
+            return None
         self._hold_noise_except(started_slots)
         observation = evaluator.get_observation()
         if self.config.observation_keys is not None:
@@ -318,7 +272,7 @@ class EvaluatorEpisodeSource:
             run.initial_observation, _, _ = split_observation(
                 observation, slot, observation_keys=self.config.observation_keys
             )
-        return latest, observation
+        return latest
 
     def _reset_groups(
         self, assigned: List[Tuple[int, EpisodeAttempt]]
@@ -343,8 +297,8 @@ class EvaluatorEpisodeSource:
         """Keep the next capture from advancing the camera noise of other slots.
 
         An episode-deterministic stream counts a slot's noise frames over the
-        captures made for it (its initial observation and its recorded or
-        policy-read ticks), not the ones made for other slots.
+        captures made for it (its initial observation and its recorded
+        ticks), not the ones made for other slots.
         """
         if self.config.determinism == "sequential":
             return
@@ -437,26 +391,6 @@ class EvaluatorEpisodeSource:
         if self._evaluator is None:
             raise RuntimeError("EvaluatorEpisodeSource is not running.")
         return self._evaluator
-
-
-def _policy_resetter(policy: Any, batch_size: int) -> Callable[[np.ndarray], None]:
-    """Reset the policy state of the slots in a mask.
-
-    Slots reset one at a time, so with more than one slot ``policy.reset``
-    must accept ``env_mask``; resetting every slot would clear the state of
-    the episodes still running.
-    """
-    reset = getattr(policy, "reset", None)
-    if reset is None:
-        return lambda _mask: None
-    if "env_mask" in inspect.signature(reset).parameters:
-        return lambda mask: reset(env_mask=mask)
-    if batch_size == 1:
-        return lambda _mask: reset()
-    raise TypeError(
-        f"{type(policy).__name__}.reset() must accept env_mask when "
-        f"batch_size={batch_size} > 1: stream slots reset independently."
-    )
 
 
 def _reset_index(context: ExecutionContext) -> int:

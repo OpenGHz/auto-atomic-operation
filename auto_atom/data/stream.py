@@ -16,7 +16,7 @@ from typing import Any, Iterator, Optional, Union
 from .attempts import AttemptScheduler, StreamStats
 from .config import StreamConfig
 from .records import Episode
-from .source import EvaluatorEpisodeSource, PolicyFactory
+from .source import EvaluatorEpisodeSource
 
 _POLL_SECONDS = 0.1
 
@@ -48,12 +48,10 @@ class EpisodeStream(Iterator[Episode]):
         self,
         config: StreamConfig,
         *,
-        policy: Optional[PolicyFactory] = None,
         worker_id: int = 0,
         num_workers: int = 1,
     ) -> None:
         self.config = config
-        self._policy = policy
         self._scheduler = AttemptScheduler(
             config, worker_id=worker_id, num_workers=num_workers
         )
@@ -63,15 +61,9 @@ class EpisodeStream(Iterator[Episode]):
         self._finished = False
 
     @classmethod
-    def from_config(
-        cls, config: StreamConfig, *, policy: Optional[PolicyFactory] = None
-    ) -> "EpisodeStream":
-        """A stream of ``config``; ``policy`` overrides ``config.policy``.
-
-        ``policy`` must be picklable (a module-level callable) for the stream
-        to be rebuilt in a spawned worker.
-        """
-        return cls(config, policy=policy)
+    def from_config(cls, config: StreamConfig) -> "EpisodeStream":
+        """A stream of ``config``, shard 0 of 1."""
+        return cls(config)
 
     @property
     def worker_id(self) -> int:
@@ -97,7 +89,6 @@ class EpisodeStream(Iterator[Episode]):
             )
         return EpisodeStream(
             self.config,
-            policy=self._policy,
             worker_id=self.worker_id + worker_id * self.num_workers,
             num_workers=self.num_workers * num_workers,
         )
@@ -147,10 +138,7 @@ class EpisodeStream(Iterator[Episode]):
 
     def _produce(self) -> None:
         source = EvaluatorEpisodeSource(
-            self.config,
-            scheduler=self._scheduler,
-            policy=self._policy,
-            stop_event=self._stop,
+            self.config, scheduler=self._scheduler, stop_event=self._stop
         )
         episodes = source.episodes()
         last: _Item = _End()
@@ -187,13 +175,7 @@ class EpisodeStream(Iterator[Episode]):
                 return
 
 
-def stream(
-    task: str,
-    *,
-    base_seed: int,
-    policy: Optional[PolicyFactory] = None,
-    **options: Any,
-) -> EpisodeStream:
+def stream(task: str, *, base_seed: int, **options: Any) -> EpisodeStream:
     """``EpisodeStream`` of ``task``; ``options`` are further ``StreamConfig`` fields.
 
     ::
@@ -202,5 +184,6 @@ def stream(
             for episode in episodes:
                 ...
     """
-    config = StreamConfig(task=task, base_seed=base_seed, **options)
-    return EpisodeStream.from_config(config, policy=policy)
+    return EpisodeStream.from_config(
+        StreamConfig(task=task, base_seed=base_seed, **options)
+    )

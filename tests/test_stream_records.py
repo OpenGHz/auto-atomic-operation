@@ -12,10 +12,8 @@ from auto_atom.data import EpisodeArrays, StreamConfig, Transition
 from auto_atom.data.recording import (
     EpisodeRecorder,
     is_command_key,
-    policy_action_row,
     split_observation,
 )
-from auto_atom.policy_eval import ConfigDrivenPolicyAction
 from auto_atom.runtime import TaskUpdate
 
 
@@ -131,20 +129,6 @@ def test_split_observation_rejects_a_reshaped_observation() -> None:
         split_observation({"arm": np.zeros((2, 3))}, 0)
 
 
-def test_policy_action_rows_follow_the_default_applier_layout() -> None:
-    batched = policy_action_row(np.arange(6.0).reshape(2, 3), 1, 2)
-    single = policy_action_row(np.arange(3.0), 0, 1)
-    mapping = policy_action_row({"action": [[1.0], [2.0]]}, 1, 2)
-
-    np.testing.assert_array_equal(batched["policy"], [3.0, 4.0, 5.0])
-    np.testing.assert_array_equal(single["policy"], [0.0, 1.0, 2.0])
-    np.testing.assert_array_equal(mapping["policy/action"], [2.0])
-    assert policy_action_row(ConfigDrivenPolicyAction(env_actions=[None]), 0, 1) == {}
-    assert policy_action_row(None, 0, 1) == {}
-    with pytest.raises(ValueError, match="batch size"):
-        policy_action_row(np.zeros((3, 2)), 0, 2)
-
-
 def test_recorder_stacks_rows_and_keeps_ragged_values_as_objects() -> None:
     recorder = EpisodeRecorder()
     for tick, ragged in enumerate(([1], [1, 2])):
@@ -190,6 +174,7 @@ def test_stream_config_requires_an_explicit_seed_and_accepts_zero() -> None:
         {"on_invalid": "skip"},
         {"determinism": "random"},
         {"policy": "my_policy"},
+        {"policy": "auto_atom.policy_eval:ConfigDrivenDemoPolicy"},
         {"unknown_field": 1},
     ],
 )

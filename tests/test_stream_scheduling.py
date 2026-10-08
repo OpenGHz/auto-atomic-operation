@@ -39,19 +39,20 @@ def _config(**fields: Any) -> StreamConfig:
     return StreamConfig(base_seed=0, config_dir=CONFIG_DIR, **fields)
 
 
-class StallingDemoPolicy(ConfigDrivenDemoPolicy):
-    """Withholds slot 1's action every other tick, so slot 0 finishes first."""
+@pytest.fixture
+def stall_slot_one(monkeypatch) -> None:
+    """Withhold slot 1's demo action every other tick, so the slots drift apart."""
+    act = ConfigDrivenDemoPolicy.act
+    calls: List[None] = []
 
-    def __init__(self) -> None:
-        super().__init__()
-        self.calls = 0
-
-    def act(self, observation: Any, update: Any, evaluator: Any) -> Any:
-        action = super().act(observation, update, evaluator)
-        self.calls += 1
-        if self.calls % 2 == 0 and len(action.env_actions) > 1:
+    def stalling_act(self: Any, observation: Any, update: Any, evaluator: Any) -> Any:
+        action = act(self, observation, update, evaluator)
+        calls.append(None)
+        if len(calls) % 2 == 0 and len(action.env_actions) > 1:
             action.env_actions[1] = None
         return action
+
+    monkeypatch.setattr(ConfigDrivenDemoPolicy, "act", stalling_act)
 
 
 # ---------------------------------------------------------------------------
@@ -165,10 +166,10 @@ def test_stats_snapshot_is_detached_and_json_ready() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_slots_restart_independently_without_crosstalk() -> None:
+def test_slots_restart_independently_without_crosstalk(stall_slot_one) -> None:
     config = _config(task="policy_eval_mock", num_episodes=6, batch_size=2)
 
-    with EpisodeStream.from_config(config, policy=StallingDemoPolicy) as episodes:
+    with EpisodeStream.from_config(config) as episodes:
         collected = list(episodes)
 
     assert sorted(episode.episode_index for episode in collected) == list(range(6))

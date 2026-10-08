@@ -41,10 +41,9 @@ class EpisodeArrays:
     Row ``t`` pairs the command of control tick ``tick[t]`` with the labels
     it was issued under and the observation that followed it:
 
-    - ``action``: the command issued on the tick. Environment command
-      channels (observation keys with an ``action/`` segment) keep their
-      observation key; a numeric policy return value is stored under
-      ``policy`` (``policy/<key>`` for a dict).
+    - ``action``: the command issued on the tick, from the environment's
+      command channels (observation keys with an ``action/`` segment), under
+      their observation keys.
     - ``stage_index`` ... ``phase_step``: the ``TaskUpdate`` the policy acted
       on, i.e. the stage the command belongs to. ``-1`` / ``""`` mean none.
     - ``obs`` and ``sim_time``: the observation captured after the tick.

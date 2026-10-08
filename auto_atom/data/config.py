@@ -18,9 +18,6 @@ from pydantic import (
     field_validator,
 )
 
-DEMO_POLICY = "demo"
-"""Policy name of :class:`auto_atom.policy_eval.ConfigDrivenDemoPolicy`."""
-
 # Overrides the config owns through its own fields.
 _RESERVED_OVERRIDES = {
     "task.seed": "base_seed",
@@ -49,10 +46,10 @@ class StreamConfig(BaseModel):
     """Measurement keys to record; ``None`` records every key. Command
     channels (``action/...``) are always recorded. Which keys exist is decided
     when the environment is built (enabled sensors and camera channels)."""
-    policy: str = DEMO_POLICY
-    """``"demo"`` for the config-driven demo policy, or ``"module:attr"``
-    naming a policy factory called with no arguments. A factory passed to
-    ``EpisodeStream.from_config`` takes precedence."""
+    policy: Literal["demo"] = "demo"
+    """Policy that drives the rollouts: ``"demo"`` is the config-driven demo
+    policy, the actions ``aao-demo`` takes. Other policies (scripted or
+    trained) are not supported yet."""
     max_updates: PositiveInt = 600
     """Control ticks an episode may take before it is truncated."""
     sample_stride: PositiveInt = 1
@@ -89,12 +86,3 @@ class StreamConfig(BaseModel):
                     f"Override {override!r} sets {key}; use StreamConfig.{field}."
                 )
         return overrides
-
-    @field_validator("policy")
-    @classmethod
-    def _check_policy_name(cls, policy: str) -> str:
-        if policy != DEMO_POLICY and ":" not in policy:
-            raise ValueError(
-                f"policy must be {DEMO_POLICY!r} or 'module:attr'; got {policy!r}."
-            )
-        return policy

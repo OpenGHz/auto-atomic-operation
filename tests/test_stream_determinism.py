@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
 import numpy as np
+import pytest
 
 import auto_atom.mock as mock
 from auto_atom.data import EpisodeStream, StreamConfig
@@ -70,22 +71,25 @@ def test_a_retried_episode_keeps_its_number(monkeypatch) -> None:
     assert (episode.metadata["reset_index"], episode.metadata["retry"]) == (1, 1)
 
 
-class _StallingDemoPolicy(ConfigDrivenDemoPolicy):
-    """Withholds slot 1's action every other tick, so the slots drift apart."""
+@pytest.fixture
+def stall_slot_one(monkeypatch) -> None:
+    """Withhold slot 1's demo action every other tick, so the slots drift apart."""
+    act = ConfigDrivenDemoPolicy.act
+    calls: List[None] = []
 
-    def __init__(self) -> None:
-        super().__init__()
-        self.calls = 0
-
-    def act(self, observation: Any, update: Any, evaluator: Any) -> Any:
-        action = super().act(observation, update, evaluator)
-        self.calls += 1
-        if self.calls % 2 == 0:
+    def stalling_act(self: Any, observation: Any, update: Any, evaluator: Any) -> Any:
+        action = act(self, observation, update, evaluator)
+        calls.append(None)
+        if len(calls) % 2 == 0 and len(action.env_actions) > 1:
             action.env_actions[1] = None
         return action
 
+    monkeypatch.setattr(ConfigDrivenDemoPolicy, "act", stalling_act)
 
-def test_a_slot_noise_frames_are_its_own_captures_only(monkeypatch) -> None:
+
+def test_a_slot_noise_frames_are_its_own_captures_only(
+    monkeypatch, stall_slot_one
+) -> None:
     """Each episode's noise advances once per capture made for it.
 
     That is its initial observation and each recorded tick, however the other
@@ -126,7 +130,6 @@ def test_a_slot_noise_frames_are_its_own_captures_only(monkeypatch) -> None:
             sample_stride=2,
             on_invalid="keep",
         ),
-        policy=_StallingDemoPolicy,
     ) as episodes:
         collected = list(episodes)
 

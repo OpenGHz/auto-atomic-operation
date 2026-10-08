@@ -18,39 +18,36 @@ from auto_atom.data import (
     InvalidEpisodeError,
     StreamConfig,
 )
-from auto_atom.data.source import resolve_policy_factory
 from auto_atom.execution_model import StageExecutionStatus
-from auto_atom.policy_eval import ConfigDrivenDemoPolicy
 from auto_atom.runtime import ComponentRegistry
 
 CONFIG_DIR = str(Path(__file__).resolve().parents[1] / "aao_configs")
 
 
-class ObservingDemoPolicy(ConfigDrivenDemoPolicy):
-    """Demo policy whose observation getter reports EEF poses and a capture clock."""
+@pytest.fixture(autouse=True)
+def eef_observations(monkeypatch) -> None:
+    """Make the mock env report EEF poses, an EEF command, and a capture clock."""
+    original = mock.MockSceneBackend.__post_init__
 
-    def __init__(self) -> None:
-        super().__init__()
-        self.captures = 0
+    def post_init(self: Any) -> None:
+        original(self)
+        self.env.backend = self
+        self.env.captures = 0
 
-    def observation_getter(self, context: Any) -> Dict[str, Dict[str, Any]]:
-        self.captures += 1
-        backend = context.backend
+    def capture_observation(env: Any) -> Dict[str, Dict[str, Any]]:
+        env.captures += 1
+        backend = env.backend
         operator = sorted(backend.operators)[0]
         eef = backend.get_operator_handler(operator).get_end_effector_pose()
-        stamp = np.full(backend.batch_size, float(self.captures))
+        stamp = np.full(backend.batch_size, float(env.captures))
         return {
             "arm/eef/position": {"data": eef.position.copy(), "t": stamp},
             "arm/eef/orientation": {"data": eef.orientation.copy(), "t": stamp},
             "action/arm/eef/position": {"data": eef.position.copy(), "t": stamp},
         }
 
-
-class ZeroActionPolicy:
-    """External numeric policy; the mock never completes a stage with it."""
-
-    def act(self, observation: Any, update: Any, evaluator: Any) -> np.ndarray:
-        return np.zeros((evaluator.batch_size, 3))
+    monkeypatch.setattr(mock.MockSceneBackend, "__post_init__", post_init)
+    monkeypatch.setattr(mock.MockEnv, "capture_observation", capture_observation)
 
 
 def _config(task: str, **fields: Any) -> StreamConfig:
@@ -59,8 +56,8 @@ def _config(task: str, **fields: Any) -> StreamConfig:
     return StreamConfig(task=task, base_seed=0, config_dir=CONFIG_DIR, **fields)
 
 
-def _run(config: StreamConfig, policy: Any = ObservingDemoPolicy) -> List[Any]:
-    source = EvaluatorEpisodeSource(config, policy=policy)
+def _run(config: StreamConfig) -> List[Any]:
+    source = EvaluatorEpisodeSource(config)
     try:
         return list(source.episodes())
     finally:
@@ -128,15 +125,13 @@ def test_failed_episode_is_kept_with_its_reason() -> None:
     assert set(episode.scene["objects"]) == {"cup", "shelf", "tray"}
 
 
-def test_truncated_episode_records_the_numeric_policy_action() -> None:
-    (episode,) = _run(
-        _config("mock", on_invalid="keep", max_updates=5), policy=ZeroActionPolicy
-    )
+def test_episode_cut_by_max_updates_is_truncated() -> None:
+    (episode,) = _run(_config("mock", on_invalid="keep", max_updates=2))
 
     assert episode.truncated and not episode.success
-    assert episode.failure_reason == "reached max_updates=5 before task completion"
+    assert episode.failure_reason == "reached max_updates=2 before task completion"
     assert episode.metadata["failure_category"] == "max_updates_reached"
-    assert episode.transitions.action["policy"].shape == (5, 3)
+    assert episode.metadata["steps"] == 2
 
 
 def test_sample_stride_keeps_every_kth_tick_and_the_last() -> None:
@@ -181,19 +176,8 @@ def test_episode_determinism_fails_closed_without_reset_addressing(
         _run(_config("policy_eval_mock", determinism="episode"))
 
 
-def test_batched_stream_rejects_a_policy_whose_reset_takes_no_mask() -> None:
-    class AllSlotsPolicy(ConfigDrivenDemoPolicy):
-        def reset(self) -> None:
-            super().reset()
-
-    with pytest.raises(TypeError, match="env_mask"):
-        _run(_config("policy_eval_mock", batch_size=2), policy=AllSlotsPolicy)
-
-
 def test_close_tears_down_and_clears_the_registry() -> None:
-    source = EvaluatorEpisodeSource(
-        _config("policy_eval_mock"), policy=ObservingDemoPolicy
-    )
+    source = EvaluatorEpisodeSource(_config("policy_eval_mock"))
     episodes = source.episodes()
     next(episodes)
 
@@ -201,13 +185,3 @@ def test_close_tears_down_and_clears_the_registry() -> None:
     source.close()
 
     assert not ComponentRegistry.has_env("mock_policy_eval")
-
-
-def test_policy_names_resolve_to_factories() -> None:
-    assert resolve_policy_factory("demo") is ConfigDrivenDemoPolicy
-    assert (
-        resolve_policy_factory("auto_atom.policy_eval:ConfigDrivenDemoPolicy")
-        is ConfigDrivenDemoPolicy
-    )
-    with pytest.raises(TypeError, match="not callable"):
-        resolve_policy_factory("auto_atom.data.recording:POLICY_ACTION_KEY")

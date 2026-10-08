@@ -1,8 +1,8 @@
 """Turn batched evaluator output into one env's episode rows.
 
-Everything here is pure: it takes the batched observation, policy action, and
-``TaskUpdate`` an evaluator produced and selects one environment row, so the
-row layout can be tested without a simulator.
+Everything here is pure: it takes the batched observation and ``TaskUpdate``
+an evaluator produced and selects one environment row, so the row layout can
+be tested without a simulator.
 """
 
 from __future__ import annotations
@@ -11,13 +11,9 @@ from typing import Any, Collection, Dict, List, Mapping, Optional, Tuple
 
 import numpy as np
 
-from auto_atom.policy_eval import ConfigDrivenPolicyAction, action_to_numpy
 from auto_atom.runtime import TaskUpdate
 
 from .records import EpisodeArrays
-
-POLICY_ACTION_KEY = "policy"
-"""Key of a numeric policy return value in ``EpisodeArrays.action``."""
 
 
 def is_command_key(key: str) -> bool:
@@ -74,38 +70,6 @@ def missing_observation_keys(
 ) -> List[str]:
     """Requested keys the environment does not produce."""
     return sorted(set(observation_keys) - set(observation))
-
-
-def policy_action_row(action: Any, env_index: int, batch_size: int) -> Dict[str, Any]:
-    """One env's row of a numeric policy action, keyed for ``EpisodeArrays``.
-
-    A batched array (or one dict entry) is indexed by env; a 1-D array is
-    the single env's action, as the default action applier reads it. Config
-    primitives and other non-numeric values are not recorded: their issued
-    command is in the environment's ``action/`` channels.
-    """
-    if action is None or isinstance(action, ConfigDrivenPolicyAction):
-        return {}
-    items = (
-        [(f"{POLICY_ACTION_KEY}/{key}", value) for key, value in action.items()]
-        if isinstance(action, Mapping)
-        else [(POLICY_ACTION_KEY, action)]
-    )
-    row: Dict[str, Any] = {}
-    for key, value in items:
-        try:
-            array = action_to_numpy(value)
-        except (TypeError, ValueError):
-            continue
-        if array.ndim >= 2 or (array.ndim == 1 and batch_size > 1):
-            if array.shape[0] != batch_size:
-                raise ValueError(
-                    f"Policy action {key!r} has shape {array.shape}; its leading "
-                    f"dimension must be the batch size {batch_size}."
-                )
-            array = array[env_index]
-        row[key] = array
-    return row
 
 
 class EpisodeRecorder:
