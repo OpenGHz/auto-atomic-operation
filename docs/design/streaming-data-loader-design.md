@@ -1,11 +1,26 @@
-# AAO 流式 Data Loader 设计方案（提案，尚未实现）
+# AAO 流式 Data Loader 设计方案（R1–R4 已实现）
 
-> **状态：提案，尚未实现。**
+> **状态：R1–R4 已实现（`auto_atom/data/`），R5–R6 尚未实现。**
 >
 > 本文描述把 AAO 的“按需生成 episode”能力收敛成一等公民**流式数据集 / 数据加载器**
-> 的设计方向。当前仓库没有 `auto_atom/data` 包，也没有 `aao-stream` 入口；文中的
-> 包路径、API、配置字段均为**拟议接口**，直接按本文调用会失败。
-> 实现完成后按本仓库约定更新本文状态，或把稳定用法迁移到 `docs/tools/` 下的使用文档。
+> 的设计。`auto_atom.data` 已提供 `EpisodeStream` / `StreamConfig` / `stream()`、
+> 进程内 slot 异步调度、分片、背压、失败治理与按 `episode_index` 寻址的确定性；
+> PyTorch adapter（`auto_atom/integrations/torch_data.py`）、多进程 worker pool、
+> rpyc 形态、`aao-stream` CLI 与基准脚本仍是**拟议接口**。稳定后把用法迁移到
+> `docs/tools/streaming_data_loader.md`（R6）。
+>
+> **实现与提案的差异**（正文已按实现更新）：
+>
+> - `EpisodeArrays` 多了 `tick`、`stage_name`、`phase` 三列；行语义见 §4.1。
+> - `action` 记录环境的 `action/...` 命令通道，外加数值型 policy 返回值（键 `policy`），见 §4.2。
+> - `StreamConfig` 多了 `config_dir` 与 `num_episodes`；`retry_budget` 耗尽抛
+>   `RetryBudgetExhaustedError`（§8）。transition 级流式（`level="transition"`）未实现。
+> - 寻址接口是 `set_reset_address(ResetAddress)`，协议 `AddressableResetHost` 在
+>   `auto_atom/contracts.py`，是后端能力而非 `RandomizationHost` 的子协议；执行器从
+>   host 的 `reset_address` 得知本次 reset 是否寻址（§5.4）。
+> - 实现中又发现两处随调度变化的内容（§5.2 的 5、6）：多 slot 时 waypoint 随机化取的是
+>   最近一次 reset 的流；相机噪声的帧号把为其他 slot 做的 capture 也算进去。两处都已修复。
+> - 原生 MuJoCo 的 RGB 图像在同一状态下可能因此前渲染过的画面不同而差 1 个灰度级（§12）。
 >
 > **2026-10-08 按当前代码复核**：每次 reset 的随机流已改为只由“运行种子 + reset 编号”
 > 派生（`auto_atom/utils/seed.py::reset_generator`），§5 据此重写，寻址剩下的工作随之变小；
@@ -84,11 +99,12 @@
 ### 4.1 数据单元：`Transition` 与 `Episode`
 
 ```python
-# auto_atom/data/records.py   （拟议；为什么是 dataclass 见 §4.5）
+# auto_atom/data/records.py   （为什么是 dataclass 见 §4.5）
 @dataclass(frozen=True)
 class Transition:
     obs: dict[str, np.ndarray]        # 已去掉 batch 维；key 与 capture_observation 一致
     action: dict[str, np.ndarray]     # 本 tick 实际下发的命令（见 §4.2 的“命令口径”）
+    tick: int                         # 本 episode 内第几个 control tick（0 起）
     stage_index: int
     stage_name: str
     phase: str | None
@@ -100,8 +116,11 @@ class EpisodeArrays:
     """Columnar 形式：每通道一个 (T, ...) 数组，供 collate / 训练直接消费。"""
     obs: dict[str, np.ndarray]
     action: dict[str, np.ndarray]
+    tick: np.ndarray
     stage_index: np.ndarray
-    phase_step: np.ndarray
+    stage_name: np.ndarray            # 字符串列；无 stage 为 ""
+    phase: np.ndarray                 # 字符串列；无 phase 为 ""
+    phase_step: np.ndarray            # 无 phase step 为 -1
     sim_time: np.ndarray
 
     def __post_init__(self) -> None:
@@ -125,10 +144,19 @@ class Episode:
     def window(self, length: int, stride: int) -> Iterator["EpisodeArrays"]: ...
 ```
 
+**行语义**：第 `t` 行是 control tick `tick[t]` 下发的命令、该命令所依据的标签（policy
+决策时看到的 `TaskUpdate`，即命令所属的 stage）、以及该 tick 之后采集的观测
+（`obs`、`sim_time`）。命令通道与观测同一时间戳（与
+[external_data_collection](../tools/external_data_collection.md) 一致）。因此
+`(obs_t, action_t)` 样本的 `obs` 取上一行（第 0 行取 `initial_observation`），这个平移
+留在训练侧 adapter。`sample_stride > 1` 时行会跳过 tick，最后一个 tick 总被记录，
+`tick` 列写明实际是哪些 tick。
+
 设计取舍：
 
 - **columnar 优先**：逐 tick 的 `Transition` 对象开销大，`EpisodeArrays` 一次成型、
-  可零拷贝切片；`Transition` 仅作为便利视图（`episode.transitions[i]`）。
+  可零拷贝切片；`Transition` 仅作为便利视图（`episode.transitions[i]`），
+  `episode.window(length, stride)` 给出定长视图。
 - **`scene` 与 `randomization` 是显式字段**：随机化场景下的场景级监督（物体位姿真值、
   采样偏移）比像素更便宜也更有用，且它们是“每 episode 一个”的天然形状。
 - **时间语义**：`sim_time` 来自观测的 `t`（`env.stamp_ns` 决定 ns 还是 s），
@@ -137,7 +165,7 @@ class Episode:
 ### 4.2 生产者协议：`EpisodeSource`
 
 ```python
-# auto_atom/data/source.py   （拟议）
+# auto_atom/data/source.py
 class EpisodeSource(Protocol):
     def episodes(self) -> Iterator[Episode]: ...
     def close(self) -> None: ...
@@ -147,13 +175,16 @@ class EpisodeSource(Protocol):
 
 | 实现 | 基座 | 适用 |
 |---|---|---|
-| `EvaluatorEpisodeSource`（推荐主路径） | `PolicyEvaluator` + policy（`ConfigDrivenDemoPolicy` 或外部 policy） | 需要**逐 control tick 的 dense 数据**；action 即 policy 返回值，口径精确无歧义 |
-| `RunnerEpisodeSource` | `TaskRunner` + `execution.update_boundary` | 只需要边界样本（primitive/keypoint/stage），用宏步进换吞吐 |
+| `EvaluatorEpisodeSource`（已实现，主路径） | `PolicyEvaluator` + policy（`ConfigDrivenDemoPolicy` 或外部 policy） | 需要**逐 control tick 的 dense 数据**；action 即 policy 返回值，口径精确无歧义 |
+| `RunnerEpisodeSource`（未实现） | `TaskRunner` + `execution.update_boundary` | 只需要边界样本（primitive/keypoint/stage），用宏步进换吞吐 |
 
 **命令口径（重要）**：训练数据里的 `action` 必须是“实际下发的命令”。
 
-- `EvaluatorEpisodeSource`：`PolicyEvaluator.update(action)` 的 `action` 就是下发值，
-  直接记录，无需额外 hook。
+- `EvaluatorEpisodeSource`：环境在 tick 之后报告的 `action/...` 命令通道按观测 key
+  原样记录；policy 返回的数值（数组、tensor、或 dict 的各项）另记在 `policy`
+  （`policy/<key>`）下。`ConfigDrivenDemoPolicy` 返回的是 primitive，不是数值，它下发的
+  命令只出现在 `action/...` 通道里。policy 的调用约定（`call_policy`、默认 applier / getter）
+  与 `aao-eval` 共用，位于 `auto_atom/policy_eval.py`。
 - `RunnerEpisodeSource`：下发值是内部 primitive 解析后的结果，只能从
   `TaskUpdate.details[env]["execution"]` / `ExecutionRecord` 侧读取；**宏步进会跳过中间
   tick**，所以 dense 数据必须用 `control_tick`（与
@@ -165,24 +196,27 @@ class EpisodeSource(Protocol):
 ### 4.3 调度层：`EpisodeStream`
 
 ```python
-# auto_atom/data/stream.py   （拟议；为什么是 pydantic 见 §4.5）
+# auto_atom/data/config.py   （为什么是 pydantic 见 §4.5）
 class StreamConfig(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid", use_attribute_docstrings=True)
 
     task: str                                  # → load_task_file_hydra(task, ...)
     base_seed: int                             # 必填：拒绝 None，0 是合法种子（见 §5.1）
-    overrides: tuple[str, ...] = ()
-    observation_keys: tuple[str, ...] | None = None  # None = 全通道
-    policy: str = "demo"                       # 注册名或 "module:attr"；可调用对象走 from_config
+    overrides: tuple[str, ...] = ()            # 不得含 task.seed / env.batch_size
+    config_dir: str | None = None              # None = <cwd>/aao_configs
+    observation_keys: tuple[str, ...] | None = None  # None = 全通道；命令通道总记录
+    policy: str = "demo"                       # "demo" 或 "module:attr"；可调用对象走 from_config
     max_updates: PositiveInt = 600
     sample_stride: PositiveInt = 1             # 每 k 个 control tick 采一帧
     batch_size: PositiveInt = 1                # 进程内 slot 数（→ env.batch_size）
+    num_episodes: PositiveInt | None = None    # 分片前的 episode_index 范围；None = 无限
     on_invalid: Literal["resample", "keep", "raise"] = "resample"
     retry_budget: NonNegativeInt = 3
     max_consecutive_invalid: PositiveInt = 20  # 熔断阈值（§8）
     queue_size: PositiveInt = 16               # 背压上限
     determinism: Literal["episode", "sequential"] = "episode"
 
+# auto_atom/data/stream.py
 class EpisodeStream(Iterator[Episode]):
     @classmethod
     def from_config(
@@ -202,14 +236,21 @@ class EpisodeStream(Iterator[Episode]):
   `reset(该 slot 掩码)` 开新 episode，用 `handled` 掩码对 `done` 去重（沿用
   [external_data_collection](../tools/external_data_collection.md) 的告警：`done=True`
   会一直可见直到该 env 被 reset）。
-- **产出口径**：默认按 **episode** 产出（IL 场景下整条轨迹是样本最小单位，且
-  `success`/`scene`/统计都需要整条轨迹）。**transition 级流式**通过
-  `stream(level="transition")` 提供，供在线 RL 使用，代价是同一 episode 的元数据要
-  在流中重复携带。
+- **产出口径**：按 **episode** 产出（IL 场景下整条轨迹是样本最小单位，且
+  `success`/`scene`/统计都需要整条轨迹）。**transition 级流式**（`level="transition"`，
+  供在线 RL）尚未实现：它要在 episode 结束前就产出，与 `resample` 的“丢弃整条”冲突，
+  需要单独设计。
 - **分片**：`episode_index = worker_id + k * num_workers`。分片只影响“生成哪些
-  episode_index”，不影响每个 episode 的内容（见 §5）。
-- **背压**：内部有界 `queue.Queue(maxsize=queue_size)`；生产者是后台线程/进程，
-  消费者慢时生产自动阻塞，内存有界。
+  episode_index”，不影响每个 episode 的内容（见 §5）。分片可以再分片
+  （`shard(1, 2).shard(1, 3)` 即 6 份中的第 3 份），便于先按 rank 再按 DataLoader worker 切。
+- **背压**：内部有界 `queue.Queue(maxsize=queue_size)`；生产者是一个后台线程，它在
+  自己的线程里构造、驱动并关闭仿真器（GL context 归它所有），消费者慢时生产自动阻塞，
+  内存有界。生产者抛的错（含 §8 的失败治理错误）在消费者的 `next()` 里重新抛出。
+- **记录不随运行增长**：每个 episode 结束时用 `PolicyEvaluator.pop_records(env)` 取走
+  该 env 的 `ExecutionRecord`。
+- **policy 状态按 slot 重置**：`batch_size > 1` 时 `policy.reset` 必须接受 `env_mask`
+  （`ConfigDrivenDemoPolicy.reset(env_mask)` 已支持），否则一个 slot 的 reset 会清掉其他
+  slot 已抽好的动作；不接受时构造即报错。
 
 ### 4.4 Adapter 层（训练框架侧）
 
@@ -225,7 +266,7 @@ def aao_worker_init(worker_id: int) -> None:
     """在 worker 内构造/绑定 EpisodeStream 并调用 shard(worker_id, num_workers)。"""
 ```
 
-用法（拟议）：
+用法（拟议；`EpisodeStream` 部分已可用，adapter 尚未实现）：
 
 ```python
 from torch.utils.data import DataLoader
@@ -261,7 +302,7 @@ for step, batch in enumerate(loader):
 - **核心包零 torch 依赖**：`auto_atom` 目前只有 GS 后端用 torch；`integrations/` 下必须
   惰性 import，`import auto_atom` 不得因此变重。
 
-### 4.5 类型选择：配置用 pydantic，记录用 dataclass
+### 4.5 类型选择：配置用 pydantic，记录用 dataclass（已按此实现）
 
 沿用仓库已有的分工：用户写、Hydra 组装的**配置**是 pydantic 模型（`AutoAtomConfig`、
 `EnvConfig`、`ExecutionConfig`），运行期产出的**记录**是 dataclass（`TaskUpdate`、
@@ -337,7 +378,8 @@ for step, batch in enumerate(loader):
   （场景随机化、相机噪声），以及 `ExecutionContext.reset_count`（后端没有 RNG 时的 waypoint 随机化）。
   寻址时两个都要设定（5.4）。
 - **第 4 条不受运行种子控制**：用到背景池抽样或背景偏移随机化时，同一种子的两次运行可能得到
-  不同背景。`determinism="episode"` 下要么给它接上按编号派生的流，要么拒绝启用。
+  不同背景。`determinism="episode"` 下要么给它接上按编号派生的流，要么拒绝启用；
+  实现选了拒绝启用（5.4）。
 
 ### 5.2 按 reset 编号复现 ≠ episode 寻址
 
@@ -369,8 +411,16 @@ for step, batch in enumerate(loader):
 4. Poisson-disk（以及 `spacing > 0` 的其他非 IID 生成器）的样本取决于此前各次 reset 的采样（5.3），
    哪些 episode 先被 reset 就改变了后面的场景。
 
-所以 slot 异步调度（§4.3）下，“第 1000 个 episode 长什么样”今天仍不可回答。前三处靠
-“编号由 loader 分配”和“行号不进内容”解决，第四处要求寻址模式下把执行器状态归位（5.4）。
+实现时又发现两处，同样只在多 slot 异步时出现：
+
+5. waypoint 随机化在 stage 开始时才 materialize，取的是 `backend.rng`，即**最近一次
+   reset** 的流；slot A 的 waypoint 因而取决于 slot B 何时 reset、取了多少数；
+6. 相机噪声的帧号是“本 episode 开始以来的 capture 次数”，AR(1) 状态也逐次 capture 推进；
+   为其他 slot 做的 capture（新 slot 的初始观测、只有别的 slot 需要记录的 tick）也会推进它。
+
+所以在寻址之前，slot 异步调度（§4.3）下“第 1000 个 episode 长什么样”不可回答。前三处靠
+“编号由 loader 分配”和“行号不进内容”解决，第四处要求寻址模式下把执行器状态归位，
+第五、六处靠按 env 绑定 waypoint 流与相机噪声的 hold（均见 5.4）。
 
 ### 5.3 执行器的跨 reset 状态（寻址必须一并处理）
 
@@ -388,35 +438,50 @@ for step, batch in enumerate(loader):
 不是遗漏。所以寻址 seam 不是“换个 RNG”这么简单，而是“把执行器的历史恢复到与
 该 episode 无关的确定状态”。
 
-### 5.4 方案 A′（推荐，目标态）：由 loader 分配 reset 编号
+### 5.4 方案 A′（已实现，`determinism="episode"`）：由 loader 分配 reset 编号
 
 `derive(seed, index)` 已经存在，就是 `reset_generator`：后端与 `ExecutionContext` 每次 reset
 都用它重建 RNG，相机噪声也按编号派生。寻址因此不需要新的随机流，只需让 loader 决定
-**下一次 reset 用哪个编号**，再堵住 5.2 列出的四处：
+**下一次 reset 用哪个编号**，再堵住 5.2 列出的几处：
 
 ```python
-# auto_atom/randomization_executor.py   （拟议，与 RandomizationHost 并列）
-class AddressableResetHost(RandomizationHost, Protocol):
-    def set_reset_address(self, *, reset_index: int, retry: int = 0) -> None:
-        """声明下一次 reset 的编号。
+# auto_atom/utils/seed.py
+@dataclass(frozen=True)
+class ResetAddress:
+    reset_index: int      # 1 起
+    retry: int = 0
 
-        实现方让下一次 reset 的 rng 从 (seed, reset_index, retry) 派生，reset_index 属性
-        返回给定值（候选索引随之寻址），相机噪声按同一编号标记 episode。retry 也要进入
-        候选索引，否则 QMC/Poisson 的重试拿到同一组候选（见 §8）。种子在构造时由
-        task.seed=base_seed 给定。
-        """
+def reset_generator(seed, reset_index, retry=0):   # retry=0 与计数 reset 逐位相同
+    ...                                            # retry>0：spawn_key=(reset_index, retry)
+
+# auto_atom/contracts.py   （后端能力；MuJoCo、MJWarp、mock 后端实现）
+@runtime_checkable
+class AddressableResetHost(Protocol):
+    def set_reset_address(self, address: ResetAddress) -> None:
+        """只作用于下一次 reset，且该 reset 只能选一个 env；做不到就报错。"""
+    @property
+    def reset_address(self) -> ResetAddress | None:
+        """最近一次 reset 的地址；计数 reset 为 None。"""
+
+# auto_atom/policy_eval.py
+PolicyEvaluator.reset(env_mask, *, address: ResetAddress | None = None)
 ```
 
-执行器侧只加一件事：
+`PolicyEvaluator.reset(mask, address=...)` 校验掩码只选一个 env、后端满足
+`AddressableResetHost`，然后依次 `backend.set_reset_address(address)`、
+`ExecutionContext.begin_reset(address)`、`backend.reset(mask)`、
+`ExecutionContext.bind_env_generators(mask, addressed=True)`。
+
+执行器不新增参数：它在 `begin_reset()` 里读 host 的 `reset_address`，寻址时把跨 reset 状态归位：
 
 ```python
-# 拟议：寻址模式下把跨 reset 状态归位；默认路径不变
-def begin_reset(self, *, addressed: bool = False) -> None:
-    ...
-    if addressed:
+# auto_atom/randomization_executor.py
+def begin_reset(self) -> None:
+    if self.reset_address is not None:
         self.clear_history()
         self._poisson_streams.clear()
         self._auto_radius_cache.clear()
+    ...
 ```
 
 这堵住 5.2 的 4，代价见 §12 的“跨 reset 历史的取舍”：非 IID 生成器在寻址模式下只在一个
@@ -424,22 +489,43 @@ episode 内部的重试之间覆盖空间，不再跨 episode 覆盖。
 
 loader 与 runner 侧的约定：
 
-- **一个 episode 一次 reset**：几个 slot 同时完成时也逐个用 one-hot 掩码 reset，编号由
-  `episode_index` 唯一确定（如 `episode_index + 1`，reset 编号从 1 起）。这堵住 5.2 的 1、2。
-  代价是同一 tick 完成的 slot 要多次 reset；MJWarp 上每次 reset 有一次设备端 forward。
-- **寻址模式下 env 行不进内容**：QMC 候选索引改用 `episode_index`（而不是
-  `reset_index * batch_size + env_index`），Poisson 播种与相机噪声的派生键把行号当 0。这堵住 5.2 的 3。
-- **waypoint 流同编号**：`TaskRunner` / `PolicyEvaluator` 的 reset 把编号传给
-  `ExecutionContext.begin_reset`，使后端没有 RNG 时的 waypoint 随机化也按它派生。
-- **GS 背景**接上按编号派生的流，或在寻址模式下拒绝启用（5.1）。
+- **一个 episode 一次 reset**：几个 slot 同时完成时也逐个用 one-hot 掩码 reset，编号是
+  `episode_index + 1`（reset 编号从 1 起）。这堵住 5.2 的 1、2。代价是同一 tick 完成的
+  slot 要多次 reset；MJWarp 上每次 reset 有一次设备端 forward。
+- **寻址模式下 env 行不进内容**：一律按“batch 为 1 的第 0 行”取值。QMC（实体与相机随机化）
+  读第 `qmc_candidate_index(reset_index, 0, 1) = reset_index` 个点，同时与 `batch_size` 无关；
+  Poisson 流的键把行号当 0，种子改由 `(运行种子, 标签, reset 编号, retry)` 派生（每次寻址
+  reset 都重建流，种子不含编号会让每个 episode 拿到同一个首点）；相机噪声的派生键把行号当 0。
+  这堵住 5.2 的 3。
+- **retry 进入候选**：retry>0 时 reset 流、QMC 序列种子（`qmc_sequence_seed(..., retry)`）、
+  Poisson 种子与相机噪声的派生键都带上 retry，重试拿到新的一组候选（§8）。
+- **waypoint 流同编号且按 env 绑定**：`ExecutionContext.begin_reset(address)` 让后端没有
+  RNG 时的 waypoint 随机化也按编号派生；`bind_env_generators` 让每个 env 留住自己那次
+  reset 的生成器，`TaskRunner._apply_waypoint_randomization(actions, context, env_index)`
+  从它取数（`StageActionsFactory` 因此多了 `env_index` 参数）。这堵住 5.2 的 5。
+- **相机噪声只数为本 slot 做的 capture**：`CameraNoiseProcessor.hold(rows)` /
+  `env.hold_camera_noise(mask)` 让下一次 capture 重复这些行的上一帧（同一派生键、同一 AR(1)
+  偏移，仍按序抽 innovation 以保持逐像素噪声一致）。stream 在每次 capture 前 hold 所有
+  不需要这次 capture 的行：新 slot 初始观测那次 hold 正在跑的 slot，post-update 那次 hold
+  本 tick 不记录的 slot（policy 读观测时则全部 active slot 都需要）。这堵住 5.2 的 6。
+- **GS 背景在寻址模式下拒绝启用**：GS env 通过 `unseeded_randomness` 报告背景池、背景
+  位姿随机化、前景变体这些不受运行种子控制的选择，`MujocoTaskBackend.set_reset_address`
+  遇到就报错（5.1）。
 
-要点与约束：
+`round_selection` 与 `TaskRunner.reset` 仍只走计数 reset，没有地址参数。
+
+要点与约束（均已用测试锁定，见 `tests/test_stream_determinism.py`）：
 
 - **默认路径逐字不动**。重构把“RNG 消费顺序 + `sample_index` 公式 + `env_mask`
   per-component 写回语义”列为逐字保留约束（“否则 reset 复现性会漂”）。寻址必须是
   **显式开启**的模式，开启时不得改变顺序路径的取数次数与顺序。
-- **fail-closed**：`determinism="episode"` 下，host 不满足 `AddressableResetHost` 就
-  直接报错，而不是悄悄退化成顺序流。
+- **fail-closed**：`determinism="episode"` 下，后端不满足 `AddressableResetHost` 就
+  直接报错（`TypeError`），而不是悄悄退化成顺序流。
+- **与计数 reset 对齐**：IID 生成器（以及 `spacing = 0` 的 QMC）下，episode `i`
+  （retry 0）的场景、waypoint、命令与状态通道与 `batch_size=1` 顺序运行的第 `i + 1` 次
+  reset 逐位相同（RGB 见 §12）；`tests/test_stream_determinism.py` 在 `open_door` 上比较
+  顺序 batch 1、寻址 batch 2、寻址分片三种运行，`tests/test_reset_addressing.py` 用假 host
+  逐个生成器断言场景。
 - **寻址保证确定性，不保证多样性**：`reset_generator` 是纯函数，同一 `(seed, 编号)`
   必然给同一场景；要让不同 episode 不同，编号就必须不同
   （分片公式 `episode_index = worker_id + k * num_workers` 已保证这点）。
@@ -452,7 +538,7 @@ loader 与 runner 侧的约定：
   **“第 i 个 episode 的场景”可以在没有仿真器的进程里算出来并断言**；
 - 顺序模式下现有的 `round_selection` 复现不受影响。
 
-### 5.5 方案 B（兼容态）：顺序消费 + 游标恢复
+### 5.5 方案 B（兼容态，`determinism="sequential"`，已实现）：顺序消费 + 游标恢复
 
 不做任何寻址改动，接受“样本 = 第 N 次 reset 的结果”：
 
@@ -461,8 +547,9 @@ loader 与 runner 侧的约定：
   不执行，即 `round_selection` 今天的做法；
 - worker 数变化即破坏可复现性；`_history` 的连续性也随之变成“必须不被打断”的隐含要求。
 
-保留为兜底：`StreamConfig(determinism="sequential")`。若实现周期紧张，可先落 B，
-但**接口按 A′ 设计**（`determinism` 字段 + host 能力），避免后续返工。
+保留为兜底：`StreamConfig(determinism="sequential")`。顺序模式下多个 slot 同时开始时
+合并为一次批量 reset（与 `aao-eval` 的一轮相同），不做 hold。游标恢复（重放水位之前的
+reset）尚未实现。
 
 ### 5.6 与场景规格（scene spec）的关系
 
@@ -535,17 +622,25 @@ viewer；控制 tick 内各 env 的 step 由 `deferred_step` 合并成一次全 
 - **随机化失败**：现有语义是 fail-closed（`RandomizationFailureError`，见
   [Randomization](../task-configuration/randomization.md)）。在流式 loader 中这是
   “这个 episode 无效”，默认 `on_invalid="resample"`：同一 `episode_index` 换一个
-  重试子种子重新采样场景，**最多 `retry_budget` 次**。
+  重试子种子重新采样场景，**最多 `retry_budget` 次**，耗尽抛 `RetryBudgetExhaustedError`。
+  失败的 reset 没有轨迹可保留，所以 `on_invalid="keep"` 下它也重试；`"raise"` 下第一次
+  无效即抛 `InvalidEpisodeError`。重试排在新 index 之前。
   **重试次数必须进入地址**（`set_reset_address(reset_index=..., retry=...)`，派生方式与
   `reset_generator` 相同：`SeedSequence(seed, spawn_key=(reset_index, retry))`），否则“重试过一次才
   成功的 episode”与“一次就成功的”在记录里无法区分，复现时会指向不同场景。
 - **无限流的死循环风险（必须防）**：若任务配置本身不可行（100% 随机化失败或 100% 超时），
   `resample` 会永远重试。必须加**熔断**：连续 `max_consecutive_invalid` 次无效 → 抛 `StreamUnhealthyError`
   并携带 `StreamStats`；同时 `stats` 里暴露有效率，供训练脚本 early-stop。
-- **统计**：`StreamStats(episodes_emitted, invalid_skipped, retries, truncations,
-  success_rate, steps_p50/p95, wall_time_per_episode, sim_time_per_episode)`。
+- **统计**：`StreamStats` 计数 `attempts`、`episodes_emitted`、`successes`、`failures`、
+  `truncations`、`randomization_failures`、`invalid_skipped`、`retries`、
+  `consecutive_invalid`、`invalid_reasons`（按 `kind:failure_category`），派生
+  `success_rate`（成功 / 跑完的 rollout）、`valid_rate`（成功 / 全部 attempt）、
+  `steps_p50/p95`（最近 1024 条）、`wall_time_per_episode`、`sim_time_per_episode`；
+  `to_dict()` 给出可 JSON 化的快照。
 - **不要让“跳过”静默改变分布**：跳过失败的 episode 会让训练集偏向成功样本；
   `stats` 与 `Episode.metadata` 必须保留被跳过样本的计数与原因，便于量化幸存者偏差。
+  `Episode.metadata["invalid_attempts"]` 列出同一 `episode_index` 此前被丢弃的每次
+  attempt（retry、kind、category、reason）。
 
 ## 9. 性能与吞吐
 
@@ -578,6 +673,10 @@ viewer；控制 tick 内各 env 的 step 由 `deferred_step` 合并成一次全 
 
 ## 11. 分阶段实施计划（每轮独立提交、独立验证）
 
+R1–R4 已实现，验证分别在 `tests/test_stream_records.py`、`tests/test_stream_source.py`、
+`tests/test_stream_scheduling.py`、`tests/test_reset_addressing.py` 与
+`tests/test_stream_determinism.py`（以及 `tests/test_mjwarp_backend.py` 的寻址用例）。
+
 | 轮次 | 内容 | 验证 |
 |---|---|---|
 | **R1** | `auto_atom/data/` 骨架：`Episode`/`EpisodeArrays`/`Transition`/`StreamConfig` + `EvaluatorEpisodeSource`（单 env、同步、进程内） | `aao_configs/task/mock.yaml`（`task=mock`）上的单测：episode 长度、标签对齐、T 与观测一致；不跑重仿真 |
@@ -607,7 +706,7 @@ pixi run -e warp test --test-targets "tests/test_stream_<x>.py" --max-concurrenc
 | **fork + GL** | 经典崩溃源（GL context / 线程池 / MuJoCo 状态） | 强制 spawn；worker 内自建 env；设备在构造前选择 |
 | **torch 可选依赖** | 核心包不得因 stream 变重 | `integrations/` 惰性 import；CI 不强行安装 torch |
 | **幸存者偏差** | `on_invalid="resample"` 静默改变数据分布 | `stats` + `Episode.metadata` 显式记录跳过原因与计数 |
-| **确定性的剩余缺口** | 场景随机化、waypoint 随机化、相机噪声的随机流已按 reset 编号派生；但 GS 背景仍用不带种子的 `default_rng()`，QMC 候选索引、Poisson 与相机噪声带 env 行 | 寻址模式下 GS 背景接派生流或拒绝启用，QMC 索引改用 `episode_index`，其余 env 行归 0；用测试锁定 |
+| **确定性的剩余缺口** | 寻址后，场景、waypoint、相机噪声、命令与全部状态通道按 `(seed, episode_index)` 逐位复现。剩下两处：GS 背景仍用不带种子的 `default_rng()`；原生 MuJoCo 的 RGB 在同一 `MjData` 下可能差 1 个灰度级（`open_door` 上几十个像素），取决于此前渲染过什么。后者不是随机源：reset 后同一状态连拍两次即可复现，裸 `mujoco.Renderer` 则没有，问题在 env 的渲染管线（clip 范围切换、分割渲染开关等 GL 状态） | GS 背景在寻址模式下拒绝启用；RGB 的 1 级差异作为已知限制，测试对 uint8 图像放宽到 1 级。按像素逐位复现需要先修渲染管线 |
 | **逐 episode reset 的开销** | 寻址要求一个 episode 一次 reset，同一 tick 完成的 slot 不能合并成一次 `reset(mask)` | 只在 `determinism="episode"` 下逐个 reset；MJWarp 上用基准脚本量出每次 reset 的设备端开销 |
 
 ## 13. 相关文档
