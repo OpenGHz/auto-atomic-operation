@@ -78,6 +78,7 @@ from auto_atom.config.task import (
 )
 from auto_atom.contracts import (
     CameraModel,
+    CommandObservationEnvProtocol,
     EnvProtocol,
     IKSolver,
     InfoEnvProtocol,
@@ -148,6 +149,7 @@ __all__ = [
     "ControlResult",
     "ControlSignal",
     "CameraModel",
+    "CommandObservationEnvProtocol",
     "ControlledFrameConfig",
     "ControlledFrameKind",
     "ConfigDrivenDemoPolicy",

@@ -176,6 +176,12 @@ class BatchExecutionAdapter:
             )
         return self.stack_observations([env.capture_observation() for env in self.envs])
 
+    def capture_commands(self) -> dict[str, dict[str, Any]]:
+        """Capture every row's command channels (``capture_commands``)."""
+        if self.mode == BatchExecutionMode.SHARED:
+            return self.broadcast_observation(self.physical_envs[0].capture_commands())
+        return self.stack_observations([env.capture_commands() for env in self.envs])
+
     def capture_observation_raw(self) -> dict[str, dict[str, Any]]:
         """Capture batch rows before per-environment sensor post-processing."""
 

@@ -227,6 +227,15 @@ class ObservationEnvProtocol(EnvProtocol, Protocol):
 
 
 @runtime_checkable
+class CommandObservationEnvProtocol(EnvProtocol, Protocol):
+    """Environment capability for reading command channels without rendering."""
+
+    def capture_commands(self) -> Dict[str, Dict[str, Any]]:
+        """The ``action/...`` entries of ``capture_observation()``, same layout."""
+        ...
+
+
+@runtime_checkable
 class JointActionEnvProtocol(EnvProtocol, Protocol):
     """Environment capability for directly applying operator joint actions."""
 

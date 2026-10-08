@@ -95,6 +95,9 @@ _JOINT_LIMIT_WARN_MARGIN_RAD: float = 0.05
 # Prevents flapping warnings when the IK solution sits right at the boundary.
 _JOINT_LIMIT_WARN_CLEAR_MARGIN_RAD: float = 0.10
 
+# Sensors whose observation includes ``action/...`` command channels.
+_COMMAND_SENSORS = frozenset({DataType.JOINT_POSITION, DataType.POSE})
+
 
 _ENCODINGS: dict[tuple[type, int], str] = {
     (np.uint8, 1): "mono8",
@@ -1607,6 +1610,14 @@ class UnifiedMujocoEnv(MujocoBasis):
     def capture_observation(self) -> dict[str, dict[str, Any]]:
         return self._apply_camera_noise(self._capture_observation_raw())
 
+    def capture_commands(self) -> dict[str, dict[str, Any]]:
+        """The ``action/...`` command channels of :meth:`capture_observation`.
+
+        Renders no camera and leaves camera noise untouched, so reading the
+        command just issued costs almost nothing.
+        """
+        return self._collect_obs(self.config.structured, commands_only=True)
+
     def _capture_observation_raw(self) -> dict[str, dict[str, Any]]:
         """Capture an observation before RGB/depth sensor noise is applied."""
         return self._collect_obs(self.config.structured)
@@ -1633,11 +1644,20 @@ class UnifiedMujocoEnv(MujocoBasis):
         if processor is not None:
             processor.set_seed(seed)
 
-    def _collect_obs(self, structured: bool) -> dict[str, dict[str, Any]]:
+    def _collect_obs(
+        self, structured: bool, *, commands_only: bool = False
+    ) -> dict[str, dict[str, Any]]:
         sim_time = self.data.time
         t = int(sim_time * 1e9) if self.config.stamp_ns else float(sim_time)
         obs: dict[str, dict[str, Any]] = {}
         kc = self._key_creator
+        # Command channels come only from the joint-state and pose sensors, so a
+        # command capture reads those and renders nothing.
+        sensors = (
+            set(self.config.enabled_sensors) & _COMMAND_SENSORS
+            if commands_only
+            else self.config.enabled_sensors
+        )
 
         for op in self._operators.values():
             arm_qidx = self._op_arm_qidx[op.name]
@@ -1654,7 +1674,7 @@ class UnifiedMujocoEnv(MujocoBasis):
 
             eef_mapper = self._op_eef_mapper.get(op.name)
 
-            if DataType.JOINT_POSITION in self.config.enabled_sensors:
+            if DataType.JOINT_POSITION in sensors:
                 if structured:
                     for limb, qidx, vidx, aidx in joint_components:
                         if qidx.size == 0 and vidx.size == 0 and aidx.size == 0:
@@ -1711,7 +1731,7 @@ class UnifiedMujocoEnv(MujocoBasis):
                             }
 
             if not structured:
-                if DataType.JOINT_VELOCITY in self.config.enabled_sensors:
+                if DataType.JOINT_VELOCITY in sensors:
                     for limb, _, vidx, _ in joint_components:
                         if vidx.size == 0:
                             continue
@@ -1719,7 +1739,7 @@ class UnifiedMujocoEnv(MujocoBasis):
                             "data": np.asarray(self.data.qvel[vidx]),
                             "t": t,
                         }
-                if DataType.JOINT_EFFORT in self.config.enabled_sensors:
+                if DataType.JOINT_EFFORT in sensors:
                     for limb, _, _, aidx in joint_components:
                         if aidx.size == 0:
                             continue
@@ -1728,7 +1748,7 @@ class UnifiedMujocoEnv(MujocoBasis):
                             "t": t,
                         }
 
-            if DataType.POSE in self.config.enabled_sensors:
+            if DataType.POSE in sensors:
                 site_id = self._pose_site_ids.get(op.name, -1)
                 if site_id >= 0:
                     # Validate sensor vs site (once).
@@ -1814,7 +1834,7 @@ class UnifiedMujocoEnv(MujocoBasis):
                 #         f"eef_site or disable DataType.POSE for this operator."
                 #     )
 
-            if DataType.IMU in self.config.enabled_sensors:
+            if DataType.IMU in sensors:
                 acc_id = self._imu_ids[op.name]["acc"]
                 gyro_id = self._imu_ids[op.name]["gyro"]
                 quat_id = self._imu_ids[op.name]["quat"]
@@ -1846,7 +1866,7 @@ class UnifiedMujocoEnv(MujocoBasis):
                             "t": t,
                         }
 
-            if DataType.WRENCH in self.config.enabled_sensors:
+            if DataType.WRENCH in sensors:
                 force = self._sensor_data(self._wrench_ids[op.name]["force"])
                 torque = self._sensor_data(self._wrench_ids[op.name]["torque"])
                 if force.size == 0 or torque.size == 0:
@@ -1868,10 +1888,7 @@ class UnifiedMujocoEnv(MujocoBasis):
                         "t": t,
                     }
 
-        if (
-            DataType.TACTILE in self.config.enabled_sensors
-            and self._tactile_manager is not None
-        ):
+        if DataType.TACTILE in sensors and self._tactile_manager is not None:
             tactile_data = self._tactile_manager.get_data().get("tactile")
             if tactile_data is not None:
                 for component, data in self._group_tactile_by_component(
@@ -1884,7 +1901,7 @@ class UnifiedMujocoEnv(MujocoBasis):
                         key = f"{component}/tactile/point_cloud2"
                     obs[kc.apply_prefix(key)] = {"data": data, "t": t}
 
-        if DataType.CAMERA in self.config.enabled_sensors:
+        if DataType.CAMERA in sensors:
             color_keys = set()
             if structured:
                 info = self.get_info()["cameras"]
@@ -1981,6 +1998,13 @@ class UnifiedMujocoEnv(MujocoBasis):
                         "t": t,
                     }
 
+        if commands_only:
+            command_prefix = kc.apply_prefix("action/")
+            return {
+                key: value
+                for key, value in obs.items()
+                if key.startswith(command_prefix)
+            }
         return obs
 
     # ------------------------------------------------------------------
@@ -2680,6 +2704,10 @@ class BatchedUnifiedMujocoEnv:
     def _capture_observation_raw(self) -> dict[str, dict[str, Any]]:
         """Capture a logical batch before RGB/depth sensor noise is applied."""
         return self._batch_adapter().capture_observation_raw()
+
+    def capture_commands(self) -> dict[str, dict[str, Any]]:
+        """Every row's ``action/...`` command channels, without rendering."""
+        return self._batch_adapter().capture_commands()
 
     def set_camera_noise_seed(self, seed: int | None) -> None:
         """Set the deterministic root seed for all logical batch rows."""
