@@ -46,3 +46,12 @@ def test_replay_recording_does_not_import_runner_or_data_replay() -> None:
     imports = _imports(PROJECT_ROOT / "auto_atom" / "runner" / "replay_recording.py")
     assert "auto_atom.runner.data_replay" not in imports
     assert "auto_atom.runner" not in imports
+
+
+def test_data_stream_package_does_not_import_the_runner_layer() -> None:
+    for path in (PROJECT_ROOT / "auto_atom" / "data").glob("*.py"):
+        imports = _imports(path)
+        assert not any(
+            name == "auto_atom.runner" or name.startswith("auto_atom.runner.")
+            for name in imports
+        ), path.name

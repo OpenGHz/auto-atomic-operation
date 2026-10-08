@@ -88,9 +88,20 @@ class ConfigDrivenDemoPolicy:
         self._cached_stage_indices: List[Optional[int]] = []
         self._cached_actions: List[List[PrimitiveAction]] = []
 
-    def reset(self) -> None:
-        self._cached_stage_indices = []
-        self._cached_actions = []
+    def reset(self, env_mask: Optional[np.ndarray] = None) -> None:
+        """Forget the cached stage actions of the masked envs (all by default).
+
+        A stream that resets one slot while the others keep running passes
+        that slot's mask, so the running slots keep the actions they drew.
+        """
+        if env_mask is None:
+            self._cached_stage_indices = []
+            self._cached_actions = []
+            return
+        mask = np.asarray(env_mask, dtype=bool).reshape(-1)
+        for env_index in np.flatnonzero(mask[: len(self._cached_stage_indices)]):
+            self._cached_stage_indices[env_index] = None
+            self._cached_actions[env_index] = []
 
     def act(
         self,
@@ -266,9 +277,26 @@ class PolicyEvaluator:
     def records(self) -> List[ExecutionRecord]:
         return list(self._records)
 
+    def pop_records(self, env_index: int) -> List[ExecutionRecord]:
+        """Remove and return the records accumulated for one env.
+
+        ``records`` grows for the evaluator's lifetime; a long-running
+        consumer takes each env's records when its episode ends instead.
+        """
+        taken = [record for record in self._records if record.env_index == env_index]
+        self._records[:] = [
+            record for record in self._records if record.env_index != env_index
+        ]
+        return taken
+
     @property
     def batch_size(self) -> int:
         return self._require_context().backend.batch_size
+
+    @property
+    def context(self) -> ExecutionContext:
+        """The execution context: backend, task config, and plan."""
+        return self._require_context()
 
     def defer_viewer_updates(self) -> ContextManager[None]:
         """Hold viewer refreshes, and the step delay they bring, for a block."""
