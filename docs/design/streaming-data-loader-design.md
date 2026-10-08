@@ -6,6 +6,11 @@
 > 的设计方向。当前仓库没有 `auto_atom/data` 包，也没有 `aao-stream` 入口；文中的
 > 包路径、API、配置字段均为**拟议接口**，直接按本文调用会失败。
 > 实现完成后按本仓库约定更新本文状态，或把稳定用法迁移到 `docs/tools/` 下的使用文档。
+>
+> **2026-10-08 按当前代码复核**：每次 reset 的随机流已改为只由“运行种子 + reset 编号”
+> 派生（`auto_atom/utils/seed.py::reset_generator`），§5 据此重写，寻址剩下的工作随之变小；
+> 新增 §4.5 说明哪些类型用 pydantic、哪些保留 dataclass；§3、§6、§9 补上 MJWarp 后端、
+> `round_selection`、`object_only` 与观测配置组。
 
 ## 1. 背景与当前边界
 
@@ -68,6 +73,10 @@
 | `RandomizationHost`（可行性层能力协议） | 位姿读写、baseline、相机名/模型、支撑几何、`evaluate_pose_constraints`；`SceneBackend` 只留 `rng` / `get_camera_poses` / `get_reset_diagnostics` | `auto_atom/randomization_executor.py`、`auto_atom/contracts.py` |
 | `_RecordingHost` 假 host | 只实现位姿读写就能跑完整一次 reset → **场景采样可脱离仿真器测试，甚至离线预生成** | `tests/test_randomization_executor.py` |
 | `BatchExecutionAdapter` + REPLICATED replica pool | 进程内批内并行 | `auto_atom/basis/mjc/batch_execution.py`、`env.parallel_batch_step` |
+| MJWarp 后端（`backend=warp`） | 进程内批内并行的 GPU 版：一个设备模型里 `batch_size` 个 world，按掩码 reset/step；在 pixi `warp` 环境运行 | `auto_atom/backend/mjwarp/`、`auto_atom/basis/mjwarp/` |
+| `resolve_run_seed` / `reset_generator` | 每次 reset 的随机流只由 `(运行种子, reset 编号)` 决定，是 §5 寻址的现成基础 | `auto_atom/utils/seed.py` |
+| `round_selection`（`+round_selection=...`） | 按编号复现第 N 轮的现成用例：跳过的轮次只 reset、不执行（仍要 reset，因为 reset 编号与非 IID 生成器的跨 reset 状态都靠它推进） | `auto_atom/runner/common.py` |
+| `execution=object_only` | 不带操作器、按 stage 运动学搬运物体；只要场景与观测时的低成本生产者 | `aao_configs/execution/object_only.yaml` |
 | `auto_atom.ipc`（rpyc） | 跨进程/跨机：仿真留在 server，客户端只消费序列化 dict | `auto_atom/ipc/` |
 
 ## 4. 核心抽象
@@ -75,8 +84,8 @@
 ### 4.1 数据单元：`Transition` 与 `Episode`
 
 ```python
-# auto_atom/data/records.py   （拟议）
-@dataclass
+# auto_atom/data/records.py   （拟议；为什么是 dataclass 见 §4.5）
+@dataclass(frozen=True)
 class Transition:
     obs: dict[str, np.ndarray]        # 已去掉 batch 维；key 与 capture_observation 一致
     action: dict[str, np.ndarray]     # 本 tick 实际下发的命令（见 §4.2 的“命令口径”）
@@ -86,7 +95,7 @@ class Transition:
     phase_step: int | None
     sim_time: float
 
-@dataclass
+@dataclass(frozen=True)
 class EpisodeArrays:
     """Columnar 形式：每通道一个 (T, ...) 数组，供 collate / 训练直接消费。"""
     obs: dict[str, np.ndarray]
@@ -95,7 +104,10 @@ class EpisodeArrays:
     phase_step: np.ndarray
     sim_time: np.ndarray
 
-@dataclass
+    def __post_init__(self) -> None:
+        """校验所有列的首维是同一个 T：唯一值得在构造时检查的不变式。"""
+
+@dataclass(frozen=True)
 class Episode:
     episode_index: int
     seed: int
@@ -108,7 +120,7 @@ class Episode:
     scene: dict[str, Any]          # reset 后初始真值（物体/操作器位姿 + 相机位姿）
     randomization: dict[str, Any]  # get_reset_diagnostics 的诊断（实际采样偏移、难放原因）
     records: list[ExecutionRecord]
-    metadata: dict[str, Any]       # 配置名、overrides、worker_id、wall_time…
+    metadata: dict[str, Any]       # StreamConfig.model_dump(mode="json")、reset 编号、worker_id、wall_time…
 
     def window(self, length: int, stride: int) -> Iterator["EpisodeArrays"]: ...
 ```
@@ -153,23 +165,29 @@ class EpisodeSource(Protocol):
 ### 4.3 调度层：`EpisodeStream`
 
 ```python
-# auto_atom/data/stream.py   （拟议）
-@dataclass
-class StreamConfig:
+# auto_atom/data/stream.py   （拟议；为什么是 pydantic 见 §4.5）
+class StreamConfig(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
     task: str                                  # → load_task_file_hydra(task, ...)
-    overrides: list[str] = field(default_factory=list)
-    observation_keys: list[str] | None = None  # None = 全通道
-    policy: str | Callable = "demo"
-    max_updates: int = 600
-    sample_stride: int = 1                     # 每 k 个 control tick 采一帧
-    batch_size: int = 1                        # 进程内 slot 数（→ env.batch_size）
+    base_seed: int                             # 必填：拒绝 None，0 是合法种子（见 §5.1）
+    overrides: tuple[str, ...] = ()
+    observation_keys: tuple[str, ...] | None = None  # None = 全通道
+    policy: str = "demo"                       # 注册名或 "module:attr"；可调用对象走 from_config
+    max_updates: PositiveInt = 600
+    sample_stride: PositiveInt = 1             # 每 k 个 control tick 采一帧
+    batch_size: PositiveInt = 1                # 进程内 slot 数（→ env.batch_size）
     on_invalid: Literal["resample", "keep", "raise"] = "resample"
-    retry_budget: int = 3
-    queue_size: int = 16                       # 背压上限
+    retry_budget: NonNegativeInt = 3
+    max_consecutive_invalid: PositiveInt = 20  # 熔断阈值（§8）
+    queue_size: PositiveInt = 16               # 背压上限
     determinism: Literal["episode", "sequential"] = "episode"
-    base_seed: int                             # 必填：loader 不接受“未指定”，0 是合法种子（见 §5.1）
 
 class EpisodeStream(Iterator[Episode]):
+    @classmethod
+    def from_config(
+        cls, config: StreamConfig, *, policy: Callable[[], Any] | None = None
+    ) -> "EpisodeStream": ...                 # policy：可 pickle 的工厂，优先于 config.policy
     def shard(self, worker_id: int, num_workers: int) -> "EpisodeStream": ...
     @property
     def stats(self) -> "StreamStats": ...      # 成功/失败/跳过/截断计数、步数分布、吞吐
@@ -217,7 +235,8 @@ from auto_atom.integrations.torch_data import AaoIterableDataset, collate_episod
 def make_stream() -> EpisodeStream:
     return EpisodeStream.from_config(StreamConfig(
         task="pick_and_place",
-        overrides=["env.viewer.disable=true", "+env.parallel_batch_step=true"],
+        base_seed=0,
+        overrides=["env.viewer=null"],
         batch_size=1,
     ))
 
@@ -242,62 +261,116 @@ for step, batch in enumerate(loader):
 - **核心包零 torch 依赖**：`auto_atom` 目前只有 GS 后端用 torch；`integrations/` 下必须
   惰性 import，`import auto_atom` 不得因此变重。
 
+### 4.5 类型选择：配置用 pydantic，记录用 dataclass
+
+沿用仓库已有的分工：用户写、Hydra 组装的**配置**是 pydantic 模型（`AutoAtomConfig`、
+`EnvConfig`、`ExecutionConfig`），运行期产出的**记录**是 dataclass（`TaskUpdate`、
+`ExecutionSummary`、`ExecutionRecord`、`PoseState`）。
+
+| 类型 | 选择 | 理由 |
+|---|---|---|
+| `StreamConfig` | pydantic `BaseModel`，`frozen=True`、`extra="forbid"` | 只构造一次，没有性能顾虑，校验收益却很大：必填且非 `None` 的 `base_seed`、`Literal` 字段、取值范围（`queue_size ≥ 1`、`retry_budget ≥ 0`）在构造时就被检查；dataclass 不做运行期类型检查，`base_seed=None` 会一路传到 `resolve_run_seed`，被悄悄解析成随机种子。`extra="forbid"` 拦住拼错的字段；可以直接 `model_validate(OmegaConf.to_container(...))` 从 Hydra 节点构造；`model_dump(mode="json")` 写进 `Episode.metadata`，作为复现依据 |
+| `Transition` / `EpisodeArrays` / `Episode` | `@dataclass(frozen=True)` | 装的是 numpy 大数组：pydantic 要开 `arbitrary_types_allowed`，又不校验 shape/dtype，等于只付开销。`Episode` 每个 episode 构造一次，transition 级流式下 `Transition` 每个 tick 一个，处在热路径上，还要经 spawn worker 与队列 pickle；内嵌的 `ExecutionRecord`、`PoseState` 本身就是 dataclass。真正的不变式只有“各列首维同为 T”，在 `__post_init__` 里查一次 |
+| `StreamStats` | dataclass | 生产者线程累加的可变计数，对外只给快照；要 JSON（如 `aao-stream` 输出）时用 `dataclasses.asdict` |
+
+此前的 dataclass 草稿还有两处具体问题，换成 pydantic 时一并修正：
+
+- `base_seed: int` 没有默认值却排在有默认值的字段之后，dataclass 在**定义时**就抛
+  `TypeError: non-default argument 'base_seed' follows default argument`；pydantic 的必填字段没有顺序限制。
+- `policy: str | Callable` 不该放进配置：可调用对象既不能校验也不能序列化，而配置要写进
+  `Episode.metadata`，还要随 spawn 传进 worker。配置里只留 `policy: str`（注册名或
+  `"module:attr"`），可调用的 policy 工厂作为 `EpisodeStream.from_config(..., policy=...)`
+  的运行期参数传入，且必须可 pickle（模块级函数）。
+
+另外补上 §8 熔断用的阈值字段 `max_consecutive_invalid`，原草稿只在正文里提到 N，配置里没有。
+实现时字段说明按仓库惯例写成属性 docstring（`use_attribute_docstrings=True`）。
+
 ## 5. 确定性、分片与可恢复性
 
 这是本方案里**唯一需要改动现有实现语义**的部分，也是必须先决策的部分。
 
 随机化重构（R-D2…R-E3，见 [randomization-config-redesign](randomization-config-redesign.md)）
-之后，随机化由 `RandomizationExecutor` 独占、后端只提供能力，**可复现契约第一次被写成一句话**：
+之后，随机化由 `RandomizationExecutor` 独占、后端只提供能力；此后每次 reset 的随机流又改成
+只由运行种子和 reset 编号派生，可复现契约随之变强：
 
-> 执行器按固定顺序从 host 的 RNG 取数，只从 host 的 reset 计数器派生一个
-> `sample_index`；因此同一个 seed 在任何提供相同 baseline 的后端上产生相同的
-> **reset 序列**。
-> —— `auto_atom/randomization_executor.py` 模块 docstring
+> Every reset draws from its own stream, derived from the run seed and the
+> reset's 1-based number (`reset_generator`). What one episode consumes
+> therefore never shifts the next one, so episode `N` of a seed is the same
+> whether or not the episodes before it ran to completion.
+> —— `auto_atom/utils/seed.py` 模块 docstring
 
-这句话是本节的基础：它保证的是**顺序复现**（第 N 次 reset 与第 N 次 reset 相同），
-不是**寻址复现**（第 `episode_index` 号 episode 与上次生成的第 `episode_index` 号相同）。
+要区分两种“前面”：
+
+- **前面 episode 的执行**（执行了几步、waypoint 随机化取了多少数、有没有跑完）不再影响
+  第 N 次 reset：它的随机流只由 `(seed, N)` 派生。
+- **前面各次 reset 的采样**是否影响它，取决于生成器（5.3）：
+  - Poisson-disk 总是受影响：候选流游标随此前每次抽取推进，被拒的候选也算。
+  - Latin hypercube / Halton / Sobol 只在 `spacing > 0` 时可能受影响：某个候选离此前接受的样本
+    不到 `spacing` 而被拒时，本次就换下一个候选。候选点本身按 `(reset 编号, env, 尝试序号)` 从
+    每个实体一条、由运行种子扰乱的序列里寻址取出（5.2），与此前取过哪些点无关；`spacing` 默认为 0，
+    此时只拒绝完全重复的点，第 N 次 reset 只由 `(seed, N)` 决定。
+  - IID 不受影响，第 N 次 reset 只由 `(seed, N)` 决定。
+
+`round_selection` 对跳过的轮次只 reset、不执行，用的正是这个区分：不执行，是因为执行不影响
+之后的 reset；仍要 reset，是为了让 reset 编号与非 IID 生成器的状态走到与完整运行相同的位置。
+这仍是**按 reset 编号复现**，不是**按 `episode_index` 寻址**：编号按 `reset()` 调用计数，
+同一次 reset 里的多个 env 共用一条流，执行器还持有跨 reset 的状态（5.2、5.3）。
 
 ### 5.1 一次 reset 里有四条随机源，不是一个
 
 | # | 随机源 | 种子来源 | 每次 reset 推进什么 | 状态是否跨 reset |
 |---|---|---|---|---|
-| 1 | 场景随机化（物体 / 操作器 base、EEF / 相机位姿） | `RandomizationHost.rng` ← `MujocoTaskBackend._rng = default_rng(random_seed)`，配合 `RandomizationHost.reset_index` | 掩码内 env **逐个顺序消费**同一条流（IID）；QMC/Poisson 走候选索引 | 是（执行器持有，见 5.3） |
-| 2 | waypoint 随机化（`stages[].param.*.randomization`） | `context.backend.rng`，或 `ExecutionContext.random_generator = default_rng(resolve_run_seed(task.seed))` | 每次 materialize stage action 时消费 | 否 |
-| 3 | 相机噪声（RGB/depth 的 AR(1)、漂移、曝光） | `CameraNoiseProcessor` 自己的 root seed（`None` → `SeedSequence().entropy`） | `_capture_index` **故意跨 reset 连续**（同一次曝光序列） | 是（`_capture_index`、`_temporal_state`；后者按 reset 清理） |
-| 4 | GS 背景解析 | `env._bg_rng = default_rng()` | 每次解析 | 否 |
+| 1 | 场景随机化（物体 / 操作器 base、EEF / 相机位姿） | `RandomizationHost.rng`：MuJoCo 与 MJWarp 后端在每次 `reset()` 里重建为 `reset_generator(random_seed, reset_index)`；`reset_index` 同时进候选索引 | 掩码内 env **逐个顺序消费**本次 reset 的流（IID）；QMC/Poisson 走候选索引 | RNG 不跨；非 IID 生成器的历史与 Poisson 游标跨（见 5.3） |
+| 2 | waypoint 随机化（`stages[].param.*.randomization`） | `context.backend.rng`（同上）；后端没有 RNG 时用 `ExecutionContext.random_generator`，每次 reset 由 `begin_reset()` 重建为 `reset_generator(run_seed, reset_count)` | 每次 materialize stage action 时消费 | 否 |
+| 3 | 相机噪声（RGB/depth 的 AR(1)、漂移、曝光） | `CameraNoiseProcessor`：根种子由后端 `set_camera_noise_seed(random_seed)` 设为运行种子，每次 reset 用 `set_camera_noise_episode(reset_index, mask)` 标记各行的 episode | 每帧按 `(种子, reset 编号, 本 episode 内第几帧, env 行, 相机, rgb/depth)` 派生 | 否（`_capture_index` 仍连续计数，但只用它减去本 episode 的起点） |
+| 4 | GS 背景解析 | `env._bg_rng = default_rng()`，**不接运行种子** | 每次解析 | 否 |
 
 三条结论直接决定 loader 必须显式处理什么：
 
-- **`task.seed` 的“未指定”是 `None`，不是 `0`**（已按此修复）：`resolve_run_seed(seed)`
-  是全局唯一出口——`None` 解析为一个熵派生的**具体**种子并被记录（日志/诊断），任何整数
-  （**包括 `0`**）原样使用。场景随机化、waypoint 随机化、相机噪声都走这一个函数，
-  不再各自把 `0` 当哨兵。副作用：一次未指定种子的运行仍可用记录到的
-  `task.seed=<该值>` 事后复现——这个性质对“复现某个出问题的 episode”很关键。
-  对 loader 的要求因此变成：**要求显式 seed（拒绝 `None`）**，而不是“必须非零”。
-- **只有第 1 条有 host 级契约**（`rng` / `seed` / `reset_index`）：第 2 条挂在
-  `ExecutionContext` 上，第 3 条在 env 的噪声处理器内部。做 episode 级确定性时，
-  这三条都得一起寻址，不能只改场景随机化。
-- 第 3 条意味着**像素级**确定性最弱：同一 root seed 下不同 `_capture_index` 会得到
-  不同的曝光噪声（刻意设计）。要严格复现像素，必须 `set_camera_noise_seed(...)`
-  重启整个序列。
+- **`task.seed` 的“未指定”是 `None`，不是 `0`**：`resolve_run_seed(seed)` 是全局唯一出口——
+  `None` 解析为一个熵派生的**具体**种子并被记录（日志/诊断），任何整数（**包括 `0`**）原样使用。
+  一次未指定种子的运行因此仍可用记录到的 `task.seed=<该值>` 事后复现，这个性质对“复现某个出问题的
+  episode”很关键。对 loader 的要求是**要求显式 seed（拒绝 `None`）**，而不是“必须非零”；
+  §4.5 的 `StreamConfig` 在构造时就拒绝 `None`。
+- **前三条的随机流都只由“运行种子 + reset 编号”派生**（场景随机化用 Poisson-disk，或用其他非 IID
+  生成器且 `spacing > 0` 时，样本还取决于执行器的跨 reset 状态，见 5.3），**但编号分属两个计数器**：后端的 `_reset_index`
+  （场景随机化、相机噪声），以及 `ExecutionContext.reset_count`（后端没有 RNG 时的 waypoint 随机化）。
+  寻址时两个都要设定（5.4）。
+- **第 4 条不受运行种子控制**：用到背景池抽样或背景偏移随机化时，同一种子的两次运行可能得到
+  不同背景。`determinism="episode"` 下要么给它接上按编号派生的流，要么拒绝启用。
 
-### 5.2 顺序复现 ≠ episode 寻址
+### 5.2 按 reset 编号复现 ≠ episode 寻址
 
-现状的四个事实（均可在代码中核对）：
+现状的事实（均可在代码中核对）：
 
 - `reset_index` 是 **host 级单调计数器**，每调用一次 `backend.reset(...)` 加一，
-  与掩码里几个 env 无关（`RandomizationHost.reset_index`）。
-- 场景随机化按**掩码内 env 顺序逐个消费**同一条流（`RandomizationExecutor.sample_component`
-  的 `for env_index, enabled in enumerate(env_mask)`），逐 env 采样时把 `env_index`
-  归一为 0、基线来自 `pose.select(env_index)`（`_sample_pose_for_env(..., 0, ...)`）→
-  **IID 下 env 间差异来自流的位置，而不是 env 索引**。
-- 相机随机化仍走 `sample_pose_batch`：`sample_index = reset_index * 1009 + env_index`。
-- QMC / Poisson：实体候选索引是 `reset_index * 1009 + attempt * 17 + label` 形态，公式里
-  **没有 `env` 项**；Poisson 流另按 `(env_index, label, 范围, 参考系上下文)` 缓存并用
-  `seed + env_index * 10_007 + label_seed` 播种，是当前**唯一按 env 寻址**的生成器。
+  与掩码里有几个 env 无关（`RandomizationHost.reset_index`）。
+- 一次 reset 的流由掩码内的 env **按顺序**消费（`RandomizationExecutor.sample_component`
+  的 `for env_index, enabled in enumerate(env_mask)`）；逐 env 组合位姿时把 env 归一为 0
+  （`_pose_from_axis_values(..., env_index=0)`）→ **IID 下 env 间差异来自流的位置，而不是 env 索引**。
+- 有几处直接按 env 行寻址：Latin hypercube / Halton / Sobol（实体与相机都是）取所在序列的第
+  `qmc_candidate_index = reset_index * batch_size + env_index` 个点；Poisson 流按
+  `(env_index, label, 范围, 参考系上下文)` 缓存，并用 `seed + env_index * 10_007 + label_seed` 播种；
+  相机噪声的派生键里有 env 行。
+- Latin hypercube / Halton / Sobol 的序列（`QmcCandidateSequence`）每个“实体或相机 × 尝试序号”一条，
+  种子是 `qmc_sequence_seed(运行种子, 名字, 尝试序号)`；点只由种子和索引决定。
+  > 2026-10-08 之前，这几种生成器每取一个候选就新建一个 scrambled 引擎，种子是
+  > `reset_index * 1_000_003 + sample_index`：运行种子不进入（`task.seed` 取 1 和 999 场景完全相同），
+  > 前后候选也互不相关，128 次 reset 的中心差异与 IID 相当（Sobol 0.00215，IID 平均 0.00289）。
+  > 修复后 Sobol 为 0.00006、Halton 0.00009，接近一条真正的 Sobol 序列（0.00004）。
 
-于是 slot 异步调度（§4.3）下，**谁先被 reset、掩码里有几个 slot，都会改变样本内容**：
-“第 1000 个 episode 长什么样”今天不可回答。
+每次 reset 一条独立流，去掉了前面 episode 的执行对它的影响；剩下四处仍让样本内容
+随调度变化：
+
+1. 两个 slot 在同一次 `reset(mask)` 里重置时共用一条流，掩码里靠前的拿到前面的数；
+2. 编号按调用计数，slot 完成的先后决定哪个 episode 拿到哪个编号；
+3. env 行与 `batch_size` 进入 QMC 候选索引，env 行还进入 Poisson 与相机噪声，同一场景落在不同
+   slot 会得到不同的位姿与噪声；
+4. Poisson-disk（以及 `spacing > 0` 的其他非 IID 生成器）的样本取决于此前各次 reset 的采样（5.3），
+   哪些 episode 先被 reset 就改变了后面的场景。
+
+所以 slot 异步调度（§4.3）下，“第 1000 个 episode 长什么样”今天仍不可回答。前三处靠
+“编号由 loader 分配”和“行号不进内容”解决，第四处要求寻址模式下把执行器状态归位（5.4）。
 
 ### 5.3 执行器的跨 reset 状态（寻址必须一并处理）
 
@@ -305,29 +378,32 @@ for step, batch in enumerate(loader):
 
 | 状态 | 生命周期 | 对寻址的影响 |
 |---|---|---|
-| `RandomizationExecutor._history` | **刻意不按 reset 清空**（上限 256），让非 IID 生成器跨 reset 覆盖提案空间 | episode 场景依赖此前所有 reset 的接受样本 → 必须清空或预热到确定状态 |
-| `RandomizationExecutor._poisson_streams` | 按 key 持久化 | 复用同一 lattice 游标 → 必须按 episode 重建 |
+| `RandomizationExecutor._history` | **刻意不按 reset 清空**（上限 256），让非 IID 生成器跨 reset 覆盖提案空间 | episode 场景依赖此前所有 reset 的接受样本 → 必须清空或预热到确定状态。`round_selection` 也因此仍要把跳过的轮次逐个 reset 一遍 |
+| `RandomizationExecutor._poisson_streams` | 按 key 持久化 | 游标随此前每次抽取推进，包括被拒的候选 → 必须按 episode 重建 |
 | `RandomizationExecutor._auto_radius_cache` | 每 reset 丢弃 operator 项、保留 object 项 | 影响较小，但仍是顺序依赖 |
-| `CameraNoiseProcessor._capture_index` | **刻意跨 reset 连续** | 影响像素 |
+
+相机噪声的 `_capture_index` 已不在此列：噪声只用本 episode 内的帧号。
 
 `begin_reset()` 只做“丢弃 operator 半径缓存 + 校验配置”，**不清历史**——这是刻意设计，
 不是遗漏。所以寻址 seam 不是“换个 RNG”这么简单，而是“把执行器的历史恢复到与
 该 episode 无关的确定状态”。
 
-### 5.4 方案 A′（推荐，目标态）：把寻址做在 host 上
+### 5.4 方案 A′（推荐，目标态）：由 loader 分配 reset 编号
 
-重构之后 seam 的位置变了：执行器**所有**随机决策都通过 host 提问
-（`RandomizationHost.rng` / `seed` / `reset_index`），因此寻址应当是 **host 的一个可选能力**，
-执行器只多一个“历史归位”入口：
+`derive(seed, index)` 已经存在，就是 `reset_generator`：后端与 `ExecutionContext` 每次 reset
+都用它重建 RNG，相机噪声也按编号派生。寻址因此不需要新的随机流，只需让 loader 决定
+**下一次 reset 用哪个编号**，再堵住 5.2 列出的四处：
 
 ```python
 # auto_atom/randomization_executor.py   （拟议，与 RandomizationHost 并列）
 class AddressableResetHost(RandomizationHost, Protocol):
-    def set_reset_address(self, *, seed: int, reset_index: int) -> None:
-        """声明下一次 reset 的确定性坐标。
+    def set_reset_address(self, *, reset_index: int, retry: int = 0) -> None:
+        """声明下一次 reset 的编号。
 
-        实现方应把 rng 重建为 derive(seed, reset_index)，并让 reset_index 属性返回
-        给定值，使 sample_index 与 QMC/Poisson 的索引寻址一致。
+        实现方让下一次 reset 的 rng 从 (seed, reset_index, retry) 派生，reset_index 属性
+        返回给定值（候选索引随之寻址），相机噪声按同一编号标记 episode。retry 也要进入
+        候选索引，否则 QMC/Poisson 的重试拿到同一组候选（见 §8）。种子在构造时由
+        task.seed=base_seed 给定。
         """
 ```
 
@@ -343,6 +419,20 @@ def begin_reset(self, *, addressed: bool = False) -> None:
         self._auto_radius_cache.clear()
 ```
 
+这堵住 5.2 的 4，代价见 §12 的“跨 reset 历史的取舍”：非 IID 生成器在寻址模式下只在一个
+episode 内部的重试之间覆盖空间，不再跨 episode 覆盖。
+
+loader 与 runner 侧的约定：
+
+- **一个 episode 一次 reset**：几个 slot 同时完成时也逐个用 one-hot 掩码 reset，编号由
+  `episode_index` 唯一确定（如 `episode_index + 1`，reset 编号从 1 起）。这堵住 5.2 的 1、2。
+  代价是同一 tick 完成的 slot 要多次 reset；MJWarp 上每次 reset 有一次设备端 forward。
+- **寻址模式下 env 行不进内容**：QMC 候选索引改用 `episode_index`（而不是
+  `reset_index * batch_size + env_index`），Poisson 播种与相机噪声的派生键把行号当 0。这堵住 5.2 的 3。
+- **waypoint 流同编号**：`TaskRunner` / `PolicyEvaluator` 的 reset 把编号传给
+  `ExecutionContext.begin_reset`，使后端没有 RNG 时的 waypoint 随机化也按它派生。
+- **GS 背景**接上按编号派生的流，或在寻址模式下拒绝启用（5.1）。
+
 要点与约束：
 
 - **默认路径逐字不动**。重构把“RNG 消费顺序 + `sample_index` 公式 + `env_mask`
@@ -350,8 +440,8 @@ def begin_reset(self, *, addressed: bool = False) -> None:
   **显式开启**的模式，开启时不得改变顺序路径的取数次数与顺序。
 - **fail-closed**：`determinism="episode"` 下，host 不满足 `AddressableResetHost` 就
   直接报错，而不是悄悄退化成顺序流。
-- **寻址保证确定性，不保证多样性**：`derive(seed, index)` 是纯函数，同一
-  `(seed, index)` 必然给同一场景；要让不同 episode 不同，`index` 就必须不同
+- **寻址保证确定性，不保证多样性**：`reset_generator` 是纯函数，同一 `(seed, 编号)`
+  必然给同一场景；要让不同 episode 不同，编号就必须不同
   （分片公式 `episode_index = worker_id + k * num_workers` 已保证这点）。
 
 收益：
@@ -359,16 +449,17 @@ def begin_reset(self, *, addressed: bool = False) -> None:
 - `episode_index` 可乱序、可重放、可跨 worker 迁移（恢复 = 记录已消费的 index 水位）；
 - worker 数从 4 改到 8 不改变“第 1000 个 episode 长什么样”；
 - 因为 host 是 Protocol、执行器可用假 host（`tests/test_randomization_executor.py::_RecordingHost`），
-  **“第 i 个 episode 的场景”可以在没有仿真器的进程里算出来并断言**。
+  **“第 i 个 episode 的场景”可以在没有仿真器的进程里算出来并断言**；
+- 顺序模式下现有的 `round_selection` 复现不受影响。
 
 ### 5.5 方案 B（兼容态）：顺序消费 + 游标恢复
 
 不做任何寻址改动，接受“样本 = 第 N 次 reset 的结果”：
 
 - 每 worker 顺序消费，不 shuffle；
-- 恢复时记录 `(worker_id, num_workers, consumed_index)`，按 index 水位重放；
-- worker 数变化即破坏可复现性；`_history` 与 `_capture_index` 的连续性也随之变成
-  “必须不被打断”的隐含要求。
+- 恢复时记录 `(worker_id, num_workers, consumed_index)`，把水位之前的 reset 重放一遍、
+  不执行，即 `round_selection` 今天的做法；
+- worker 数变化即破坏可复现性；`_history` 的连续性也随之变成“必须不被打断”的隐含要求。
 
 保留为兜底：`StreamConfig(determinism="sequential")`。若实现周期紧张，可先落 B，
 但**接口按 A′ 设计**（`determinism` 字段 + host 能力），避免后续返工。
@@ -393,7 +484,7 @@ worker 写入。当前两条写入路径都不完全满足：
 ```mermaid
 flowchart LR
   subgraph A["A. 进程内多 env"]
-    S1[EpisodeStream] --> E1[PolicyEvaluator<br/>env.batch_size=S<br/>REPLICATED + replica pool]
+    S1[EpisodeStream] --> E1[PolicyEvaluator<br/>env.batch_size=S<br/>REPLICATED + replica pool<br/>或 MJWarp：S 个 world]
   end
   subgraph B["B. 多进程 worker"]
     S2[EpisodeStream] --> W1[worker 0: 1 env]
@@ -407,9 +498,12 @@ flowchart LR
 
 | 形态 | 吞吐 | 复杂度 | 适用 |
 |---|---|---|---|
-| A. 进程内多 env | 中（GPU 渲染可批内并行） | 低 | 单机、GPU 渲染（GS 批量渲染）、快速起步 |
+| A. 进程内多 env | 中（GPU 渲染可批内并行；MJWarp 把物理也放上 GPU） | 低 | 单机、GPU 渲染（GS 批量渲染）、快速起步 |
 | B. 多进程 worker | 高（CPU 密集、多核扩展） | 中 | 大吞吐数据生产、多 GPU |
 | C. rpyc env server | 视网络 | 中高 | 训练与仿真分机；仿真机器独占 GL |
+
+形态 A 的 MJWarp 变体（`backend=warp`，在 pixi `warp` 环境运行）目前没有相机噪声，也没有
+viewer；控制 tick 内各 env 的 step 由 `deferred_step` 合并成一次全 world 的 step。
 
 推荐落地顺序 **A → B → C**：`EpisodeSource` 做成 protocol，三种形态只是不同实现，
 上层的 `EpisodeStream` / adapter 不变。
@@ -442,10 +536,11 @@ flowchart LR
   [Randomization](../task-configuration/randomization.md)）。在流式 loader 中这是
   “这个 episode 无效”，默认 `on_invalid="resample"`：同一 `episode_index` 换一个
   重试子种子重新采样场景，**最多 `retry_budget` 次**。
-  **重试次数必须进入地址**（`derive(seed, episode_index, retry)`），否则“重试过一次才
+  **重试次数必须进入地址**（`set_reset_address(reset_index=..., retry=...)`，派生方式与
+  `reset_generator` 相同：`SeedSequence(seed, spawn_key=(reset_index, retry))`），否则“重试过一次才
   成功的 episode”与“一次就成功的”在记录里无法区分，复现时会指向不同场景。
 - **无限流的死循环风险（必须防）**：若任务配置本身不可行（100% 随机化失败或 100% 超时），
-  `resample` 会永远重试。必须加**熔断**：连续 N 次无效 → 抛 `StreamUnhealthyError`
+  `resample` 会永远重试。必须加**熔断**：连续 `max_consecutive_invalid` 次无效 → 抛 `StreamUnhealthyError`
   并携带 `StreamStats`；同时 `stats` 里暴露有效率，供训练脚本 early-stop。
 - **统计**：`StreamStats(episodes_emitted, invalid_skipped, retries, truncations,
   success_rate, steps_p50/p95, wall_time_per_episode, sim_time_per_episode)`。
@@ -457,7 +552,8 @@ flowchart LR
 - **通道选择在 env 构造期决定**，不是每次 capture 动态裁剪：`env.enabled_sensors`
   （`DataType` 集合）与每相机 `enable_color/enable_depth/enable_mask/enable_heat_map`
   决定 `capture_observation()` 里出现哪些 key。为训练 schema 只开需要的通道，是最大
-  的单点收益（相机渲染通常是主导成本）。
+  的单点收益（相机渲染通常是主导成本）。粗粒度开关已有配置组：`observation=rgb_only`
+  （关深度与 heat map）、`camera_layout=operator_only|no_operator`（只留腕部相机 / 只留场景相机）。
 - **批内并行**：`env.parallel_batch_step=true` + `env.parallel_batch_workers`
   （REPLICATED 且无 viewer 时才生效；实测 batch=4 约 4×）。
 - **`sample_stride`**：每 k 个 control tick 采一帧。注意语义区分：**命令仍然是每 tick
@@ -487,15 +583,16 @@ flowchart LR
 | **R1** | `auto_atom/data/` 骨架：`Episode`/`EpisodeArrays`/`Transition`/`StreamConfig` + `EvaluatorEpisodeSource`（单 env、同步、进程内） | `aao_configs/task/mock.yaml`（`task=mock`）上的单测：episode 长度、标签对齐、T 与观测一致；不跑重仿真 |
 | **R2** | recording seam：观测/命令/标签/`scene`/`randomization` 采集 + `success`/`truncated`/`failure_reason` 三态 + `StreamStats` | mock 后端测三态与非成功 episode 的字段完整性 |
 | **R3** | `EpisodeStream` 调度：slot 掩码异步、`shard`、背压队列、`on_invalid` + `retry_budget` + 熔断 | 单测：多 slot 异步不串扰、`done` 去重、跳过计数正确；`retry_budget` 耗尽时抛错 |
-| **R4** | 确定性：`AddressableResetHost.set_reset_address` + `begin_reset(addressed=True)` 状态归位，并覆盖 waypoint 随机化与相机噪声两条随机源 | 单测：同 `episode_index` 在不同 worker 数/顺序下 → 场景一致（用假 host 断言场景规格）；`determinism="sequential"` 与今日逐字一致（`tests/test_randomization_*` 不回归） |
+| **R4** | 确定性：`AddressableResetHost.set_reset_address`（后端与 `ExecutionContext` 共用编号）+ 一个 episode 一次 reset + 寻址模式下 env 行归 0 + `begin_reset(addressed=True)` 状态归位 + GS 背景接派生流或拒绝。每次 reset 的独立流已经存在，不再需要新的随机源 | 单测：同 `episode_index` 在不同 worker 数/顺序、不同 slot 下 → 场景与相机噪声一致（用假 host 断言场景规格）；`determinism="sequential"` 与今日逐字一致（`tests/test_randomization_*`、`round_selection` 不回归） |
 | **R5** | `integrations/torch_data.py` + 多进程 spawn worker pool（形态 B） | 冒烟：`num_workers=2` 下分片不重不漏；`collate_episodes` 变长 padding 正确；`import auto_atom` 不引入 torch |
 | **R6** | 形态 C（rpyc，可选）、`aao-stream` CLI（可选，输出 stats/写盘）、基准脚本、文档迁移（design → `docs/tools/streaming_data_loader.md`） | 端到端示例 + `docs/` 引用检查 |
 
 每轮按仓库约定用资源受限 runner 做定向验证：
 
 ```bash
-/home/ghz/.mini_conda3/envs/airbot_play_data/bin/python scripts/dev/run_tests_safe.py \
-  --test-targets "tests/test_stream_<x>.py" --max-concurrency=1
+pixi run test --test-targets "tests/test_stream_<x>.py" --max-concurrency=1
+# 覆盖 MJWarp 形态时用 warp 环境，否则其测试会被跳过
+pixi run -e warp test --test-targets "tests/test_stream_<x>.py" --max-concurrency=1
 ```
 
 ## 12. 风险与取舍
@@ -510,7 +607,8 @@ flowchart LR
 | **fork + GL** | 经典崩溃源（GL context / 线程池 / MuJoCo 状态） | 强制 spawn；worker 内自建 env；设备在构造前选择 |
 | **torch 可选依赖** | 核心包不得因 stream 变重 | `integrations/` 惰性 import；CI 不强行安装 torch |
 | **幸存者偏差** | `on_invalid="resample"` 静默改变数据分布 | `stats` + `Episode.metadata` 显式记录跳过原因与计数 |
-| **确定性 vs 吞吐** | 严格 episode 寻址要求场景随机化、waypoint 随机化、相机噪声都只用派生源，不能混用共享流 | 寻址模式下禁止在随机化路径消费共享 `_rng`；用测试锁定 |
+| **确定性的剩余缺口** | 场景随机化、waypoint 随机化、相机噪声的随机流已按 reset 编号派生；但 GS 背景仍用不带种子的 `default_rng()`，QMC 候选索引、Poisson 与相机噪声带 env 行 | 寻址模式下 GS 背景接派生流或拒绝启用，QMC 索引改用 `episode_index`，其余 env 行归 0；用测试锁定 |
+| **逐 episode reset 的开销** | 寻址要求一个 episode 一次 reset，同一 tick 完成的 slot 不能合并成一次 `reset(mask)` | 只在 `determinism="episode"` 下逐个 reset；MJWarp 上用基准脚本量出每次 reset 的设备端开销 |
 
 ## 13. 相关文档
 
@@ -519,7 +617,9 @@ flowchart LR
 - [Data Collection](../tools/data_collection.md) — 离线录制与回放
 - [Randomization](../task-configuration/randomization.md) — reset 随机化语义
 - [Randomization 配置重构](randomization-config-redesign.md) — 执行器独占随机化与能力契约分层（R-D2…R-E3）
+- [Randomization：Reproducibility](../task-configuration/randomization.md#reproducibility) — 每次 reset 的独立随机流（`reset_generator`）
 - [Custom Backend](../mujoco-backend/custom-backend.md) — host 能力表（`rng` / `seed` / `reset_index`）
+- [MJWarp Backend Design](mjwarp-backend-design.md) — 形态 A 的 GPU 变体
 - [Stages & Waypoints](../task-configuration/stages_and_waypoints.md) — 宏步进边界与 interval selection
 - [Update Granularity Analysis](update-granularity-analysis.md) — update 粒度与内部观测 callback 的演进
 - [MuJoCo EGL Troubleshooting](../troubleshooting/mujoco-egl-troubleshooting.md) — headless 渲染
