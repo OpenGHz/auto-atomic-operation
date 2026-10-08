@@ -57,12 +57,18 @@ class MockOperatorHandler(OperatorHandler):
     _progress: np.ndarray = field(default_factory=lambda: np.zeros(1, dtype=np.int64))
     base_pose: PoseState = field(default_factory=PoseState)
     end_effector_pose: PoseState = field(default_factory=PoseState)
+    commanded_pose: PoseState = field(init=False)
+    """Latest commanded EEF pose; starts at the initial EEF pose."""
 
     def __post_init__(self) -> None:
         self._command_key = [""] * self.batch_size
         self._progress = np.zeros(self.batch_size, dtype=np.int64)
         self.base_pose = self.base_pose.broadcast_to(self.batch_size)
         self.end_effector_pose = self.end_effector_pose.broadcast_to(self.batch_size)
+        self.commanded_pose = PoseState(
+            position=self.end_effector_pose.position.copy(),
+            orientation=self.end_effector_pose.orientation.copy(),
+        )
 
     @property
     def name(self) -> str:
@@ -84,6 +90,14 @@ class MockOperatorHandler(OperatorHandler):
                 f"pose:{_serialize_param(pose)}:{target.name if target else ''}"
             )
             self._prepare_command(env_index, command_key)
+            self.commanded_pose.position[env_index] = np.asarray(
+                pose.position or self.commanded_pose.position[env_index],
+                dtype=np.float64,
+            )
+            self.commanded_pose.orientation[env_index] = np.asarray(
+                pose.orientation or self.commanded_pose.orientation[env_index],
+                dtype=np.float64,
+            )
             self._progress[env_index] += 1
             if self._progress[env_index] == 1:
                 details[env_index] = {
@@ -151,15 +165,48 @@ class MockOperatorHandler(OperatorHandler):
 
 @dataclass
 class MockEnv:
-    """Minimal env stub that satisfies the ``SceneBackend.env`` contract."""
+    """Minimal env stub that satisfies the ``SceneBackend.env`` contract.
+
+    Observes each operator's EEF pose, and its commanded EEF pose as the
+    ``action/<operator>/pose/...`` command channels. There is no simulator
+    clock, so every ``t`` is 0.
+    """
 
     batch_size: int = 1
+    operators: Dict[str, "MockOperatorHandler"] = field(
+        default_factory=dict, repr=False
+    )
 
     def step(self, action: np.ndarray, env_mask: np.ndarray | None = None) -> None:
         pass
 
     def capture_observation(self) -> Dict[str, Dict[str, Any]]:
-        return {}
+        observation: Dict[str, Dict[str, Any]] = {}
+        for name, operator in self.operators.items():
+            observation.update(
+                self._pose_channels(f"{name}/pose", operator.end_effector_pose)
+            )
+        observation.update(self._command_channels())
+        return observation
+
+    def capture_commands(self) -> Dict[str, Dict[str, Any]]:
+        """The ``action/...`` channels of :meth:`capture_observation`."""
+        return self._command_channels()
+
+    def _command_channels(self) -> Dict[str, Dict[str, Any]]:
+        observation: Dict[str, Dict[str, Any]] = {}
+        for name, operator in self.operators.items():
+            observation.update(
+                self._pose_channels(f"action/{name}/pose", operator.commanded_pose)
+            )
+        return observation
+
+    def _pose_channels(self, key: str, pose: PoseState) -> Dict[str, Dict[str, Any]]:
+        stamp = np.zeros(self.batch_size)
+        return {
+            f"{key}/position": {"data": pose.position.copy(), "t": stamp},
+            f"{key}/orientation": {"data": pose.orientation.copy(), "t": stamp},
+        }
 
     def apply_joint_action(
         self,
@@ -201,7 +248,7 @@ class MockSceneBackend(SceneBackend):
     )
 
     def __post_init__(self) -> None:
-        self.env = MockEnv(batch_size=self.batch_size)
+        self.env = MockEnv(batch_size=self.batch_size, operators=self.operators)
 
     def get_env(self) -> MockEnv:
         return self.env
@@ -228,6 +275,12 @@ class MockSceneBackend(SceneBackend):
         )
         for operator in self.operators.values():
             operator._progress[mask] = 0
+            operator.commanded_pose.position[mask] = (
+                operator.end_effector_pose.position[mask]
+            )
+            operator.commanded_pose.orientation[mask] = (
+                operator.end_effector_pose.orientation[mask]
+            )
             for env_index, enabled in enumerate(mask):
                 if enabled:
                     operator._command_key[env_index] = ""

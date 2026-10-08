@@ -193,8 +193,11 @@ class EpisodeSource(Protocol):
 
 - `EvaluatorEpisodeSource`：记录环境在 tick 之后报告的 `action/...` 命令通道，按观测 key
   原样存放。`ConfigDrivenDemoPolicy` 返回的是 primitive 而不是数值，它下发的命令（经 IK
-  之后）只出现在这些通道里。schema 因此只由环境决定，与 policy 无关。没有命令通道的环境
-  （MJWarp env、`execution=object_only`）记录不到命令。
+  之后）只出现在这些通道里。schema 因此只由环境决定，与 policy 无关。环境不报告任何
+  `action/...` 通道时，stream 在第一次采集后直接报错，而不是产出没有动作的 episode。
+  目前只有原生 MuJoCo 的 physical 执行有命令通道：MJWarp env 只报告相机（连关节状态与
+  EEF 位姿也没有），`execution=object_only` 下原生与 MJWarp 都只报告相机，所以这两种
+  形态暂时不能用来生产模仿学习数据。
 - `RunnerEpisodeSource`：下发值是内部 primitive 解析后的结果，只能从
   `TaskUpdate.details[env]["execution"]` / `ExecutionRecord` 侧读取；**宏步进会跳过中间
   tick**，所以 dense 数据必须用 `control_tick`（与

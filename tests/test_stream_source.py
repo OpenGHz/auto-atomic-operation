@@ -26,51 +26,36 @@ CONFIG_DIR = str(Path(__file__).resolve().parents[1] / "aao_configs")
 
 @pytest.fixture(autouse=True)
 def captures(monkeypatch) -> Dict[str, int]:
-    """Make the mock env report EEF poses, an EEF command, and a capture clock.
+    """Stamp each full capture of the mock env with its count; return the count.
 
-    The EEF command channel reports the EEF pose, which the mock operator sets
-    on reaching it. Returns the count of full captures.
+    The mock env observes ``<operator>/pose/...`` (the EEF pose) and the
+    commanded EEF pose as ``action/<operator>/pose/...``.
     """
     counts = {"full": 0}
-    original = mock.MockSceneBackend.__post_init__
-
-    def post_init(self: Any) -> None:
-        original(self)
-        self.env.backend = self
+    original = mock.MockEnv.capture_observation
 
     def capture_observation(env: Any) -> Dict[str, Dict[str, Any]]:
         counts["full"] += 1
-        backend = env.backend
-        operator = sorted(backend.operators)[0]
-        eef = backend.get_operator_handler(operator).get_end_effector_pose()
-        stamp = np.full(backend.batch_size, float(counts["full"]))
-        return {
-            "arm/eef/position": {"data": eef.position.copy(), "t": stamp},
-            "arm/eef/orientation": {"data": eef.orientation.copy(), "t": stamp},
-            "action/arm/eef/position": {"data": eef.position.copy(), "t": stamp},
-        }
+        observation = original(env)
+        for payload in observation.values():
+            payload["t"] = np.full(env.batch_size, float(counts["full"]))
+        return observation
 
-    monkeypatch.setattr(mock.MockSceneBackend, "__post_init__", post_init)
     monkeypatch.setattr(mock.MockEnv, "capture_observation", capture_observation)
     return counts
 
 
 @pytest.fixture
 def command_captures(monkeypatch) -> List[int]:
-    """Give the mock env a render-free ``capture_commands``; logs each call."""
+    """Log each render-free ``capture_commands`` call of the mock env."""
     calls: List[int] = []
+    original = mock.MockEnv.capture_commands
 
     def capture_commands(env: Any) -> Dict[str, Dict[str, Any]]:
         calls.append(1)
-        backend = env.backend
-        operator = sorted(backend.operators)[0]
-        eef = backend.get_operator_handler(operator).get_end_effector_pose()
-        stamp = np.full(backend.batch_size, -1.0)
-        return {"action/arm/eef/position": {"data": eef.position.copy(), "t": stamp}}
+        return original(env)
 
-    monkeypatch.setattr(
-        mock.MockEnv, "capture_commands", capture_commands, raising=False
-    )
+    monkeypatch.setattr(mock.MockEnv, "capture_commands", capture_commands)
     return calls
 
 
@@ -88,7 +73,7 @@ def _run(config: StreamConfig) -> List[Any]:
         source.close()
 
 
-def test_each_row_pairs_the_observation_before_a_tick_with_its_command() -> None:
+def test_successful_episode_rows_align_with_ticks_and_labels() -> None:
     (episode,) = _run(_config("policy_eval_mock"))
 
     arrays = episode.transitions
@@ -102,20 +87,31 @@ def test_each_row_pairs_the_observation_before_a_tick_with_its_command() -> None
     # Capture 1 follows the reset and capture t + 1 follows tick t - 1, so the
     # observation tick t decides on is capture t + 1.
     np.testing.assert_array_equal(arrays.sim_time, np.arange(steps) + 1.0)
-    # Tick 1 reaches the commanded pose: its command is what the observation
-    # after it shows, the final observation.
-    position = arrays.obs["arm/eef/position"]
-    commands = arrays.action["action/arm/eef/position"]
-    np.testing.assert_array_equal(commands[0], position[1])
-    np.testing.assert_array_equal(
-        commands[-1], episode.final_observation["arm/eef/position"]
-    )
-    np.testing.assert_allclose(position[0], [0.2, 0.0, 0.3])
     assert set(episode.final_observation) == {
-        "arm/eef/position",
-        "arm/eef/orientation",
+        "arm/pose/position",
+        "arm/pose/orientation",
     }
-    assert list(arrays.action) == ["action/arm/eef/position"]
+    assert sorted(arrays.action) == [
+        "action/arm/pose/orientation",
+        "action/arm/pose/position",
+    ]
+
+
+def test_each_row_pairs_the_observation_before_a_tick_with_its_command() -> None:
+    (episode,) = _run(_config("mock", on_invalid="keep"))
+
+    position = episode.transitions.obs["arm_a/pose/position"]
+    commands = episode.transitions.action["action/arm_a/pose/position"]
+    target = commands[0]
+    # Tick 0 commands the pick pose while the EEF is still at home; tick 1
+    # reaches it, so the observation tick 2 decides on shows it.
+    assert not np.allclose(position[0], target)
+    np.testing.assert_array_equal(position[:2], [position[0], position[0]])
+    np.testing.assert_array_equal(commands, np.stack([target] * len(commands)))
+    np.testing.assert_array_equal(position[2], target)
+    np.testing.assert_array_equal(
+        episode.final_observation["arm_a/pose/position"], target
+    )
 
 
 def test_successful_episode_carries_scene_records_and_metadata() -> None:
@@ -182,8 +178,10 @@ def test_sample_stride_records_ticks_zero_k_2k(
 
 
 def test_without_capture_commands_a_command_costs_a_full_capture(
-    captures: Dict[str, int],
+    captures: Dict[str, int], monkeypatch
 ) -> None:
+    monkeypatch.delattr(mock.MockEnv, "capture_commands")
+
     (episode,) = _run(_config("mock", on_invalid="keep", sample_stride=3))
 
     assert episode.transitions.tick.tolist() == [0, 3]
@@ -194,12 +192,22 @@ def test_without_capture_commands_a_command_costs_a_full_capture(
 
 def test_observation_keys_filter_measurements_but_keep_commands() -> None:
     (episode,) = _run(
-        _config("policy_eval_mock", observation_keys=["arm/eef/position"])
+        _config("policy_eval_mock", observation_keys=["arm/pose/position"])
     )
 
-    assert list(episode.transitions.obs) == ["arm/eef/position"]
-    assert list(episode.final_observation) == ["arm/eef/position"]
-    assert list(episode.transitions.action) == ["action/arm/eef/position"]
+    assert list(episode.transitions.obs) == ["arm/pose/position"]
+    assert list(episode.final_observation) == ["arm/pose/position"]
+    assert sorted(episode.transitions.action) == [
+        "action/arm/pose/orientation",
+        "action/arm/pose/position",
+    ]
+
+
+def test_an_env_without_command_channels_is_refused(monkeypatch) -> None:
+    monkeypatch.setattr(mock.MockEnv, "_command_channels", lambda env: {})
+
+    with pytest.raises(ValueError, match="no action/... command channels"):
+        _run(_config("policy_eval_mock"))
 
 
 def test_unknown_observation_keys_fail_before_the_first_tick() -> None:

@@ -42,7 +42,12 @@ from auto_atom.utils.seed import ResetAddress
 
 from .attempts import AttemptOutcome, AttemptScheduler, EpisodeAttempt
 from .config import StreamConfig
-from .recording import EpisodeRecorder, missing_observation_keys, split_observation
+from .recording import (
+    EpisodeRecorder,
+    is_command_key,
+    missing_observation_keys,
+    split_observation,
+)
 from .records import Episode
 
 
@@ -281,6 +286,14 @@ class EvaluatorEpisodeSource:
             return None
         self._hold_noise_except(started_slots)
         observation = evaluator.get_observation()
+        if not any(is_command_key(key) for key in observation):
+            raise ValueError(
+                "The environment reports no action/... command channels, so the "
+                "episodes would have no actions. "
+                f"{type(evaluator.get_env()).__name__} "
+                f"(execution.mode={evaluator.context.task_file.execution.mode.value}) "
+                f"produces {sorted(observation)}."
+            )
         if self.config.observation_keys is not None:
             missing = missing_observation_keys(
                 observation, self.config.observation_keys

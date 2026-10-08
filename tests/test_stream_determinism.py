@@ -112,22 +112,22 @@ def test_a_slot_noise_frames_are_its_own_captures_only(
     def hold_camera_noise(self: Any, env_mask: Any) -> None:
         held.update(int(slot) for slot in np.flatnonzero(env_mask))
 
+    original_capture = mock.MockEnv.capture_observation
+
     def capture_observation(self: Any) -> Dict[str, Any]:
         for slot, episode in episode_of_slot.items():
             if slot not in held:
                 frames[episode] += 1
         held.clear()
-        return {}
+        return original_capture(self)
 
     monkeypatch.setattr(mock.MockSceneBackend, "reset", reset)
     monkeypatch.setattr(
         mock.MockEnv, "hold_camera_noise", hold_camera_noise, raising=False
     )
     monkeypatch.setattr(mock.MockEnv, "capture_observation", capture_observation)
-    if cheap_commands:
-        monkeypatch.setattr(
-            mock.MockEnv, "capture_commands", lambda self: {}, raising=False
-        )
+    if not cheap_commands:
+        monkeypatch.delattr(mock.MockEnv, "capture_commands")
 
     with EpisodeStream.from_config(
         _mock_config(

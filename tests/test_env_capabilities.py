@@ -14,6 +14,7 @@ from auto_atom.mock import MockEnv, build_mock_backend
 from auto_atom.policy_eval import PolicyEvaluator
 from auto_atom.policy_eval import default_action_applier as cli_action_applier
 from auto_atom.contracts import (
+    CommandObservationEnvProtocol,
     EnvProtocol,
     InfoEnvProtocol,
     JointActionEnvProtocol,
@@ -169,6 +170,7 @@ def test_mock_env_exposes_only_its_supported_capabilities() -> None:
     assert isinstance(env, EnvProtocol)
     assert isinstance(env, StepEnvProtocol)
     assert isinstance(env, ObservationEnvProtocol)
+    assert isinstance(env, CommandObservationEnvProtocol)
     assert isinstance(env, JointActionEnvProtocol)
     assert isinstance(env, PoseActionEnvProtocol)
     assert isinstance(env, KinematicPoseActionEnvProtocol)
