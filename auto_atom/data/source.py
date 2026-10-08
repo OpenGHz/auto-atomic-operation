@@ -31,6 +31,7 @@ from typing import (
 import numpy as np
 
 from auto_atom.config_loader import load_task_file_hydra
+from auto_atom.contracts import AddressableResetHost
 from auto_atom.policy_eval import (
     ConfigDrivenDemoPolicy,
     PolicyEvaluator,
@@ -46,6 +47,7 @@ from auto_atom.runtime import (
     TaskUpdate,
 )
 from auto_atom.utils.pose import PoseState
+from auto_atom.utils.seed import ResetAddress
 
 from .attempts import AttemptOutcome, AttemptScheduler, EpisodeAttempt
 from .config import DEMO_POLICY, StreamConfig
@@ -162,6 +164,9 @@ class EvaluatorEpisodeSource:
                 if ended or run.steps % self.config.sample_stride == 0:
                     sampled.append(int(slot))
             if sampled or reads_observation:
+                self._hold_noise_except(
+                    np.flatnonzero(active).tolist() if reads_observation else sampled
+                )
                 observation = evaluator.get_observation()
             for slot in sampled:
                 run = self._slots[slot]
@@ -225,12 +230,14 @@ class EvaluatorEpisodeSource:
                 f"for batch_size={config.batch_size} through env.batch_size."
             )
         self._reset_policy = _policy_resetter(policy, evaluator.batch_size)
-        if config.determinism == "episode":
-            raise NotImplementedError(
+        backend = evaluator.context.backend
+        if config.determinism == "episode" and not isinstance(
+            backend, AddressableResetHost
+        ):
+            raise TypeError(
                 "determinism='episode' needs a backend whose next reset can be "
-                "given its number (AddressableResetHost); "
-                f"{type(evaluator.context.backend).__name__} does not provide one. "
-                "Use determinism='sequential'."
+                f"given its number (AddressableResetHost); {type(backend).__name__} "
+                "is not one. Use determinism='sequential'."
             )
         return evaluator
 
@@ -264,7 +271,7 @@ class EvaluatorEpisodeSource:
                 mask[[slot for slot, _ in group]] = True
                 started = time.perf_counter()
                 try:
-                    update = evaluator.reset(mask)
+                    update = evaluator.reset(mask, address=self._address(group))
                 except RandomizationFailureError as error:
                     for slot, attempt in group:
                         self.scheduler.judge(
@@ -294,6 +301,7 @@ class EvaluatorEpisodeSource:
             waiting = failed
         if latest is None:
             return None, None
+        self._hold_noise_except(started_slots)
         observation = evaluator.get_observation()
         if self.config.observation_keys is not None:
             missing = missing_observation_keys(
@@ -315,11 +323,39 @@ class EvaluatorEpisodeSource:
     def _reset_groups(
         self, assigned: List[Tuple[int, EpisodeAttempt]]
     ) -> List[List[Tuple[int, EpisodeAttempt]]]:
+        """Slots reset together: all of them, or one per reset when addressed."""
         if not assigned:
             return []
         if self.config.determinism == "sequential":
             return [assigned]
         return [[item] for item in assigned]
+
+    def _address(
+        self, group: List[Tuple[int, EpisodeAttempt]]
+    ) -> Optional[ResetAddress]:
+        """Reset number of an episode-deterministic attempt: its index + 1."""
+        if self.config.determinism == "sequential":
+            return None
+        ((_, attempt),) = group
+        return ResetAddress(attempt.episode_index + 1, attempt.retry)
+
+    def _hold_noise_except(self, slots: List[int]) -> None:
+        """Keep the next capture from advancing the camera noise of other slots.
+
+        An episode-deterministic stream counts a slot's noise frames over the
+        captures made for it (its initial observation and its recorded or
+        policy-read ticks), not the ones made for other slots.
+        """
+        if self.config.determinism == "sequential":
+            return
+        evaluator = self._require_evaluator()
+        hold = getattr(evaluator.get_env(), "hold_camera_noise", None)
+        if hold is None:
+            return
+        mask = np.ones(evaluator.batch_size, dtype=bool)
+        mask[list(slots)] = False
+        if mask.any():
+            hold(mask)
 
     def _finish(
         self, slot: int, run: _SlotRun, update: TaskUpdate

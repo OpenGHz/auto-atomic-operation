@@ -32,7 +32,9 @@ def _arrays(length: int) -> EpisodeArrays:
     )
 
 
-def _update(batch_size: int, stage: int = 0, phase: str | None = "pre_move") -> TaskUpdate:
+def _update(
+    batch_size: int, stage: int = 0, phase: str | None = "pre_move"
+) -> TaskUpdate:
     return TaskUpdate(
         stage_index=np.full(batch_size, stage, dtype=np.int64),
         stage_name=[f"stage_{stage}"] * batch_size,
@@ -104,7 +106,10 @@ def test_command_keys_are_recognized_with_a_prefix() -> None:
 
 def test_split_observation_separates_commands_and_filters_measurements() -> None:
     observation = {
-        "arm/pose/position": {"data": np.arange(6).reshape(2, 3), "t": np.array([1, 2])},
+        "arm/pose/position": {
+            "data": np.arange(6).reshape(2, 3),
+            "t": np.array([1, 2]),
+        },
         "cam/color": {"data": np.zeros((2, 4, 4, 3)), "t": np.array([1, 5])},
         "action/arm/pose/position": {"data": np.ones((2, 3)), "t": np.array([1, 2])},
     }
@@ -194,7 +199,8 @@ def test_stream_config_rejects_invalid_fields(fields: dict) -> None:
 
 
 @pytest.mark.parametrize(
-    "override", ["task.seed=1", "++task.seed=1", "+env.batch_size=4", "env.batch_size=2"]
+    "override",
+    ["task.seed=1", "++task.seed=1", "+env.batch_size=4", "env.batch_size=2"],
 )
 def test_stream_config_reserves_seed_and_batch_size_overrides(override: str) -> None:
     with pytest.raises(ValidationError, match="use StreamConfig"):

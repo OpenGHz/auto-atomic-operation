@@ -12,6 +12,7 @@ from typing import Any, Dict, List
 import numpy as np
 import pytest
 
+import auto_atom.mock as mock
 from auto_atom.data import (
     EvaluatorEpisodeSource,
     InvalidEpisodeError,
@@ -171,8 +172,12 @@ def test_on_invalid_raise_raises_with_the_outcome() -> None:
     assert error.value.stats.failures == 1
 
 
-def test_episode_determinism_fails_closed_on_the_mock_backend() -> None:
-    with pytest.raises(NotImplementedError, match="AddressableResetHost"):
+def test_episode_determinism_fails_closed_without_reset_addressing(
+    monkeypatch,
+) -> None:
+    monkeypatch.delattr(mock.MockSceneBackend, "set_reset_address")
+
+    with pytest.raises(TypeError, match="AddressableResetHost"):
         _run(_config("policy_eval_mock", determinism="episode"))
 
 

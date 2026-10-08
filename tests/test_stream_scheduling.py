@@ -88,7 +88,12 @@ def test_resample_retries_the_same_index_before_new_ones() -> None:
     assert retry == EpisodeAttempt(0, retry=1)
     assert emitted.emit
     assert emitted.invalid_attempts == [
-        {"retry": 0, "kind": "failed", "category": "missing_grasp", "reason": "no grasp"}
+        {
+            "retry": 0,
+            "kind": "failed",
+            "category": "missing_grasp",
+            "reason": "no grasp",
+        }
     ]
     assert scheduler.next_attempt() == EpisodeAttempt(1)
     stats = scheduler.snapshot()
@@ -123,9 +128,7 @@ def test_keep_yields_failed_rollouts_but_retries_failed_resets() -> None:
 
 
 def test_consecutive_invalid_attempts_trip_the_breaker() -> None:
-    scheduler = AttemptScheduler(
-        _config(on_invalid="keep", max_consecutive_invalid=3)
-    )
+    scheduler = AttemptScheduler(_config(on_invalid="keep", max_consecutive_invalid=3))
 
     scheduler.judge(scheduler.next_attempt(), FAILED)
     scheduler.judge(scheduler.next_attempt(), SUCCESS)
@@ -186,9 +189,7 @@ def test_slots_restart_independently_without_crosstalk() -> None:
 
 
 def test_shards_together_yield_every_episode_once() -> None:
-    base = EpisodeStream.from_config(
-        _config(task="policy_eval_mock", num_episodes=7)
-    )
+    base = EpisodeStream.from_config(_config(task="policy_eval_mock", num_episodes=7))
     seen: List[int] = []
 
     for worker_id in range(3):
@@ -270,16 +271,15 @@ def test_failed_reset_randomization_is_resampled(monkeypatch) -> None:
 
 
 def test_producer_errors_reach_the_consumer() -> None:
-    with EpisodeStream.from_config(
-        _config(num_episodes=5, retry_budget=0)
-    ) as episodes, pytest.raises(RetryBudgetExhaustedError):
+    with (
+        EpisodeStream.from_config(_config(num_episodes=5, retry_budget=0)) as episodes,
+        pytest.raises(RetryBudgetExhaustedError),
+    ):
         next(episodes)
 
 
 def test_infeasible_task_trips_the_breaker_through_the_stream() -> None:
-    config = _config(
-        on_invalid="keep", max_consecutive_invalid=3, batch_size=2
-    )
+    config = _config(on_invalid="keep", max_consecutive_invalid=3, batch_size=2)
 
     with EpisodeStream.from_config(config) as episodes:
         kept = []
