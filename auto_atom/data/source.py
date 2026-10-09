@@ -27,6 +27,7 @@ from typing import (
 
 import numpy as np
 
+from auto_atom.config.operations import Operation
 from auto_atom.config_loader import load_task_file_hydra
 from auto_atom.contracts import AddressableResetHost
 from auto_atom.policy_eval import ConfigDrivenDemoPolicy, PolicyEvaluator
@@ -141,7 +142,7 @@ class EvaluatorEpisodeSource:
             observation = None
             if observed:
                 self._hold_noise_except(observed)
-                observation = evaluator.get_observation()
+                observation = self._observe()
             if recorded:
                 # The tick's command, which only a capture after it reports.
                 commands_capture = (
@@ -285,7 +286,7 @@ class EvaluatorEpisodeSource:
         if latest is None:
             return None
         self._hold_noise_except(started_slots)
-        observation = evaluator.get_observation()
+        observation = self._observe()
         if not any(is_command_key(key) for key in observation):
             raise ValueError(
                 "The environment reports no action/... command channels, so the "
@@ -341,10 +342,29 @@ class EvaluatorEpisodeSource:
         # CommandObservationEnvProtocol, checked by attribute: isinstance()
         # would cache a class's answer.
         capture_commands = getattr(evaluator.get_env(), "capture_commands", None)
-        if capture_commands is not None:
-            return capture_commands()
-        self._hold_noise_except([])
-        return evaluator.get_observation()
+        if capture_commands is None:
+            self._hold_noise_except([])
+            return self._observe()
+        commands = capture_commands()
+        if evaluator.context.is_object_only:
+            commands.update(
+                object_transport_channels(
+                    evaluator.context, _timestamps(commands), commands_only=True
+                )
+            )
+        return commands
+
+    def _observe(self) -> Dict[str, Dict[str, Any]]:
+        """A full capture, with the object-only transport channels when they apply."""
+        evaluator = self._require_evaluator()
+        observation = evaluator.get_observation()
+        if evaluator.context.is_object_only:
+            observation.update(
+                object_transport_channels(
+                    evaluator.context, _timestamps(observation), commands_only=False
+                )
+            )
+        return observation
 
     def _hold_noise_except(self, slots: List[int]) -> None:
         """Keep the next capture from advancing the camera noise of other slots.
@@ -451,6 +471,77 @@ def _reset_index(context: ExecutionContext) -> int:
     """Number of the reset just performed: the backend's, else the runner's."""
     index = getattr(context.backend, "reset_index", None)
     return int(context.reset_count if index is None else index)
+
+
+def object_transport_channels(
+    context: ExecutionContext, timestamps: Any, *, commands_only: bool
+) -> Dict[str, Dict[str, Any]]:
+    """Observation and command channels of object-only transport.
+
+    Object-only execution has no robot: a pick acquires the stage object
+    logically and pose waypoints move it kinematically. For every object a
+    pick stage carries:
+
+    - ``<object>/pose/position|orientation``: its world pose;
+    - ``<object>/carried``: ``1.0`` while it is carried, else ``0.0``;
+    - ``action/<object>/pose/position|orientation``: the world pose last
+      commanded on it since the reset, or its current pose if none was;
+    - ``action/<object>/carried``: whether it is carried after the commands
+      issued so far (the pick acquires, the place releases).
+
+    ``commands_only`` returns only the ``action/`` channels.
+    """
+    backend = context.backend
+    batch_size = backend.batch_size
+    carried_names = sorted(
+        {
+            plan.stage.object
+            for plan in context.plan
+            if plan.stage.operation == Operation.PICK and plan.stage.object
+        }
+    )
+    channels: Dict[str, Dict[str, Any]] = {}
+
+    def emit(key: str, data: np.ndarray) -> None:
+        channels[key] = {"data": data, "t": timestamps}
+
+    for name in carried_names:
+        handler = backend.get_object_handler(name)
+        if handler is None:
+            continue
+        current = handler.get_pose().broadcast_to(batch_size)
+        commanded_position = np.array(current.position, dtype=np.float64)
+        commanded_orientation = np.array(current.orientation, dtype=np.float64)
+        for env_index in range(batch_size):
+            command = context.object_commands.get((env_index, name))
+            if command is not None:
+                commanded_position[env_index] = command.position[0]
+                commanded_orientation[env_index] = command.orientation[0]
+        carried = np.asarray(
+            [
+                [float(context.get_logical_carried_object(env_index) == name)]
+                for env_index in range(batch_size)
+            ]
+        )
+        if not commands_only:
+            emit(f"{name}/pose/position", np.array(current.position, dtype=np.float64))
+            emit(
+                f"{name}/pose/orientation",
+                np.array(current.orientation, dtype=np.float64),
+            )
+            emit(f"{name}/carried", carried.copy())
+        emit(f"action/{name}/pose/position", commanded_position)
+        emit(f"action/{name}/pose/orientation", commanded_orientation)
+        emit(f"action/{name}/carried", carried)
+    return channels
+
+
+def _timestamps(observation: Dict[str, Dict[str, Any]]) -> Any:
+    """The clock of a capture, from any of its channels (zeros when it has none)."""
+    for payload in observation.values():
+        if "t" in payload:
+            return payload["t"]
+    return 0.0
 
 
 def scene_ground_truth(context: ExecutionContext, env_index: int) -> Dict[str, Any]:

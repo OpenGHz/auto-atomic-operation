@@ -163,3 +163,15 @@ def test_a_warp_stream_records_actions() -> None:
     assert actions["action/arm/pose/position"].shape == (10, 3)
     assert episode.transitions.sim_time.dtype == np.float64
     assert np.all(np.diff(episode.transitions.sim_time) > 0)
+
+
+def test_a_warp_object_only_stream_records_the_carried_object() -> None:
+    from test_stream_object_only import (
+        assert_transport_channels,
+        object_only_episodes,
+    )
+
+    (episode,) = object_only_episodes("backend=warp")
+
+    assert episode.success
+    assert_transport_channels(episode)

@@ -164,6 +164,12 @@ class ExecutionContext:
         default_factory=dict,
         repr=False,
     )
+    object_commands: Dict[tuple[int, str], PoseState] = field(
+        default_factory=dict,
+        repr=False,
+    )
+    """World pose last commanded on each ``(env, object)`` through
+    :meth:`apply_object_pose` since that env's reset (object-only mode)."""
     random_generator: np.random.Generator = field(
         init=False,
         repr=False,
@@ -314,6 +320,17 @@ class ExecutionContext:
         if not self.is_object_only:
             raise RuntimeError("Object pose transport requires object_only mode.")
         self.backend.apply_object_pose(object_name, pose, env_mask=env_mask)
+        batch_size = self.backend.batch_size
+        mask = (
+            np.ones(batch_size, dtype=bool)
+            if env_mask is None
+            else np.asarray(env_mask, dtype=bool).reshape(-1)
+        )
+        commanded = pose.broadcast_to(batch_size)
+        for env_index in np.flatnonzero(mask):
+            self.object_commands[(int(env_index), object_name)] = commanded.select(
+                int(env_index)
+            )
 
     def release_logical_object(self, env_index: int) -> str:
         """Stop carrying and return the released object identity."""
@@ -327,6 +344,8 @@ class ExecutionContext:
     def clear_env_logical_object(self, env_index: int) -> None:
         """Clear one environment's object-only carry state during reset."""
         self.logical_carried_objects.pop(env_index, None)
+        for key in [key for key in self.object_commands if key[0] == env_index]:
+            del self.object_commands[key]
 
 
 @dataclass(frozen=True)
@@ -1513,7 +1532,7 @@ class TaskRunner:
         )
         motion = context.task_file.execution.object_motion
         if motion.mode == ObjectMotionMode.DIRECT:
-            context.backend.apply_object_pose(
+            context.apply_object_pose(
                 goal.controlled_object_name,
                 target,
                 env_mask=env_mask,
@@ -1552,7 +1571,7 @@ class TaskRunner:
                 next_orientation,
                 fraction=angular_step / angular_distance,
             )
-        context.backend.apply_object_pose(
+        context.apply_object_pose(
             goal.controlled_object_name,
             PoseState(position=next_position, orientation=next_orientation),
             env_mask=env_mask,
