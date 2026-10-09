@@ -1,0 +1,28 @@
+# Real-robot data volume for grasping an irregular sweet potato (about
+# 0.15 x 0.05 x 0.05 m) with a parallel two-finger gripper whose fingers are
+# 0.15 m long. Estimate with:
+#
+#   python scripts/data/estimate_data_volume.py
+#
+# A dimension gives `range` as a span or as [low, high] bounds, plus a
+# `resolution` in the same unit, or a discrete `count`. Any other mapping is a
+# group whose point count is the product of its members.
+
+rate_hz: 30         # points recorded per second by one station
+stations: 1         # robots collecting in parallel
+hours_per_day: 24   # collection hours per calendar day
+
+dimensions:
+  space:
+    position:       # object position in a 1 m cube at 1 mm (m)
+      x: {range: [-0.5, 0.5], resolution: 0.001}
+      y: {range: [-0.5, 0.5], resolution: 0.001}
+      z: {range: [0.0, 1.0], resolution: 0.001}
+    orientation:    # object orientation at 1 deg (deg)
+      roll: {range: [-90, 90], resolution: 1}
+      pitch: {range: [-90, 90], resolution: 1}
+      yaw: {range: 180, resolution: 1}
+  grasp:            # grasp relative to the object
+    along_object: {range: 0.15, resolution: 0.001}  # m, grasp point along the object
+    along_finger: {range: 0.15, resolution: 0.001}  # m, object depth along the fingers
+    angle: {range: 35, resolution: 1}               # deg
