@@ -21,6 +21,8 @@
 >   transition 级流式（`level="transition"`）未实现。
 > - env 新增 `capture_commands()`（`CommandObservationEnvProtocol`）：不渲染地读命令通道，
 >   `sample_stride > 1` 时读命令不必多一次渲染（§9）。
+> - 环境不报告命令通道时 stream 直接报错。MJWarp env 现在报告与原生相同的关节、EEF 与
+>   命令通道；`execution=object_only` 的命令是被搬运物体的位姿与 carried 标志（§4.2）。
 > - 寻址接口是 `set_reset_address(ResetAddress)`，协议 `AddressableResetHost` 在
 >   `auto_atom/contracts.py`，是后端能力而非 `RandomizationHost` 的子协议；执行器从
 >   host 的 `reset_address` 得知本次 reset 是否寻址（§5.4）。
@@ -195,9 +197,21 @@ class EpisodeSource(Protocol):
   原样存放。`ConfigDrivenDemoPolicy` 返回的是 primitive 而不是数值，它下发的命令（经 IK
   之后）只出现在这些通道里。schema 因此只由环境决定，与 policy 无关。环境不报告任何
   `action/...` 通道时，stream 在第一次采集后直接报错，而不是产出没有动作的 episode。
-  目前只有原生 MuJoCo 的 physical 执行有命令通道：MJWarp env 只报告相机（连关节状态与
-  EEF 位姿也没有），`execution=object_only` 下原生与 MJWarp 都只报告相机，所以这两种
-  形态暂时不能用来生产模仿学习数据。
+- **physical 执行**：原生 MuJoCo 与 MJWarp env 报告同样的 key 与语义——
+  `action/<limb>/joint_state/position`（执行器命令）与 `action/<operator>/pose/...`
+  （本 tick 的 EEF 目标，base 系；`solve_once_interpolate` 下是最终 waypoint 位姿），
+  状态侧是关节状态与 base 系 EEF 位姿。在 `pick_and_place`（mocap）与 `open_door`
+  （airbot_play_g2p，per-step IK / solve_once_interpolate）上两后端 reset 帧差 < 1e-5，
+  40 tick 内命令、臂关节与 EEF 位姿差 < 1e-3（`tests/test_mjwarp_observation_channels.py`）；
+  夹爪接触后测得的开度差约 1 mm（MJWarp 没有 noslip）。MJWarp 只产出非 structured 布局，
+  没有 IMU / wrench / tactile。
+- **`execution=object_only`**：没有机器人，pick 逻辑上抓取 stage 物体、pose waypoint 运动学地
+  搬运它。stream 为每个 pick stage 的物体加上状态 `<object>/pose/position|orientation`
+  （世界系）、`<object>/carried`，以及命令 `action/<object>/pose/...`（reset 以来最后一次下发的
+  世界系位姿，未下发时保持当前位姿）与 `action/<object>/carried`（pick 置 1、place 置 0）。
+  命令由 `ExecutionContext.apply_object_pose` 记录，在 backend 之上实现，原生与 MJWarp 都有。
+  搬运是运动学的，所以每个命令位姿就是下一帧观测到的位姿；这种模式不步进物理，
+  `sim_time` 在 episode 内不变，行序看 `tick`。
 - `RunnerEpisodeSource`：下发值是内部 primitive 解析后的结果，只能从
   `TaskUpdate.details[env]["execution"]` / `ExecutionRecord` 侧读取；**宏步进会跳过中间
   tick**，所以 dense 数据必须用 `control_tick`（与
