@@ -168,9 +168,10 @@ def test_masks_match_native_almost_exactly(captures, camera):
     """Masks are training targets, so they have to agree, and they do.
 
     These come from the segmentation pass rather than the shading model, which is
-    why they agree where RGB cannot: measured IoU is 1.0 on three of the four
-    camera/stream combinations and 0.9966 on the fourth, where four silhouette
-    pixels differ.
+    why they agree where RGB cannot: measured IoU is 1.0 on ``plate_cam`` and
+    0.9929 on ``rack_camera_front``, where 9 pixels differ along one edge of
+    the 1 mm target pad, which lies on the floor right under the rack mesh's
+    base, so the two renderers resolve that depth tie differently.
     """
     _, warp_obs, _, native_obs = captures
     key = f"{camera}/mask/image_raw"
@@ -282,3 +283,34 @@ def test_interest_list_length_is_validated():
             env.set_interest_objects_and_operations(["object"], ["fly"])
     finally:
         env.close()
+
+
+def test_geoms_native_does_not_draw_are_not_rendered(captures):
+    """Zero-alpha geoms (collision proxies) must not occlude what native shows.
+
+    MuJoCo leaves them out of its scene; the ray tracer used to draw them as
+    opaque black, hiding the rack target pad behind invisible ribs and parts
+    of the plate behind its collision mesh.
+    """
+    import mujoco
+
+    from auto_atom.basis.mjwarp.render import natively_drawn_geom_ids
+
+    warp_env = captures[0]
+    model = warp_env.host_model
+    invisible = [
+        geom
+        for geom in range(model.ngeom)
+        if model.geom_rgba[geom, 3] == 0 and model.geom_group[geom] in (0, 1, 2)
+    ]
+    assert invisible, "the rack_plate scene has invisible collision geoms"
+    assert natively_drawn_geom_ids(model).isdisjoint(invisible)
+
+    rendered = warp_env.renderer.render()
+    geom = int(mujoco.mjtObj.mjOBJ_GEOM)
+    for camera in _CAMERAS:
+        segmentation = rendered[camera]["segmentation"][0]
+        shown = np.isin(segmentation[..., 0], invisible) & (
+            segmentation[..., 1] == geom
+        )
+        assert not shown.any(), camera

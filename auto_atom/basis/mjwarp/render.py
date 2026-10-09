@@ -16,6 +16,13 @@ rather than assumed:
 * **A ``RenderContext`` fixes one ``znear`` at creation and has no ``zfar``.**
   The native path switches clip range per output stream, so cameras are grouped
   by requested range and one context is built per distinct group.
+* **The ray tracer draws every geom of the rendered groups, invisible ones
+  included.** MuJoCo leaves a geom whose colour has zero alpha out of the scene;
+  MJWarp drew such geoms as opaque black, in colour, depth and segmentation
+  alike. Scenes use them for collision proxies (``rack_plate`` has 11), so they
+  occluded what native shows. Contexts are built from a render-only model copy
+  that keeps exactly the geoms MuJoCo's own scene contains
+  (:func:`natively_drawn_geom_ids`).
 
 Image orientation and segmentation encoding need no conversion: measured
 centroids agree with the native renderer to four decimals, and segmentation is
@@ -30,7 +37,63 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Tuple
 import numpy as np
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
+    import mujoco
+
     from auto_atom.basis.mjwarp.state import MjWarpSceneState
+
+# Geom groups both renderers draw: MuJoCo's default ``MjvOption.geomgroup``,
+# which the native env renders with, and MJWarp's default
+# ``enabled_geom_groups``.
+RENDERED_GEOM_GROUPS: Tuple[int, ...] = (0, 1, 2)
+# A group outside RENDERED_GEOM_GROUPS, where the render model parks the geoms
+# native does not draw.
+_UNRENDERED_GEOM_GROUP = 5
+
+
+def natively_drawn_geom_ids(model: "mujoco.MjModel") -> frozenset:
+    """Geoms MuJoCo's own renderer draws with the native env's visual options.
+
+    Asked of ``mjv_updateScene`` rather than re-derived, so every rule MuJoCo
+    applies (group switches, zero alpha after resolving the material) carries
+    over. Visibility is read once, from the model as compiled: a geom whose
+    alpha is changed per world later keeps the visibility it had.
+    """
+    import mujoco
+
+    data = mujoco.MjData(model)
+    scene = mujoco.MjvScene(model, maxgeom=max(1000, 2 * model.ngeom))
+    mujoco.mjv_updateScene(
+        model,
+        data,
+        mujoco.MjvOption(),
+        None,
+        mujoco.MjvCamera(),
+        int(mujoco.mjtCatBit.mjCAT_ALL),
+        scene,
+    )
+    geom_type = int(mujoco.mjtObj.mjOBJ_GEOM)
+    return frozenset(
+        int(geom.objid)
+        for geom in scene.geoms[: scene.ngeom]
+        if int(geom.objtype) == geom_type
+    )
+
+
+def render_model(model: "mujoco.MjModel") -> "mujoco.MjModel":
+    """A copy of ``model`` whose rendered groups hold only natively drawn geoms."""
+    import copy
+
+    drawn = natively_drawn_geom_ids(model)
+    hidden = [
+        geom
+        for geom in range(model.ngeom)
+        if geom not in drawn and int(model.geom_group[geom]) in RENDERED_GEOM_GROUPS
+    ]
+    if not hidden:
+        return model
+    copied = copy.copy(model)
+    copied.geom_group[hidden] = _UNRENDERED_GEOM_GROUP
+    return copied
 
 
 @dataclass(frozen=True)
@@ -133,9 +196,10 @@ class MjWarpBatchRenderer:
 
         import mujoco_warp as mjw
 
+        model = render_model(self.state.host_model)
         for group in grouped.values():
             group.context = mjw.create_render_context(
-                self.state.host_model,
+                model,
                 nworld=self.state.nworld,
                 cam_res=list(group.resolutions),
                 render_rgb=list(group.render_rgb),
@@ -144,6 +208,7 @@ class MjWarpBatchRenderer:
                 # cam_active accepts camera names directly, so no id lookup is
                 # needed and the group's own ordering becomes the stream index.
                 cam_active=list(group.camera_names),
+                enabled_geom_groups=list(RENDERED_GEOM_GROUPS),
             )
         return list(grouped.values())
 

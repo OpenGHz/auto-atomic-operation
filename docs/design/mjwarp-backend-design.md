@@ -32,9 +32,9 @@ records=4
 一致。**观测采集也已跑通**：同一次运行每个 tick 采到 6 路观测
 （2 相机 x color/depth/heat_map），形状与 dtype 与原生一致。
 
-轮 1 与轮 2a–2i 已实现。一处需要知道的边界：**RGB 无法与原生逐像素一致**
-（光线追踪 vs 光栅化的着色差异），而 mask / heat map 的 IoU 为 1.0、depth 前景
-平均误差 0.9 mm——细节见 2i 那一节。
+轮 1 与轮 2a–2i 已实现。一处需要知道的边界：**RGB 不与原生逐像素一致**
+（光线追踪 vs 光栅化的着色差异，但修掉不可见 geom 被画成黑色的问题后已很接近），
+mask / heat map 的 IoU ≥ 0.99、depth 前景平均误差 0.9 mm——细节见 2i 那一节。
 
 **接缝已经在正确的位置**，移植工作量比按文件行数估算的小得多。
 
@@ -596,29 +596,35 @@ env 同样的接线方式；否则 builder 的 `get_env` 找不到 Hydra 已经�
 key 集合、shape、dtype 全部相同，`t` 逐 world 取自 `data.time`（它带 world 轴，
 所以每个 world 报自己的时钟，而不是广播 world 0）。
 
-### 关于精度：mask 几乎完全一致，RGB 无法一致
-
-这是本轮最重要的结论，**RGB 的差异不是缺陷，而是渲染器本身不同**：
+### 关于精度：mask 几乎完全一致，RGB 接近但不逐像素一致
 
 | 流 | 与原生的一致度 |
 |---|---|
-| `mask/image_raw` | IoU **1.0000**（`plate_cam`）／**0.9966**（`rack_camera_front`，1182 px 中差 4 px） |
+| `mask/image_raw` | IoU **1.0000**（`plate_cam`）／**0.9929**（`rack_camera_front`，1259 px 中差 9 px） |
 | `mask/heat_map` | IoU **1.0000**，逐像素 **100%** |
 | depth（前景） | 平均误差 **0.9 mm**，p99 **1.05 cm** |
 | depth（背景掩码） | 与原生一致 **99.9991%** |
-| `color/image_raw` | 中位差 **1/255**，但均值亮度 44.4 vs 31.7 |
+| `color/image_raw` | 两相机合计：均值差 **1.6/255**，中位差 **0**，相关系数 **0.98**，均值亮度 28.2 vs 27.1，>96/255 的像素 **0%** |
+
+> 2026-10-09 复测：此前 RGB 的大部分差异是一个缺陷，而不是着色模型——MJWarp 把
+> alpha 为 0 的 geom（碰撞代理，`rack_plate` 有 11 个）画成了不透明黑色，在 color、
+> depth、segmentation 中都遮挡了原生能看到的东西（见下文第 4 条）。修复前同一场景
+> 两相机合计：均值差 8.0/255、相关系数 0.74、均值亮度 20.2 vs 27.1、>96/255 的像素
+> 2.28%；早先表中的“均值亮度 44.4 vs 31.7”“相关系数 0.72”和下面色彩空间实验的
+> 14.3/255 都包含这个缺陷。`rack_camera_front` 的 mask 也因此跌破 0.99：隐形的
+> rack rib 挡住了目标垫片。修复后剩下的 9 px 在 1 mm 厚的目标垫片的一条边上——它
+> 平躺在地面、紧贴 rack 网格的底面，两种渲染器对这处深度并列的判定不同。
 
 mask 与 heat map 来自 segmentation pass（几何），所以能一致；RGB 来自着色，
 MJWarp 光线追踪、MuJoCo 用 OpenGL 光栅化，着色模型不同。实测尝试过 sRGB/linear
-两个方向的色彩空间变换，**都让误差变大**（raw 14.3/255 最优，sRGB 82.3，linear
-27.7），因此这不是一个可以纠正的编码差异。几何是对的：相关系数 0.72，结构性
-不匹配（>96/255）只占 0.07%。
+两个方向的色彩空间变换，**都让误差变大**（当时 raw 14.3/255 最优，sRGB 82.3，
+linear 27.7），因此剩下的差异不是一个可以纠正的编码差异。
 
-**结论**：训练目标（mask/heat map）和几何量（depth）可以跨后端互换；RGB 不能，
-需要 RGB 逐像素一致的场景不要混用两个后端采的数据。测试因此断言契约、depth 与
-mask，而把 RGB 差异记录为实测容差而非当作 bug。
+**结论**：训练目标（mask/heat map）和几何量（depth）可以跨后端互换；RGB 很接近但
+不逐像素一致，需要 RGB 逐像素一致的场景不要混用两个后端采的数据。测试因此断言
+契约、depth 与 mask，而把 RGB 差异记录为实测容差。
 
-### 三处 MJWarp 渲染语义与 MuJoCo 不同
+### MJWarp 渲染语义与 MuJoCo 的异同
 
 1. **depth 永远是归一化的**。`get_depth` 算的是
    `clamp(value / depth_scale, 0, 1)`，传 `1.0` 会把超过 1 m 的距离全部截断。取米
@@ -629,6 +635,11 @@ mask，而把 RGB 差异记录为实测容差而非当作 bug。
 3. **图像朝向与 segmentation 编码不需要转换**。实测 segmentation 质心与原生一致到
    小数点后 4 位（无翻转），编码本身已是 MuJoCo 的 `(object_id, object_type)`、
    背景 `(-1, -1)`。
+4. **不可见的 geom 也会被画出来**。MuJoCo 的 `mjv_updateScene` 不把 alpha 为 0 的
+   geom 放进场景；MJWarp 的光线追踪只按 geom group 过滤，会把它们画成不透明黑色。
+   `render_model()` 因此给 render context 用一份模型副本，把原生场景里没有的 geom 移到
+   不渲染的 group（是否可见直接问 `mjv_updateScene`，所以材质 alpha 等规则自动一致），
+   物理模型不受影响。可见性只在建 context 时取一次：之后逐 world 改 alpha 不会改变它。
 
 另外修正了轮 2f 的一个真实 bug：相机 id 解析原本无条件执行，但原生（与
 `EnvConfig.camera_elements` 的文档）都把它**门控在 `DataType.CAMERA` 上**——没有
