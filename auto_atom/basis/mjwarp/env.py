@@ -17,6 +17,12 @@ fixes ``znear`` at creation and has no ``zfar``, while the native path switches
 clip range per output stream (see ``docs/design/mjwarp-backend-design.md`` 3.3).
 Capture is explicit: nothing on the ``object_only`` execution path renders, so a
 run that never asks for an observation never builds a context.
+
+Operators are observed as the native env observes them, with the same keys and
+meaning: joint position, velocity and effort, the EEF pose in base frame, and
+the ``action/...`` command channels (actuator commands and the commanded EEF
+pose). Only the unstructured layout is produced, and IMU, wrench and tactile
+channels are native-only.
 """
 
 from __future__ import annotations
@@ -92,6 +98,9 @@ class MjWarpObjectOnlyEnv:
         if config.gravity is not None:
             self.host_model.opt.gravity[:] = config.gravity
         host_data = self._initial_host_data()
+        # Before MjWarpSceneState adapts the host model's solver options: the
+        # mapper's gripper sweep must see the scene native binds it on.
+        self._eef_mappers = self._bind_eef_mappers()
         attachments = [
             (attachment.operator, attachment.object)
             for attachment in config.grasp_attachments
@@ -206,6 +215,29 @@ class MjWarpObjectOnlyEnv:
                 mocap_body=binding.mocap_body or "",
                 freejoint=binding.freejoint or "",
             )
+
+    def _bind_eef_mappers(self) -> Dict[str, Tuple[Any, Any]]:
+        """The EEF mapper of each operator that registers, bound as native binds it.
+
+        A mapper remaps gripper position and command values for observation
+        (e.g. to finger distance); binding sweeps the gripper on scratch data of
+        the host model.
+        """
+        import copy
+
+        import mujoco
+
+        mappers: Dict[str, Tuple[Any, Any]] = {}
+        for name, binding in self.config.operators.items():
+            mapper = binding.eef_mapper
+            if mapper is None or not binding.root_body:
+                continue
+            mapper = copy.deepcopy(mapper)
+            data = mujoco.MjData(self.host_model)
+            if hasattr(mapper, "bind"):
+                mapper.bind(self.host_model, data)
+            mappers[name] = (mapper, data)
+        return mappers
 
     @property
     def operator_names(self) -> Tuple[str, ...]:
@@ -507,15 +539,13 @@ class MjWarpObjectOnlyEnv:
         from auto_atom.basis.mjc.mujoco_env import KeyCreator
         from auto_atom.config.env_config import DataType
 
+        observation = self._operator_channels(commands_only=False)
         if DataType.CAMERA not in self.config.enabled_sensors or not self._camera_specs:
-            return {}
+            return observation
 
         keys = KeyCreator(self.config.structured)
         rendered = self.renderer.render()
-        # data.time carries a world axis, so each world reports its own clock
-        # rather than world 0's broadcast across the batch.
-        timestamps = np.asarray(self.state.data.time.numpy(), dtype=np.float64)
-        observation: Dict[str, Dict[str, Any]] = {}
+        timestamps = self._timestamps()
 
         def emit(key: str, data: np.ndarray) -> None:
             observation[key] = {"data": data, "t": timestamps}
@@ -542,6 +572,116 @@ class MjWarpObjectOnlyEnv:
                 )
 
         return observation
+
+    def capture_commands(self) -> Dict[str, Dict[str, Any]]:
+        """The ``action/...`` channels of :meth:`capture_observation`, unrendered."""
+        return self._operator_channels(commands_only=True)
+
+    def _timestamps(self) -> np.ndarray:
+        """Each world's simulator time, in ns with ``stamp_ns`` as native does.
+
+        ``data.time`` carries a world axis, so each world reports its own clock
+        rather than world 0's broadcast across the batch.
+        """
+        seconds = np.asarray(self.state.data.time.numpy(), dtype=np.float64)
+        if self.config.stamp_ns:
+            return (seconds * 1e9).astype(np.int64)
+        return seconds
+
+    def _operator_channels(self, *, commands_only: bool) -> Dict[str, Dict[str, Any]]:
+        """Operator observation channels in the native unstructured layout."""
+        from auto_atom.backend.mjwarp.operator_state import get_eef_pose_in_base
+        from auto_atom.config.env_config import DataType
+        from auto_atom.utils.transformations import euler_from_matrix, quaternion_matrix
+
+        sensors = self.config.enabled_sensors
+        if self.config.structured or not self._operators:
+            return {}
+        timestamps = self._timestamps()
+        observation: Dict[str, Dict[str, Any]] = {}
+
+        def emit(key: str, data: np.ndarray) -> None:
+            observation[key] = {"data": data, "t": timestamps}
+
+        ctrl = self.state.get_ctrl()
+        for name, operator in self._operators.items():
+            binding = self.config.operators[name]
+            # (output name, qpos, dof, actuators, mapped by the EEF mapper)
+            limbs = (
+                (
+                    binding.arm_output_name or name,
+                    operator.arm_qpos_indices,
+                    operator.arm_dof_indices,
+                    operator.arm_actuator_ids,
+                    False,
+                ),
+                (
+                    binding.eef_output_name,
+                    operator.eef_qpos_indices,
+                    operator.eef_dof_indices,
+                    operator.eef_actuator_ids,
+                    name in self._eef_mappers,
+                ),
+            )
+            if DataType.JOINT_POSITION in sensors:
+                for limb, qpos_indices, _, actuators, maps in limbs:
+                    if not commands_only and qpos_indices.size > 0:
+                        positions = self.state.get_joint_positions(qpos_indices)
+                        emit(
+                            f"{limb}/joint_state/position",
+                            self._map_eef(name, positions) if maps else positions,
+                        )
+                    if actuators.size > 0:
+                        commands = ctrl[:, actuators]
+                        emit(
+                            f"action/{limb}/joint_state/position",
+                            self._map_eef(name, commands) if maps else commands,
+                        )
+            if not commands_only and DataType.JOINT_VELOCITY in sensors:
+                for limb, _, dof_indices, _, _ in limbs:
+                    if dof_indices.size > 0:
+                        emit(
+                            f"{limb}/joint_state/velocity",
+                            self.state.get_joint_velocities(dof_indices),
+                        )
+            if not commands_only and DataType.JOINT_EFFORT in sensors:
+                force = np.asarray(
+                    self.state.data.actuator_force.numpy(), dtype=np.float64
+                )
+                for limb, _, _, actuators, _ in limbs:
+                    if actuators.size > 0:
+                        emit(f"{limb}/joint_state/effort", force[:, actuators])
+            if DataType.POSE in sensors:
+                if not commands_only:
+                    position, orientation = get_eef_pose_in_base(self.state, operator)
+                    rotation = np.stack(
+                        [quaternion_matrix(quat)[:3, :3] for quat in orientation]
+                    )
+                    emit(f"{name}/pose/position", position)
+                    emit(f"{name}/pose/orientation", orientation)
+                    emit(
+                        f"{name}/pose/rotation",
+                        np.stack([euler_from_matrix(matrix) for matrix in rotation]),
+                    )
+                    emit(
+                        f"{name}/pose/rotation_6d",
+                        rotation.reshape(len(rotation), 9)[:, :6],
+                    )
+                emit(
+                    f"action/{name}/pose/position",
+                    operator.target_position_in_base.copy(),
+                )
+                emit(
+                    f"action/{name}/pose/orientation",
+                    operator.target_orientation_in_base.copy(),
+                )
+        return observation
+
+    def _map_eef(self, operator_name: str, values: np.ndarray) -> np.ndarray:
+        """Apply an operator's EEF mapper to batched gripper values."""
+        mapper, data = self._eef_mappers[operator_name]
+        mapped = mapper.obs_map(self.host_model, data, values)
+        return np.asarray(mapped, dtype=np.float64).reshape(values.shape)
 
     # ------------------------------------------------------------------
     # Mask construction (shared arithmetic with the native path)

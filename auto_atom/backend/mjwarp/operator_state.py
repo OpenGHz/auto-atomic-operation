@@ -77,6 +77,12 @@ class MjWarpOperatorState:
     max_joint_delta: float = 0.35
     joint_interp_speed: float = 0.05
     ik_solver: Optional[object] = field(default=None, repr=False)
+
+    # The EEF goal of the latest control tick in base frame, per world: what
+    # the arm is commanded toward (native ``target_pos_in_base``). A reset
+    # sets it to the EEF pose the reset left, so an uncommanded arm holds.
+    target_position_in_base: Optional[np.ndarray] = None  # (nworld, 3)
+    target_orientation_in_base: Optional[np.ndarray] = None  # (nworld, 4) xyzw
     _baseline: dict[str, np.ndarray] = field(default_factory=dict, repr=False)
 
     def restore_baseline(self, world_mask: np.ndarray) -> None:
@@ -208,6 +214,7 @@ def register_operator(
         mocap_to_root_position=mocap_to_root_position,
         mocap_to_root_orientation=mocap_to_root_orientation,
     )
+    hold_current_target(state, operator)
     for field_name in (
         "base_position",
         "base_orientation",
@@ -299,6 +306,26 @@ def get_eef_pose_in_base(
     return world_to_base_batch(
         position, orientation, operator.base_position, operator.base_orientation
     )
+
+
+def hold_current_target(
+    state: MjWarpSceneState,
+    operator: MjWarpOperatorState,
+    world_mask: Optional[np.ndarray] = None,
+) -> None:
+    """Make the current EEF pose the commanded target of the masked worlds."""
+    position, orientation = get_eef_pose_in_base(state, operator)
+    if operator.target_position_in_base is None:
+        operator.target_position_in_base = position.copy()
+        operator.target_orientation_in_base = orientation.copy()
+        return
+    mask = (
+        np.ones(state.nworld, dtype=bool)
+        if world_mask is None
+        else np.asarray(world_mask, dtype=bool)
+    )
+    operator.target_position_in_base[mask] = position[mask]
+    operator.target_orientation_in_base[mask] = orientation[mask]
 
 
 def get_base_pose(operator: MjWarpOperatorState) -> Tuple[np.ndarray, np.ndarray]:

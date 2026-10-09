@@ -225,6 +225,7 @@ class MjWarpArmControl:
             self.operator.base_position[world],
             self.operator.base_orientation[world],
         )
+        self._record_target(world, target_position_b, target_orientation_b)
         solution = self.ik.solve(
             world, target_position_b, target_orientation_b, seed, "per_step_ik"
         )
@@ -246,6 +247,8 @@ class MjWarpArmControl:
             self.operator.base_position[world],
             self.operator.base_orientation[world],
         )
+        # As native: the target of this mode is the final waypoint pose.
+        self._record_target(world, position_b, orientation_b)
         plan = self._plans[world]
         if plan is None or not plan.matches(position_b, orientation_b):
             solution = self.ik.solve(
@@ -321,6 +324,15 @@ class MjWarpArmControl:
             waypoint_linear_step,
             waypoint_angular_step,
         )
+        self._record_target(
+            world,
+            *world_to_base(
+                position,
+                orientation,
+                self.operator.base_position[world],
+                self.operator.base_orientation[world],
+            ),
+        )
         root_position, root_orientation = eef_to_root_pose(
             self.operator, world, position, orientation
         )
@@ -330,6 +342,13 @@ class MjWarpArmControl:
             root_orientation,
             world_mask=np.arange(self.state.nworld) == world,
         )
+
+    def _record_target(
+        self, world: int, position_b: np.ndarray, orientation_b: np.ndarray
+    ) -> None:
+        """Keep this tick's EEF goal in base frame as the arm's command."""
+        self.operator.target_position_in_base[world] = position_b
+        self.operator.target_orientation_in_base[world] = orientation_b
 
     def _evaluate(
         self,

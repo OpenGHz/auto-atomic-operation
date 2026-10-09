@@ -22,6 +22,7 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence, Set
 import numpy as np
 
 from auto_atom.backend.mjwarp.handlers import MjWarpObjectHandler
+from auto_atom.backend.mjwarp.operator_state import hold_current_target
 from auto_atom.basis.mjwarp.env import MjWarpObjectOnlyEnv
 from auto_atom.config.operations import Operation
 from auto_atom.config.randomization import (
@@ -156,6 +157,9 @@ class MjWarpObjectOnlyBackend(SceneBackend):
         if self.randomization.applies:
             with self.env.state.deferred_forward():
                 self.randomization_executor.apply_randomization(mask)
+        # An arm not yet commanded this episode holds the pose the reset left.
+        for handler in self.operator_handlers.values():
+            hold_current_target(self.env.state, handler.operator, mask)
 
     def _apply_operator_initial_states(self, env_mask: np.ndarray) -> None:
         """Apply each operator's ``initial_state`` for the selected worlds.
